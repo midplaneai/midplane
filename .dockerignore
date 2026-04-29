@@ -1,0 +1,44 @@
+# VCS / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Workspace tooling
+.context
+.claude
+.gstack
+
+# Docs / scaffolding
+*.md
+THREAT_MODEL.md
+SECURITY.md
+LICENSE
+docs
+
+# Dependencies + local data
+node_modules
+**/node_modules
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+coverage
+
+# Examples — runtime stage doesn't COPY them, but the deps stage needs the
+# package.json files so the workspace graph resolves under --frozen-lockfile.
+examples/**
+!examples/*/
+!examples/*/package.json
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# OS
+.DS_Store
+Thumbs.db

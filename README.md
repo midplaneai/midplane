@@ -34,6 +34,12 @@ V1 in active development. Free hosted tier and OSS self-host both ship at launch
 - [Trust posture](./docs/trust-posture.md)
 - [Policy rules](./docs/policy-rules.md)
 
+### Maintainer notes
+
+The `publish-docker` workflow pushes to Docker Hub on every `v*` tag. Before
+the first release tag, set repo secrets `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN`. GHCR uses the built-in `GITHUB_TOKEN` and needs no setup.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
