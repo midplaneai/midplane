@@ -1,0 +1,160 @@
+// Midplane V1 audit event types (locked 2026-04-29 from /plan-eng-review T2).
+//
+// Append-only event sourcing model. Each query emits 2-3 events:
+//   ATTEMPTED  — agent intent recorded (always written first, before policy)
+//   DECIDED    — ALLOW or DENY decision (always written, before execute)
+//   EXECUTED   — successful execution (only if ALLOW + exec succeeds)
+//   FAILED     — execution failed (only if ALLOW + exec throws)
+//
+// Pipeline order is non-negotiable per eng review T3:
+//   parse → policy → audit(ATTEMPTED + DECIDED) → execute → audit(EXECUTED|FAILED)
+//
+// If audit of ATTEMPTED+DECIDED fails, the engine throws AuditUnavailableError
+// and the query is NOT executed. Constraint #3 strictly honored.
+
+import { z } from "zod";
+
+// ─── Discriminator values ───────────────────────────────────────────────────
+
+export const EventType = {
+  ATTEMPTED: "ATTEMPTED",
+  DECIDED: "DECIDED",
+  EXECUTED: "EXECUTED",
+  FAILED: "FAILED",
+} as const;
+export type EventType = (typeof EventType)[keyof typeof EventType];
+
+export const Decision = {
+  ALLOW: "ALLOW",
+  DENY: "DENY",
+} as const;
+export type Decision = (typeof Decision)[keyof typeof Decision];
+
+export const PolicyRule = {
+  WRITES_REQUIRE_APPROVAL: "writes_require_approval",
+  MULTI_STATEMENT: "multi_statement",
+  TENANT_SCOPE_MISSING: "tenant_scope_missing",
+  PARSE_ERROR: "parse_error",
+} as const;
+export type PolicyRule = (typeof PolicyRule)[keyof typeof PolicyRule];
+
+// ─── Payload schemas (one per event type) ───────────────────────────────────
+
+// ATTEMPTED — agent intent. Recorded before policy evaluation. Cannot be redacted later.
+export const AttemptedPayload = z.object({
+  sql_raw: z.string().min(1).max(1_048_576),               // 1 MiB cap; longer is parse_error at decision
+  sql_fingerprint: z.string().regex(/^[0-9a-f]{16}$/),     // hex of first 8 bytes of SHA-256 over normalized AST
+  // intentionally no parsed AST here — that's transient. fingerprint is the durable summary.
+});
+export type AttemptedPayload = z.infer<typeof AttemptedPayload>;
+
+// DECIDED — policy decision. Always written. Captures *why* on DENY.
+export const DecidedPayload = z.discriminatedUnion("decision", [
+  z.object({
+    decision: z.literal("ALLOW"),
+    statement_type: z.string(),                            // SELECT, INSERT, UPDATE, etc.
+    tables_touched: z.array(z.string()).max(64),           // schema-qualified, deduped
+  }),
+  z.object({
+    decision: z.literal("DENY"),
+    policy_rule: z.string(),                               // e.g. "writes_require_approval"
+    reason: z.string(),                                    // human-readable, surfaced to agent
+    statement_type: z.string().optional(),                 // present when parse succeeded
+    tables_touched: z.array(z.string()).max(64).optional(),
+  }),
+]);
+export type DecidedPayload = z.infer<typeof DecidedPayload>;
+
+// EXECUTED — query ran successfully. Captures performance + side-effect summary.
+export const ExecutedPayload = z.object({
+  exec_ms: z.number().int().nonnegative(),                 // Postgres execution time
+  overhead_ms: z.number().int().nonnegative(),             // Midplane-added latency (parse+policy+audit+net)
+  rows_affected: z.number().int().nonnegative().optional(),// for INSERT/UPDATE/DELETE returning
+  rows_returned: z.number().int().nonnegative().optional(),// for SELECT
+});
+export type ExecutedPayload = z.infer<typeof ExecutedPayload>;
+
+// FAILED — query was allowed but Postgres rejected it. Captures the error.
+export const FailedPayload = z.object({
+  exec_ms: z.number().int().nonnegative(),
+  overhead_ms: z.number().int().nonnegative(),
+  error_class: z.string(),                                 // Postgres SQLSTATE class, e.g. "42P01"
+  error_message: z.string().max(4096),                     // truncated; full error stays in pino logs
+});
+export type FailedPayload = z.infer<typeof FailedPayload>;
+
+// ─── Discriminated event union ──────────────────────────────────────────────
+
+export const AuditEvent = z.discriminatedUnion("event_type", [
+  z.object({
+    id: z.string(),
+    query_id: z.string(),
+    tenant_id: z.string(),
+    agent_identity: z.string().nullable(),
+    ts: z.number().int(),
+    schema_version: z.literal(1),
+    event_type: z.literal("ATTEMPTED"),
+    payload: AttemptedPayload,
+  }),
+  z.object({
+    id: z.string(),
+    query_id: z.string(),
+    tenant_id: z.string(),
+    agent_identity: z.string().nullable(),
+    ts: z.number().int(),
+    schema_version: z.literal(1),
+    event_type: z.literal("DECIDED"),
+    payload: DecidedPayload,
+  }),
+  z.object({
+    id: z.string(),
+    query_id: z.string(),
+    tenant_id: z.string(),
+    agent_identity: z.string().nullable(),
+    ts: z.number().int(),
+    schema_version: z.literal(1),
+    event_type: z.literal("EXECUTED"),
+    payload: ExecutedPayload,
+  }),
+  z.object({
+    id: z.string(),
+    query_id: z.string(),
+    tenant_id: z.string(),
+    agent_identity: z.string().nullable(),
+    ts: z.number().int(),
+    schema_version: z.literal(1),
+    event_type: z.literal("FAILED"),
+    payload: FailedPayload,
+  }),
+]);
+export type AuditEvent = z.infer<typeof AuditEvent>;
+
+// ─── Fingerprint algorithm (specification only — implementation lives elsewhere) ──
+
+// fingerprint(sql) is a 16-hex-char hash that's the same for "the same query intent".
+// Algorithm:
+//   1. Parse SQL with libpg-query → AST
+//   2. Walk AST, replace every literal node (constants, strings, numbers) with a `?` placeholder
+//   3. Replace every parameter ref ($1, $2, ...) with a `?` placeholder
+//   4. Sort table aliases alphabetically (so `t1, t2` and `t2, t1` collapse)
+//   5. Serialize the canonical AST as deterministic JSON
+//   6. SHA-256, take first 8 bytes, hex encode → 16 chars
+//
+// Examples (all should produce the SAME fingerprint):
+//   SELECT * FROM users WHERE id = 42
+//   SELECT * FROM users WHERE id = 99
+//   SELECT * FROM users WHERE id = $1
+//
+// Different fingerprints (different intent):
+//   SELECT * FROM users WHERE id = 42      -- single-row by PK
+//   SELECT * FROM users WHERE created_at > now()  -- different predicate column
+//   SELECT id FROM users WHERE id = 42     -- different projection
+
+// ─── V2 hash-chain extension (forward-compatible — schema migration is non-breaking) ──
+
+// Future:
+//   prev_hash:  SHA-256 of (id || JSON(payload)) of the previous row in the same tenant
+//   signature:  HMAC-SHA-256 of (id || prev_hash || JSON(payload)) signed with per-tenant key
+//
+// Both nullable when added; existing rows backfilled lazily on first read or
+// during a migration window. Compliance buyer in year 2 turns these on.

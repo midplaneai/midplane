@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Conductor / gstack workspace tooling
+.context/
+.claude/
+
+# Local data
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Coverage
+coverage/
+
+# Misc
+.turbo/
+*.local
