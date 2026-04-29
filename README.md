@@ -29,8 +29,11 @@ If audit fails, the query doesn't run.
 
 V1 in active development. Free hosted tier and OSS self-host both ship at launch.
 
+Verified across **Cursor**, **Claude Code**, and **Claude Desktop** on 2026-04-29 — all three connect to a local self-host instance and reach the three V1 tools (`query`, `list_tables`, `describe_table`). The `writes_require_approval` denial path was exercised end-to-end in Claude Code; see [agent-setup.md](./docs/agent-setup.md) for setup details.
+
 - [Threat model](./THREAT_MODEL.md)
 - [Self-host docs](./docs/self-host.md)
+- [Agent setup](./docs/agent-setup.md) — verified configs for Cursor, Claude Code, Claude Desktop
 - [Trust posture](./docs/trust-posture.md)
 - [Policy rules](./docs/policy-rules.md)
 

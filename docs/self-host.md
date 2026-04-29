@@ -17,6 +17,8 @@ The MCP endpoint is at `http://localhost:8080/mcp`. The audit log persists at `/
 
 ## Wire it into your agent
 
+See [docs/agent-setup.md](./agent-setup.md) for verified per-agent configs, demo prompts, and known quirks. Quick reference:
+
 ### Cursor
 
 `~/.cursor/mcp.json`:
@@ -25,7 +27,6 @@ The MCP endpoint is at `http://localhost:8080/mcp`. The audit log persists at `/
 {
   "mcpServers": {
     "midplane": {
-      "transport": "http",
       "url": "http://localhost:8080/mcp"
     }
   }
@@ -35,10 +36,14 @@ The MCP endpoint is at `http://localhost:8080/mcp`. The audit log persists at `/
 ### Claude Code
 
 ```bash
-claude mcp add midplane http://localhost:8080/mcp
+claude mcp add --transport http midplane http://localhost:8080/mcp
 ```
 
+The `--transport http` flag is required — without it the CLI defaults to stdio.
+
 ### Claude Desktop
+
+For local self-host, the Custom Connectors UI doesn't work — it requires HTTPS and rejects `http://localhost`. Use the `mcp-remote` config-file shim instead.
 
 `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 
@@ -46,12 +51,16 @@ claude mcp add midplane http://localhost:8080/mcp
 {
   "mcpServers": {
     "midplane": {
-      "transport": "http",
-      "url": "http://localhost:8080/mcp"
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:8080/mcp"]
     }
   }
 }
 ```
+
+Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
+
+(Hosted Midplane at `https://…midplane.com/mcp/<token>` uses Custom Connectors; see [agent-setup.md](./agent-setup.md#config--hosted-custom-connectors-ui) for both paths.)
 
 ## Configuration
 
