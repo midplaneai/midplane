@@ -1,0 +1,291 @@
+// Midplane engine — class-based with dependency injection.
+//
+// Pipeline (locked, T3): parse → policy → audit(ATTEMPTED) →
+// audit(DECIDED) → if ALLOW execute → audit(EXECUTED|FAILED).
+//
+// Audit failure on ATTEMPTED or DECIDED throws AuditUnavailableError and
+// the query is NOT executed. Audit failure after exec is logged but not
+// fatal (the ATTEMPTED+DECIDED row already proves intent).
+//
+// Policy denials are NORMAL Decision returns, not exceptions.
+// Infrastructure failures (audit/KMS/parser) are typed exceptions.
+
+import { ulid } from "ulid";
+import { createHash } from "node:crypto";
+import type { AuditWriter } from "./audit/index.ts";
+import type { CredentialStore } from "./crypto/credential-store.ts";
+import type { Executor, ExecutionResult } from "./executor.ts";
+import type { Rule } from "./policy/rules/index.ts";
+import { evaluate } from "./policy/index.ts";
+import { parse } from "./parser/parse.ts";
+import { AuditEvent } from "./audit/types.ts";
+import { AuditUnavailableError } from "./errors.ts";
+
+export type EngineContext = {
+  tenant_id: string;
+  agent_identity: string | null;
+  role?: string;
+  tenant_scope?: { mappings: Record<string, string> };
+};
+
+export type Decision =
+  | { allowed: true;  result: ExecutionResult; auditId: string }
+  | { allowed: false; reason: string;          auditId: string };
+
+export interface EngineOptions {
+  policy: { rules: Rule[] };
+  audit: AuditWriter;
+  credentials: CredentialStore;
+  executor: Executor;
+  now?: () => number;
+  idGen?: () => string;
+}
+
+export class Engine {
+  private readonly rules: Rule[];
+  private readonly audit: AuditWriter;
+  private readonly executor: Executor;
+  private readonly credentials: CredentialStore;
+  private readonly now: () => number;
+  private readonly idGen: () => string;
+
+  constructor(opts: EngineOptions) {
+    this.rules = opts.policy.rules;
+    this.audit = opts.audit;
+    this.executor = opts.executor;
+    this.credentials = opts.credentials;
+    this.now = opts.now ?? Date.now;
+    this.idGen = opts.idGen ?? ulid;
+  }
+
+  async handle(input: { sql: string; ctx: EngineContext }): Promise<Decision> {
+    const start = this.now();
+    const queryId = this.idGen();
+
+    // ── 1. parse — never throws past here. A WASM crash converts to a
+    //    synthetic parse-failure ParseResult so ATTEMPTED still records
+    //    the agent's intent before any policy runs.
+    let parseResult: Awaited<ReturnType<typeof parse>>;
+    try {
+      parseResult = await parse(input.sql);
+    } catch (err) {
+      parseResult = {
+        ok: false,
+        error: `parser_crashed: ${(err as Error)?.message ?? String(err)}`,
+      };
+    }
+
+    // ── 2. audit ATTEMPTED — written BEFORE policy so a misbehaving rule
+    //    or future built-in bug cannot disappear the query from audit.
+    //    Failure here is fatal (per T3): query never executes without intent recorded.
+    const fingerprint = computeFingerprint(input.sql, parseResult);
+    const attemptedEvent: AuditEvent = {
+      id: this.idGen(),
+      query_id: queryId,
+      tenant_id: input.ctx.tenant_id,
+      agent_identity: input.ctx.agent_identity,
+      ts: this.now(),
+      schema_version: 1,
+      event_type: "ATTEMPTED",
+      payload: {
+        sql_raw: input.sql.length === 0 ? " " : input.sql.slice(0, 1_048_576),
+        sql_fingerprint: fingerprint,
+      },
+    };
+    await this.writeOrThrow(attemptedEvent);
+
+    // ── 3. policy — wrapped so any rule throw produces a clean DENY
+    //    DECIDED row with reason=internal_error rather than an unhandled
+    //    exception. The original error is logged to ops for diagnosis.
+    let evalResult: ReturnType<typeof evaluate>;
+    try {
+      evalResult = evaluate({
+        parse: parseResult,
+        ctx: input.ctx,
+        rules: this.rules,
+      });
+    } catch (err) {
+      console.error("[engine] policy evaluation threw:", err);
+      evalResult = {
+        verdict: { decision: "DENY", reason: "internal_error" },
+        statementType: null,
+        tablesTouched: [],
+      };
+    }
+
+    // ── 4. audit DECIDED — failure here aborts the pipeline.
+    const decidedId = this.idGen();
+    const decidedEvent: AuditEvent =
+      evalResult.verdict.decision === "ALLOW"
+        ? {
+            id: decidedId,
+            query_id: queryId,
+            tenant_id: input.ctx.tenant_id,
+            agent_identity: input.ctx.agent_identity,
+            ts: this.now(),
+            schema_version: 1,
+            event_type: "DECIDED",
+            payload: {
+              decision: "ALLOW",
+              statement_type: evalResult.statementType ?? "UNKNOWN",
+              tables_touched: evalResult.tablesTouched,
+            },
+          }
+        : {
+            id: decidedId,
+            query_id: queryId,
+            tenant_id: input.ctx.tenant_id,
+            agent_identity: input.ctx.agent_identity,
+            ts: this.now(),
+            schema_version: 1,
+            event_type: "DECIDED",
+            payload: {
+              decision: "DENY",
+              policy_rule: evalResult.verdict.reason,
+              reason: humanReason(evalResult.verdict.reason),
+              statement_type: evalResult.statementType ?? undefined,
+              tables_touched:
+                evalResult.tablesTouched.length > 0
+                  ? evalResult.tablesTouched
+                  : undefined,
+            },
+          };
+    await this.writeOrThrow(decidedEvent);
+
+    if (evalResult.verdict.decision === "DENY") {
+      return {
+        allowed: false,
+        reason: evalResult.verdict.reason,
+        auditId: decidedId,
+      };
+    }
+
+    // ── 5. execute (only on ALLOW)
+    const execStart = this.now();
+    let execResult: ExecutionResult;
+    try {
+      execResult = await this.executor.execute(input.sql, {
+        tenant_id: input.ctx.tenant_id,
+        agent_identity: input.ctx.agent_identity,
+      });
+    } catch (err) {
+      const failed: AuditEvent = {
+        id: this.idGen(),
+        query_id: queryId,
+        tenant_id: input.ctx.tenant_id,
+        agent_identity: input.ctx.agent_identity,
+        ts: this.now(),
+        schema_version: 1,
+        event_type: "FAILED",
+        payload: {
+          exec_ms: Math.max(0, this.now() - execStart),
+          overhead_ms: Math.max(0, execStart - start),
+          error_class: (err as { code?: string })?.code ?? "UNKNOWN",
+          error_message: String((err as Error)?.message ?? err).slice(0, 4096),
+        },
+      };
+      // Post-execute audit failure logs but does not throw — the ATTEMPTED+
+      // DECIDED rows already prove intent.
+      await this.writePostExecBestEffort(failed);
+
+      // Re-throw the underlying execution error (it's an infrastructure /
+      // remote failure, not a policy denial).
+      throw err;
+    }
+
+    const executed: AuditEvent = {
+      id: this.idGen(),
+      query_id: queryId,
+      tenant_id: input.ctx.tenant_id,
+      agent_identity: input.ctx.agent_identity,
+      ts: this.now(),
+      schema_version: 1,
+      event_type: "EXECUTED",
+      payload: {
+        exec_ms: Math.max(0, this.now() - execStart),
+        overhead_ms: Math.max(0, execStart - start),
+        rows_returned: execResult.rows.length,
+        rows_affected: execResult.rowCount,
+      },
+    };
+    await this.writePostExecBestEffort(executed);
+
+    return { allowed: true, result: execResult, auditId: decidedId };
+  }
+
+  // Pre-execute audit writes are critical-path. A throw here aborts the pipeline.
+  private async writeOrThrow(event: AuditEvent): Promise<void> {
+    try {
+      await this.audit.write(event);
+    } catch (err) {
+      if (err instanceof AuditUnavailableError) throw err;
+      throw new AuditUnavailableError(
+        `audit write failed: ${(err as Error).message}`,
+        err,
+      );
+    }
+  }
+
+  // Post-execute audit writes are best-effort (per T3). We don't throw,
+  // because the ATTEMPTED+DECIDED rows already prove intent.
+  private async writePostExecBestEffort(event: AuditEvent): Promise<void> {
+    try {
+      await this.audit.write(event);
+    } catch (err) {
+      // Surface to ops via stderr — pino integration belongs to the
+      // server package, not the engine library.
+      console.error(
+        `[engine] post-exec audit write failed for ${event.event_type}:`,
+        err,
+      );
+    }
+  }
+}
+
+// Stable, AST-agnostic fingerprint. Spec calls for AST normalization
+// (literals → ?, sorted aliases) but a content-only hash is acceptable
+// for V1 — the moat (cross-customer fingerprint statistics) is a Phase 3
+// concern. We hash the parsed-stmts JSON when available, otherwise the raw
+// SQL. First 8 bytes of SHA-256 = 16 hex chars to match the zod regex.
+function computeFingerprint(sql: string, parseResult: Awaited<ReturnType<typeof parse>>): string {
+  const input = parseResult.ok
+    ? JSON.stringify(normalizeForFingerprint(parseResult.ast))
+    : sql;
+  const digest = createHash("sha256").update(input).digest("hex");
+  return digest.slice(0, 16);
+}
+
+// Replace literal node values with placeholders so semantically-equivalent
+// queries with different literals produce the same fingerprint.
+function normalizeForFingerprint(node: unknown): unknown {
+  if (node === null || node === undefined) return node;
+  if (Array.isArray(node)) return node.map(normalizeForFingerprint);
+  if (typeof node !== "object") return node;
+  const obj = node as Record<string, unknown>;
+  if (obj.A_Const) return { A_Const: "?" };
+  if (obj.ParamRef) return { ParamRef: "?" };
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(obj)) {
+    // Drop location fields to make the hash independent of source positions.
+    if (k === "location") continue;
+    out[k] = normalizeForFingerprint(obj[k]);
+  }
+  return out;
+}
+
+function humanReason(rule: string): string {
+  switch (rule) {
+    case "writes_require_approval":
+      return "Midplane denied this query because writes are read-only by default in V1.";
+    case "multi_statement":
+      return "Midplane denied this query because it contains multiple statements.";
+    case "tenant_scope_missing":
+      return "Midplane denied this query because the tenant scope on the queried table could not be verified.";
+    case "parse_error":
+      return "Midplane denied this query because it could not be parsed as Postgres SQL.";
+    case "internal_error":
+      return "Midplane denied this query because policy evaluation failed unexpectedly.";
+    default:
+      return `Midplane denied this query (rule: ${rule}).`;
+  }
+}

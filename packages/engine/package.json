@@ -13,7 +13,12 @@
   },
   "dependencies": {
     "libpg-query": "^16.7.0",
+    "pg": "^8.13.0",
+    "ulid": "^2.3.0",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
   },
   "engines": {
     "bun": ">=1.3.0"

@@ -1,8 +1,39 @@
 // @midplane/engine — public entrypoint.
-// V1 implementation lands incrementally. Placeholder until engine.ts is written.
 
-export type { AuditEvent, AttemptedPayload, DecidedPayload, ExecutedPayload, FailedPayload } from "./audit/types.ts";
-export { EventType, Decision, PolicyRule } from "./audit/types.ts";
+export { Engine } from "./engine.ts";
+export type { EngineContext, EngineOptions, Decision } from "./engine.ts";
 
-// TODO: export Engine class once implemented (eng review locked class-based DI API).
-// TODO: export SqliteAuditWriter (bun:sqlite), PostgresAuditWriter, KmsCredentialStore.
+export type {
+  AuditWriter,
+  AuditEvent,
+  AttemptedPayload,
+  DecidedPayload,
+  ExecutedPayload,
+  FailedPayload,
+} from "./audit/index.ts";
+export { EventType, Decision as AuditDecision, PolicyRule } from "./audit/types.ts";
+export { SqliteAuditWriter } from "./audit/sqlite.ts";
+export { PostgresAuditWriter } from "./audit/postgres.ts";
+
+export type { CredentialStore } from "./crypto/credential-store.ts";
+export { EnvCredentialStore } from "./crypto/credential-store.ts";
+
+export type { Executor, ExecutionResult, ExecuteContext } from "./executor.ts";
+
+export type { Rule, RuleVerdict } from "./policy/index.ts";
+export {
+  evaluate,
+  writesRequireApproval,
+  multiStatement,
+  tenantScope,
+  parseError,
+} from "./policy/index.ts";
+
+export { parse, warmup } from "./parser/parse.ts";
+export type { ParseResult, PgParseTree } from "./parser/parse.ts";
+
+export {
+  AuditUnavailableError,
+  KmsUnavailableError,
+  ParserCrashedError,
+} from "./errors.ts";
