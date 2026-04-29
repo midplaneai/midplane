@@ -52,6 +52,13 @@ export async function parse(sql: string): Promise<ParseResult> {
     if (!ast || !Array.isArray(ast.stmts)) {
       return { ok: false, error: "parser returned no statements" };
     }
+    // Comment-only input parses cleanly with stmts=[]. The pipeline below
+    // would then see no work, no write, no scope target — a coherent ALLOW
+    // by accident. Treat empty AST as a parse_error so the agent gets a
+    // clear "you didn't send a query" signal.
+    if (ast.stmts.length === 0) {
+      return { ok: false, error: "no statements" };
+    }
     return { ok: true, ast };
   } catch (err) {
     // libpg-query's SqlError class is the expected case (bad SQL).

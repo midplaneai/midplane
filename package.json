@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "test": "bun test",
+    "test:cov": "bun test --coverage",
     "smoketest": "cd examples/smoketest && ./run.sh"
   },
   "engines": {

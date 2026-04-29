@@ -9,6 +9,12 @@
 // libpg-query keeps the body of `DO $$ ... $$` as an opaque string
 // literal, so AST scanning cannot see writes inside. Conservative
 // answer is to deny DO outright at V1.
+//
+// Notify/Listen/Unlisten/Lock are in the set even though they aren't
+// strictly DML: NOTIFY publishes to Postgres's pubsub channel, LISTEN/
+// UNLISTEN mutate session subscription state, and LOCK acquires a
+// transaction-scoped table lock with availability impact. Each is a
+// side effect outside the read-only contract, so V1 denies all four.
 
 import type { Rule, RuleEvalContext, RuleVerdict } from "./index.ts";
 import type { VisitorScope } from "../visitor.ts";
@@ -40,6 +46,10 @@ const WRITE_KINDS = new Set([
   "IndexStmt",
   "RuleStmt",
   "RefreshMatViewStmt",
+  "NotifyStmt",
+  "ListenStmt",
+  "UnlistenStmt",
+  "LockStmt",
 ]);
 
 export function writesRequireApproval(): Rule {
