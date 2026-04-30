@@ -12,6 +12,7 @@ import { CopyButton } from "@/components/copy-button";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
 import { deleteConnection } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { REGION_LABELS } from "@/lib/region";
 
 export default async function Dashboard() {
@@ -94,7 +95,15 @@ async function deleteAction(formData: FormData) {
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
   }
-  await deleteConnection(customer, id);
+  const deleted = await deleteConnection(customer, id);
+  if (deleted) {
+    // Stop the running OSS container — it still holds the deleted DSN in
+    // env until the 30-min idle timer fires otherwise.
+    const ctx = getMcpProxyContext();
+    await ctx.registry.invalidate(deleted.mcpToken).catch((err) => {
+      console.error("[dashboard.deleteAction] registry.invalidate failed", err);
+    });
+  }
   revalidatePath("/dashboard");
 }
 
