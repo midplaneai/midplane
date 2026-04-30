@@ -102,7 +102,7 @@ describe("parsePolicyOrThrow", () => {
 });
 
 describe("serializePolicyToYaml", () => {
-  it("emits a flat YAML doc with sorted table keys", () => {
+  it("wraps under table_access: with sorted table keys", () => {
     const policy: TableAccessPolicy = {
       default: "read",
       tables: { users: "read_write", "public.orders": "deny", audit: "read" },
@@ -110,11 +110,12 @@ describe("serializePolicyToYaml", () => {
     const yaml = serializePolicyToYaml(policy);
     expect(yaml).toBe(
       [
-        "default: read",
-        "tables:",
-        "  audit: read",
-        "  public.orders: deny",
-        "  users: read_write",
+        "table_access:",
+        "  default: read",
+        "  tables:",
+        "    audit: read",
+        "    public.orders: deny",
+        "    users: read_write",
         "",
       ].join("\n"),
     );
@@ -122,7 +123,7 @@ describe("serializePolicyToYaml", () => {
 
   it("emits empty tables map when no overrides exist", () => {
     expect(serializePolicyToYaml({ default: "deny", tables: {} })).toBe(
-      "default: deny\ntables: {}\n",
+      "table_access:\n  default: deny\n  tables: {}\n",
     );
   });
 

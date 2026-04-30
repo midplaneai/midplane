@@ -34,7 +34,7 @@ describe("FlyMachineSpawner", () => {
           "utf8",
         );
         expect(decoded).toBe(
-          "default: read\ntables:\n  orders: read_write\n",
+          "table_access:\n  default: read\n  tables:\n    orders: read_write\n",
         );
 
         return new Response(

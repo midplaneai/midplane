@@ -124,28 +124,34 @@ export function parsePolicyOrThrow(input: unknown): TableAccessPolicy {
 }
 
 // Serialize to the YAML shape the OSS engine reads. We hand-roll because
-// the schema is flat and predictable; pulling in js-yaml would add ~30KB
-// for two top-level keys.
+// the schema is small and predictable; pulling in js-yaml would add ~30KB
+// for one nested object.
 //
-//   default: read
-//   tables:
-//     public.users: read
-//     orders: deny
+//   table_access:
+//     default: read
+//     tables:
+//       public.users: read
+//       orders: deny
+//
+// The `table_access:` wrapper is required — the OSS mcp-server's
+// PolicyFileSchema reads `table_access.default` and `table_access.tables`.
+// A flat top-level shape is silently ignored (zod non-strict), which means
+// the engine boots with no table_access config and denies nothing.
 //
 // Table names are validated to TABLE_NAME_RE so they never need YAML
 // quoting; access levels are a fixed enum, also unquoted-safe.
 export function serializePolicyToYaml(policy: TableAccessPolicy): string {
-  const lines: string[] = [];
-  lines.push(`default: ${policy.default}`);
+  const lines: string[] = ["table_access:"];
+  lines.push(`  default: ${policy.default}`);
   const entries = Object.entries(policy.tables).sort(([a], [b]) =>
     a < b ? -1 : a > b ? 1 : 0,
   );
   if (entries.length === 0) {
-    lines.push("tables: {}");
+    lines.push("  tables: {}");
   } else {
-    lines.push("tables:");
+    lines.push("  tables:");
     for (const [name, level] of entries) {
-      lines.push(`  ${name}: ${level}`);
+      lines.push(`    ${name}: ${level}`);
     }
   }
   return lines.join("\n") + "\n";

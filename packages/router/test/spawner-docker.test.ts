@@ -63,7 +63,9 @@ describe("DockerSpawner", () => {
     expect(mountArg).toBeDefined();
     const hostPath = mountArg!.split(":")[0]!;
     const yaml = await readFile(hostPath, "utf8");
-    expect(yaml).toBe("default: read\ntables:\n  users: deny\n");
+    expect(yaml).toBe(
+      "table_access:\n  default: read\n  tables:\n    users: deny\n",
+    );
 
     await c.stop();
     const stopCall = exec.mock.calls.find((c) => c[1]?.[0] === "stop");
