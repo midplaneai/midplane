@@ -1,0 +1,24 @@
+services:
+  midplane:
+    image: midplane/midplane:latest
+    env_file: .env
+    ports:
+      # Reads PORT from .env; falls back to 8080. Container listens on the
+      # same port via packages/mcp-server/src/config.ts, so the host:container
+      # mapping stays symmetric.
+      - "${PORT:-8080}:${PORT:-8080}"
+    volumes:
+      # Named volume at /data persists the audit DB across restarts. If you
+      # set DB_PATH in .env, keep it inside /data — or edit this mount to
+      # match the parent directory of your DB_PATH.
+      - midplane-audit:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  midplane-audit:

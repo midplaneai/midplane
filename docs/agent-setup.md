@@ -6,11 +6,12 @@ Verified copy-paste configs for connecting Cursor, Claude Code, and Claude Deskt
 
 ## Before you start
 
-Boot a Midplane container with Postgres reachable:
+Boot a Midplane container with Postgres reachable. Use `--env-file` (or `docker compose up`) — never pass `DATABASE_URL` inline, since it leaks to `ps aux` and shell history.
 
 ```bash
+cp .env.example .env  # edit with your DATABASE_URL
 docker run -d --name midplane \
-  -e DATABASE_URL=postgres://your-readonly-agent:pass@your-db:5432/your-db \
+  --env-file .env \
   -p 8080:8080 \
   -v midplane-audit:/data \
   midplane/midplane:latest

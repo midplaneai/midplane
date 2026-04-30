@@ -4,16 +4,34 @@ Run Midplane locally or in your own VPC. Single Docker container. Postgres URL s
 
 ## Quick start
 
+### Option A — `docker compose` (recommended)
+
+From a clone of this repo:
+
 ```bash
+cp .env.example .env  # edit with your DATABASE_URL
+docker compose up -d
+```
+
+`compose.yaml` ships with the named `midplane-audit` volume mounted at `/data` and a healthcheck against `/health`.
+
+### Option B — `docker run` with `--env-file`
+
+```bash
+cp .env.example .env  # edit with your DATABASE_URL
 docker run -d \
   --name midplane \
-  -e DATABASE_URL=postgres://your-readonly-agent:pass@your-db:5432/your-db \
+  --env-file .env \
   -p 8080:8080 \
   -v midplane-audit:/data \
   midplane/midplane:latest
 ```
 
-The MCP endpoint is at `http://localhost:8080/mcp`. The audit log persists at `/data/audit.db` inside the container; mount a volume to survive restarts.
+### Why not `-e DATABASE_URL=postgres://...` inline?
+
+The expanded credential ends up in `ps aux` (visible to any user on the host) and in your shell history. `--env-file` keeps the secret in a file you can `chmod 600`. Same reason we ship `.env.example` and gitignore `.env`.
+
+The MCP endpoint is at `http://localhost:8080/mcp`. The audit log persists at `/data/audit.db` inside the container; the named volume survives restarts.
 
 ## Wire it into your agent
 
