@@ -57,6 +57,13 @@
       "when": 1777644000001,
       "tag": "0007_fix_journal_ordering",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777644000002,
+      "tag": "0008_policy_reloaded_event",
+      "breakpoints": true
     }
   ]
 }

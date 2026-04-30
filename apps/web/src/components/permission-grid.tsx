@@ -4,9 +4,11 @@
 //
 // Edits the JSONB policy stored on connections.table_access. On Save,
 // posts the whole policy as a single JSON-encoded form field; the server
-// action validates it again (defense-in-depth — the engine spawn would
-// also refuse) and calls setTableAccess(), which invalidates the running
-// container so the next agent request boots with the new YAML.
+// action validates it again (defense-in-depth — the engine also
+// re-validates) and calls setTableAccess(), which writes Postgres and
+// then POSTs the new YAML to the engine's /admin/policy so the agent's
+// MCP session keeps running. EnginePolicyRejected from the server
+// action surfaces as the form's error string.
 //
 // State model: keep tables as an ordered array internally so add/remove/
 // reorder work naturally. We serialize back to a Record<string,level>
@@ -244,7 +246,8 @@ export function PermissionGrid({
       ) : null}
       {savedAt ? (
         <p className="text-xs text-muted-foreground">
-          Saved. New policy will take effect on the next agent request.
+          Saved. Permission changes take effect immediately without
+          interrupting active agent sessions.
         </p>
       ) : null}
 

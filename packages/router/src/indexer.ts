@@ -75,7 +75,7 @@ export interface ContainerAuditRow {
   tenant_id: string;
   agent_identity: string | null;
   ts: number;
-  event_type: "ATTEMPTED" | "DECIDED" | "EXECUTED" | "FAILED";
+  event_type: "ATTEMPTED" | "DECIDED" | "EXECUTED" | "FAILED" | "POLICY_RELOADED";
   payload: Record<string, unknown>;
   schema_version: number;
 }
@@ -85,11 +85,16 @@ interface AuditSinceResponse {
   next_cursor: string | null;
 }
 
+// POLICY_RELOADED is emitted by the OSS engine on a successful
+// POST /admin/policy hot-swap (cloud-driven via setTableAccess); it
+// flows through the same audit pipeline as query events so operators
+// can see when a policy change took effect.
 const VALID_EVENT_TYPES = new Set([
   "ATTEMPTED",
   "DECIDED",
   "EXECUTED",
   "FAILED",
+  "POLICY_RELOADED",
 ]);
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
