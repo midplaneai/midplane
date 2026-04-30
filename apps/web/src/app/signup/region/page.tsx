@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { BrandLockup } from "@/components/layout/brand-mark";
 import { Button } from "@/components/ui/button";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
@@ -21,27 +22,33 @@ export default async function RegionPicker() {
   const suggested = defaultRegionForCountry(country);
 
   return (
-    <main className="container mx-auto flex min-h-screen max-w-2xl flex-col items-center justify-center gap-8 px-4">
-      <div className="space-y-3 text-center">
-        <h1 className="text-3xl font-semibold tracking-tight">
-          Pick your data region
-        </h1>
-        <p className="text-muted-foreground">
-          Your audit log and encrypted credentials live in this region. We
-          can&apos;t change it later — region migration is a V2 feature.
-        </p>
-      </div>
+    <main className="flex min-h-screen flex-col">
+      <header className="border-b border-border px-10 py-5">
+        <BrandLockup />
+      </header>
 
-      <form
-        action={pickRegion}
-        className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2"
-      >
-        <RegionCard region="fra" suggested={suggested} />
-        <RegionCard region="iad" suggested={suggested} />
-        <Button type="submit" className="sm:col-span-2" size="lg">
-          Continue
-        </Button>
-      </form>
+      <section className="container mx-auto flex max-w-[760px] flex-1 flex-col items-center justify-center gap-8 px-4 py-16">
+        <div className="space-y-3 text-center">
+          <h1 className="text-3xl font-semibold tracking-[-0.025em] text-foreground">
+            Pick your data region
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Your audit log and encrypted credentials live in this region. We
+            can&apos;t change it later — region migration is a V2 feature.
+          </p>
+        </div>
+
+        <form
+          action={pickRegion}
+          className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2"
+        >
+          <RegionCard region="fra" suggested={suggested} />
+          <RegionCard region="iad" suggested={suggested} />
+          <Button type="submit" className="sm:col-span-2" size="lg">
+            Continue
+          </Button>
+        </form>
+      </section>
     </main>
   );
 }
@@ -54,9 +61,11 @@ function RegionCard({
   suggested: Region;
 }) {
   return (
-    <label className="flex cursor-pointer flex-col gap-2 rounded-lg border bg-card p-4 transition-colors has-[:checked]:border-primary has-[:checked]:ring-2 has-[:checked]:ring-ring">
+    <label className="flex cursor-pointer flex-col gap-2 rounded-lg border border-border bg-card p-4 transition-colors has-[:checked]:border-[hsl(var(--brand))] has-[:checked]:ring-2 has-[:checked]:ring-ring">
       <div className="flex items-center justify-between">
-        <span className="font-medium">{REGION_LABELS[region]}</span>
+        <span className="font-medium text-foreground">
+          {REGION_LABELS[region]}
+        </span>
         {region === suggested && (
           <span className="text-xs text-muted-foreground">Suggested</span>
         )}

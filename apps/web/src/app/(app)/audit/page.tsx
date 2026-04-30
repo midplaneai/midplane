@@ -8,6 +8,10 @@ import {
   StalenessBanner,
   StalenessSubtitle,
 } from "@/components/audit/staleness-banner";
+import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { cn } from "@/lib/utils";
 import {
   countByEventType,
   EVENT_TYPES,
@@ -66,16 +70,12 @@ export default async function AuditListPage({ searchParams }: PageProps) {
 
   return (
     <>
-      <header className="md-topbar">
-        <div className="md-breadcrumb">
-          <b>{customer.email}</b>
-          <span className="md-breadcrumb-sep">/</span>Audit log
-        </div>
-      </header>
-      <div className="md-content">
-        <div className="md-page-header">
-          <h1 className="md-page-title">Audit log</h1>
-        </div>
+      <Topbar>
+        <b className="font-medium text-foreground">{customer.email}</b>
+        <span className="mx-2 text-subtle">/</span>Audit log
+      </Topbar>
+      <PageContainer>
+        <PageHeader title="Audit log" />
         <StalenessSubtitle read={staleness} totalCount={totalCount} />
         <StalenessBanner read={staleness} />
 
@@ -89,62 +89,68 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         />
 
         {list.rows.length === 0 ? (
-          <EmptyState hasFilters={hasFilters} />
+          <AuditEmpty hasFilters={hasFilters} />
         ) : (
-          <table className="md-table" data-testid="audit-table">
+          <table
+            className="w-full border-collapse text-xs"
+            data-testid="audit-table"
+          >
             <thead>
               <tr>
-                <th style={{ width: "13%" }}>Time</th>
-                <th style={{ width: "13%" }}>Event</th>
-                <th style={{ width: "16%" }}>Agent</th>
-                <th style={{ width: "16%" }}>Query ID</th>
-                <th>SQL fingerprint</th>
+                <Th width="13%">Time</Th>
+                <Th width="13%">Event</Th>
+                <Th width="16%">Agent</Th>
+                <Th width="16%">Query ID</Th>
+                <Th>SQL fingerprint</Th>
               </tr>
             </thead>
             <tbody>
               {list.rows.map((r) => (
                 <tr
                   key={r.id}
-                  className="md-row"
                   data-testid="audit-row"
                   data-event-type={r.eventType}
                   data-tenant-id={r.tenantId}
+                  className="border-b border-card transition-colors hover:bg-card"
                 >
-                  <td className="md-ts">
+                  <Td className="whitespace-nowrap font-mono text-[11px] text-subtle">
                     <Link href={`/audit/${r.id}`}>{relativeTime(r.ts)}</Link>
-                  </td>
-                  <td>
+                  </Td>
+                  <Td>
                     <Link href={`/audit/${r.id}`}>
                       <EventBadge eventType={r.eventType} />
                     </Link>
-                  </td>
-                  <td>
+                  </Td>
+                  <Td>
                     <Link href={`/audit/${r.id}`}>
                       {r.agentIdentity ? (
-                        <span className="md-agent-pill">
+                        <span className="rounded-[3px] border border-border bg-secondary px-1.5 py-px font-mono text-[10px] text-subtle">
                           {r.agentIdentity}
                         </span>
                       ) : (
-                        <span className="md-muted">—</span>
+                        <span className="text-subtle">—</span>
                       )}
                     </Link>
-                  </td>
-                  <td>
-                    <Link href={`/audit/${r.id}`} className="md-query-id">
-                      {truncate(r.queryId, 16)}
-                    </Link>
-                  </td>
-                  <td>
+                  </Td>
+                  <Td>
                     <Link
                       href={`/audit/${r.id}`}
-                      className="md-fingerprint"
+                      className="font-mono text-[11px] text-subtle"
+                    >
+                      {truncate(r.queryId, 16)}
+                    </Link>
+                  </Td>
+                  <Td>
+                    <Link
+                      href={`/audit/${r.id}`}
                       title={r.sqlFingerprint ?? undefined}
+                      className="block max-w-[340px] truncate font-mono text-xs text-foreground"
                     >
                       {r.sqlFingerprint ?? (
-                        <span className="md-muted">—</span>
+                        <span className="text-subtle">—</span>
                       )}
                     </Link>
-                  </td>
+                  </Td>
                 </tr>
               ))}
             </tbody>
@@ -152,75 +158,120 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         )}
 
         {(list.rows.length > 0 || cursor) && (
-          <div className="md-footer">
+          <div className="flex items-center gap-2.5 py-4 text-[11px] text-subtle">
             <span>
               Showing{" "}
-              <span className="mono">{list.rows.length.toLocaleString()}</span>
-              {/* "of Y" is only honest when no filter narrows the result set;
-                  countByEventType is unfiltered (it backs the chip badges).
-                  totalCount is always rendered in the page subtitle as the
-                  customer's overall query volume, so dropping it here when
-                  filtering avoids implying more matching rows exist. */}
+              <span className="font-mono">
+                {list.rows.length.toLocaleString()}
+              </span>
               {!hasFilters && totalCount > 0 && (
                 <>
                   {" "}
-                  of <span className="mono">{totalCount.toLocaleString()}</span>
+                  of{" "}
+                  <span className="font-mono">
+                    {totalCount.toLocaleString()}
+                  </span>
                 </>
               )}
               {hasFilters && " matching"}
             </span>
-            <div className="md-pagination">
-              <Link
+            <div className="ml-auto flex gap-1">
+              <PageLink
                 href={buildUrl({ cursor: null })}
-                className={`md-page-btn${cursor ? "" : " disabled"}`}
-                aria-disabled={!cursor}
-              >
-                ← Newest
-              </Link>
-              <Link
+                disabled={!cursor}
+                label="← Newest"
+              />
+              <PageLink
                 href={
-                  list.nextCursor
-                    ? buildUrl({ cursor: list.nextCursor })
-                    : "#"
+                  list.nextCursor ? buildUrl({ cursor: list.nextCursor }) : "#"
                 }
-                className={`md-page-btn${list.nextCursor ? "" : " disabled"}`}
-                aria-disabled={!list.nextCursor}
-              >
-                Older →
-              </Link>
+                disabled={!list.nextCursor}
+                label="Older →"
+              />
             </div>
           </div>
         )}
-      </div>
+      </PageContainer>
     </>
   );
 }
 
-function EmptyState({ hasFilters }: { hasFilters: boolean }) {
+function Th({ children, width }: { children: React.ReactNode; width?: string }) {
+  return (
+    <th
+      style={width ? { width } : undefined}
+      className="border-b border-border px-3 py-2 text-left text-[11px] font-medium uppercase tracking-[0.02em] text-subtle"
+    >
+      {children}
+    </th>
+  );
+}
+
+function Td({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <td className={cn("px-3 py-2.5 align-middle text-foreground", className)}>
+      {children}
+    </td>
+  );
+}
+
+function PageLink({
+  href,
+  disabled,
+  label,
+}: {
+  href: string;
+  disabled: boolean;
+  label: string;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-disabled={disabled || undefined}
+      className={cn(
+        "inline-flex items-center gap-1 rounded border border-border bg-secondary px-2.5 py-0.5 font-mono text-[11px] text-subtle transition-colors",
+        disabled
+          ? "pointer-events-none opacity-40"
+          : "hover:border-border-strong hover:text-foreground",
+      )}
+    >
+      {label}
+    </Link>
+  );
+}
+
+function AuditEmpty({ hasFilters }: { hasFilters: boolean }) {
   if (hasFilters) {
     return (
-      <div className="md-empty">
-        <div className="md-empty-title">No matching audit rows</div>
-        <div>Try clearing a filter, or widen the search term.</div>
-      </div>
+      <EmptyState
+        title="No matching audit rows"
+        description="Try clearing a filter, or widen the search term."
+      />
     );
   }
   return (
-    <div className="md-empty">
-      <div className="md-empty-title">No queries yet.</div>
-      <div>
+    <EmptyState title="No queries yet.">
+      <p className="text-sm text-muted-foreground">
         Once you wire up your agent, queries will appear here.{" "}
         <Link
           href="/dashboard"
-          style={{ color: "var(--accent)", textDecoration: "underline" }}
+          className="text-[hsl(var(--brand))] underline underline-offset-2"
         >
           Connect a database →
         </Link>
-      </div>
-      <pre>{`agent ─▶ MCP token ─▶ midplane engine ─▶ your Postgres
+      </p>
+      <pre className="mt-4 font-mono text-[11px] leading-relaxed text-muted-foreground">
+        {`agent ─▶ MCP token ─▶ midplane engine ─▶ your Postgres
                               │
-                              └─▶ audit_events ──▶ this dashboard`}</pre>
-    </div>
+                              └─▶ audit_events ──▶ this dashboard`}
+      </pre>
+    </EmptyState>
   );
 }
 
