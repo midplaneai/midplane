@@ -50,7 +50,6 @@ const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 let custAId: string;
 let custBId: string;
 let custAQueryId: string;
-const seededIds: string[] = [];
 
 test.beforeAll(async () => {
   const db = getDb();
@@ -58,6 +57,7 @@ test.beforeAll(async () => {
   custBId = ulid();
   custAQueryId = `qA-${ulid()}`;
 
+  // customers has no RLS — bulk insert is fine.
   await db.insert(customers).values([
     {
       id: custAId,
@@ -74,7 +74,7 @@ test.beforeAll(async () => {
   ]);
 
   const baseTs = Date.now();
-  const rows: NewAuditEvent[] = [
+  const aRows: NewAuditEvent[] = [
     seedRow(custAId, "tenant_a1", custAQueryId, "ATTEMPTED", baseTs, {
       sql_fingerprint: "select-from-users-1",
       sql_raw: "SELECT id FROM users",
@@ -93,7 +93,8 @@ test.beforeAll(async () => {
       baseTs + 3,
       { sql_fingerprint: "delete-from-orders-99", error: "denied" },
     ),
-
+  ];
+  const bRows: NewAuditEvent[] = [
     seedRow(custBId, "tenant_b1", `qB-${ulid()}`, "ATTEMPTED", baseTs + 10, {
       sql_fingerprint: "select-from-secrets-of-B",
     }),
@@ -102,18 +103,47 @@ test.beforeAll(async () => {
       reason: "writes_require_approval",
     }),
   ];
-  for (const r of rows) seededIds.push(r.id);
-  await db.insert(auditEventsIndex).values(rows);
+  // INSERT is gated by the same RLS policy under FORCE ROW LEVEL SECURITY
+  // (USING serves as the WITH CHECK when no separate WITH CHECK is given),
+  // so the seed must bind app.customer_id per batch — anything else would
+  // pass today (owner bypasses RLS) but fail the moment the deployment
+  // moves to a non-BYPASSRLS app role, which is the configuration this
+  // test is supposed to validate.
+  await insertScoped(custAId, aRows);
+  await insertScoped(custBId, bRows);
 });
 
 test.afterAll(async () => {
   const db = getDb();
-  for (const id of seededIds) {
-    await db.delete(auditEventsIndex).where(eq(auditEventsIndex.id, id));
-  }
+  // Cleanup also goes through SET LOCAL — DELETE under FORCE RLS only sees
+  // (and only deletes) rows visible to the bound customer_id.
+  await deleteScoped(custAId);
+  await deleteScoped(custBId);
   if (custAId) await db.delete(customers).where(eq(customers.id, custAId));
   if (custBId) await db.delete(customers).where(eq(customers.id, custBId));
 });
+
+async function insertScoped(
+  customerId: string,
+  rows: NewAuditEvent[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const db = getDb();
+  await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${customerId}'`));
+    await tx.insert(auditEventsIndex).values(rows);
+  });
+}
+
+async function deleteScoped(customerId: string): Promise<void> {
+  const db = getDb();
+  await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${customerId}'`));
+    await tx
+      .delete(auditEventsIndex)
+      .where(eq(auditEventsIndex.customerId, customerId));
+  });
+}
 
 test("customer A's listing returns ONLY A's rows under RLS", async () => {
   const aRows = await listForCustomer(custAId, {});

@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { EVENT_TYPES, type EventType } from "@/lib/audit";
 
 interface FilterChipsProps {
@@ -36,26 +38,26 @@ export function FilterChips({
       <span className="md-nav-label" style={{ padding: 0, marginRight: 4 }}>
         Event
       </span>
-      <a
+      <Link
         href={buildUrl({ eventType: [], cursor: null })}
         className={`md-filter${allTypesActive ? " active" : ""}`}
       >
         <b>All</b>
-      </a>
+      </Link>
       {EVENT_TYPES.map((t) => {
         const active = selectedTypes.includes(t);
         const next = active
           ? selectedTypes.filter((x) => x !== t)
           : [...selectedTypes, t];
         return (
-          <a
+          <Link
             key={t}
             href={buildUrl({ eventType: next, cursor: null })}
             className={`md-filter${active ? " active" : ""}`}
           >
             <b>{t.charAt(0) + t.slice(1).toLowerCase()}</b>
             <span className="md-filter-count">{counts[t]}</span>
-          </a>
+          </Link>
         );
       })}
 
@@ -67,15 +69,15 @@ export function FilterChips({
           >
             Tenant
           </span>
-          <a
+          <Link
             href={buildUrl({ tenantId: null, cursor: null })}
             className={`md-filter${selectedTenant === null ? " active" : ""}`}
           >
             <b>All</b>
             <span className="md-filter-count">{tenants.length}</span>
-          </a>
+          </Link>
           {tenants.map((t) => (
-            <a
+            <Link
               key={t}
               href={buildUrl({
                 tenantId: selectedTenant === t ? null : t,
@@ -84,7 +86,7 @@ export function FilterChips({
               className={`md-filter${selectedTenant === t ? " active" : ""}`}
             >
               <b className="mono">{truncate(t, 18)}</b>
-            </a>
+            </Link>
           ))}
         </>
       )}

@@ -1,5 +1,6 @@
 import { UserButton } from "@clerk/nextjs";
 import { Geist, Geist_Mono } from "next/font/google";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { currentCustomer } from "@/lib/customer";
@@ -33,14 +34,14 @@ export default async function AuditLayout({
         </div>
         <div className="md-nav-section">
           <div className="md-nav-label">Workspace</div>
-          <a href="/dashboard" className="md-nav-item">
+          <Link href="/dashboard" className="md-nav-item">
             <span className="md-nav-icon" aria-hidden />
             Connections
-          </a>
-          <a href="/audit" className="md-nav-item active">
+          </Link>
+          <Link href="/audit" className="md-nav-item active">
             <span className="md-nav-icon" aria-hidden />
             Audit log
-          </a>
+          </Link>
         </div>
         <div className="md-nav-section">
           <div className="md-nav-label">Region</div>

@@ -156,12 +156,18 @@ export default async function AuditListPage({ searchParams }: PageProps) {
             <span>
               Showing{" "}
               <span className="mono">{list.rows.length.toLocaleString()}</span>
-              {totalCount > 0 && (
+              {/* "of Y" is only honest when no filter narrows the result set;
+                  countByEventType is unfiltered (it backs the chip badges).
+                  totalCount is always rendered in the page subtitle as the
+                  customer's overall query volume, so dropping it here when
+                  filtering avoids implying more matching rows exist. */}
+              {!hasFilters && totalCount > 0 && (
                 <>
                   {" "}
                   of <span className="mono">{totalCount.toLocaleString()}</span>
                 </>
               )}
+              {hasFilters && " matching"}
             </span>
             <div className="md-pagination">
               <Link
