@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 // Inline rotate form rendered on /connections/[id]. The Server Action passed
 // in via `action` re-encrypts and atomically swaps the ciphertext + invalidates
@@ -40,13 +41,15 @@ export function RotateConnectionForm({
       className="space-y-3"
     >
       <input type="hidden" name="id" value={id} />
-      <input
+      <Input
         type="password"
         name="dsn"
         required
-        autoComplete="off"
+        autoComplete="new-password"
+        data-1p-ignore
+        data-lpignore="true"
         placeholder="postgres://user:pass@host:5432/db"
-        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm placeholder:text-muted-foreground"
+        className="font-mono"
       />
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" disabled={pending}>

@@ -2,59 +2,84 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Midplane design tokens. See DESIGN.md.
+ * Mapped onto shadcn's HSL variable names so the existing Button/AlertDialog
+ * primitives keep working without code changes. */
+
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 240 5.9% 10%;
-    --radius: 0.5rem;
-  }
+    /* Surfaces — bg-0..3 ramp */
+    --background: 0 0% 4%;          /* #0a0a0a */
+    --card: 0 0% 7%;                /* #111111 */
+    --popover: 0 0% 9%;             /* #161616 */
+    --secondary: 0 0% 9%;           /* #161616 */
+    --muted: 0 0% 9%;               /* #161616 */
+    --accent: 0 0% 11%;             /* #1d1d1d */
 
-  .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    /* Text — text-0..2 ramp.
+     * --foreground = primary (headings, key data).
+     * --muted-foreground = body/secondary, used everywhere prose lives. Must
+     *   clear WCAG AA against --background (#0a0a0a → 4.5:1 needs ≥#a0a0a0).
+     * --subtle = tertiary only — labels, timestamps, table cell hints.
+     *   Below AA on purpose; never use for body copy. */
+    --foreground: 0 0% 96%;         /* #f5f5f5 */
+    --card-foreground: 0 0% 96%;
+    --popover-foreground: 0 0% 96%;
+    --secondary-foreground: 0 0% 96%;
+    --accent-foreground: 0 0% 96%;
+    --muted-foreground: 0 0% 71%;   /* #b4b4b4 — body */
+    --subtle: 0 0% 44%;             /* #707070 — labels/captions only */
+
+    /* Hairlines */
+    --border: 0 0% 14%;             /* #232323 */
+    --input: 0 0% 14%;              /* #232323 */
+    --border-strong: 0 0% 18%;      /* #2e2e2e */
+
+    /* Primary = inverse (white-on-black button) */
+    --primary: 0 0% 96%;            /* #f5f5f5 */
+    --primary-foreground: 0 0% 4%;  /* #0a0a0a */
+
+    /* Focus ring + brand accent */
+    --ring: 209 100% 71%;           /* #6cb6ff */
+    --brand: 209 100% 71%;          /* #6cb6ff (alias for clarity) */
+
+    /* Semantic — query lifecycle vocabulary */
+    --allow: 137 27% 49%;           /* #5a9c6e */
+    --deny: 0 46% 62%;              /* #c87070 */
+    --warn: 37 61% 56%;             /* #d4a04c */
+
+    /* Destructive (shadcn alias for --deny) */
+    --destructive: 0 46% 62%;       /* #c87070 */
+    --destructive-foreground: 0 0% 96%;
+
+    --radius: 0.5rem;
   }
 }
 
 @layer base {
   * {
     @apply border-border;
+    box-sizing: border-box;
   }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Tabular numerics on anything explicitly typographic-data. */
+  .mono,
+  .tabular {
+    font-feature-settings: "tnum";
+  }
+  /* Pin our dark input bg against Chrome's pale autofill paint, which
+   * otherwise wins via !important user-agent style. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 30px hsl(var(--background)) inset !important;
+    -webkit-text-fill-color: hsl(var(--foreground)) !important;
+    caret-color: hsl(var(--foreground));
+    transition: background-color 0s 600000s, color 0s 600000s;
   }
 }

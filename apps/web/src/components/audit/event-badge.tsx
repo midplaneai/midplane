@@ -1,14 +1,13 @@
-// 4 OSS event types (engine emits ATTEMPTED → DECIDED → EXECUTED|FAILED).
-// Color mapping mirrors the design tokens: ATTEMPTED muted, DECIDED accent
-// blue, EXECUTED allow green, FAILED deny red. Mockup mapped on
-// allow/deny — we pivot to event_type since that's what the schema actually
-// carries; the dashboard demo flows around lifecycle, not pre-/post-decision.
+import { Badge } from "@/components/ui/badge";
 
-const CLASS_MAP: Record<string, string> = {
-  ATTEMPTED: "attempted",
-  DECIDED: "decided",
-  EXECUTED: "executed",
-  FAILED: "failed",
+const VARIANT_MAP: Record<
+  string,
+  "default" | "accent" | "allow" | "deny" | "warn"
+> = {
+  ATTEMPTED: "default",
+  DECIDED: "accent",
+  EXECUTED: "allow",
+  FAILED: "deny",
 };
 
 const ARIA_MAP: Record<string, string> = {
@@ -19,12 +18,11 @@ const ARIA_MAP: Record<string, string> = {
 };
 
 export function EventBadge({ eventType }: { eventType: string }) {
-  const cls = CLASS_MAP[eventType] ?? "attempted";
+  const variant = VARIANT_MAP[eventType] ?? "default";
   const aria = ARIA_MAP[eventType] ?? eventType;
   return (
-    <span className={`md-badge ${cls}`} aria-label={aria}>
-      <span className="md-badge-dot" aria-hidden />
+    <Badge variant={variant} aria-label={aria}>
       {eventType}
-    </span>
+    </Badge>
   );
 }

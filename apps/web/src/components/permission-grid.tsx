@@ -19,7 +19,7 @@ import {
   ACCESS_LEVELS,
   type AccessLevel,
   type TableAccessPolicy,
-} from "@midplane-cloud/db";
+} from "@midplane-cloud/db/policy";
 
 import { Button } from "@/components/ui/button";
 

@@ -3,12 +3,13 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-import { connections, getDb } from "@midplane-cloud/db";
+import { connections, getDb, parsePolicyOrThrow } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
-import { parsePolicyOrThrow } from "@midplane-cloud/db";
-
+import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { CopyButton } from "@/components/copy-button";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
 import { EditableConnectionTitle } from "@/components/editable-connection-title";
@@ -145,98 +146,112 @@ export default async function ConnectionDetail({
   }
 
   return (
-    <main className="container mx-auto max-w-2xl px-4 py-12">
-      <EditableConnectionTitle
-        id={conn.id}
-        initialName={conn.name}
-        placeholder="Your MCP endpoint is ready"
-        action={renameAction}
-      />
-      <p className="mt-2 text-sm text-muted-foreground">
-        Hosted in {REGION_LABELS[conn.region]}. Your DSN is encrypted at rest;
-        we never log or persist the plaintext.
-      </p>
-
-      <section className="mt-8 space-y-2">
-        <label className="text-sm font-medium">MCP endpoint URL</label>
-        <div className="flex items-center gap-2">
-          <input
-            readOnly
-            value={mcpUrl}
-            className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 font-mono text-sm"
+    <>
+      <Topbar>
+        <Link href="/dashboard">
+          <b className="font-medium text-foreground">Connections</b>
+        </Link>
+        <span className="mx-2 text-subtle">/</span>
+        <span className="font-mono">{conn.name ?? conn.id.slice(0, 12)}</span>
+      </Topbar>
+      <PageContainer>
+        <div className="mx-auto max-w-[760px]">
+          <EditableConnectionTitle
+            id={conn.id}
+            initialName={conn.name}
+            placeholder="Your MCP endpoint is ready"
+            action={renameAction}
           />
-          <CopyButton value={mcpUrl} />
-        </div>
-      </section>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Hosted in {REGION_LABELS[conn.region]}. Your DSN is encrypted at
+            rest; we never log or persist the plaintext.
+          </p>
 
-      <section className="mt-8 space-y-2">
-        <label className="text-sm font-medium">
-          Cursor config (~/.cursor/mcp.json)
-        </label>
-        <div className="relative rounded-md border bg-muted">
-          <pre className="overflow-x-auto p-4 font-mono text-xs">
-            {cursorConfig}
-          </pre>
-          <div className="absolute right-2 top-2">
-            <CopyButton value={cursorConfig} label="Copy config" />
+          <section className="mt-8 space-y-2">
+            <Label htmlFor="mcp-url">MCP endpoint URL</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="mcp-url"
+                readOnly
+                value={mcpUrl}
+                className="font-mono"
+              />
+              <CopyButton value={mcpUrl} />
+            </div>
+          </section>
+
+          <section className="mt-8 space-y-2">
+            <Label>Cursor config (~/.cursor/mcp.json)</Label>
+            <div className="relative rounded-md border border-border bg-muted">
+              <pre className="overflow-x-auto p-4 font-mono text-xs text-foreground">
+                {cursorConfig}
+              </pre>
+              <div className="absolute right-2 top-2">
+                <CopyButton value={cursorConfig} label="Copy config" />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              For Claude Code:{" "}
+              <code className="font-mono text-foreground">
+                claude mcp add --transport http midplane {mcpUrl}
+              </code>
+            </p>
+          </section>
+
+          <section className="mt-12 space-y-3 rounded-lg border border-border bg-card p-6">
+            <h2 className="text-base font-medium text-foreground">
+              Table permissions
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Per-table read / write policy enforced by the Midplane engine.
+              Saving stops the running session so the new policy takes effect
+              on the next agent request.
+            </p>
+            <div className="pt-2">
+              <PermissionGrid
+                connectionId={conn.id}
+                initialPolicy={parsePolicyOrThrow(conn.tableAccess)}
+                action={policyAction}
+              />
+            </div>
+          </section>
+
+          <section className="mt-6 space-y-3 rounded-lg border border-border bg-card p-6">
+            <h2 className="text-base font-medium text-foreground">
+              Rotate DSN
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Paste a new Postgres URL to replace the encrypted ciphertext. The
+              MCP endpoint URL stays the same; running sessions are torn down so
+              the new credentials take effect on the next request.
+              {conn.rotatedAt ? (
+                <> Last rotated {formatRelative(conn.rotatedAt)}.</>
+              ) : null}
+            </p>
+            <RotateConnectionForm id={conn.id} action={rotateAction} />
+          </section>
+
+          <section className="mt-6 flex items-center justify-between gap-4 rounded-lg border border-[hsl(var(--deny)/0.4)] bg-card p-6">
+            <div>
+              <h2 className="text-base font-medium text-foreground">
+                Delete connection
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Stops the MCP endpoint and removes the encrypted row. Audit
+                history stays in the dashboard for compliance.
+              </p>
+            </div>
+            <DeleteConnectionButton id={conn.id} action={deleteAction} />
+          </section>
+
+          <div className="mt-8">
+            <Link href="/dashboard">
+              <Button variant="outline">Back to dashboard</Button>
+            </Link>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">
-          For Claude Code:{" "}
-          <code className="font-mono">
-            claude mcp add --transport http midplane {mcpUrl}
-          </code>
-        </p>
-      </section>
-
-      <section className="mt-12 space-y-2 rounded-lg border bg-card p-6">
-        <h2 className="text-base font-medium">Table permissions</h2>
-        <p className="text-xs text-muted-foreground">
-          Per-table read / write policy enforced by the Midplane engine.
-          Saving stops the running session so the new policy takes effect on
-          the next agent request.
-        </p>
-        <div className="pt-2">
-          <PermissionGrid
-            connectionId={conn.id}
-            initialPolicy={parsePolicyOrThrow(conn.tableAccess)}
-            action={policyAction}
-          />
-        </div>
-      </section>
-
-      <section className="mt-6 space-y-2 rounded-lg border bg-card p-6">
-        <h2 className="text-base font-medium">Rotate DSN</h2>
-        <p className="text-xs text-muted-foreground">
-          Paste a new Postgres URL to replace the encrypted ciphertext. The MCP
-          endpoint URL stays the same; running sessions are torn down so the
-          new credentials take effect on the next request.
-          {conn.rotatedAt ? (
-            <>
-              {" "}Last rotated {formatRelative(conn.rotatedAt)}.
-            </>
-          ) : null}
-        </p>
-        <RotateConnectionForm id={conn.id} action={rotateAction} />
-      </section>
-
-      <section className="mt-6 flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-card p-6">
-        <div>
-          <h2 className="text-base font-medium">Delete connection</h2>
-          <p className="text-xs text-muted-foreground">
-            Stops the MCP endpoint and removes the encrypted row. Audit history
-            stays in the dashboard for compliance.
-          </p>
-        </div>
-        <DeleteConnectionButton id={conn.id} action={deleteAction} />
-      </section>
-
-      <div className="mt-8">
-        <Link href="/dashboard">
-          <Button variant="outline">Back to dashboard</Button>
-        </Link>
-      </div>
-    </main>
+      </PageContainer>
+    </>
   );
 }
 
