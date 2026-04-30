@@ -363,9 +363,11 @@ surface area is `libpg_query` 16.7.x.
 `table_access` denies more than DML. NOTIFY publishes a pubsub event;
 LISTEN/UNLISTEN mutate session subscription state; LOCK acquires a
 transaction-scoped lock with availability impact; CALL/EXECUTE invoke
-stored code; COPY moves data on the server filesystem. None of these
-carry an extractable per-table target the YAML can grant `read_write`
-to, so all deny under both legacy and any YAML config.
+stored code; COPY moves data on the server filesystem; SET would
+redirect bare-name table resolution on a pooled connection (breaking
+the bare → `public.<name>` policy guarantee). None of these carry an
+extractable per-table target the YAML can grant `read_write` to, so
+all deny under both legacy and any YAML config.
 
 | SQL                                                  | Verdict |
 |------------------------------------------------------|---------|
@@ -380,6 +382,10 @@ to, so all deny under both legacy and any YAML config.
 | `COPY t TO '/tmp/leak'`                              | DENY (`table_access`) |
 | `COPY t FROM STDIN`                                  | DENY (`table_access`) |
 | `COPY (SELECT * FROM users) TO '/tmp/dump'`          | DENY (`table_access`) |
+| `SET search_path = malicious_schema, public`         | DENY (`table_access`) |
+| `SET LOCAL search_path = elsewhere`                  | DENY (`table_access`) |
+| `SET timezone = 'UTC'`                               | DENY (`table_access`) |
+| `RESET search_path`                                  | DENY (`table_access`) |
 
 ---
 

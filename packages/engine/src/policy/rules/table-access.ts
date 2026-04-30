@@ -14,12 +14,30 @@
 // permission. Read-position tables checked against `read`; write-target
 // tables checked against `read_write`.
 //
-// Schema resolution: schema-qualified key first (`stripe.charges`),
-// fall back to bare name (`users`). When no policy is supplied, the
-// rule falls back to legacy "deny all writes" behavior — equivalent to
-// `{ default: "read", tables: {} }` so SELECTs allow but every write
-// (no table is `read_write`) denies. Same V1 trust posture out of the
-// box.
+// Schema resolution mirrors how Postgres's default search_path
+// (`"$user", public`) resolves bare names to `public.<table>` in the
+// 99% case. Lookup order:
+//   1. If ref is schema-qualified (`public.users`), try `<schema>.<name>` first.
+//   2. If ref is bare (`users`), try `public.<name>` as the implicit-schema
+//      fallback before the bare key — so policies written in canonical
+//      form (`public.users`) match agent SQL that uses bare names.
+//   3. Try the bare `<name>` key (matches both bare refs and qualified
+//      refs whose schema-qualified key is absent).
+//   4. Fall through to `default`.
+//
+// Executor contract: the engine's "bare → public.<name>" assumption
+// MUST be a guarantee at execution time, not a guess. Executors are
+// expected to pin the connection's search_path to `public` (PgPoolExecutor
+// does this via the libpq `options` startup parameter) so the role's
+// default search_path can't redirect a bare ref to a different schema
+// while policy authorized it against `public.X`. To keep the pin
+// tamper-proof, `VariableSetStmt` is in WRITE_STATEMENT_KINDS — any
+// `SET search_path = ...` from agent SQL denies as no_target, so an
+// agent can't desync the search_path on a pooled connection.
+// When no policy is supplied, the rule falls back to legacy "deny all
+// writes" behavior — equivalent to `{ default: "read", tables: {} }` so
+// SELECTs allow but every write (no table is `read_write`) denies. Same
+// V1 trust posture out of the box.
 //
 // Side-effecting statements that don't carry an extractable table
 // target (DO blocks, NOTIFY/LISTEN/UNLISTEN, EXECUTE, CALL, CREATE
@@ -77,6 +95,13 @@ const WRITE_STATEMENT_KINDS = new Set([
   "ListenStmt",
   "UnlistenStmt",
   "LockStmt",
+  // `SET search_path = ...` would let an agent redirect bare-name table
+  // resolution on the pooled connection, breaking the policy's
+  // "bare → public.<name>" guarantee. No per-table target is grantable,
+  // so it falls through to no_target denial for every SET (including
+  // benign ones like SET timezone — the YAML can't grant any of them
+  // safely, and SET is rarely needed in agent SQL).
+  "VariableSetStmt",
 ]);
 
 interface TableRef {
@@ -137,7 +162,7 @@ function messageFor(cause: DenialCause): string {
         `Midplane denied this query because the ${cause.statement} statement ` +
         `has no per-table target the table-access policy can grant. ` +
         `Side-effect statements (CALL, EXECUTE, NOTIFY, LISTEN, UNLISTEN, ` +
-        `LOCK, COPY, DO, CREATE/DROP/GRANT on non-table objects) deny ` +
+        `LOCK, COPY, DO, SET, CREATE/DROP/GRANT on non-table objects) deny ` +
         `regardless of YAML config.`
       );
   }
@@ -275,6 +300,7 @@ function humanStatement(kind: string): string {
     case "CreateRoleStmt": return "CREATE ROLE";
     case "CreatedbStmt": return "CREATE DATABASE";
     case "CreateFunctionStmt": return "CREATE FUNCTION";
+    case "VariableSetStmt": return "SET";
     default: return kind.replace(/Stmt$/, "").toUpperCase();
   }
 }
@@ -413,6 +439,19 @@ function resolvePermission(ref: TableRef, cfg: TableAccessConfig): TableAccessLe
     const qualified = `${ref.schema}.${ref.relname}`;
     if (Object.prototype.hasOwnProperty.call(cfg.tables, qualified)) {
       return cfg.tables[qualified]!;
+    }
+  } else {
+    // Bare reference. Postgres's default search_path resolves these to
+    // `public.<name>` on 99% of setups, and operators writing per-table
+    // policy use the canonical schema-qualified form (`public.users`),
+    // not the syntactic form the agent happens to use (`FROM users`).
+    // Try `public.<name>` before the bare key so the two match. Without
+    // this fallback, default-deny + `public.users: read` denies every
+    // unqualified `FROM users` and forces operators to double-list every
+    // table under both keys.
+    const publicQualified = `public.${ref.relname}`;
+    if (Object.prototype.hasOwnProperty.call(cfg.tables, publicQualified)) {
+      return cfg.tables[publicQualified]!;
     }
   }
   if (Object.prototype.hasOwnProperty.call(cfg.tables, ref.relname)) {

@@ -34,11 +34,28 @@ table_access:
     "stripe.charges": read    # schema-qualified key, matched first
 ```
 
-Schema resolution: a schema-qualified key (`stripe.charges`) is matched
-first; bare names (`users`) match anything not schema-qualified, and
-also match schema-qualified references (`public.users`) when no
-qualified key exists. `default: deny` blocks reads and writes on
-every unlisted table.
+Schema resolution mirrors how Postgres's default search_path
+(`"$user", public`) resolves bare names. Lookup order:
+
+1. Schema-qualified ref (`FROM stripe.charges`) → try `stripe.charges` key.
+2. Bare ref (`FROM users`) → try `public.<name>` (`public.users`) before
+   the bare key, so policies in canonical schema-qualified form match
+   agent SQL that uses bare names.
+3. Bare key (`users`) — matches bare refs and any schema-qualified ref
+   whose qualified key is absent from policy.
+4. Otherwise `default`.
+
+`default: deny` blocks reads and writes on every unlisted table.
+
+The bare → `public.<name>` fallback assumes Postgres actually resolves
+bare refs to `public`. To make this a hard guarantee instead of a guess,
+`PgPoolExecutor` pins every connection's search_path to `public,
+pg_catalog` via the libpq `options` startup parameter, and `SET`
+(`VariableSetStmt`) is denied unconditionally so agent SQL can't
+rewrite search_path on a pooled connection. Tables outside `public`
+must be referenced with schema-qualified names in both policy and SQL
+(`FROM app_data.users` + `app_data.users: read`); bare refs always
+resolve to `public`.
 
 Examples:
 

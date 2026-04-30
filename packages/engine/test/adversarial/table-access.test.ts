@@ -577,6 +577,97 @@ describe("adversarial/table-access (YAML): per-permission semantics", () => {
   });
 });
 
+// ─── Bare → public.<name> fallback (search_path implicit resolution) ──────
+//
+// Postgres's default search_path resolves `FROM users` to `public.users` on
+// 99% of setups. Operators writing per-table policy use the canonical
+// schema-qualified form (`public.users`), not the syntactic form the agent
+// happens to use (`FROM users`). The lookup order tries `public.<name>`
+// before the bare key for bare refs so the two match without forcing
+// operators to double-list every table.
+
+describe("adversarial/table-access: bare → public.<name> fallback", () => {
+  test("default `deny` + `public.users: read` + `FROM users` → allow (the new fallback)", async () => {
+    const cfg: TableAccessConfig = {
+      default: "deny",
+      tables: { "public.users": "read" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectAllow(engine, baseCtx, "SELECT COUNT(*) FROM users");
+  });
+
+  test("default `deny` + `public.users: read` + `FROM other_schema.users` → deny (different schema)", async () => {
+    // Qualified ref to a non-public schema must not pick up public.* policy.
+    const cfg: TableAccessConfig = {
+      default: "deny",
+      tables: { "public.users": "read" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT * FROM other_schema.users",
+      TABLE_ACCESS,
+    );
+  });
+
+  test("ambiguous policy: `public.users: deny` + `users: read_write` + bare ref → qualified form wins (deny)", async () => {
+    // When both keys are present for a bare ref, public.<name> matches first.
+    // Deny beats allow when the operator clearly identified the table by
+    // schema-qualified path — the safer interpretation.
+    const cfg: TableAccessConfig = {
+      default: "deny",
+      tables: { "public.users": "deny", users: "read_write" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(engine, baseCtx, "SELECT * FROM users", TABLE_ACCESS);
+  });
+
+  test("default `deny` + `users: read` + `FROM users` → allow (bare-key fallback still works)", async () => {
+    // Operators who wrote bare-key policies before the public.<name>
+    // fallback existed don't regress: bare ref → public.users miss → bare
+    // `users` hit.
+    const cfg: TableAccessConfig = {
+      default: "deny",
+      tables: { users: "read" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectAllow(engine, baseCtx, "SELECT * FROM users");
+  });
+
+  test("`public.users: read` + write `INSERT INTO users` → deny (read perm doesn't satisfy write)", async () => {
+    // The new fallback resolves the table; write-target check still
+    // requires `read_write`.
+    const cfg: TableAccessConfig = {
+      default: "deny",
+      tables: { "public.users": "read" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(
+      engine,
+      baseCtx,
+      "INSERT INTO users (id, name) VALUES (1, 'a')",
+      TABLE_ACCESS,
+    );
+  });
+
+  test("CTE name shadows even when `public.<name>` policy entry exists", async () => {
+    // `WITH users AS (...) SELECT * FROM users` — the bare RangeVar `users`
+    // is a CTE reference. CTE shadowing must run before policy lookup so
+    // the public.users key isn't consulted.
+    const cfg: TableAccessConfig = {
+      default: "read",
+      tables: { "public.users": "deny" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectAllow(
+      engine,
+      baseCtx,
+      "WITH users AS (SELECT 1) SELECT * FROM users",
+    );
+  });
+});
+
 // ─── CTE-name shadowing (regression for review feedback) ───────────────────
 //
 // libpg-query represents `FROM <cte_name>` with the same RangeVar shape it
@@ -800,5 +891,61 @@ describe("adversarial/table-access: COPY/LOCK unconditional deny", () => {
       "LOCK TABLE webhooks IN ACCESS EXCLUSIVE MODE",
       TABLE_ACCESS,
     );
+  });
+});
+
+// ─── SET (VariableSetStmt) unconditional deny ─────────────────────────────
+//
+// `SET search_path = ...` would let an agent redirect bare-name table
+// resolution on a pooled connection, breaking the policy engine's
+// "bare → public.<name>" guarantee that pairs with PgPoolExecutor's
+// search_path pin. Every SET denies unconditionally; the YAML can't
+// grant any of them safely (no per-table target), and SET is rarely
+// needed in agent SQL. This pairs with the executor-side search_path
+// pin in `packages/mcp-server/src/executor/pg-pool.ts`.
+
+describe("adversarial/table-access: SET unconditional deny", () => {
+  test("SET search_path = malicious → deny", async () => {
+    const { engine } = makeEngine();
+    await expectDeny(engine, baseCtx, "SET search_path = malicious_schema", TABLE_ACCESS);
+  });
+
+  test("SET search_path with multiple schemas → deny", async () => {
+    const { engine } = makeEngine();
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SET search_path = malicious_schema, public",
+      TABLE_ACCESS,
+    );
+  });
+
+  test("SET timezone = 'UTC' → deny (any SET, not just search_path)", async () => {
+    const { engine } = makeEngine();
+    await expectDeny(engine, baseCtx, "SET timezone = 'UTC'", TABLE_ACCESS);
+  });
+
+  test("SET LOCAL search_path → deny", async () => {
+    const { engine } = makeEngine();
+    await expectDeny(engine, baseCtx, "SET LOCAL search_path = elsewhere", TABLE_ACCESS);
+  });
+
+  test("SET SESSION search_path → deny", async () => {
+    const { engine } = makeEngine();
+    await expectDeny(engine, baseCtx, "SET SESSION search_path = elsewhere", TABLE_ACCESS);
+  });
+
+  test("RESET search_path → deny (RESET parses as VariableSetStmt)", async () => {
+    const { engine } = makeEngine();
+    await expectDeny(engine, baseCtx, "RESET search_path", TABLE_ACCESS);
+  });
+
+  test("SET denies under YAML config too — no key can grant it", async () => {
+    const cfg: TableAccessConfig = {
+      default: "read_write",
+      tables: { users: "read_write" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(engine, baseCtx, "SET search_path = whatever", TABLE_ACCESS);
   });
 });
