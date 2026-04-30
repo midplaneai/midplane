@@ -1,0 +1,46 @@
+# Frankfurt regional MCP runtime app.
+#
+# This Fly app receives /mcp/<token> traffic for fra-region customers. The
+# router's spawn-or-reuse logic (PR #2+) creates Fly machines on demand from
+# this image with DATABASE_URL set to the customer's decrypted DSN. fly-replay
+# session affinity (cache_key=<mcp-session-id>) is emitted by the OSS
+# transport — Fly handles routing.
+#
+# Adding iad in the V1 launch session is a copy of this file with primary_region
+# = "iad" and app = "midplane-iad". Same image, same env shape.
+
+app = "midplane-fra"
+primary_region = "fra"
+
+[build]
+  image = "midplaneai/midplane:0.1.0"
+
+[env]
+  PORT = "8080"
+  DB_PATH = "/data/audit.db"
+  # DATABASE_URL is injected per-machine by the router from the decrypted
+  # customer DSN. NEVER bake a database URL into the image config.
+
+[[mounts]]
+  source = "midplane_audit"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

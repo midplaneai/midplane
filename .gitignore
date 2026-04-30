@@ -1,0 +1,30 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+
+# build outputs
+dist/
+.next/
+out/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# bun
+.bun/
+bun-debug.log*
+
+# test
+coverage/
+test-results/
+playwright-report/
+playwright/.cache/
+
+# drizzle
+drizzle/.snapshots/
+
+# local
+.context/

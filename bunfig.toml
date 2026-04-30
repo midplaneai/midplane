@@ -1,0 +1,7 @@
+[install]
+# npm-style flat layout. Bun's default (isolated) hides transitive deps inside
+# node_modules/.bun/<pkg>/node_modules/, which breaks tools that resolve
+# plugins from the consumer's cwd — eslint-config-next being the prime
+# example (its dependencies aren't visible from apps/web). Hoisted makes
+# every transitive accessible at the top level, like npm/yarn.
+linker = "hoisted"

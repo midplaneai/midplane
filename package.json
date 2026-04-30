@@ -1,0 +1,35 @@
+{
+  "name": "midplane-cloud",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hosted Midplane. Sign up, paste a Postgres URL, get an MCP endpoint that runs the OSS engine with your credentials.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun --filter '@midplane-cloud/web' dev",
+    "build": "bun --filter '*' build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "lint": "bun --filter '*' lint",
+    "typecheck": "bun --filter '*' typecheck",
+    "db:generate": "bun --filter '@midplane-cloud/db' generate",
+    "db:migrate": "bun --filter '@midplane-cloud/db' migrate",
+    "db:studio": "bun --filter '@midplane-cloud/db' studio"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "bun": ">=1.3.0",
+    "node": ">=22.0.0"
+  }
+}
