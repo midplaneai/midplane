@@ -11,10 +11,12 @@
   ],
   "scripts": {
     "dev": "bun --filter '@midplane-cloud/web' dev",
+    "dev:image": "bash scripts/dev-image.sh",
     "build": "bun --filter '*' build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:live": "E2E_LIVE=1 playwright test",
     "lint": "bun --filter '*' lint",
     "typecheck": "bun --filter '*' typecheck",
     "db:generate": "bun --filter '@midplane-cloud/db' generate",

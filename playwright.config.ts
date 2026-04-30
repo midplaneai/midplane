@@ -1,4 +1,34 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { defineConfig, devices } from "@playwright/test";
+
+// Tiny .env.local loader. The test process needs DATABASE_URL +
+// MIDPLANE_KMS_DEV_KEY_FRA for the live E2E's seed step (encryptDsn,
+// getDb). Next.js loads .env.local for the dev server itself, but
+// Playwright workers don't inherit that unless we forward it here.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+loadDotenv(resolve(__dirname, ".env.local"));
+
+function loadDotenv(path: string): void {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/i.exec(line);
+    if (!m || line.trim().startsWith("#")) continue;
+    const [, key, raw] = m;
+    if (!key) continue;
+    if (process.env[key] !== undefined) continue;
+    const val = raw?.replace(/^['"]|['"]$/g, "") ?? "";
+    process.env[key] = val;
+  }
+}
 
 export default defineConfig({
   testDir: "./e2e",
