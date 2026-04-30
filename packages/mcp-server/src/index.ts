@@ -5,6 +5,7 @@
 // build server → pick transport → serve. NEVER touches SQL itself; every
 // tool routes through engine.handle().
 
+import type { AuditWriter } from "@midplane/engine";
 import { warmup } from "@midplane/engine";
 import { loadConfig } from "./config.ts";
 import { buildEngine } from "./engine-factory.ts";
@@ -13,6 +14,10 @@ import { startStdio } from "./transport/stdio.ts";
 import { startHttp } from "./transport/http.ts";
 import { logger } from "./logger.ts";
 import { initTelemetry } from "./telemetry/index.ts";
+import {
+  DenyWebhookAuditWriter,
+  loadDenyWebhookConfig,
+} from "./deny-webhook.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
 export async function runServer(): Promise<void> {
@@ -32,7 +37,31 @@ export async function runServer(): Promise<void> {
     transport: cfg.transport,
   });
 
-  const handle = buildEngine(cfg, { wrapAudit: (w) => telemetry.wrap(w) });
+  let denyWebhook;
+  try {
+    denyWebhook = loadDenyWebhookConfig(process.env);
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    process.exit(1);
+  }
+  if (denyWebhook) {
+    logger.info(
+      {
+        rules:
+          denyWebhook.rules && denyWebhook.rules.size > 0
+            ? [...denyWebhook.rules]
+            : "all",
+      },
+      "deny webhook enabled",
+    );
+  }
+
+  const wrapAudit = (w: AuditWriter): AuditWriter => {
+    let result = telemetry.wrap(w);
+    if (denyWebhook) result = new DenyWebhookAuditWriter(result, denyWebhook);
+    return result;
+  };
+  const handle = buildEngine(cfg, { wrapAudit });
 
   let close: () => Promise<void>;
 

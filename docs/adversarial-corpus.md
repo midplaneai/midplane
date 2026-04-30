@@ -2,11 +2,11 @@
 
 Every shape in this document is a real test in
 [`packages/engine/test/adversarial/`](../packages/engine/test/adversarial).
-The corpus exists to answer one question: *what does Midplane V1 actually
+The corpus exists to answer one question: *what does Midplane actually
 catch, and where are its limits?* It is intentionally short on marketing
 and long on SQL.
 
-V1 ships four policy rules, in this evaluation order:
+Midplane ships four policy rules, in this evaluation order:
 
 1. `parse_error` — input couldn't be parsed
 2. `multi_statement` — input parsed to more than one top-level statement
@@ -16,9 +16,9 @@ V1 ships four policy rules, in this evaluation order:
    `WHERE org_id = 42` predicate at the same SelectStmt scope, reachable
    through `AND` only
 
-V1 is **conservative by default**: when in doubt we deny. False positives
-(legitimate queries refused) are bugs we triage in V1.5. Bypasses are
-release blockers.
+Midplane is **conservative by default**: when in doubt we deny. False
+positives (legitimate queries refused) are bugs we triage as we go.
+Bypasses are release blockers.
 
 ---
 
@@ -30,8 +30,8 @@ finds it.
 
 | SQL                                                                         | Verdict | Rule                       | Why this matters |
 |-----------------------------------------------------------------------------|---------|----------------------------|------------------|
-| `DELETE FROM users`                                                         | DENY    | `writes_require_approval`  | Unbounded delete (PocketOS-style); V1 default-read-only. |
-| `DELETE FROM users WHERE id = 1`                                            | DENY    | `writes_require_approval`  | Bounded delete still denies — V1 does not infer "scoped enough". |
+| `DELETE FROM users`                                                         | DENY    | `writes_require_approval`  | Unbounded delete (PocketOS-style); read-only by default. |
+| `DELETE FROM users WHERE id = 1`                                            | DENY    | `writes_require_approval`  | Bounded delete still denies — Midplane does not infer "scoped enough". |
 | `UPDATE users SET name='b' WHERE org_id=42`                                 | DENY    | `writes_require_approval`  | Even with a tenant predicate, an UPDATE is a write. |
 | `UPDATE a SET n=1 FROM b WHERE a.id=b.id`                                   | DENY    | `writes_require_approval`  | Multi-table UPDATE form. |
 | `INSERT INTO users (org_id, name) VALUES (42, 'a')`                         | DENY    | `writes_require_approval`  | Plain INSERT. |
@@ -185,8 +185,8 @@ shape (Supabase, generic-MCP wrappers, etc.).
 | `SELECT * FROM users WHERE 1 = 1`                            | DENY    | Tautology, no scope. |
 | `SELECT * FROM users WHERE id IS NOT NULL`                   | DENY    | Looks broad but doesn't pin tenant. |
 | `SELECT * FROM users WHERE true`                             | DENY    | Same shape. |
-| `SELECT * FROM users WHERE org_id IN (42)`                   | DENY    | V1 conservative: operator must be `=`, not `IN`. |
-| `SELECT * FROM users WHERE org_id::text = '42'`              | DENY    | V1 conservative: cast fails the literal extractor. |
+| `SELECT * FROM users WHERE org_id IN (42)`                   | DENY    | Conservative: operator must be `=`, not `IN`. |
+| `SELECT * FROM users WHERE org_id::text = '42'`              | DENY    | Conservative: cast fails the literal extractor. |
 | `SELECT * FROM users WHERE org_id = NULL`                    | DENY    | NULL literal isn't a value the literal extractor recognizes; predicate doesn't match. |
 
 ### Predicate connective handling
@@ -240,8 +240,8 @@ matching, a single `u.org_id=42` predicate would have appeared to satisfy
 
 Verifies tenant_scope is correct on its own. In production
 `writes_require_approval` denies writes first; this section exercises
-the rule in isolation. V1 conservative posture: any DML on a mapped
-table denies regardless of WHERE.
+the rule in isolation. Conservative posture: any DML on a mapped table
+denies regardless of WHERE.
 
 | SQL                                                                  | Verdict |
 |----------------------------------------------------------------------|---------|
@@ -278,7 +278,7 @@ surface area is `libpg_query` 16.7.x.
 
 ### Postgres-specific syntax that parses cleanly
 
-| SQL                                                             | Verdict (under V1 read-only) |
+| SQL                                                             | Verdict (read-only by default) |
 |-----------------------------------------------------------------|------------------------------|
 | `INSERT … RETURNING id`                                         | DENY (`writes_require_approval`) — parses fine |
 | `UPDATE … RETURNING id, msg`                                    | DENY (`writes_require_approval`) |
@@ -328,26 +328,26 @@ filesystem. All deny.
 
 ---
 
-## Known V1 limitations
+## Known limitations
 
 The following shapes currently **allow** when an audit mindset would
 prefer a deny. They are documented gaps, not patched-around bypasses —
-V1 ships with a small, predictable rule surface, and tightening any of
-these adds policy state we'd rather defer to V1.5.
+Midplane ships with a small, predictable rule surface, and tightening
+any of these adds policy state we'd rather defer to a follow-up release.
 
-| SQL                                            | V1 verdict | Why it's a gap |
-|------------------------------------------------|------------|----------------|
-| `SELECT pg_terminate_backend(123)`             | ALLOW      | SELECT-wrapped admin function. AST-level write detection cannot tell side-effecting `pg_*` functions from pure ones without a denylist. **V1.5: function-side-effects denylist.** |
-| `SELECT pg_cancel_backend(123)`                | ALLOW      | Same shape. |
-| `SELECT lo_unlink(1)`                          | ALLOW      | Large-object unlink — a write disguised as a SELECT. |
-| `BEGIN`                                        | ALLOW      | Transaction control statement. V1 commits per query so BEGIN is a no-op for the pipeline. |
-| `VACUUM users`                                 | ALLOW      | Performance side effects (locks, IO) but no data mutation. |
-| `PREPARE my_p AS SELECT 1`                     | ALLOW      | Session-state mutation. Tightening requires session-scope tracking; deferred to V1.5. |
-| `DEALLOCATE my_p`                              | ALLOW      | Symmetric to PREPARE. Same V1 gap. |
+| SQL                                            | Verdict | Why it's a gap |
+|------------------------------------------------|---------|----------------|
+| `SELECT pg_terminate_backend(123)`             | ALLOW   | SELECT-wrapped admin function. AST-level write detection cannot tell side-effecting `pg_*` functions from pure ones without a denylist. **Planned: function-side-effects denylist.** |
+| `SELECT pg_cancel_backend(123)`                | ALLOW   | Same shape. |
+| `SELECT lo_unlink(1)`                          | ALLOW   | Large-object unlink — a write disguised as a SELECT. |
+| `BEGIN`                                        | ALLOW   | Transaction control statement. Midplane commits per query, so BEGIN is a no-op for the pipeline. |
+| `VACUUM users`                                 | ALLOW   | Performance side effects (locks, IO) but no data mutation. |
+| `PREPARE my_p AS SELECT 1`                     | ALLOW   | Session-state mutation. Tightening requires session-scope tracking; deferred. |
+| `DEALLOCATE my_p`                              | ALLOW   | Symmetric to PREPARE. Same gap. |
 
 If your threat model needs any of these tightened today, that is a
-known V1 gap rather than a bug — please open an issue and we'll either
-backport the tightening or prioritize it for V1.5.
+known gap rather than a bug — please open an issue and we'll either
+backport the tightening or prioritize it for a follow-up release.
 
 ---
 

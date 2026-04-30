@@ -34,7 +34,7 @@ If you find a bypass and don't know how to fix it, open the PR with just the fai
 
 - [ ] Tests pass (`bun test`)
 - [ ] Adversarial-corpus markdown and tests stay in sync (one row in the doc → one assertion)
-- [ ] Policy changes preserve the four V1 rules' contract; if you tightened one, add an entry to the corpus showing what's now denied
+- [ ] Policy changes preserve the four shipping rules' contract; if you tightened one, add an entry to the corpus showing what's now denied
 - [ ] No new fields added to telemetry payloads without updating [`TELEMETRY.md`](./TELEMETRY.md) and bumping `schema_version`
 - [ ] Docs touched if behavior changed (`README`, `docs/self-host.md`, `docs/agent-setup.md`, `TELEMETRY.md`, `THREAT_MODEL.md`)
 - [ ] Commit messages reference the WHY (the issue, the bypass class, the user-visible effect) over the WHAT
@@ -47,6 +47,6 @@ Sign your commits with `git commit -s`. By signing, you certify the [Developer C
 
 The project is and stays MIT. By contributing you agree your contribution is licensed the same way.
 
-## Scope guidance for V1
+## Scope guidance
 
-Some things are deliberately out of scope until V1.5+ (write-approval flow, function-side-effects denylist, session-scope tracking, column-level reads). PRs that add those should reference the [Roadmap](./README.md#roadmap) so we can stage them. Smaller fixes inside the V1 surface are easier to land.
+Some things are deliberately out of scope right now (write-approval flow, function-side-effects denylist, session-scope tracking, column-level reads). PRs that add those should reference the [Roadmap](./README.md#roadmap) so we can stage them. Smaller fixes inside the current surface are easier to land.

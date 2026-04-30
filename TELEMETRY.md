@@ -31,7 +31,7 @@ Telemetry is best-effort: failure is silent and never blocks a query.
 | Mode        | Default      | How to change                              |
 | ----------- | ------------ | ------------------------------------------ |
 | Self-host   | **enabled**  | `MIDPLANE_TELEMETRY=0` or `DO_NOT_TRACK=1` |
-| Hosted      | **enabled**  | Account setting (post-V1)                  |
+| Hosted      | **enabled**  | Account setting (later)                    |
 
 First-run notice: when the install ID is generated for the first time, the
 server prints a three-line stderr notice pointing at this document and the

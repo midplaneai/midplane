@@ -70,7 +70,7 @@ export async function handleQuery(input: {
 function humanReason(rule: string): string {
   switch (rule) {
     case "writes_require_approval":
-      return "Midplane denied this query because writes are read-only by default in V1.";
+      return "Midplane denied this query because writes require approval and are read-only by default.";
     case "multi_statement":
       return "Midplane denied this query because it contains multiple statements.";
     case "tenant_scope_missing":

@@ -74,7 +74,7 @@ Now try a destructive prompt:
 
 > "Delete every user whose email ends in `@example.com`."
 
-Cursor will probably ask for confirmation first (the agent's own gate). Confirm. Midplane denies the actual `DELETE` with `policy_rule=writes_require_approval` — read-only is the V1 default. Cursor reports the denial in plain language.
+Cursor will probably ask for confirmation first (the agent's own gate). Confirm. Midplane denies the actual `DELETE` with `policy_rule=writes_require_approval` — read-only is the default. Cursor reports the denial in plain language.
 
 ## 5. See the audit row (30 seconds)
 

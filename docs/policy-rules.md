@@ -1,12 +1,12 @@
-# Policy rules (V1)
+# Policy rules
 
-V1 ships four hardcoded policy rules. Custom policy authoring (YAML) is V1.5+.
+Midplane ships four hardcoded policy rules. Custom YAML policy authoring is on the roadmap.
 
 ## `writes_require_approval` (default: ON)
 
 Denies any AST node matching the write set: `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE`, `EXECUTE`, `CALL`. Recursive — catches writes embedded in CTEs, subqueries, function calls.
 
-V1 has no in-product approval flow; denial returns a structured MCP error. Per-customer opt-in to allow writes is V1.5.
+There is no in-product approval flow yet; denial returns a structured MCP error. Per-customer opt-in to allow writes is on the roadmap.
 
 Examples:
 
@@ -30,7 +30,7 @@ SELECT 1; DROP TABLE users;                                -- DENY (2 statements
 
 Configurable per customer. Maps tables to tenant columns. Denies queries on mapped tables that lack a literal `WHERE {column} = {context.tenant_id}` predicate at the same scope.
 
-Conservative semantics: subqueries, CTEs, UNION arms, JOINs, and function calls all enforced. Some legitimate queries may be denied (false positives possible; refine in V2).
+Conservative semantics: subqueries, CTEs, UNION arms, JOINs, and function calls all enforced. Some legitimate queries may be denied (false positives possible; we'll keep refining the matcher).
 
 Self-host config (YAML):
 
@@ -49,9 +49,9 @@ Per-session: set `MIDPLANE_TENANT_ID=42` in env vars. Hosted: `tenant_id` claim 
 
 Denies any input that fails to parse. `libpg_query` is the parser. Anything that looks like a string but isn't valid Postgres SQL is denied.
 
-## What ISN'T a policy rule (V1)
+## What isn't a policy rule (today)
 
-- "Limit row count" — `LIMIT` clause not enforced. Year-2 feature.
+- "Limit row count" — `LIMIT` clause not enforced. Long-term roadmap.
 - "Match against a SQL pattern" — explicitly rejected. Regex-on-SQL is the anti-pattern Midplane fights.
-- "Approve based on time-of-day / business hours" — V2.
-- "Prevent specific column reads" — V2 (fine-grained schema-aware policy).
+- "Approve based on time-of-day / business hours" — later roadmap.
+- "Prevent specific column reads" — later roadmap (fine-grained schema-aware policy).

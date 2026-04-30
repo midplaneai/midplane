@@ -89,6 +89,8 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 | `DB_PATH` | `/data/audit.db` | Path to the local SQLite audit log. |
 | `MIDPLANE_TENANT_ID` | (none) | Used by the `tenant_scope` policy rule. See [policy-rules.md](./policy-rules.md). |
 | `MIDPLANE_POLICY_FILE` | (none) | Path to a YAML policy override file. Defaults apply if unset. |
+| `MIDPLANE_DENY_WEBHOOK` | (none) | If set to an `http(s)://` URL, every policy denial fires a JSON `POST` to it. See [deny-webhook.md](./deny-webhook.md). |
+| `MIDPLANE_DENY_WEBHOOK_RULES` | (all rules) | Comma-separated allowlist of policy rule names that trigger the webhook. |
 | `INDEXER_TOKEN` | (none) | Bearer token for the audit pull endpoints. Unset → endpoints return 404. See [Shipping audit to your own collector](#shipping-audit-to-your-own-collector). |
 
 ## Reading the audit log

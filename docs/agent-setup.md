@@ -2,7 +2,7 @@
 
 Verified copy-paste configs for connecting Cursor, Claude Code, and Claude Desktop to a running Midplane MCP endpoint.
 
-> **Status:** Live trace ran 2026-04-29 against a local container booted via `scripts/agent-smoke.sh`. All three agents connected and listed the three V1 tools. Per-prompt verification depth varies — see each agent's section below for what was specifically exercised.
+> **Status:** Live trace ran 2026-04-29 against a local container booted via `scripts/agent-smoke.sh`. All three agents connected and listed all three Midplane tools. Per-prompt verification depth varies — see each agent's section below for what was specifically exercised.
 
 ## Before you start
 
@@ -49,14 +49,14 @@ Verified 2026-04-29: after saving the config, Cursor's MCP panel lists three too
 
 ### Demo paths
 
-Run each prompt in chat (assuming the seeded `users` / `posts` demo schema from `agent-smoke.sh`). The first three exercise the three V1 tools on the happy path; the last three exercise the three V1 policy denials. Confirm each denial's reason renders cleanly in the chat (not buried in a stack trace).
+Run each prompt in chat (assuming the seeded `users` / `posts` demo schema from `agent-smoke.sh`). The first three exercise the three Midplane tools on the happy path; the last three exercise the three policy denials. Confirm each denial's reason renders cleanly in the chat (not buried in a stack trace).
 
 | # | Prompt | Expected tool | Expected result | Audit row |
 |---|---|---|---|---|
 | 1 | "What tables are in the database?" | `list_tables` | `users`, `posts` | `ATTEMPTED → DECIDED → EXECUTED` |
 | 2 | "What columns does the users table have?" | `describe_table` | 4 columns: id, email, org_id, created_at | `ATTEMPTED → DECIDED → EXECUTED` |
 | 3 | "Show me the first 5 rows of the users table." | `query` | 2 rows returned | `ATTEMPTED → DECIDED → EXECUTED` |
-| 4 | "Delete all users." | `query` (`DELETE FROM users`) | Denied; reason: *"Midplane denied this query because writes are read-only by default in V1."* `policy_rule=writes_require_approval`. | `ATTEMPTED → DECIDED` |
+| 4 | "Delete all users." | `query` (`DELETE FROM users`) | Denied; reason: *"Midplane denied this query because writes require approval and are read-only by default."* `policy_rule=writes_require_approval`. | `ATTEMPTED → DECIDED` |
 | 5 | "Run this SQL: `SELECT 1; DROP TABLE users`" | `query` | Denied; `policy_rule=multi_statement`. | `ATTEMPTED → DECIDED` |
 | 6 | "Run this SQL: `this is not sql`" | `query` | Denied; `policy_rule=parse_error`. | `ATTEMPTED → DECIDED` |
 
@@ -105,13 +105,13 @@ User: *"confirm delete all users"*
 
 > Called midplane (ctrl+o to expand)
 >
-> ⏺ Midplane blocked it — policy `writes_require_approval` is enforced and the connection is read-only in V1. The DELETE was audited but not executed.
+> ⏺ Midplane blocked it — policy `writes_require_approval` is enforced and the connection is read-only by default. The DELETE was audited but not executed.
 
 Two enforcement layers visible to the user: Claude Code's own confirmation prompt before any destructive call, then Midplane's policy denial. The Midplane reason string (`writes_require_approval`, read-only by default) surfaces cleanly in Claude Code's natural-language summary.
 
 ### Quirks
 
-- Claude Code applies its own pre-write confirmation gate, so a denied write surfaces twice (Claude's confirmation prompt → user confirms → Midplane denies). This makes the V1 trust story more visible, not less. Read paths skip the gate entirely.
+- Claude Code applies its own pre-write confirmation gate, so a denied write surfaces twice (Claude's confirmation prompt → user confirms → Midplane denies). This makes the trust story more visible, not less. Read paths skip the gate entirely.
 
 ---
 

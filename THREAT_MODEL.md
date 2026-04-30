@@ -1,6 +1,6 @@
 # Midplane Threat Model
 
-Status: V1 draft. Refines through implementation; updated before public launch.
+Status: pre-launch draft. Refines through implementation; updated before public launch.
 
 ## Trust boundaries
 
@@ -22,18 +22,18 @@ Status: V1 draft. Refines through implementation; updated before public launch.
 
 For hosted only: the customer's Postgres URL is encrypted at rest with a per-tenant AWS KMS key. Decrypted in process memory at query time, cached for up to 10 minutes (with up to 60 additional minutes of grace if KMS is unreachable, after which new sessions are refused). Never written to disk.
 
-## Attack vectors covered (V1)
+## Attack vectors covered
 
 - **SQL injection via raw text in MCP arguments.** AST-based parsing (libpg_query); no regex. Anything that doesn't parse is denied.
 - **Multi-statement injection** (Datadog SQLi vector). Parser detects multiple statements; policy rule `multi_statement` denies.
-- **Destructive writes against production.** Policy rule `writes_require_approval` denies `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE`, `EXECUTE`, `CALL` at any AST depth. Per-customer opt-in to allow writes is V1.5.
+- **Destructive writes against production.** Policy rule `writes_require_approval` denies `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE`, `EXECUTE`, `CALL` at any AST depth. Per-customer opt-in to allow writes is on the roadmap.
 - **Cross-tenant exfiltration** (Supabase service-role pattern). Opt-in tenant scope rule; denies any query against a mapped table without a literal `WHERE {column} = {tenant_id}` predicate at the same scope. Conservative: subqueries, CTEs, UNION arms, JOINs all enforced.
 - **CTE-embedded writes.** Recursive AST walk catches `INSERT/UPDATE/DELETE` at any depth, even when the top-level statement is a `SELECT`.
 
-## Attack vectors NOT covered (out of scope V1)
+## Attack vectors NOT covered (out of scope today)
 
 - **Compromised customer DB role.** If your agent's connection string belongs to a privileged role, Midplane operates on top of those permissions. We do not replace Postgres role-based access control. Best practice: create a scoped role for your agent.
-- **Supply chain attack on the published artifacts.** V1 ships only as a Docker image (`midplane/midplane` on Docker Hub) — `@midplane/engine` and `@midplane/mcp-server` are workspace identifiers, not published npm packages. Hub-side access control + multi-arch image digests are the V1 mitigation. npm publishing with provenance attestations is planned for V2 once the runtime story (currently Bun-only via `bun:sqlite`) supports a Node consumer path.
+- **Supply chain attack on the published artifacts.** Midplane ships only as a Docker image (`midplane/midplane` on Docker Hub) — `@midplane/engine` and `@midplane/mcp-server` are workspace identifiers, not published npm packages. Hub-side access control + multi-arch image digests are the current mitigation. npm publishing with provenance attestations is on the roadmap once the runtime story (currently Bun-only via `bun:sqlite`) supports a Node consumer path.
 - **Malicious agent prompt before it reaches Midplane.** If the agent is jailbroken to bypass the MCP server entirely (e.g., direct DB connection through other means), Midplane sees nothing. We secure the path through us, not all paths.
 - **Agent leaking query results outside Midplane's view.** Midplane denies and audits queries; what the agent does with returned rows after the fact is the agent's responsibility (and the user's session).
 - **Metadata side-channel attacks against the audit log.** Audit row count and timing are observable to the customer's own infrastructure operators. No guarantee against insider threat at the customer.

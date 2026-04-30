@@ -30,7 +30,7 @@ AI coding agents are getting plugged into production Postgres without an audit t
 - **Cross-tenant exfiltration.** Opt in by mapping a tenant column once; queries on that table without the right `WHERE` predicate are denied at any AST depth (subqueries, CTEs, JOINs).
 - **CTE-embedded writes.** `WITH x AS (DELETE FROM ...) SELECT * FROM x` doesn't fool the recursive AST walk.
 
-Pinned by an [adversarial SQL corpus](./docs/adversarial-corpus.md): **105 bypass attempts denied** + 52 legitimate-query controls allowed. **100% line coverage** on the V1 policy surface (`packages/engine/src/policy/*`).
+Pinned by an [adversarial SQL corpus](./docs/adversarial-corpus.md): **105 bypass attempts denied** + 52 legitimate-query controls allowed. **100% line coverage** on the policy surface (`packages/engine/src/policy/*`).
 
 ## In a real chat
 
@@ -40,7 +40,7 @@ A `delete all users` prompt to Claude Code, against a Midplane-fronted DB:
 >
 > *user: confirm delete all users*
 >
-> ⏺ Midplane blocked it — policy `writes_require_approval` is enforced and the connection is read-only in V1. The DELETE was audited but not executed.
+> ⏺ Midplane blocked it — policy `writes_require_approval` is enforced and the connection is read-only by default. The DELETE was audited but not executed.
 
 Two enforcement layers: the agent's own confirmation, then Midplane's policy denial. The audit row lands before the query reaches the DB. Full transcript and demo prompts in [agent-setup.md](./docs/agent-setup.md).
 
@@ -139,9 +139,9 @@ Performance against locked spike targets: 154 MB image (under 200 MB budget), co
 
 ## Roadmap
 
-- **V1.5** — write approval flow, custom YAML policy authoring, function-side-effects denylist (`pg_terminate_backend`, `lo_unlink`, etc.), session-scope tracking (`BEGIN` / `COMMIT` / `PREPARE`).
-- **V2** — fine-grained schema-aware policy (column-level reads), time-of-day rules, fewer false positives on `tenant_scope`.
-- **Year 2** — `LIMIT` enforcement, SOC 2.
+- **Next** — write approval flow, custom YAML policy authoring, function-side-effects denylist (`pg_terminate_backend`, `lo_unlink`, etc.), session-scope tracking (`BEGIN` / `COMMIT` / `PREPARE`).
+- **Later** — fine-grained schema-aware policy (column-level reads), time-of-day rules, fewer false positives on `tenant_scope`.
+- **Long-term** — `LIMIT` enforcement, SOC 2.
 
 Tracked in GitHub Issues. PRs welcome.
 
@@ -176,4 +176,4 @@ For security issues, follow [SECURITY.md](./SECURITY.md). Do not open a public i
 
 ## License
 
-MIT. See [LICENSE](./LICENSE). The license stays MIT in V1, V2, V3, and forever — no copyleft, no BSL, no source-available.
+MIT. See [LICENSE](./LICENSE). The license stays MIT — no copyleft, no BSL, no source-available, ever.
