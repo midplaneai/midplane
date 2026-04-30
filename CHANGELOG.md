@@ -2,6 +2,12 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Anonymous telemetry** (`@midplane/mcp-server`). On startup the server posts a single ULID-keyed event to `https://t.midplane.ai/v1/events`; every 24h it posts a heartbeat with per-tool call counts, denials grouped by policy rule, statement-type buckets, latency histograms (p50/p95/p99), and Postgres failure counts grouped by 2-char SQLSTATE class. No SQL, no fingerprints, no table/column names, no tenant IDs, no error messages — see [`TELEMETRY.md`](./TELEMETRY.md) for the full schema and the "what we never send" list. Disable with `MIDPLANE_TELEMETRY=0` or `DO_NOT_TRACK=1`. Inspect with `MIDPLANE_TELEMETRY=debug`.
+
 ## [0.1.0] — Unreleased
 
 First tagged release. The four V1 policy rules — `writes_require_approval`, `multi_statement`, `tenant_scope`, `parse_error` — sit on the `audit-before-execute` pipeline and are pinned by [an adversarial SQL corpus](./docs/adversarial-corpus.md) covering CTE-hidden writes, stacked-statement injection, cross-tenant exfiltration, parser edges, and exec-side-effects. Agent compatibility verified across Cursor, Claude Code, and Claude Desktop on 2026-04-29.

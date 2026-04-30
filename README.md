@@ -165,6 +165,7 @@ For security issues, follow [SECURITY.md](./SECURITY.md). Do not open a public i
 - [Trust posture](./docs/trust-posture.md) — what we claim, what we don't
 - [Policy rules](./docs/policy-rules.md)
 - [Adversarial corpus](./docs/adversarial-corpus.md)
+- [Telemetry](./TELEMETRY.md) — what's collected, how to disable (`MIDPLANE_TELEMETRY=0`)
 
 ## Acknowledgements
 

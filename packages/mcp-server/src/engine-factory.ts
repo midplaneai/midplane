@@ -9,6 +9,7 @@ import {
   multiStatement,
   writesRequireApproval,
   tenantScope,
+  type AuditWriter,
   type EngineContext,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
@@ -22,8 +23,15 @@ export interface EngineHandle {
   close(): Promise<void>;
 }
 
-export function buildEngine(cfg: Config): EngineHandle {
-  const audit = new SqliteAuditWriter(cfg.dbPath);
+export interface BuildEngineOptions {
+  // Wraps the constructed audit writer (e.g. with a telemetry tee).
+  // Defaults to identity so non-telemetry callers don't need to know.
+  wrapAudit?: (w: AuditWriter) => AuditWriter;
+}
+
+export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineHandle {
+  const baseAudit = new SqliteAuditWriter(cfg.dbPath);
+  const audit = opts.wrapAudit ? opts.wrapAudit(baseAudit) : baseAudit;
   const credentials = new EnvCredentialStore("DATABASE_URL");
   const executor = new PgPoolExecutor({ databaseUrl: cfg.databaseUrl });
 
@@ -60,6 +68,9 @@ export function buildEngine(cfg: Config): EngineHandle {
     ctxBase,
     async close() {
       await executor.close();
+      // audit may be a wrapper (e.g. telemetry tee); its close() delegates
+      // to the inner SqliteAuditWriter. Calling baseAudit.close() here
+      // would double-close.
       await audit.close();
     },
   };
