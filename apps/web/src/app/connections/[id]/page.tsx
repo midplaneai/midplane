@@ -61,6 +61,9 @@ export default async function ConnectionDetail({
     const renamed = await renameConnection(customer, formId, name);
     if (!renamed) notFound();
     revalidatePath(`/connections/${formId}`);
+    // The dashboard list also renders c.name, so its prefetched/cached
+    // render goes stale on rename — bust it too.
+    revalidatePath("/dashboard");
   }
 
   async function rotateAction(formData: FormData) {
