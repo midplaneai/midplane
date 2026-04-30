@@ -307,7 +307,12 @@ async function buildHarness(
 
   const spawner = new StubSpawner();
   const registry = new ContainerRegistry(spawner, { idleMs: 60_000 });
-  await registry.acquire({ token: "tok-A", region: "fra", dsn: "postgres://x" });
+  await registry.acquire({
+    token: "tok-A",
+    region: "fra",
+    dsn: "postgres://x",
+    tableAccess: { default: "deny", tables: {} },
+  });
 
   return { db, state, registry, spawner };
 }

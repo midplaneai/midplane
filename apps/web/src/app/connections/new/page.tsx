@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 
+import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db";
+
 import { Button } from "@/components/ui/button";
 import { currentCustomer } from "@/lib/customer";
 import {
@@ -52,15 +54,69 @@ export default async function NewConnection() {
             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           <p className="text-xs text-muted-foreground">
-            Best practice: a least-privilege role. Midplane enforces read-only
-            by default in V1, but defense-in-depth at the DB layer matters.
+            Best practice: a least-privilege role. Midplane enforces the
+            access level you pick below; defense-in-depth at the DB layer
+            still matters.
           </p>
         </div>
+        <fieldset className="space-y-3">
+          <legend className="text-sm font-medium">Default agent access</legend>
+          <p className="text-xs text-muted-foreground">
+            Sets the baseline for any table the agent queries. Per-table
+            overrides can be added later from the connection page.
+          </p>
+          <div className="space-y-2">
+            <AccessRadio
+              value="read"
+              label="Read"
+              description="Agents can query any table. Writes always denied unless granted per-table. Recommended."
+              defaultChecked
+            />
+            <AccessRadio
+              value="deny"
+              label="Deny"
+              description="Agents have no access until you grant it explicitly. Strictest; useful when you want allowlisting from day one."
+            />
+            <AccessRadio
+              value="read_write"
+              label="Read + write"
+              description="Agents can read and write any table. Not recommended outside one-shot migration tokens."
+            />
+          </div>
+        </fieldset>
         <Button type="submit" size="lg">
           Create connection
         </Button>
       </form>
     </main>
+  );
+}
+
+function AccessRadio({
+  value,
+  label,
+  description,
+  defaultChecked,
+}: {
+  value: AccessLevel;
+  label: string;
+  description: string;
+  defaultChecked?: boolean;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 rounded-md border bg-card p-3 hover:bg-accent">
+      <input
+        type="radio"
+        name="default_access"
+        value={value}
+        defaultChecked={defaultChecked}
+        className="mt-1"
+      />
+      <div className="space-y-0.5">
+        <div className="text-sm font-medium">{label}</div>
+        <div className="text-xs text-muted-foreground">{description}</div>
+      </div>
+    </label>
   );
 }
 
@@ -76,6 +132,16 @@ async function createAction(formData: FormData) {
   const nameRaw = formData.get("name");
   const name = typeof nameRaw === "string" ? nameRaw : null;
 
-  const { id } = await createConnection(customer, dsn, name);
+  // Form-posted radio values are strings. Validate against the canonical
+  // enum so a tampered request can't smuggle in something the spawner
+  // would later refuse — and so a missing field falls back to `read`.
+  const accessRaw = formData.get("default_access");
+  const defaultAccess: AccessLevel =
+    typeof accessRaw === "string" &&
+    (ACCESS_LEVELS as readonly string[]).includes(accessRaw)
+      ? (accessRaw as AccessLevel)
+      : "read";
+
+  const { id } = await createConnection(customer, dsn, name, defaultAccess);
   redirect(`/connections/${id}`);
 }

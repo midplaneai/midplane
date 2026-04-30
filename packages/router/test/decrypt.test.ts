@@ -41,6 +41,7 @@ const conn: Connection = {
   createdAt: new Date(),
   rotatedAt: null,
   lastKmsSuccessAt: null,
+  tableAccess: { default: "deny", tables: {} },
 };
 
 const kms: KmsContext = { mode: "env", envKeys: { fra: "x".repeat(64) } };

@@ -31,6 +31,7 @@ const opts = (token = "tok-a"): SpawnOptions => ({
   token,
   region: "fra",
   dsn: "postgres://x",
+  tableAccess: { default: "deny", tables: {} },
 });
 
 describe("ContainerRegistry", () => {

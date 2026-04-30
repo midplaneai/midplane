@@ -10,8 +10,18 @@
 // 30 minutes after the last request.
 
 import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { serializePolicyToYaml } from "@midplane-cloud/db";
 
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
+
+// Path inside the container where the OSS engine reads the policy file
+// from. Matches the Fly spawner so the OSS image's MIDPLANE_POLICY_FILE
+// env points at the same path regardless of backend.
+const POLICY_FILE_GUEST_PATH = "/etc/midplane/policy.yaml";
 
 export interface DockerSpawnerOptions {
   image?: string;
@@ -48,6 +58,19 @@ export class DockerSpawner implements Spawner {
 
   async spawn(opts: SpawnOptions): Promise<SpawnedContainer> {
     const name = `midplane-${opts.token.slice(0, 16)}`;
+    // Materialize the policy YAML to a host tempfile, bind-mount it ro
+    // into the container at MIDPLANE_POLICY_FILE. The dir is per-spawn so
+    // a concurrent spawn for a different token can't observe or clobber.
+    // Cleaned up in stop(); a leak survives until OS tmp eviction, which
+    // is fine — the file is non-secret (no DSN, no keys).
+    const policyDir = await mkdtemp(join(tmpdir(), "midplane-policy-"));
+    const policyHostPath = join(policyDir, "policy.yaml");
+    await writeFile(
+      policyHostPath,
+      serializePolicyToYaml(opts.tableAccess),
+      { mode: 0o644 },
+    );
+
     // -p 0:8080 asks Docker for a random host port; -d --rm so the container
     // self-removes on stop. DATABASE_URL is the only place the decrypted DSN
     // surfaces; it lives in the container's env, not on disk.
@@ -61,14 +84,24 @@ export class DockerSpawner implements Spawner {
       `DATABASE_URL=${opts.dsn}`,
       "-e",
       "PORT=8080",
+      "-e",
+      `MIDPLANE_POLICY_FILE=${POLICY_FILE_GUEST_PATH}`,
+      "-v",
+      `${policyHostPath}:${POLICY_FILE_GUEST_PATH}:ro`,
     ];
     if (this.indexerToken) {
       args.push("-e", `INDEXER_TOKEN=${this.indexerToken}`);
     }
     args.push("-p", "0:8080", this.image);
-    const runRes = await this.exec("docker", args);
-    const containerId = runRes.stdout.trim();
-    if (!containerId) throw new Error("docker run returned empty container id");
+    let containerId: string;
+    try {
+      const runRes = await this.exec("docker", args);
+      containerId = runRes.stdout.trim();
+      if (!containerId) throw new Error("docker run returned empty container id");
+    } catch (err) {
+      await rm(policyDir, { recursive: true, force: true }).catch(() => undefined);
+      throw err;
+    }
 
     let port: number;
     try {
@@ -77,6 +110,7 @@ export class DockerSpawner implements Spawner {
       await this.waitForHealth(port);
     } catch (err) {
       await this.exec("docker", ["rm", "-f", containerId]).catch(() => undefined);
+      await rm(policyDir, { recursive: true, force: true }).catch(() => undefined);
       throw err;
     }
 
@@ -88,6 +122,7 @@ export class DockerSpawner implements Spawner {
         await exec("docker", ["stop", "--time=0", containerId]).catch(
           () => undefined,
         );
+        await rm(policyDir, { recursive: true, force: true }).catch(() => undefined);
       },
     };
   }
