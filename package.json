@@ -25,6 +25,8 @@
     "db:studio": "bun --filter '@midplane-cloud/db' studio"
   },
   "devDependencies": {
+    "@clerk/backend": "^3.4.2",
+    "@clerk/testing": "^2.0.22",
     "@playwright/test": "^1.49.1",
     "@types/bun": "^1.1.14",
     "@types/node": "^22.10.0",

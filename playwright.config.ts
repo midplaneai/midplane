@@ -48,9 +48,30 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
+    // Setup project: mints a Clerk testing token and stuffs it into
+    // process.env so setupClerkTestingToken({ page }) calls in the
+    // signup suite can attach __clerk_testing_token to FAPI requests.
+    // workers: 1 above keeps setup + dependent tests in the same worker
+    // so process.env mutations survive — Clerk's docs recommend this
+    // shape over function-based globalSetup for exactly that reason.
+    {
+      name: "clerk-setup",
+      testMatch: /_clerk-globalsetup\.ts$/,
+    },
+    // signup-chromium runs ONLY the Clerk-driven critical-path suite and
+    // is the one project that depends on clerk-setup. Pulling Clerk in as
+    // a chromium-wide dependency would force every non-auth live suite
+    // (mcp-proxy, indexer) to require Clerk keys, which they don't use.
+    {
+      name: "signup-chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /signup\.live\.e2e\.ts$/,
+      dependencies: ["clerk-setup"],
+    },
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: [/_clerk-globalsetup\.ts$/, /signup\.live\.e2e\.ts$/],
     },
   ],
   webServer: process.env.E2E_BASE_URL
