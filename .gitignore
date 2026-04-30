@@ -11,6 +11,7 @@ dist/
 out/
 .turbo/
 .vercel/
+*.tsbuildinfo
 
 # bun
 .bun/
