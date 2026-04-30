@@ -49,6 +49,9 @@ interface FakeDbState {
   failNextTxn: boolean;
   /** Override for retention max-id query. */
   retentionMaxId: string | null;
+  /** Captures every SET LOCAL app.customer_id = '...' bind issued
+   *  inside indexer transactions. */
+  boundCustomerIds: string[];
 }
 
 function makeFakeDb(): { db: Db; state: FakeDbState } {
@@ -59,6 +62,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
     inserts: [],
     failNextTxn: false,
     retentionMaxId: null,
+    boundCustomerIds: [],
   };
 
   const select = (
@@ -176,6 +180,33 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
   const db = {
     select,
     insert,
+    // The indexer issues `SET LOCAL app.customer_id = '<id>'` inside every
+    // transaction post-0004_force_rls so the RLS policy on
+    // audit_events_index doesn't block its own writes. The fake just
+    // records that the bind happened with a customer_id string.
+    async execute(q: unknown): Promise<unknown> {
+      const text = (() => {
+        if (q && typeof q === "object") {
+          const r = q as {
+            queryChunks?: unknown[];
+            sql?: string;
+            getSQL?: () => unknown;
+          };
+          if (typeof r.sql === "string") return r.sql;
+          if (Array.isArray(r.queryChunks)) {
+            return r.queryChunks
+              .map((c) =>
+                typeof c === "string" ? c : (c as { value?: string }).value ?? "",
+              )
+              .join("");
+          }
+        }
+        return "";
+      })();
+      const m = /SET LOCAL app\.customer_id = '([^']+)'/.exec(text);
+      if (m?.[1]) state.boundCustomerIds.push(m[1]);
+      return [];
+    },
     async transaction<T>(fn: (tx: typeof db) => Promise<T>): Promise<T> {
       if (state.failNextTxn) {
         state.failNextTxn = false;
@@ -190,19 +221,21 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
 
 /** Walks a drizzle-orm SQL tree (which has cycles, so JSON.stringify
  *  doesn't work) and pulls out string Param values prefixed with "tok-"
- *  or "cust-". The Indexer's where-clauses are simple enough that this
- *  one walk covers every case. */
+ *  or matching the ULID alphabet (Crockford base32, 26 chars). The
+ *  Indexer's where-clauses are simple enough that this one walk covers
+ *  every case. */
 function parseWhere(
   cond: unknown,
 ): { token?: string; customerId?: string } {
   const seen = new WeakSet<object>();
   const out: { token?: string; customerId?: string } = {};
+  const ulid = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
   function walk(v: unknown): void {
     if (v === null || v === undefined) return;
     if (typeof v === "string") {
       if (v.startsWith("tok-") && !out.token) out.token = v;
-      else if (v.startsWith("cust-") && !out.customerId) out.customerId = v;
+      else if (ulid.test(v) && !out.customerId) out.customerId = v;
       return;
     }
     if (typeof v !== "object") return;
@@ -217,6 +250,8 @@ function parseWhere(
   walk(cond);
   return out;
 }
+
+const TEST_CUST_A = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -268,7 +303,7 @@ async function buildHarness(
 }> {
   const { db, state } = makeFakeDb();
   if (opts.failNextTxn) state.failNextTxn = true;
-  state.customerByToken.set("tok-A", { customerId: "cust-A", region: "fra" });
+  state.customerByToken.set("tok-A", { customerId: TEST_CUST_A, region: "fra" });
 
   const spawner = new StubSpawner();
   const registry = new ContainerRegistry(spawner, { idleMs: 60_000 });
@@ -293,6 +328,24 @@ describe("Indexer", () => {
           indexerToken: "",
         }),
     ).toThrow(/indexerToken is required/);
+  });
+
+  it("binds RLS via SET LOCAL app.customer_id inside the write transaction", async () => {
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [row("01HX0000000000000000000001")],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+    });
+    await ix.tick();
+    expect(state.boundCustomerIds).toContain(TEST_CUST_A);
   });
 
   it("polls /audit/since with bearer and inserts batch", async () => {
@@ -323,7 +376,7 @@ describe("Indexer", () => {
     );
 
     expect(state.auditRows).toHaveLength(2);
-    expect(state.auditRows[0]!.customerId).toBe("cust-A");
+    expect(state.auditRows[0]!.customerId).toBe(TEST_CUST_A);
     expect(state.cursorByToken.get("tok-A")?.lastId).toBe(
       "01HX0000000000000000000002",
     );
@@ -549,7 +602,7 @@ describe("Indexer", () => {
     const fetchFn = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
     const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
     await ix.tick();
-    expect(state.cursorByToken.get("tok-A")?.customerId).toBe("cust-A");
+    expect(state.cursorByToken.get("tok-A")?.customerId).toBe(TEST_CUST_A);
     expect(state.auditRows).toHaveLength(1);
 
     // Now the user deletes the connection — connections row gone.

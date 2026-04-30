@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev --turbo --port 3000",
-    "build": "next build",
+    "dev": "bun --env-file=../../.env.local --bun next dev --turbo --port 3000",
+    "build": "bun --env-file=../../.env.local --bun next build",
     "start": "next start --port 3000",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
