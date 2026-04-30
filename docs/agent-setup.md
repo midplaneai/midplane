@@ -124,7 +124,7 @@ Claude Desktop has two paths to attach a remote MCP server, and **which one work
 | Deployment | URL scheme | Working path |
 |---|---|---|
 | Self-host (local) | `http://localhost:8080/mcp` | `mcp-remote` config-file shim |
-| Hosted Midplane | `https://…midplane.com/mcp/<token>` | Custom Connectors UI |
+| Hosted Midplane | `https://…midplane.ai/mcp/<token>` | Custom Connectors UI |
 
 The Custom Connectors UI **rejects `http://`** (Anthropic enforces HTTPS as a baseline). It also can't accept a self-signed cert against `localhost`. So for local self-host the only supported path is `mcp-remote`, which proxies stdio↔HTTP locally.
 
@@ -147,7 +147,7 @@ The Custom Connectors UI **rejects `http://`** (Anthropic enforces HTTPS as a ba
 
 ### Config — hosted (Custom Connectors UI)
 
-When you connect to a Midplane hosted endpoint at `https://…midplane.com/mcp/<token>`:
+When you connect to a Midplane hosted endpoint at `https://…midplane.ai/mcp/<token>`:
 
 1. Settings → Connectors → **Add custom connector**.
 2. Name: `midplane`. URL: your hosted endpoint.

@@ -78,7 +78,7 @@ For local self-host, the Custom Connectors UI doesn't work — it requires HTTPS
 
 Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 
-(Hosted Midplane at `https://…midplane.com/mcp/<token>` uses Custom Connectors; see [agent-setup.md](./agent-setup.md#config--hosted-custom-connectors-ui) for both paths.)
+(Hosted Midplane at `https://…midplane.ai/mcp/<token>` uses Custom Connectors; see [agent-setup.md](./agent-setup.md#config--hosted-custom-connectors-ui) for both paths.)
 
 ## Configuration
 
@@ -89,6 +89,7 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 | `DB_PATH` | `/data/audit.db` | Path to the local SQLite audit log. |
 | `MIDPLANE_TENANT_ID` | (none) | Used by the `tenant_scope` policy rule. See [policy-rules.md](./policy-rules.md). |
 | `MIDPLANE_POLICY_FILE` | (none) | Path to a YAML policy override file. Defaults apply if unset. |
+| `INDEXER_TOKEN` | (none) | Bearer token for the audit pull endpoints. Unset → endpoints return 404. See [Shipping audit to your own collector](#shipping-audit-to-your-own-collector). |
 
 ## Reading the audit log
 
@@ -101,6 +102,46 @@ sqlite3 /var/lib/docker/volumes/midplane-audit/_data/audit.db
 ```
 
 Schema: see [packages/engine/src/audit/schema.sql](../packages/engine/src/audit/schema.sql).
+
+## Shipping audit to your own collector
+
+Two HTTP endpoints let an external indexer (your SIEM, your warehouse loader, the Midplane hosted indexer) pull audit rows in cursor order and acknowledge them after they're durable downstream. They're **opt-in** — set `INDEXER_TOKEN` to enable; unset, both routes return `404` so the routes don't appear to exist.
+
+Generate a token and append it to `.env`. Docker's `--env-file` is **not a shell** — it doesn't expand `$(...)` — so generate the value first, then write the literal hex:
+
+```bash
+echo "INDEXER_TOKEN=$(openssl rand -hex 32)" >> .env
+```
+
+Then `docker compose up -d` (or restart the container) so the new env reaches the process. Export the same value into your shell so the curl examples below work:
+
+```bash
+export INDEXER_TOKEN=$(grep ^INDEXER_TOKEN= .env | cut -d= -f2-)
+```
+
+### `GET /audit/since/<cursor>?limit=N`
+
+Pulls rows with `id > cursor` in ascending `id` order. Pass `0` (or any sentinel that sorts below the smallest ULID) to start from the beginning.
+
+- `limit` defaults to `500`, max `1000`.
+- Response: `{ "rows": [...], "next_cursor": "<id>" | null }`. `next_cursor` is `null` when the page was short (no more rows).
+- Auth: `Authorization: Bearer <INDEXER_TOKEN>`. Constant-time comparison; `401` on any mismatch.
+
+```bash
+curl -sH "Authorization: Bearer $INDEXER_TOKEN" \
+  "http://localhost:8080/audit/since/0?limit=100"
+```
+
+### `DELETE /audit/before/<id>`
+
+Deletes rows with `id <= <id>` (inclusive). Use this **after** the rows are durable in your collector. Idempotent — re-deleting already-deleted rows returns `{ "deleted": 0 }`.
+
+```bash
+curl -sX DELETE -H "Authorization: Bearer $INDEXER_TOKEN" \
+  "http://localhost:8080/audit/before/<last-id-you-confirmed>"
+```
+
+Pull-then-delete is the contract; do not call `DELETE` for rows you haven't read out yet.
 
 ## Updating
 

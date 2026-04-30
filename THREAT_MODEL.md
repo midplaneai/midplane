@@ -33,7 +33,7 @@ For hosted only: the customer's Postgres URL is encrypted at rest with a per-ten
 ## Attack vectors NOT covered (out of scope V1)
 
 - **Compromised customer DB role.** If your agent's connection string belongs to a privileged role, Midplane operates on top of those permissions. We do not replace Postgres role-based access control. Best practice: create a scoped role for your agent.
-- **Supply chain attack on `@midplane/engine`.** Mitigated by package-publishing access control + `provenance` attestations on npm releases. Not a guarantee.
+- **Supply chain attack on the published artifacts.** V1 ships only as a Docker image (`midplane/midplane` on Docker Hub) — `@midplane/engine` and `@midplane/mcp-server` are workspace identifiers, not published npm packages. Hub-side access control + multi-arch image digests are the V1 mitigation. npm publishing with provenance attestations is planned for V2 once the runtime story (currently Bun-only via `bun:sqlite`) supports a Node consumer path.
 - **Malicious agent prompt before it reaches Midplane.** If the agent is jailbroken to bypass the MCP server entirely (e.g., direct DB connection through other means), Midplane sees nothing. We secure the path through us, not all paths.
 - **Agent leaking query results outside Midplane's view.** Midplane denies and audits queries; what the agent does with returned rows after the fact is the agent's responsibility (and the user's session).
 - **Metadata side-channel attacks against the audit log.** Audit row count and timing are observable to the customer's own infrastructure operators. No guarantee against insider threat at the customer.
@@ -51,4 +51,4 @@ Self-host has no Midplane-controlled infrastructure exposure. Customer's Postgre
 
 ## Reporting a vulnerability
 
-See [SECURITY.md](./SECURITY.md). (Coming.)
+See [SECURITY.md](./SECURITY.md).

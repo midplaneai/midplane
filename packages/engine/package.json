@@ -1,6 +1,7 @@
 {
   "name": "@midplane/engine",
   "version": "0.1.0",
+  "private": true,
   "description": "Midplane engine: parse, policy, audit. Postgres-only at V1.",
   "license": "MIT",
   "type": "module",
@@ -22,8 +23,5 @@
   },
   "engines": {
     "bun": ">=1.3.0"
-  },
-  "publishConfig": {
-    "access": "public"
   }
 }

@@ -128,11 +128,12 @@ If your agent already has DB tooling, Midplane sits in front of it as a separate
 - [`packages/mcp-server`](./packages/mcp-server) — `@midplane/mcp-server`. Wraps the engine in three MCP tools (`query`, `list_tables`, `describe_table`) over stdio + Streamable HTTP.
 - [`docker/`](./docker) — production image (`midplane/midplane`).
 - [`docs/`](./docs) — agent setup, policy rules, threat model, adversarial corpus.
+- [`examples/cursor-saas-postgres`](./examples/cursor-saas-postgres) — 5-minute walkthrough: Cursor + Midplane in front of your real product DB.
 - [`examples/smoketest`](./examples/smoketest) — end-to-end smoketest against a sidecar Postgres.
 
 ## Status
 
-`0.1.0` — pre-release. The OSS engine + MCP server + Docker image are tested and tag-ready; the hosted tier is still in build. We'll cut the `v0.1.0` tag when both sides are end-to-end verified. Expect to stay on `0.x` for a while after that.
+`0.1.0` — first OSS release. The engine, MCP server, and Docker image are tagged and verified across Cursor, Claude Code, and Claude Desktop on a local self-host. Expect to stay on `0.x` for a while; the hosted tier ships separately on its own cadence and is not gated on OSS releases.
 
 Performance against locked spike targets: 154 MB image (under 200 MB budget), cold start ~470 ms (under 500 ms target), ~3.9 ms/call smoketest throughput.
 
@@ -146,7 +147,7 @@ Tracked in GitHub Issues. PRs welcome.
 
 ## Contributing
 
-Issues and PRs welcome. The single highest-leverage contribution is **new entries in [the adversarial SQL corpus](./docs/adversarial-corpus.md)** — bypass attempts (and the policy fixes that defeat them) are how this project earns trust.
+Issues and PRs welcome. The single highest-leverage contribution is **new entries in [the adversarial SQL corpus](./docs/adversarial-corpus.md)** — bypass attempts (and the policy fixes that defeat them) are how this project earns trust. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the workflow, the PR checklist, and the DCO.
 
 ```bash
 bun install
