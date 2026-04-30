@@ -23,8 +23,10 @@ import {
   FlyMachineSpawner,
   Indexer,
   loadRegions,
+  pushPolicy as pushPolicyHelper,
+  type PushPolicyResult,
 } from "@midplane-cloud/router";
-import { getDb } from "@midplane-cloud/db";
+import { getDb, type TableAccessPolicy } from "@midplane-cloud/db";
 import { makeKmsContext } from "@midplane-cloud/kms";
 
 interface McpProxyContext {
@@ -32,6 +34,14 @@ interface McpProxyContext {
   registry: ContainerRegistry;
   resolver: DsnResolver;
   indexer: Indexer | null;
+  /** Hot-reload a connection's table_access on its running engine, if
+   *  any. Resolves to `delivered:false` when there is no active
+   *  container OR `INDEXER_TOKEN` is unset (laptop dev) — the next
+   *  spawn will read the new policy from Postgres on its own. */
+  pushPolicy(
+    token: string,
+    policy: TableAccessPolicy,
+  ): Promise<PushPolicyResult>;
 }
 
 const GLOBAL_KEY = "__midplane_mcp_proxy__";
@@ -91,7 +101,21 @@ export function getMcpProxyContext(): McpProxyContext {
     indexer.start();
   }
 
-  const ctx: McpProxyContext = { cache, registry, resolver, indexer };
+  const pushPolicy = async (
+    token: string,
+    policy: TableAccessPolicy,
+  ): Promise<PushPolicyResult> => {
+    if (!indexerToken) return { delivered: false };
+    return pushPolicyHelper(token, policy, { registry, indexerToken });
+  };
+
+  const ctx: McpProxyContext = {
+    cache,
+    registry,
+    resolver,
+    indexer,
+    pushPolicy,
+  };
   g[GLOBAL_KEY] = ctx;
   return ctx;
 }

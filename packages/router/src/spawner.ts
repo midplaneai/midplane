@@ -102,6 +102,24 @@ export class ContainerRegistry {
     return promise;
   }
 
+  /** Returns the live container for `token` if one is up, else `null`.
+   *  Does NOT spawn and does NOT block on an in-flight spawn — used by
+   *  cloud admin paths (policy hot-reload) that want to mutate a running
+   *  engine without keeping it warm. A concurrent spawn that lands after
+   *  this call is fine: the saver writes Postgres before calling here,
+   *  so the new container's spawn-time read of `tableAccess` already
+   *  picks up the change. */
+  getActive(token: string): ActiveContainer | null {
+    const entry = this.entries.get(token);
+    if (!entry) return null;
+    return {
+      token,
+      region: entry.region,
+      host: entry.container.host,
+      port: entry.container.port,
+    };
+  }
+
   /** Snapshot of active containers — used by the audit indexer to know
    *  who to poll. Returned as a plain array so callers can iterate without
    *  holding a reference into the live map. */

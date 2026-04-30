@@ -108,6 +108,35 @@ describe("ContainerRegistry", () => {
     expect(reg.size()).toBe(0);
   });
 
+  it("getActive returns ActiveContainer for live tokens, null otherwise", async () => {
+    const stub = new StubSpawner();
+    const reg = new ContainerRegistry(stub);
+    expect(reg.getActive("tok-a")).toBeNull();
+
+    const c = await reg.acquire(opts("tok-a"));
+    const active = reg.getActive("tok-a");
+    expect(active).not.toBeNull();
+    expect(active?.host).toBe(c.host);
+    expect(active?.port).toBe(c.port);
+    expect(active?.region).toBe("fra");
+    expect(active?.token).toBe("tok-a");
+
+    expect(reg.getActive("tok-b")).toBeNull();
+  });
+
+  it("getActive does NOT block on an in-flight spawn (returns null)", async () => {
+    // Policy hot-reload shouldn't wait on a cold start; if there's no
+    // entry yet, the saver returns the durable PG state and the next
+    // request reads the new policy on its own.
+    const stub = new StubSpawner();
+    stub.delayMs = 50;
+    const reg = new ContainerRegistry(stub);
+    const spawning = reg.acquire(opts("tok-a"));
+    expect(reg.getActive("tok-a")).toBeNull();
+    await spawning;
+    expect(reg.getActive("tok-a")).not.toBeNull();
+  });
+
   it("idle timer triggers stop after idleMs", async () => {
     vi.useFakeTimers();
     try {
