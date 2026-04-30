@@ -6,16 +6,20 @@ import { notFound, redirect } from "next/navigation";
 import { connections, getDb } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
+import { parsePolicyOrThrow } from "@midplane-cloud/db";
+
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/copy-button";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
 import { EditableConnectionTitle } from "@/components/editable-connection-title";
+import { PermissionGrid } from "@/components/permission-grid";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
 import {
   deleteConnection,
   isValidDsn,
   renameConnection,
   rotateConnection,
+  setTableAccess,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
@@ -90,6 +94,34 @@ export default async function ConnectionDetail({
     revalidatePath(`/connections/${formId}`);
   }
 
+  async function policyAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+
+    const formId = formData.get("id");
+    if (typeof formId !== "string" || formId.length === 0) {
+      throw new Error("missing id");
+    }
+    const raw = formData.get("policy");
+    if (typeof raw !== "string") {
+      throw new Error("missing policy");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("policy is not valid JSON");
+    }
+    // parsePolicyOrThrow runs the same validator as the spawner.
+    const policy = parsePolicyOrThrow(parsed);
+
+    const ctx = getMcpProxyContext();
+    const result = await setTableAccess(customer, formId, policy, ctx);
+    if (!result) notFound();
+    revalidatePath(`/connections/${formId}`);
+  }
+
   async function deleteAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
@@ -158,6 +190,22 @@ export default async function ConnectionDetail({
       </section>
 
       <section className="mt-12 space-y-2 rounded-lg border bg-card p-6">
+        <h2 className="text-base font-medium">Table permissions</h2>
+        <p className="text-xs text-muted-foreground">
+          Per-table read / write policy enforced by the Midplane engine.
+          Saving stops the running session so the new policy takes effect on
+          the next agent request.
+        </p>
+        <div className="pt-2">
+          <PermissionGrid
+            connectionId={conn.id}
+            initialPolicy={parsePolicyOrThrow(conn.tableAccess)}
+            action={policyAction}
+          />
+        </div>
+      </section>
+
+      <section className="mt-6 space-y-2 rounded-lg border bg-card p-6">
         <h2 className="text-base font-medium">Rotate DSN</h2>
         <p className="text-xs text-muted-foreground">
           Paste a new Postgres URL to replace the encrypted ciphertext. The MCP

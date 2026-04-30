@@ -11,7 +11,7 @@
 // the same session to the same machine.
 
 import { resolveByToken } from "@midplane-cloud/router";
-import { getDb } from "@midplane-cloud/db";
+import { getDb, parsePolicyOrThrow } from "@midplane-cloud/db";
 
 import { getMcpProxyContext } from "./mcp-proxy.ts";
 
@@ -52,10 +52,15 @@ export async function proxyMcp(
 
   let upstream;
   try {
+    // Validate at the boundary — Postgres should never hold malformed
+    // policy (validatePolicy gates every write), but if it somehow does,
+    // fail closed instead of starting a container with a degraded YAML.
+    const tableAccess = parsePolicyOrThrow(conn.tableAccess);
     upstream = await ctx.registry.acquire({
       token: conn.mcpToken,
       region: conn.region,
       dsn: decrypt.plaintext,
+      tableAccess,
     });
   } catch (err) {
     console.error("spawn failed", err);

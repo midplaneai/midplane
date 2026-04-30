@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ACCESS_LEVELS } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import {
@@ -24,6 +25,9 @@ const Body = z.object({
       message: "must be a postgres:// or postgresql:// URL",
     }),
   name: z.string().max(MAX_CONNECTION_NAME_LENGTH).optional(),
+  // Initial default access level for unlisted tables. Editable later
+  // from the permission grid on the detail page. Defaults to `read`.
+  default_access: z.enum(ACCESS_LEVELS).optional(),
 });
 
 export async function POST(req: Request) {
@@ -53,6 +57,7 @@ export async function POST(req: Request) {
     customer,
     parsed.data.dsn,
     parsed.data.name ?? null,
+    parsed.data.default_access ?? "read",
   );
   const mcpUrl = mintMcpUrl(customer.region, mcpToken, process.env);
   return Response.json({ id, mcpUrl, region: customer.region }, { status: 201 });

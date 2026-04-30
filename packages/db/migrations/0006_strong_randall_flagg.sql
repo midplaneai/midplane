@@ -1,0 +1,1 @@
+ALTER TABLE "connections" ADD COLUMN "table_access" jsonb DEFAULT '{"default":"deny","tables":{}}'::jsonb NOT NULL;

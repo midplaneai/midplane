@@ -4,6 +4,7 @@ import postgres from "postgres";
 import * as schema from "./schema.ts";
 
 export * from "./schema.ts";
+export * from "./policy.ts";
 
 let cached: ReturnType<typeof create> | undefined;
 

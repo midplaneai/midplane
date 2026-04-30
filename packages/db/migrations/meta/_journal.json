@@ -43,6 +43,13 @@
       "when": 1777556981319,
       "tag": "0005_charming_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777560625125,
+      "tag": "0006_strong_randall_flagg",
+      "breakpoints": true
     }
   ]
 }
