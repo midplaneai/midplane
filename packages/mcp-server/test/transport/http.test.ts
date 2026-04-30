@@ -144,7 +144,7 @@ describe("http transport", () => {
     expect(res.isError).toBe(true);
     const content = res.content as Array<{ text: string }>;
     const data = JSON.parse(content[0]!.text);
-    expect(data.policy_rule).toBe("writes_require_approval");
+    expect(data.policy_rule).toBe("table_access");
 
     await client.close();
   });

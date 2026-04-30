@@ -26,7 +26,7 @@ For hosted only: the customer's Postgres URL is encrypted at rest with a per-ten
 
 - **SQL injection via raw text in MCP arguments.** AST-based parsing (libpg_query); no regex. Anything that doesn't parse is denied.
 - **Multi-statement injection** (Datadog SQLi vector). Parser detects multiple statements; policy rule `multi_statement` denies.
-- **Destructive writes against production.** Policy rule `writes_require_approval` denies `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE`, `EXECUTE`, `CALL` at any AST depth. Per-customer opt-in to allow writes is on the roadmap.
+- **Destructive writes against production.** Policy rule `table_access` denies any write whose target table isn't `read_write` in the YAML policy (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE`, `EXECUTE`, `CALL`, `COPY`, etc.) at any AST depth. With no YAML, every write denies (matching the original deny-all-writes posture). With YAML, per-table read/read_write grants are explicit and AST-recursive (CTEs, subqueries, UNION arms). Approval workflows on top of denial are a Midplane Cloud feature, not OSS.
 - **Cross-tenant exfiltration** (Supabase service-role pattern). Opt-in tenant scope rule; denies any query against a mapped table without a literal `WHERE {column} = {tenant_id}` predicate at the same scope. Conservative: subqueries, CTEs, UNION arms, JOINs all enforced.
 - **CTE-embedded writes.** Recursive AST walk catches `INSERT/UPDATE/DELETE` at any depth, even when the top-level statement is a `SELECT`.
 

@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { makeEngine, baseCtx, MemoryAuditWriter, MockExecutor } from "./_helpers.ts";
 import { Engine } from "../src/engine.ts";
 import { AuditUnavailableError } from "../src/errors.ts";
-import { writesRequireApproval } from "../src/policy/rules/writes-require-approval.ts";
+import { tableAccess } from "../src/policy/rules/table-access.ts";
 import { multiStatement } from "../src/policy/rules/multi-statement.ts";
 import { parseError } from "../src/policy/rules/parse-error.ts";
 import { tenantScope } from "../src/policy/rules/tenant-scope.ts";
@@ -74,9 +74,9 @@ describe("Engine.handle — DENY path", () => {
     const decided = audit.byType("DECIDED")[0]!;
     expect(decided.payload).toMatchObject({
       decision: "DENY",
-      policy_rule: "writes_require_approval",
+      policy_rule: "table_access",
     });
-    expect((decided.payload as { reason: string }).reason).toContain("read-only");
+    expect((decided.payload as { reason: string }).reason).toContain("table-access policy");
   });
 
   test("parse_error denial includes parse_error rule + does not include exec", async () => {
@@ -235,7 +235,7 @@ describe("Engine — ulid/Date defaults work without injection", () => {
     const executor = new MockExecutor();
     const credentials = new StubCredentialStore();
     const engine = new Engine({
-      policy: { rules: [parseError(), multiStatement(), writesRequireApproval(), tenantScope()] },
+      policy: { rules: [parseError(), multiStatement(), tableAccess(), tenantScope()] },
       audit,
       executor,
       credentials,

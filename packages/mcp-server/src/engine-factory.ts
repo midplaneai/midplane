@@ -7,10 +7,11 @@ import {
   SqliteAuditWriter,
   parseError,
   multiStatement,
-  writesRequireApproval,
+  tableAccess,
   tenantScope,
   type AuditWriter,
   type EngineContext,
+  type TableAccessConfig,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
 import { loadPolicyFile } from "./config.ts";
@@ -39,24 +40,45 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
   const credentials = new EnvCredentialStore("DATABASE_URL");
   const executor = new PgPoolExecutor({ databaseUrl: cfg.databaseUrl });
 
+  let mappings: Record<string, string> = {};
+  let tableAccessConfig: TableAccessConfig | undefined;
+  if (cfg.policyFile) {
+    const policy = loadPolicyFile(cfg.policyFile);
+    mappings = policy.mappings;
+    if (policy.tableAccess) {
+      tableAccessConfig = {
+        default: policy.tableAccess.default,
+        tables: policy.tableAccess.tables,
+      };
+    }
+    logger.info(
+      {
+        policyFile: cfg.policyFile,
+        mappedTables: Object.keys(mappings),
+        tableAccess: tableAccessConfig
+          ? {
+              default: tableAccessConfig.default,
+              tables: Object.keys(tableAccessConfig.tables),
+            }
+          : null,
+      },
+      "policy file loaded",
+    );
+  }
+
   const engine = new Engine({
     policy: {
-      rules: [parseError(), multiStatement(), writesRequireApproval(), tenantScope()],
+      rules: [
+        parseError(),
+        multiStatement(),
+        tableAccess(tableAccessConfig),
+        tenantScope(),
+      ],
     },
     audit,
     credentials,
     executor,
   });
-
-  let mappings: Record<string, string> = {};
-  if (cfg.policyFile) {
-    const policy = loadPolicyFile(cfg.policyFile);
-    mappings = policy.mappings;
-    logger.info(
-      { policyFile: cfg.policyFile, mappedTables: Object.keys(mappings) },
-      "policy file loaded",
-    );
-  }
 
   const ctxBase: EngineContext = {
     tenant_id: cfg.tenantId,

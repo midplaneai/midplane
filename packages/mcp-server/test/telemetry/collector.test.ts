@@ -59,14 +59,14 @@ describe("TelemetryCollector — heartbeat drain", () => {
       event_type: "DECIDED",
       payload: {
         decision: "DENY",
-        policy_rule: "writes_require_approval",
+        policy_rule: "table_access",
         reason: "denied",
         statement_type: "DELETE",
       },
     }));
 
     const drained = c.drainHeartbeat();
-    expect(drained!.denials_by_rule).toEqual({ writes_require_approval: 1 });
+    expect(drained!.denials_by_rule).toEqual({ table_access: 1 });
     expect(drained!.statement_types).toEqual({ DELETE: 1 });
   });
 

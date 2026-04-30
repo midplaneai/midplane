@@ -11,7 +11,7 @@ import { PolicyRule } from "../../src/audit/types.ts";
 import { expectDeny, expectAllow } from "./_helpers.ts";
 
 const PARSE = PolicyRule.PARSE_ERROR;
-const WRITES = PolicyRule.WRITES_REQUIRE_APPROVAL;
+const WRITES = PolicyRule.TABLE_ACCESS;
 
 describe("adversarial/parse-edges: empty / whitespace", () => {
   test("empty string → parse_error", async () => {

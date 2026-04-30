@@ -24,6 +24,11 @@ import { PolicyRule } from "../../audit/types.ts";
 type Predicate = { qualifier: string | null; column: string; literal: string };
 type MappedTable = { effectiveName: string; relname: string };
 
+interface ScopeFailure {
+  table: string;
+  column: string;
+}
+
 export function tenantScope(): Rule {
   return {
     name: PolicyRule.TENANT_SCOPE_MISSING,
@@ -34,13 +39,28 @@ export function tenantScope(): Rule {
       if (!mappings || Object.keys(mappings).length === 0) {
         return { decision: "ALLOW" };
       }
-      let scopeMissing = false;
-      visitForTenantScope(rctx.parse.ast.stmts, mappings, rctx.ctx.tenant_id, () => {
-        scopeMissing = true;
-      });
-      return scopeMissing
-        ? { decision: "DENY", reason: PolicyRule.TENANT_SCOPE_MISSING }
-        : { decision: "ALLOW" };
+      let firstFailure: ScopeFailure | null = null;
+      visitForTenantScope(
+        rctx.parse.ast.stmts,
+        mappings,
+        rctx.ctx.tenant_id,
+        (failure) => {
+          if (firstFailure === null) firstFailure = failure;
+        },
+      );
+      if (firstFailure === null) return { decision: "ALLOW" };
+      const f = firstFailure as ScopeFailure;
+      return {
+        decision: "DENY",
+        reason: PolicyRule.TENANT_SCOPE_MISSING,
+        message:
+          `Midplane denied this query because table \`${f.table}\` is in the ` +
+          `tenant_scope mapping but the query is missing a literal ` +
+          `\`WHERE ${f.column} = <tenant_id>\` predicate at the same ` +
+          `SELECT scope. Add \`${f.column} = <tenant_id>\` (joined by AND, ` +
+          `not OR) at every reference, including inside subqueries, CTEs, ` +
+          `and UNION arms.`,
+      };
     },
   };
 }
@@ -49,7 +69,7 @@ function visitForTenantScope(
   stmts: Array<{ stmt: Record<string, unknown> }>,
   mappings: Record<string, string>,
   tenantId: string,
-  flagDeny: () => void,
+  flagDeny: (failure: ScopeFailure) => void,
 ): void {
   const checkSelectStmt = (selectStmt: Record<string, unknown>): void => {
     const tables = collectMappedRangeVarsInFrom(selectStmt.fromClause, mappings);
@@ -70,7 +90,7 @@ function visitForTenantScope(
         return tables.length === 1;
       });
       if (!matched) {
-        flagDeny();
+        flagDeny({ table: table.relname, column: tenantCol });
         return;
       }
     }
@@ -102,12 +122,13 @@ function visitForTenantScope(
         }
         if (kind === "InsertStmt" || kind === "UpdateStmt" || kind === "DeleteStmt" || kind === "MergeStmt") {
           // DML target relation is a bare RangeVar-shaped object. If it's
-          // mapped, deny — V1 writes are blocked elsewhere by
-          // writes_require_approval, so this only fires when tenant_scope
-          // is used standalone.
+          // mapped, deny — writes are blocked elsewhere by table_access
+          // (default deny when no YAML), so this only fires when
+          // tenant_scope is used standalone or the target is read_write.
           const relation = innerObj.relation as Record<string, unknown> | undefined;
-          if (relation && mappings[relation.relname as string]) {
-            flagDeny();
+          const relname = relation?.relname as string | undefined;
+          if (relname && mappings[relname]) {
+            flagDeny({ table: relname, column: mappings[relname]! });
           }
           for (const k of Object.keys(innerObj)) walk(innerObj[k]);
           return;

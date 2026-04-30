@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 
-export const TELEMETRY_SCHEMA_VERSION = 1;
+export const TELEMETRY_SCHEMA_VERSION = 2;
 
 // ─── Locked enums ──────────────────────────────────────────────────────────
 
@@ -16,7 +16,7 @@ export type ToolName = z.infer<typeof ToolName>;
 
 // Mirrors PolicyRule from packages/engine/src/audit/types.ts.
 export const PolicyRuleName = z.enum([
-  "writes_require_approval",
+  "table_access",
   "multi_statement",
   "tenant_scope_missing",
   "parse_error",
@@ -48,7 +48,7 @@ export const SqlstateClass = z.string().regex(/^[0-9A-Z]{2}$/);
 
 export const StartupEventSchema = z
   .object({
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     event: z.literal("startup"),
     install_id: InstallId,
     ts: z.number().int().nonnegative(),
@@ -94,7 +94,7 @@ export type ExecFailures = z.infer<typeof ExecFailuresSchema>;
 
 export const HeartbeatEventSchema = z
   .object({
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     event: z.literal("heartbeat"),
     install_id: InstallId,
     ts: z.number().int().nonnegative(),

@@ -5,7 +5,7 @@ import type { HeartbeatEvent, StartupEvent } from "../../src/telemetry/schema.ts
 const ID = "01H8K2J9XQVWZ7PCQ3F0R2N5T8";
 
 const validStartup: StartupEvent = {
-  schema_version: 1,
+  schema_version: 2,
   event: "startup",
   install_id: ID,
   ts: 1_730_000_000,
@@ -19,7 +19,7 @@ const validStartup: StartupEvent = {
 };
 
 const validHeartbeat: HeartbeatEvent = {
-  schema_version: 1,
+  schema_version: 2,
   event: "heartbeat",
   install_id: ID,
   ts: 1_730_086_400,
@@ -27,7 +27,7 @@ const validHeartbeat: HeartbeatEvent = {
   uptime_s: 86_400,
   window_s: 86_400,
   tools: { query: { calls: 10, allow: 9, deny: 1 } },
-  denials_by_rule: { writes_require_approval: 1 },
+  denials_by_rule: { table_access: 1 },
   statement_types: { SELECT: 9 },
   latency_overhead_ms: { p50: 2, p95: 8, p99: 21, samples: 9 },
   exec_failures: { count: 0, by_sqlstate_class: {} },

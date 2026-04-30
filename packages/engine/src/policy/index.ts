@@ -6,7 +6,8 @@ import { walk } from "./visitor.ts";
 import type { Rule, RuleEvalContext, RuleVerdict } from "./rules/index.ts";
 
 export type { Rule, RuleVerdict, RuleEvalContext } from "./rules/index.ts";
-export { writesRequireApproval } from "./rules/writes-require-approval.ts";
+export { tableAccess } from "./rules/table-access.ts";
+export type { TableAccessConfig, TableAccessLevel } from "./rules/table-access.ts";
 export { multiStatement } from "./rules/multi-statement.ts";
 export { tenantScope } from "./rules/tenant-scope.ts";
 export { parseError } from "./rules/parse-error.ts";
@@ -27,8 +28,7 @@ export interface EvaluateResult {
 //
 // Rule evaluation order on DENY: the rule list is checked in array order;
 // the first DENY verdict wins. Order parse_error → multi_statement →
-// writes_require_approval → tenant_scope so the most-specific failure
-// surfaces.
+// table_access → tenant_scope so the most-specific failure surfaces.
 export function evaluate(input: EvaluateInput): EvaluateResult {
   const rctx: RuleEvalContext = { parse: input.parse, ctx: input.ctx };
   for (const r of input.rules) r.reset(rctx);

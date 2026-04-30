@@ -6,56 +6,62 @@ The corpus exists to answer one question: *what does Midplane actually
 catch, and where are its limits?* It is intentionally short on marketing
 and long on SQL.
 
-Midplane ships four policy rules, in this evaluation order:
+OSS Midplane ships four policy rules, in this evaluation order:
 
 1. `parse_error` — input couldn't be parsed
 2. `multi_statement` — input parsed to more than one top-level statement
-3. `writes_require_approval` — input contains a write at any AST depth
+3. `table_access` — per-table R/W policy. With no YAML: every write
+   denies (every SELECT allows). With YAML: each referenced table must
+   satisfy its required permission (`read` for read-position tables,
+   `read_write` for write targets); recursive over CTEs, subqueries,
+   UNION arms, JOINs.
 4. `tenant_scope_missing` — opt-in. With a `users → org_id` mapping and
    `tenant_id=42`, every read of a mapped table needs a literal
    `WHERE org_id = 42` predicate at the same SelectStmt scope, reachable
    through `AND` only
 
-Midplane is **conservative by default**: when in doubt we deny. False
-positives (legitimate queries refused) are bugs we triage as we go.
+The corpus is **conservative by default**: when in doubt we deny.
+False positives (legitimate queries refused) are bugs we triage as we go.
 Bypasses are release blockers.
 
 ---
 
-## 1. writes_require_approval (recursive AST detection)
+## 1. table_access (per-table R/W, recursive AST detection)
 
-A write anywhere in the AST denies. Top-level, inside a CTE, inside a
-subquery, inside a UNION arm, inside a JOIN — the recursive walker
-finds it.
+With no YAML config, every write denies (no table is `read_write`).
+With YAML, write targets need `read_write`; read-position tables need
+`read` or `read_write`. The recursive walker checks every node — top-
+level, inside a CTE, inside a subquery, inside a UNION arm, inside a
+JOIN.
 
 | SQL                                                                         | Verdict | Rule                       | Why this matters |
 |-----------------------------------------------------------------------------|---------|----------------------------|------------------|
-| `DELETE FROM users`                                                         | DENY    | `writes_require_approval`  | Unbounded delete (PocketOS-style); read-only by default. |
-| `DELETE FROM users WHERE id = 1`                                            | DENY    | `writes_require_approval`  | Bounded delete still denies — Midplane does not infer "scoped enough". |
-| `UPDATE users SET name='b' WHERE org_id=42`                                 | DENY    | `writes_require_approval`  | Even with a tenant predicate, an UPDATE is a write. |
-| `UPDATE a SET n=1 FROM b WHERE a.id=b.id`                                   | DENY    | `writes_require_approval`  | Multi-table UPDATE form. |
-| `INSERT INTO users (org_id, name) VALUES (42, 'a')`                         | DENY    | `writes_require_approval`  | Plain INSERT. |
-| `INSERT INTO logs (msg) VALUES ('x') RETURNING id, msg`                     | DENY    | `writes_require_approval`  | RETURNING does not change classification — still a write. |
-| `INSERT INTO t (x) VALUES (1) ON CONFLICT (x) DO NOTHING`                   | DENY    | `writes_require_approval`  | UPSERT idempotency does not exempt the write. |
-| `INSERT INTO t (x,y) VALUES (1,2) ON CONFLICT (x) DO UPDATE SET y = excluded.y` | DENY | `writes_require_approval` | UPSERT with conflict-update branch. |
-| `MERGE INTO target … WHEN MATCHED … WHEN NOT MATCHED …`                     | DENY    | `writes_require_approval`  | MERGE is a write regardless of which arm fires. |
-| `DROP TABLE x`                                                              | DENY    | `writes_require_approval`  | DDL. |
-| `TRUNCATE t`                                                                | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE TABLE foo (id int)`                                                 | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE TABLE foo AS SELECT * FROM users`                                   | DENY    | `writes_require_approval`  | CTAS — write in disguise. |
-| `ALTER TABLE users ADD COLUMN flag boolean`                                 | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE INDEX idx_users_email ON users (email)`                             | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE VIEW v AS SELECT 1`                                                 | DENY    | `writes_require_approval`  | DDL. |
-| `REFRESH MATERIALIZED VIEW v`                                               | DENY    | `writes_require_approval`  | Materialized-view rebuild. |
-| `GRANT SELECT ON users TO some_role`                                        | DENY    | `writes_require_approval`  | DCL. |
-| `REVOKE SELECT ON users FROM some_role`                                     | DENY    | `writes_require_approval`  | DCL. |
-| `GRANT admin TO some_user`                                                  | DENY    | `writes_require_approval`  | Role membership. |
-| `CREATE SCHEMA s`                                                           | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE ROLE bob`                                                           | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql`            | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE DATABASE d`                                                         | DENY    | `writes_require_approval`  | DDL. |
-| `ALTER DOMAIN d SET DEFAULT 1`                                              | DENY    | `writes_require_approval`  | DDL. |
-| `CREATE RULE r AS ON SELECT TO t DO INSTEAD SELECT 1`                       | DENY    | `writes_require_approval`  | DDL. |
+| `DELETE FROM users`                                                         | DENY    | `table_access`  | Unbounded delete (PocketOS-style); read-only by default. |
+| `DELETE FROM users WHERE id = 1`                                            | DENY    | `table_access`  | Bounded delete still denies — Midplane does not infer "scoped enough". |
+| `UPDATE users SET name='b' WHERE org_id=42`                                 | DENY    | `table_access`  | Even with a tenant predicate, an UPDATE is a write. |
+| `UPDATE a SET n=1 FROM b WHERE a.id=b.id`                                   | DENY    | `table_access`  | Multi-table UPDATE form. |
+| `INSERT INTO users (org_id, name) VALUES (42, 'a')`                         | DENY    | `table_access`  | Plain INSERT. |
+| `INSERT INTO logs (msg) VALUES ('x') RETURNING id, msg`                     | DENY    | `table_access`  | RETURNING does not change classification — still a write. |
+| `INSERT INTO t (x) VALUES (1) ON CONFLICT (x) DO NOTHING`                   | DENY    | `table_access`  | UPSERT idempotency does not exempt the write. |
+| `INSERT INTO t (x,y) VALUES (1,2) ON CONFLICT (x) DO UPDATE SET y = excluded.y` | DENY | `table_access` | UPSERT with conflict-update branch. |
+| `MERGE INTO target … WHEN MATCHED … WHEN NOT MATCHED …`                     | DENY    | `table_access`  | MERGE is a write regardless of which arm fires. |
+| `DROP TABLE x`                                                              | DENY    | `table_access`  | DDL. |
+| `TRUNCATE t`                                                                | DENY    | `table_access`  | DDL. |
+| `CREATE TABLE foo (id int)`                                                 | DENY    | `table_access`  | DDL. |
+| `CREATE TABLE foo AS SELECT * FROM users`                                   | DENY    | `table_access`  | CTAS — write in disguise. |
+| `ALTER TABLE users ADD COLUMN flag boolean`                                 | DENY    | `table_access`  | DDL. |
+| `CREATE INDEX idx_users_email ON users (email)`                             | DENY    | `table_access`  | DDL. |
+| `CREATE VIEW v AS SELECT 1`                                                 | DENY    | `table_access`  | DDL. |
+| `REFRESH MATERIALIZED VIEW v`                                               | DENY    | `table_access`  | Materialized-view rebuild. |
+| `GRANT SELECT ON users TO some_role`                                        | DENY    | `table_access`  | DCL. |
+| `REVOKE SELECT ON users FROM some_role`                                     | DENY    | `table_access`  | DCL. |
+| `GRANT admin TO some_user`                                                  | DENY    | `table_access`  | Role membership. |
+| `CREATE SCHEMA s`                                                           | DENY    | `table_access`  | DDL. |
+| `CREATE ROLE bob`                                                           | DENY    | `table_access`  | DDL. |
+| `CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql`            | DENY    | `table_access`  | DDL. |
+| `CREATE DATABASE d`                                                         | DENY    | `table_access`  | DDL. |
+| `ALTER DOMAIN d SET DEFAULT 1`                                              | DENY    | `table_access`  | DDL. |
+| `CREATE RULE r AS ON SELECT TO t DO INSTEAD SELECT 1`                       | DENY    | `table_access`  | DDL. |
 
 ### Hidden inside a CTE
 
@@ -64,14 +70,14 @@ during eng review; the walker exists to close it.
 
 | SQL                                                                                           | Verdict | Rule                       |
 |-----------------------------------------------------------------------------------------------|---------|----------------------------|
-| `WITH x AS (DELETE FROM y RETURNING *) SELECT * FROM x`                                       | DENY    | `writes_require_approval`  |
-| `WITH x AS (UPDATE y SET n=1 RETURNING *) SELECT * FROM x`                                    | DENY    | `writes_require_approval`  |
-| `WITH x AS (INSERT INTO y (n) VALUES (1) RETURNING *) SELECT * FROM x`                        | DENY    | `writes_require_approval`  |
-| `WITH a AS (SELECT 1), b AS (DELETE FROM y RETURNING n) SELECT * FROM a, b`                   | DENY    | `writes_require_approval`  |
-| `WITH outer AS (WITH inner AS (DELETE …) SELECT … FROM inner) SELECT * FROM outer`            | DENY    | `writes_require_approval`  |
-| `WITH d AS (DELETE FROM y RETURNING id) INSERT INTO archive (id) SELECT id FROM d`            | DENY    | `writes_require_approval`  |
-| `WITH RECURSIVE r AS (…), w AS (DELETE FROM y RETURNING id) SELECT * FROM r, w`               | DENY    | `writes_require_approval`  |
-| `WITH d AS (DELETE FROM y RETURNING id) SELECT id FROM x WHERE EXISTS (SELECT 1 FROM d …)`    | DENY    | `writes_require_approval`  |
+| `WITH x AS (DELETE FROM y RETURNING *) SELECT * FROM x`                                       | DENY    | `table_access`  |
+| `WITH x AS (UPDATE y SET n=1 RETURNING *) SELECT * FROM x`                                    | DENY    | `table_access`  |
+| `WITH x AS (INSERT INTO y (n) VALUES (1) RETURNING *) SELECT * FROM x`                        | DENY    | `table_access`  |
+| `WITH a AS (SELECT 1), b AS (DELETE FROM y RETURNING n) SELECT * FROM a, b`                   | DENY    | `table_access`  |
+| `WITH outer AS (WITH inner AS (DELETE …) SELECT … FROM inner) SELECT * FROM outer`            | DENY    | `table_access`  |
+| `WITH d AS (DELETE FROM y RETURNING id) INSERT INTO archive (id) SELECT id FROM d`            | DENY    | `table_access`  |
+| `WITH RECURSIVE r AS (…), w AS (DELETE FROM y RETURNING id) SELECT * FROM r, w`               | DENY    | `table_access`  |
+| `WITH d AS (DELETE FROM y RETURNING id) SELECT id FROM x WHERE EXISTS (SELECT 1 FROM d …)`    | DENY    | `table_access`  |
 
 ### Hidden inside set-ops
 
@@ -80,9 +86,9 @@ by the walker — writes hidden in any arm via a CTE still trip the rule.
 
 | SQL                                                                          | Verdict | Rule                       |
 |------------------------------------------------------------------------------|---------|----------------------------|
-| `WITH d AS (DELETE … RETURNING id) SELECT … FROM x UNION SELECT id FROM d`   | DENY    | `writes_require_approval`  |
-| `WITH d AS (DELETE … RETURNING id) … INTERSECT SELECT id FROM d`             | DENY    | `writes_require_approval`  |
-| `WITH d AS (DELETE … RETURNING id) … EXCEPT SELECT id FROM d`                | DENY    | `writes_require_approval`  |
+| `WITH d AS (DELETE … RETURNING id) SELECT … FROM x UNION SELECT id FROM d`   | DENY    | `table_access`  |
+| `WITH d AS (DELETE … RETURNING id) … INTERSECT SELECT id FROM d`             | DENY    | `table_access`  |
+| `WITH d AS (DELETE … RETURNING id) … EXCEPT SELECT id FROM d`                | DENY    | `table_access`  |
 
 ### Opaque procedural body (DO blocks)
 
@@ -92,9 +98,57 @@ is conservative-by-default in action.
 
 | SQL                                              | Verdict | Rule                       |
 |--------------------------------------------------|---------|----------------------------|
-| `DO $$ BEGIN DELETE FROM users; END $$`          | DENY    | `writes_require_approval`  |
-| `DO $$ BEGIN PERFORM 1; END $$`                  | DENY    | `writes_require_approval`  |
-| `DO $tag$ BEGIN PERFORM 1; END $tag$`            | DENY    | `writes_require_approval`  |
+| `DO $$ BEGIN DELETE FROM users; END $$`          | DENY    | `table_access`  |
+| `DO $$ BEGIN PERFORM 1; END $$`                  | DENY    | `table_access`  |
+| `DO $tag$ BEGIN PERFORM 1; END $tag$`            | DENY    | `table_access`  |
+
+### Per-table R/W under YAML
+
+The cases below assume a `MIDPLANE_POLICY_FILE` of:
+
+```yaml
+table_access:
+  default: read
+  tables:
+    users:            read
+    posts:            read
+    audit_log:        deny
+    webhooks:         read_write
+    feature_flags:    read_write
+    "stripe.charges": read
+```
+
+| SQL                                                                  | Verdict | Why                                  |
+|----------------------------------------------------------------------|---------|--------------------------------------|
+| `SELECT * FROM users WHERE id = 1`                                   | ALLOW   | `users` is `read`                    |
+| `DELETE FROM users WHERE id = 1`                                     | DENY    | `users` is `read`, not `read_write`  |
+| `DELETE FROM webhooks WHERE id = 1`                                  | ALLOW   | `webhooks` is `read_write`           |
+| `INSERT INTO feature_flags (name) VALUES ('beta')`                   | ALLOW   | `feature_flags` is `read_write`      |
+| `SELECT * FROM audit_log`                                            | DENY    | `audit_log` is `deny` (no read either) |
+| `WITH x AS (DELETE FROM users RETURNING *) SELECT * FROM x`          | DENY    | inner DELETE on `read` table         |
+| `WITH x AS (DELETE FROM webhooks RETURNING *) SELECT * FROM x`       | ALLOW   | inner DELETE on `read_write` table   |
+| `INSERT INTO webhooks (msg) SELECT msg FROM audit_log`               | DENY    | read side hits `deny` table          |
+| `INSERT INTO webhooks (uid) SELECT id FROM users`                    | ALLOW   | write target `read_write`, read side `read` |
+| `SELECT * FROM stripe.charges`                                       | ALLOW   | schema-qualified key resolves to `read` |
+| `DELETE FROM stripe.charges`                                         | DENY    | schema-qualified key is `read`       |
+| `INSERT INTO unlisted (n) VALUES (1)` (with default `read`)          | DENY    | unlisted falls through to default `read` |
+| `SELECT * FROM unlisted` (with default `read`)                       | ALLOW   | default `read` permits SELECT        |
+| `SELECT * FROM something` (with default `deny`)                      | DENY    | default `deny` blocks reads of unlisted |
+| `WITH x AS (SELECT 1) SELECT * FROM x` (with default `deny`)         | ALLOW   | `x` is a CTE, not a table reference |
+| `WITH audit_log AS (SELECT 1) SELECT * FROM audit_log`               | ALLOW   | CTE name shadows the `deny` table; the real `audit_log` is never touched |
+| `WITH audit_log AS (SELECT 1) SELECT * FROM public.audit_log`        | DENY    | schema-qualified ref bypasses CTE shadowing; resolves to `audit_log: deny` |
+| `COPY webhooks TO '/tmp/leak'` (with `webhooks: read_write`)         | DENY    | `COPY` has side effects beyond row writes; YAML can't grant it |
+| `LOCK TABLE webhooks IN ACCESS EXCLUSIVE MODE` (with `webhooks: read_write`) | DENY | `LOCK` has concurrency side effects; YAML can't grant it |
+
+### Legacy parity (no YAML)
+
+Behavior identical to the previous `writes_require_approval` rule.
+
+| SQL                                                | Verdict | Rule           |
+|----------------------------------------------------|---------|----------------|
+| `DELETE FROM anywhere`                             | DENY    | `table_access` |
+| `INSERT INTO anywhere VALUES (1)`                  | DENY    | `table_access` |
+| `SELECT * FROM anywhere`                           | ALLOW   | (default read) |
 
 ---
 
@@ -239,9 +293,9 @@ matching, a single `u.org_id=42` predicate would have appeared to satisfy
 ### Standalone DML on mapped tables (writes rule disabled)
 
 Verifies tenant_scope is correct on its own. In production
-`writes_require_approval` denies writes first; this section exercises
-the rule in isolation. Conservative posture: any DML on a mapped table
-denies regardless of WHERE.
+`table_access` denies writes first (unless the YAML grants
+`read_write`); this section exercises the rule in isolation.
+Conservative posture: any DML on a mapped table denies regardless of WHERE.
 
 | SQL                                                                  | Verdict |
 |----------------------------------------------------------------------|---------|
@@ -280,9 +334,9 @@ surface area is `libpg_query` 16.7.x.
 
 | SQL                                                             | Verdict (read-only by default) |
 |-----------------------------------------------------------------|------------------------------|
-| `INSERT … RETURNING id`                                         | DENY (`writes_require_approval`) — parses fine |
-| `UPDATE … RETURNING id, msg`                                    | DENY (`writes_require_approval`) |
-| `INSERT … ON CONFLICT (x) DO NOTHING`                           | DENY (`writes_require_approval`) |
+| `INSERT … RETURNING id`                                         | DENY (`table_access`) — parses fine |
+| `UPDATE … RETURNING id, msg`                                    | DENY (`table_access`) |
+| `INSERT … ON CONFLICT (x) DO NOTHING`                           | DENY (`table_access`) |
 | `SELECT data->'x' FROM events WHERE id=1`                       | ALLOW (JSON arrow) |
 | `SELECT data->>'name' FROM events`                              | ALLOW (JSON arrow-text) |
 | `SELECT * FROM events WHERE meta @> '{"k":1}'::jsonb`           | ALLOW (JSONB containment) |
@@ -306,25 +360,26 @@ surface area is `libpg_query` 16.7.x.
 
 ## 5. exec-side-effects (beyond DML)
 
-`writes_require_approval` denies more than DML. NOTIFY publishes a
-pubsub event; LISTEN/UNLISTEN mutate session subscription state; LOCK
-acquires a transaction-scoped lock with availability impact;
-CALL/EXECUTE invoke stored code; COPY moves data on the server
-filesystem. All deny.
+`table_access` denies more than DML. NOTIFY publishes a pubsub event;
+LISTEN/UNLISTEN mutate session subscription state; LOCK acquires a
+transaction-scoped lock with availability impact; CALL/EXECUTE invoke
+stored code; COPY moves data on the server filesystem. None of these
+carry an extractable per-table target the YAML can grant `read_write`
+to, so all deny under both legacy and any YAML config.
 
 | SQL                                                  | Verdict |
 |------------------------------------------------------|---------|
-| `CALL my_proc()`                                     | DENY (`writes_require_approval`) |
-| `EXECUTE my_prepared`                                | DENY (`writes_require_approval`) |
-| `NOTIFY ch, 'msg'`                                   | DENY (`writes_require_approval`) |
-| `LISTEN ch`                                          | DENY (`writes_require_approval`) |
-| `UNLISTEN ch` / `UNLISTEN *`                         | DENY (`writes_require_approval`) |
-| `LOCK TABLE users IN ACCESS EXCLUSIVE MODE`          | DENY (`writes_require_approval`) |
-| `LOCK TABLE users`                                   | DENY (`writes_require_approval`) |
-| `COPY t FROM '/etc/passwd'`                          | DENY (`writes_require_approval`) |
-| `COPY t TO '/tmp/leak'`                              | DENY (`writes_require_approval`) |
-| `COPY t FROM STDIN`                                  | DENY (`writes_require_approval`) |
-| `COPY (SELECT * FROM users) TO '/tmp/dump'`          | DENY (`writes_require_approval`) |
+| `CALL my_proc()`                                     | DENY (`table_access`) |
+| `EXECUTE my_prepared`                                | DENY (`table_access`) |
+| `NOTIFY ch, 'msg'`                                   | DENY (`table_access`) |
+| `LISTEN ch`                                          | DENY (`table_access`) |
+| `UNLISTEN ch` / `UNLISTEN *`                         | DENY (`table_access`) |
+| `LOCK TABLE users IN ACCESS EXCLUSIVE MODE`          | DENY (`table_access`) |
+| `LOCK TABLE users`                                   | DENY (`table_access`) |
+| `COPY t FROM '/etc/passwd'`                          | DENY (`table_access`) |
+| `COPY t TO '/tmp/leak'`                              | DENY (`table_access`) |
+| `COPY t FROM STDIN`                                  | DENY (`table_access`) |
+| `COPY (SELECT * FROM users) TO '/tmp/dump'`          | DENY (`table_access`) |
 
 ---
 

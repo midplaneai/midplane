@@ -57,29 +57,10 @@ export async function handleQuery(input: {
         text: JSON.stringify({
           allowed: false,
           policy_rule: decision.reason,
-          reason: humanReason(decision.reason),
+          reason: decision.message,
           auditId: decision.auditId,
         }),
       },
     ],
   };
-}
-
-// Mirrors the engine's humanReason output (kept here so the tool layer can
-// surface the agent-facing reason without coupling to a private engine helper).
-function humanReason(rule: string): string {
-  switch (rule) {
-    case "writes_require_approval":
-      return "Midplane denied this query because writes require approval and are read-only by default.";
-    case "multi_statement":
-      return "Midplane denied this query because it contains multiple statements.";
-    case "tenant_scope_missing":
-      return "Midplane denied this query because the tenant scope on the queried table could not be verified.";
-    case "parse_error":
-      return "Midplane denied this query because it could not be parsed as Postgres SQL.";
-    case "internal_error":
-      return "Midplane denied this query because policy evaluation failed unexpectedly.";
-    default:
-      return `Midplane denied this query (rule: ${rule}).`;
-  }
 }

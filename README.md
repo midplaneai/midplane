@@ -5,7 +5,7 @@
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20Streamable%20HTTP-blueviolet)](https://modelcontextprotocol.io/)
 [![Verified](https://img.shields.io/badge/verified-Cursor%20%7C%20Claude%20Code%20%7C%20Claude%20Desktop-2ea44f)](./docs/agent-setup.md)
 
-A safety layer between AI coding agents (Cursor, Claude Code, Claude Desktop) and your Postgres database. Parse, policy, audit. Read-only by default; writes require approval.
+A safety layer between AI coding agents (Cursor, Claude Code, Claude Desktop) and your Postgres database. Parse, policy, audit. Read-only by default. Per-table read/write policy via YAML.
 
 ```bash
 curl -O https://raw.githubusercontent.com/midplaneai/midplane/main/.env.example
@@ -25,10 +25,12 @@ AI coding agents are getting plugged into production Postgres without an audit t
 
 ## What it blocks
 
-- **Destructive writes against production.** `DELETE FROM users` (even with a `WHERE`) is denied unless you opt in to write mode.
+- **Destructive writes against production.** Out of the box (no YAML), every write denies — `DELETE FROM users` is denied even with a `WHERE`. Opt in per-table via the `table_access` YAML; mark `feature_flags: read_write` to let the agent update flags while `users` and `payments` stay read-only and `audit_log` stays `deny` (no read either).
 - **SQL stacked-statement injection.** `SELECT 1; DROP TABLE users` is denied at parse time.
 - **Cross-tenant exfiltration.** Opt in by mapping a tenant column once; queries on that table without the right `WHERE` predicate are denied at any AST depth (subqueries, CTEs, JOINs).
 - **CTE-embedded writes.** `WITH x AS (DELETE FROM ...) SELECT * FROM x` doesn't fool the recursive AST walk.
+
+> **Approvals (Slack-bot, web queue, escalation) are a Midplane Cloud feature.** OSS Midplane is policy-as-YAML; Cloud is policy + humans in the loop. The OSS roadmap below adds more YAML-driven controls; it does not add an approval flow.
 
 Pinned by an [adversarial SQL corpus](./docs/adversarial-corpus.md): **105 bypass attempts denied** + 52 legitimate-query controls allowed. **100% line coverage** on the policy surface (`packages/engine/src/policy/*`).
 
@@ -40,7 +42,7 @@ A `delete all users` prompt to Claude Code, against a Midplane-fronted DB:
 >
 > *user: confirm delete all users*
 >
-> ⏺ Midplane blocked it — policy `writes_require_approval` is enforced and the connection is read-only by default. The DELETE was audited but not executed.
+> ⏺ Midplane blocked it. The denial reason it returned: *"Midplane denied this query because writes to table `users` are not allowed by the table-access policy (`users` resolves to `read`; mark it `read_write` in your MIDPLANE_POLICY_FILE to grant writes)."* The DELETE was audited but not executed.
 
 Two enforcement layers: the agent's own confirmation, then Midplane's policy denial. The audit row lands before the query reaches the DB. Full transcript and demo prompts in [agent-setup.md](./docs/agent-setup.md).
 
@@ -139,11 +141,12 @@ Performance against locked spike targets: 154 MB image (under 200 MB budget), co
 
 ## Roadmap
 
-- **Next** — write approval flow, custom YAML policy authoring, function-side-effects denylist (`pg_terminate_backend`, `lo_unlink`, etc.), session-scope tracking (`BEGIN` / `COMMIT` / `PREPARE`).
-- **Later** — fine-grained schema-aware policy (column-level reads), time-of-day rules, fewer false positives on `tenant_scope`.
-- **Long-term** — `LIMIT` enforcement, SOC 2.
+OSS roadmap (policy-as-YAML, no approvals — those ship in Cloud):
 
-Tracked in GitHub Issues. PRs welcome.
+- **Next** — function-side-effects denylist (`pg_terminate_backend`, `lo_unlink`, etc.), session-scope tracking (`BEGIN` / `COMMIT` / `PREPARE`), per-token policy bundles.
+- **Later** — fine-grained schema-aware policy (column-level reads), time-of-day rules, fewer false positives on `tenant_scope`.
+
+Approvals (Slack-bot, web queue, escalation) and the dashboard live in Midplane Cloud, not OSS. Tracked in GitHub Issues. PRs welcome.
 
 ## Contributing
 

@@ -74,7 +74,7 @@ Now try a destructive prompt:
 
 > "Delete every user whose email ends in `@example.com`."
 
-Cursor will probably ask for confirmation first (the agent's own gate). Confirm. Midplane denies the actual `DELETE` with `policy_rule=writes_require_approval` — read-only is the default. Cursor reports the denial in plain language.
+Cursor will probably ask for confirmation first (the agent's own gate). Confirm. Midplane denies the actual `DELETE` with `policy_rule=table_access` — read-only is the default for every table when no `MIDPLANE_POLICY_FILE` is set. Cursor reports the denial in plain language.
 
 ## 5. See the audit row (30 seconds)
 
@@ -85,7 +85,7 @@ docker exec -it midplane sqlite3 /data/audit.db \
   "SELECT ts, event_type, json_extract(payload, '$.statement_type'), json_extract(payload, '$.policy_rule') FROM audit_events ORDER BY id DESC LIMIT 5"
 ```
 
-You'll see `ATTEMPTED` followed by `DECIDED` with `decision=DENY`, `policy_rule=writes_require_approval`, and the statement type Midplane parsed. No `EXECUTED` row — because the query never ran.
+You'll see `ATTEMPTED` followed by `DECIDED` with `decision=DENY`, `policy_rule=table_access`, and the statement type Midplane parsed. No `EXECUTED` row — because the query never ran.
 
 ## What to do next
 

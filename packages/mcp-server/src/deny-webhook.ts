@@ -5,7 +5,7 @@
 // Events API, or any HTTP endpoint will accept it.
 //
 // Optional MIDPLANE_DENY_WEBHOOK_RULES filters by policy_rule name
-// (comma-separated, e.g. "writes_require_approval,multi_statement").
+// (comma-separated, e.g. "table_access,multi_statement").
 //
 // Fire-and-forget with a 5s timeout. Webhook failure NEVER fails or blocks
 // an audit write — the DECIDED row is the source of truth, the webhook is

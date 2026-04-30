@@ -22,9 +22,10 @@ export { EnvCredentialStore } from "./crypto/credential-store.ts";
 export type { Executor, ExecutionResult, ExecuteContext } from "./executor.ts";
 
 export type { Rule, RuleVerdict } from "./policy/index.ts";
+export type { TableAccessConfig, TableAccessLevel } from "./policy/index.ts";
 export {
   evaluate,
-  writesRequireApproval,
+  tableAccess,
   multiStatement,
   tenantScope,
   parseError,

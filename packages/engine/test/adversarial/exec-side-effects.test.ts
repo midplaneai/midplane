@@ -1,34 +1,34 @@
 // Adversarial corpus — execution side-effects beyond DML.
 //
-// V1 reads "writes" broadly: NOTIFY publishes to Postgres pubsub,
-// LISTEN/UNLISTEN mutate session state, LOCK acquires durable
+// `table_access` reads "writes" broadly: NOTIFY publishes to Postgres
+// pubsub, LISTEN/UNLISTEN mutate session state, LOCK acquires durable
 // transaction-scoped locks, CALL/EXECUTE invoke stored procedures,
-// COPY moves data on the server filesystem. All of these can have
-// side effects outside the read-only contract, so all of them deny
-// via writes_require_approval.
+// COPY moves data on the server filesystem. None of these carry an
+// extractable per-table target that the YAML can grant `read_write` to,
+// so all of them deny under both legacy (no YAML) and any YAML config.
 //
-// Known limitation (documented, not patched at V1): SELECT-wrapped
+// Known limitation (documented, not patched): SELECT-wrapped
 // admin-function calls like `SELECT pg_terminate_backend(123)` parse as
 // a SelectStmt with a FuncCall and are NOT denied. AST-level write
 // detection cannot tell side-effecting functions from pure ones without
-// a denylist. V1.5 will introduce a function-side-effects denylist.
+// a denylist. The function-side-effects denylist is a Cloud feature.
 
 import { describe, test } from "bun:test";
 import { makeEngine, baseCtx } from "../_helpers.ts";
 import { PolicyRule } from "../../src/audit/types.ts";
 import { expectDeny, expectAllow } from "./_helpers.ts";
 
-const WRITES = PolicyRule.WRITES_REQUIRE_APPROVAL;
+const TABLE_ACCESS = PolicyRule.TABLE_ACCESS;
 
 describe("adversarial/exec-side-effects: stored procedure / prepared", () => {
   test("CALL my_proc() → deny (CallStmt)", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "CALL my_proc()", WRITES);
+    await expectDeny(engine, baseCtx, "CALL my_proc()", TABLE_ACCESS);
   });
 
   test("EXECUTE my_prepared → deny (ExecuteStmt)", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "EXECUTE my_prepared", WRITES);
+    await expectDeny(engine, baseCtx, "EXECUTE my_prepared", TABLE_ACCESS);
   });
 
   test("PREPARE my_p AS SELECT 1 → currently allow (V1 known gap)", async () => {
@@ -52,22 +52,22 @@ describe("adversarial/exec-side-effects: NOTIFY/LISTEN/UNLISTEN/LOCK", () => {
   // categories are surfaced through the same DENY path as DML.
   test("NOTIFY ch, 'msg' → deny (publishes pubsub event)", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "NOTIFY ch, 'msg'", WRITES);
+    await expectDeny(engine, baseCtx, "NOTIFY ch, 'msg'", TABLE_ACCESS);
   });
 
   test("LISTEN ch → deny (mutates session subscription state)", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "LISTEN ch", WRITES);
+    await expectDeny(engine, baseCtx, "LISTEN ch", TABLE_ACCESS);
   });
 
   test("UNLISTEN ch → deny", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "UNLISTEN ch", WRITES);
+    await expectDeny(engine, baseCtx, "UNLISTEN ch", TABLE_ACCESS);
   });
 
   test("UNLISTEN * → deny", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "UNLISTEN *", WRITES);
+    await expectDeny(engine, baseCtx, "UNLISTEN *", TABLE_ACCESS);
   });
 
   test("LOCK TABLE users IN ACCESS EXCLUSIVE MODE → deny", async () => {
@@ -76,30 +76,30 @@ describe("adversarial/exec-side-effects: NOTIFY/LISTEN/UNLISTEN/LOCK", () => {
       engine,
       baseCtx,
       "LOCK TABLE users IN ACCESS EXCLUSIVE MODE",
-      WRITES,
+      TABLE_ACCESS,
     );
   });
 
   test("LOCK TABLE users (default mode) → deny", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "LOCK TABLE users", WRITES);
+    await expectDeny(engine, baseCtx, "LOCK TABLE users", TABLE_ACCESS);
   });
 });
 
 describe("adversarial/exec-side-effects: COPY", () => {
   test("COPY t FROM '/etc/passwd' → deny (server-side filesystem read)", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "COPY t FROM '/etc/passwd'", WRITES);
+    await expectDeny(engine, baseCtx, "COPY t FROM '/etc/passwd'", TABLE_ACCESS);
   });
 
   test("COPY t TO '/tmp/leak' → deny (server-side filesystem write)", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "COPY t TO '/tmp/leak'", WRITES);
+    await expectDeny(engine, baseCtx, "COPY t TO '/tmp/leak'", TABLE_ACCESS);
   });
 
   test("COPY t FROM STDIN → deny", async () => {
     const { engine } = makeEngine();
-    await expectDeny(engine, baseCtx, "COPY t FROM STDIN", WRITES);
+    await expectDeny(engine, baseCtx, "COPY t FROM STDIN", TABLE_ACCESS);
   });
 
   test("COPY (SELECT * FROM users) TO '/tmp/dump' → deny", async () => {
@@ -108,7 +108,7 @@ describe("adversarial/exec-side-effects: COPY", () => {
       engine,
       baseCtx,
       "COPY (SELECT * FROM users) TO '/tmp/dump'",
-      WRITES,
+      TABLE_ACCESS,
     );
   });
 });

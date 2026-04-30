@@ -182,9 +182,9 @@ export async function verifyHandshake(url: string): Promise<HandshakeReport> {
   const trials: Trial[] = [
     { label: "allowed read", sql: "SELECT 1", expect: { allowed: true } },
     {
-      label: "writes_require_approval",
+      label: "table_access",
       sql: "DELETE FROM users",
-      expect: { allowed: false, rule: "writes_require_approval" },
+      expect: { allowed: false, rule: "table_access" },
     },
     {
       label: "multi_statement",

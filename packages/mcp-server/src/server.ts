@@ -56,7 +56,7 @@ export function buildServer(opts: BuildServerOptions): McpServer {
     {
       title: "Run a SQL query against the configured Postgres database",
       description:
-        "Parses the SQL with libpg_query, applies Midplane policy (writes_require_approval, multi_statement, tenant_scope, parse_error), audits the call, and returns rows on ALLOW. Denials return policy_rule + reason; the call is still audited.",
+        "Parses the SQL with libpg_query, applies Midplane policy (table_access, multi_statement, tenant_scope, parse_error), audits the call, and returns rows on ALLOW. Denials return policy_rule + reason; the call is still audited.",
       inputSchema: QueryInputSchema,
     },
     async (args: QueryArgs) => {

@@ -31,7 +31,7 @@ export const Decision = {
 export type Decision = (typeof Decision)[keyof typeof Decision];
 
 export const PolicyRule = {
-  WRITES_REQUIRE_APPROVAL: "writes_require_approval",
+  TABLE_ACCESS: "table_access",
   MULTI_STATEMENT: "multi_statement",
   TENANT_SCOPE_MISSING: "tenant_scope_missing",
   PARSE_ERROR: "parse_error",
@@ -57,7 +57,7 @@ export const DecidedPayload = z.discriminatedUnion("decision", [
   }),
   z.object({
     decision: z.literal("DENY"),
-    policy_rule: z.string(),                               // e.g. "writes_require_approval"
+    policy_rule: z.string(),                               // e.g. "table_access"
     reason: z.string(),                                    // human-readable, surfaced to agent
     statement_type: z.string().optional(),                 // present when parse succeeded
     tables_touched: z.array(z.string()).max(64).optional(),

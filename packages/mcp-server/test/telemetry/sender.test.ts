@@ -4,7 +4,7 @@ import type { TelemetryConfig } from "../../src/telemetry/config.ts";
 import type { StartupEvent } from "../../src/telemetry/schema.ts";
 
 const validStartup: StartupEvent = {
-  schema_version: 1,
+  schema_version: 2,
   event: "startup",
   install_id: "01H8K2J9XQVWZ7PCQ3F0R2N5T8",
   ts: 1_730_000_000,

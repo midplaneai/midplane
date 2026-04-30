@@ -30,8 +30,8 @@ describe("query tool — DENY path", () => {
     expect(out.isError).toBe(true);
     const payload = JSON.parse((out.content[0] as { text: string }).text);
     expect(payload.allowed).toBe(false);
-    expect(payload.policy_rule).toBe("writes_require_approval");
-    expect(payload.reason).toMatch(/read-only/);
+    expect(payload.policy_rule).toBe("table_access");
+    expect(payload.reason).toMatch(/table-access policy/);
     expect(payload.auditId).toBeTruthy();
     expect(executor.calls.length).toBe(0);
   });

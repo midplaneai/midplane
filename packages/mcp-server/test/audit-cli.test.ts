@@ -232,7 +232,7 @@ describe("midplane audit tail --follow (live polling)", () => {
 describe("midplane audit stats", () => {
   beforeEach(async () => {
     const now = Date.now();
-    // 2 ALLOW SELECT, 1 DENY writes_require_approval, 1 EXECUTED.
+    // 2 ALLOW SELECT, 1 DENY table_access, 1 EXECUTED.
     await writeEvent({ event_type: "ATTEMPTED" }, 1, now - 60_000);
     await writeEvent(
       {
@@ -257,7 +257,7 @@ describe("midplane audit stats", () => {
         event_type: "DECIDED",
         payload: {
           decision: "DENY",
-          policy_rule: "writes_require_approval",
+          policy_rule: "table_access",
           reason: "no",
           statement_type: "UPDATE",
         } as never,
@@ -283,7 +283,7 @@ describe("midplane audit stats", () => {
     const denies = Object.fromEntries(
       parsed.deny_by_rule.map((x: { k: string; n: number }) => [x.k, x.n]),
     );
-    expect(denies.writes_require_approval).toBe(1);
+    expect(denies.table_access).toBe(1);
 
     const allows = Object.fromEntries(
       parsed.allow_by_statement.map((x: { k: string; n: number }) => [x.k, x.n]),
@@ -297,7 +297,7 @@ describe("midplane audit stats", () => {
     expect(r.stdout).toContain("Audit stats — last 24h");
     expect(r.stdout).toContain("Events by type:");
     expect(r.stdout).toContain("Denies by policy rule:");
-    expect(r.stdout).toContain("writes_require_approval");
+    expect(r.stdout).toContain("table_access");
   });
 
   test("--since narrows the window", async () => {

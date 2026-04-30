@@ -29,8 +29,11 @@ export type EngineContext = {
 };
 
 export type Decision =
-  | { allowed: true;  result: ExecutionResult; auditId: string }
-  | { allowed: false; reason: string;          auditId: string };
+  | { allowed: true; result: ExecutionResult; auditId: string }
+  // `reason` is the wire-level rule name (e.g. "table_access") for the
+  // agent's structured branching; `message` is the polished, agent-facing
+  // sentence the rule produced.
+  | { allowed: false; reason: string; message: string; auditId: string };
 
 export interface EngineOptions {
   policy: { rules: Rule[] };
@@ -115,6 +118,10 @@ export class Engine {
 
     // ── 4. audit DECIDED — failure here aborts the pipeline.
     const decidedId = this.idGen();
+    const denyMessage =
+      evalResult.verdict.decision === "DENY"
+        ? evalResult.verdict.message ?? defaultMessageForRule(evalResult.verdict.reason)
+        : "";
     const decidedEvent: AuditEvent =
       evalResult.verdict.decision === "ALLOW"
         ? {
@@ -142,7 +149,7 @@ export class Engine {
             payload: {
               decision: "DENY",
               policy_rule: evalResult.verdict.reason,
-              reason: humanReason(evalResult.verdict.reason),
+              reason: denyMessage,
               statement_type: evalResult.statementType ?? undefined,
               tables_touched:
                 evalResult.tablesTouched.length > 0
@@ -156,6 +163,7 @@ export class Engine {
       return {
         allowed: false,
         reason: evalResult.verdict.reason,
+        message: denyMessage,
         auditId: decidedId,
       };
     }
@@ -273,18 +281,18 @@ function normalizeForFingerprint(node: unknown): unknown {
   return out;
 }
 
-function humanReason(rule: string): string {
+// Fallback messages for rule names that didn't supply their own polished
+// sentence on the verdict. Rules SHOULD always supply a `message` — these
+// defaults only fire for `internal_error` (synthesized when a rule throws)
+// and any future rule that forgets.
+function defaultMessageForRule(rule: string): string {
   switch (rule) {
-    case "writes_require_approval":
-      return "Midplane denied this query because writes require approval and are read-only by default.";
-    case "multi_statement":
-      return "Midplane denied this query because it contains multiple statements.";
-    case "tenant_scope_missing":
-      return "Midplane denied this query because the tenant scope on the queried table could not be verified.";
-    case "parse_error":
-      return "Midplane denied this query because it could not be parsed as Postgres SQL.";
     case "internal_error":
-      return "Midplane denied this query because policy evaluation failed unexpectedly.";
+      return (
+        "Midplane denied this query because policy evaluation threw " +
+        "unexpectedly. The query was audited but not executed; the engine " +
+        "logs the underlying error to ops."
+      );
     default:
       return `Midplane denied this query (rule: ${rule}).`;
   }

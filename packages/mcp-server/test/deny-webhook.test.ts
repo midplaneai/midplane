@@ -134,12 +134,12 @@ describe("loadDenyWebhookConfig", () => {
   test("parses MIDPLANE_DENY_WEBHOOK_RULES into a Set", () => {
     const c = loadDenyWebhookConfig({
       MIDPLANE_DENY_WEBHOOK: "https://hooks.slack.com/x",
-      MIDPLANE_DENY_WEBHOOK_RULES: "writes_require_approval, multi_statement",
+      MIDPLANE_DENY_WEBHOOK_RULES: "table_access, multi_statement",
     });
     expect(c?.rules).toBeInstanceOf(Set);
     expect([...c!.rules!].sort()).toEqual([
       "multi_statement",
-      "writes_require_approval",
+      "table_access",
     ]);
   });
 
@@ -206,7 +206,7 @@ describe("DenyWebhookAuditWriter", () => {
     await w.write(
       decidedDeny({
         query_id: "q1",
-        policy_rule: "writes_require_approval",
+        policy_rule: "table_access",
         reason: "writes denied",
         statement_type: "DELETE",
         tables_touched: ["public.users"],
@@ -222,7 +222,7 @@ describe("DenyWebhookAuditWriter", () => {
     expect(p.query_id).toBe("q1");
     expect(p.tenant_id).toBe("tenant-1");
     expect(p.agent_identity).toBe("agent-x");
-    expect(p.policy_rule).toBe("writes_require_approval");
+    expect(p.policy_rule).toBe("table_access");
     expect(p.reason).toBe("writes denied");
     expect(p.statement_type).toBe("DELETE");
     expect(p.tables_touched).toEqual(["public.users"]);
@@ -235,7 +235,7 @@ describe("DenyWebhookAuditWriter", () => {
     const poster = new CapturingPoster();
     const w = new DenyWebhookAuditWriter(
       inner,
-      { url: "https://x", rules: new Set(["writes_require_approval"]) },
+      { url: "https://x", rules: new Set(["table_access"]) },
       poster,
     );
 
@@ -248,11 +248,11 @@ describe("DenyWebhookAuditWriter", () => {
 
     await w.write(attempted({ query_id: "q2", sql_raw: "DELETE FROM x" }));
     await w.write(
-      decidedDeny({ query_id: "q2", policy_rule: "writes_require_approval" }),
+      decidedDeny({ query_id: "q2", policy_rule: "table_access" }),
     );
     await new Promise((r) => setTimeout(r, 0));
     expect(poster.posts).toHaveLength(1);
-    expect(poster.posts[0].policy_rule).toBe("writes_require_approval");
+    expect(poster.posts[0].policy_rule).toBe("table_access");
   });
 
   test("SQL preview is truncated at 1024 chars and flagged", async () => {
@@ -267,7 +267,7 @@ describe("DenyWebhookAuditWriter", () => {
     const longSql = "SELECT '" + "a".repeat(2000) + "'";
     await w.write(attempted({ query_id: "q1", sql_raw: longSql }));
     await w.write(
-      decidedDeny({ query_id: "q1", policy_rule: "writes_require_approval" }),
+      decidedDeny({ query_id: "q1", policy_rule: "table_access" }),
     );
     await new Promise((r) => setTimeout(r, 0));
 
@@ -294,7 +294,7 @@ describe("DenyWebhookAuditWriter", () => {
 
     await w.write(attempted({ query_id: "q1", sql_raw: exactSql }));
     await w.write(
-      decidedDeny({ query_id: "q1", policy_rule: "writes_require_approval" }),
+      decidedDeny({ query_id: "q1", policy_rule: "table_access" }),
     );
     await new Promise((r) => setTimeout(r, 0));
 
@@ -334,7 +334,7 @@ describe("DenyWebhookAuditWriter", () => {
     await w.write(attempted({ query_id: "q1", sql_raw: "DELETE FROM x" }));
     // The DECIDED write must not throw even though the poster will reject.
     await w.write(
-      decidedDeny({ query_id: "q1", policy_rule: "writes_require_approval" }),
+      decidedDeny({ query_id: "q1", policy_rule: "table_access" }),
     );
 
     expect(inner.events).toHaveLength(2);
@@ -379,13 +379,13 @@ describe("DenyWebhookAuditWriter", () => {
 
     // q0 should be gone — fire DENY for it and confirm sql_preview is empty.
     await w.write(
-      decidedDeny({ query_id: "q0", policy_rule: "writes_require_approval" }),
+      decidedDeny({ query_id: "q0", policy_rule: "table_access" }),
     );
     // q256 should still be there with its SQL.
     await w.write(
       decidedDeny({
         query_id: "q256",
-        policy_rule: "writes_require_approval",
+        policy_rule: "table_access",
       }),
     );
     await new Promise((r) => setTimeout(r, 0));
@@ -405,7 +405,7 @@ describe("createHttpPoster", () => {
     audit_id: "a1",
     tenant_id: "t",
     agent_identity: null,
-    policy_rule: "writes_require_approval",
+    policy_rule: "table_access",
     reason: "denied",
     statement_type: null,
     tables_touched: [],
@@ -442,7 +442,7 @@ describe("createHttpPoster", () => {
     expect(warns).toHaveLength(1);
     expect(warns[0].msg).toContain("non-2xx");
     expect(warns[0].ctx.status).toBe(400);
-    expect(warns[0].ctx.rule).toBe("writes_require_approval");
+    expect(warns[0].ctx.rule).toBe("table_access");
   });
 
   test("5xx response is logged as a warning", async () => {

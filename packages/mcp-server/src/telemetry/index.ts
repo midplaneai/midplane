@@ -134,7 +134,7 @@ async function emitHeartbeat(args: {
   const drained = args.collector.drainHeartbeat();
   if (!drained) return;          // idle window — skip
   const event: HeartbeatEvent = {
-    schema_version: 1,
+    schema_version: 2,
     event: "heartbeat",
     install_id: args.installId,
     ts: Math.floor(Date.now() / 1000),
@@ -156,7 +156,7 @@ function buildStartupEvent(args: {
   transport: "stdio" | "http";
 }): StartupEvent {
   return {
-    schema_version: 1,
+    schema_version: 2,
     event: "startup",
     install_id: args.installId,
     ts: Math.floor(Date.now() / 1000),

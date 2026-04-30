@@ -16,6 +16,10 @@ export function parseError(): Rule {
       return {
         decision: "DENY",
         reason: PolicyRule.PARSE_ERROR,
+        message:
+          `Midplane denied this query because it could not be parsed as ` +
+          `Postgres SQL (${rctx.parse.error}). Anything Midplane can't ` +
+          `parse is denied — it can't enforce policy on text it can't read.`,
       };
     },
   };

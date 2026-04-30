@@ -3,8 +3,9 @@
 // Honored: DATABASE_URL, PORT, DB_PATH, MIDPLANE_TENANT_ID,
 // MIDPLANE_POLICY_FILE, MIDPLANE_TRANSPORT, INDEXER_TOKEN.
 //
-// loadPolicyFile reads + parses a YAML override file. V1 only consumes the
-// tenant_scope mappings; the four policy rules are hardcoded.
+// loadPolicyFile reads + parses a YAML override file. The MCP server
+// consumes the tenant_scope mappings and the table_access config; the
+// four policy rules are hardcoded.
 
 import { z } from "zod";
 import { readFileSync } from "node:fs";
@@ -25,6 +26,8 @@ export const ConfigSchema = z.object({
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
+const TableAccessLevelSchema = z.enum(["deny", "read", "read_write"]);
+
 const PolicyFileSchema = z.object({
   tenant_scope: z
     .object({
@@ -32,11 +35,23 @@ const PolicyFileSchema = z.object({
       mappings: z.record(z.string(), z.string()).default({}),
     })
     .optional(),
+  table_access: z
+    .object({
+      default: TableAccessLevelSchema.default("read"),
+      tables: z.record(z.string(), TableAccessLevelSchema).default({}),
+    })
+    .optional(),
 });
 export type PolicyFile = z.infer<typeof PolicyFileSchema>;
 
+export type TableAccessLevel = z.infer<typeof TableAccessLevelSchema>;
+
 export interface LoadedPolicy {
   mappings: Record<string, string>;
+  tableAccess: {
+    default: TableAccessLevel;
+    tables: Record<string, TableAccessLevel>;
+  } | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -84,7 +99,7 @@ export function loadPolicyFile(path: string): LoadedPolicy {
   }
 
   if (doc === null || doc === undefined) {
-    return { mappings: {} };
+    return { mappings: {}, tableAccess: null };
   }
 
   const parsed = PolicyFileSchema.safeParse(doc);
@@ -95,8 +110,14 @@ export function loadPolicyFile(path: string): LoadedPolicy {
   }
 
   const ts = parsed.data.tenant_scope;
-  if (!ts || ts.enabled === false) return { mappings: {} };
-  return { mappings: ts.mappings };
+  const mappings = ts && ts.enabled !== false ? ts.mappings : {};
+
+  const ta = parsed.data.table_access;
+  const tableAccess = ta
+    ? { default: ta.default, tables: ta.tables }
+    : null;
+
+  return { mappings, tableAccess };
 }
 
 function formatZodIssues(issues: z.core.$ZodIssue[]): string {

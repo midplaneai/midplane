@@ -65,7 +65,7 @@ Sent once, immediately after the MCP transport is listening. Fields:
 
 | Field            | Type     | Example                            | Why                          |
 | ---------------- | -------- | ---------------------------------- | ---------------------------- |
-| `schema_version` | int      | `1`                                | Versioned for forward compat |
+| `schema_version` | int      | `2`                                | Versioned for forward compat |
 | `event`          | string   | `"startup"`                        | Discriminator                |
 | `install_id`     | ULID     | `"01H8K2J9XQVWZ7PCQ3F0R2N5T8"`     | Stable random ID per install |
 | `ts`             | int      | `1730000000`                       | Unix seconds, UTC            |
@@ -81,7 +81,7 @@ Sample:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "event": "startup",
   "install_id": "01H8K2J9XQVWZ7PCQ3F0R2N5T8",
   "ts": 1730000000,
@@ -122,8 +122,8 @@ tool calls, the heartbeat is suppressed (idle installs don't beacon daily).
 | `exec_failures.by_sqlstate_class.{cc}` | int | First two chars of SQLSTATE only           |
 
 Tool names are the fixed v1 set: `query`, `list_tables`, `describe_table`.
-Policy rule names are the fixed set: `writes_require_approval`,
-`multi_statement`, `tenant_scope_missing`, `parse_error`, `internal_error`.
+Policy rule names are the fixed set: `table_access`, `multi_statement`,
+`tenant_scope_missing`, `parse_error`, `internal_error`.
 Statement type buckets are the fixed set: `SELECT`, `INSERT`, `UPDATE`,
 `DELETE`, `DDL`, `OTHER`. **Anything outside these allow-lists is dropped
 before send** — a new rule or tool requires a schema bump and a doc update
@@ -135,7 +135,7 @@ Sample:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "event": "heartbeat",
   "install_id": "01H8K2J9XQVWZ7PCQ3F0R2N5T8",
   "ts": 1730086400,
@@ -148,7 +148,7 @@ Sample:
     "describe_table": { "calls":   78, "allow":   78, "deny":  0 }
   },
   "denials_by_rule": {
-    "writes_require_approval": 30,
+    "table_access":            30,
     "multi_statement":          2,
     "tenant_scope_missing":     1,
     "parse_error":              1
@@ -244,6 +244,14 @@ Schema version bumps:
   months.
 - **Anything in the "What we never send" list moves**: not a schema change.
   That's a new product decision and a new doc.
+
+### Version history
+
+- **v2** — `denials_by_rule` enum renamed: `writes_require_approval` →
+  `table_access`. Same privacy story (still rule-name histograms only,
+  no SQL); the rule itself was generalized from a binary read-only
+  sentinel to a per-table YAML-driven access policy.
+- **v1** — initial schema.
 
 ## Inspection
 

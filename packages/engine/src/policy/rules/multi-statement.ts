@@ -18,7 +18,15 @@ export function multiStatement(): Rule {
       if (!rctx.parse.ok) return { decision: "ALLOW" }; // parse_error owns this case
       const n = rctx.parse.ast.stmts.length;
       if (n > 1) {
-        return { decision: "DENY", reason: PolicyRule.MULTI_STATEMENT };
+        return {
+          decision: "DENY",
+          reason: PolicyRule.MULTI_STATEMENT,
+          message:
+            `Midplane denied this query because it contains ${n} statements ` +
+            `separated by semicolons. Send each statement as a separate ` +
+            `query (multi-statement input is the canonical SQL-injection ` +
+            `vector and is denied unconditionally).`,
+        };
       }
       return { decision: "ALLOW" };
     },

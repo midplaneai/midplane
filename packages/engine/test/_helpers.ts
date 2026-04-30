@@ -7,7 +7,7 @@ import type { CredentialStore } from "../src/crypto/credential-store.ts";
 import type { Executor, ExecutionResult } from "../src/executor.ts";
 import type { EngineContext, EngineOptions } from "../src/engine.ts";
 import { Engine } from "../src/engine.ts";
-import { writesRequireApproval } from "../src/policy/rules/writes-require-approval.ts";
+import { tableAccess, type TableAccessConfig } from "../src/policy/rules/table-access.ts";
 import { multiStatement } from "../src/policy/rules/multi-statement.ts";
 import { tenantScope } from "../src/policy/rules/tenant-scope.ts";
 import { parseError } from "../src/policy/rules/parse-error.ts";
@@ -62,6 +62,7 @@ export type EngineHarness = {
 export function makeEngine(opts: {
   enableTenantScope?: boolean;
   rules?: EngineOptions["policy"]["rules"];
+  tableAccess?: TableAccessConfig;
 } = {}): EngineHarness {
   const audit = new MemoryAuditWriter();
   const executor = new MockExecutor();
@@ -72,7 +73,7 @@ export function makeEngine(opts: {
     [
       parseError(),
       multiStatement(),
-      writesRequireApproval(),
+      tableAccess(opts.tableAccess),
       tenantScope(),
     ];
 

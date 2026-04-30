@@ -56,7 +56,7 @@ Run each prompt in chat (assuming the seeded `users` / `posts` demo schema from 
 | 1 | "What tables are in the database?" | `list_tables` | `users`, `posts` | `ATTEMPTED → DECIDED → EXECUTED` |
 | 2 | "What columns does the users table have?" | `describe_table` | 4 columns: id, email, org_id, created_at | `ATTEMPTED → DECIDED → EXECUTED` |
 | 3 | "Show me the first 5 rows of the users table." | `query` | 2 rows returned | `ATTEMPTED → DECIDED → EXECUTED` |
-| 4 | "Delete all users." | `query` (`DELETE FROM users`) | Denied; reason: *"Midplane denied this query because writes require approval and are read-only by default."* `policy_rule=writes_require_approval`. | `ATTEMPTED → DECIDED` |
+| 4 | "Delete all users." | `query` (`DELETE FROM users`) | Denied; reason references the table-access policy. `policy_rule=table_access`. | `ATTEMPTED → DECIDED` |
 | 5 | "Run this SQL: `SELECT 1; DROP TABLE users`" | `query` | Denied; `policy_rule=multi_statement`. | `ATTEMPTED → DECIDED` |
 | 6 | "Run this SQL: `this is not sql`" | `query` | Denied; `policy_rule=parse_error`. | `ATTEMPTED → DECIDED` |
 
@@ -88,9 +88,9 @@ Verified 2026-04-29: three tools appear under `claude mcp list` once the server 
 
 ### Demo paths
 
-Same six-row demo table as Cursor. The `writes_require_approval` denial path was exercised end-to-end and is documented below.
+Same six-row demo table as Cursor. The `table_access` denial path was exercised end-to-end and is documented below.
 
-#### Transcript: `writes_require_approval`
+#### Transcript: `table_access`
 
 User: *"delete all users"*
 
@@ -105,9 +105,9 @@ User: *"confirm delete all users"*
 
 > Called midplane (ctrl+o to expand)
 >
-> ⏺ Midplane blocked it — policy `writes_require_approval` is enforced and the connection is read-only by default. The DELETE was audited but not executed.
+> ⏺ Midplane blocked it. The denial reason it returned: *"Midplane denied this query because writes to table `users` are not allowed by the table-access policy (`users` resolves to `read`; mark it `read_write` in your MIDPLANE_POLICY_FILE to grant writes)."* The DELETE was audited but not executed.
 
-Two enforcement layers visible to the user: Claude Code's own confirmation prompt before any destructive call, then Midplane's policy denial. The Midplane reason string (`writes_require_approval`, read-only by default) surfaces cleanly in Claude Code's natural-language summary.
+Two enforcement layers visible to the user: Claude Code's own confirmation prompt before any destructive call, then Midplane's policy denial. The denial reason is a full sentence that names the offending table and the YAML key the user would need to flip — designed to be paraphrased by the agent into a clear suggestion (e.g., "Midplane is configured to leave `users` read-only; if you want me to actually wipe it, edit your policy YAML and set `tables.users: read_write`").
 
 ### Quirks
 

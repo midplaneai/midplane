@@ -14,7 +14,7 @@ import {
   type ExecuteContext,
   parseError,
   multiStatement,
-  writesRequireApproval,
+  tableAccess,
   tenantScope,
 } from "@midplane/engine";
 
@@ -64,7 +64,7 @@ export function makeTestEngine(opts: {
   let counter = 0;
   const engine = new Engine({
     policy: {
-      rules: [parseError(), multiStatement(), writesRequireApproval(), tenantScope()],
+      rules: [parseError(), multiStatement(), tableAccess(), tenantScope()],
     },
     audit,
     credentials,

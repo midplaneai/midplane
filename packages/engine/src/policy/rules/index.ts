@@ -20,7 +20,15 @@ export interface RuleEvalContext {
 
 export type RuleVerdict =
   | { decision: "ALLOW" }
-  | { decision: "DENY"; reason: string };
+  | {
+      decision: "DENY";
+      reason: string; // rule name (e.g. "table_access") — wire-level identifier
+      // Optional polished, agent-facing sentence. When present, the engine
+      // uses it verbatim for both the audit DECIDED `reason` field and the
+      // MCP tool's user-facing message. When absent, the engine falls back
+      // to a generic sentence keyed off the rule name.
+      message?: string;
+    };
 
 export interface Rule extends VisitorRule {
   readonly name: string;

@@ -4,7 +4,7 @@
 //
 // Asserts each of the V1 demo decision paths:
 //   - allowed read: SELECT 1 executes against the sidecar Postgres
-//   - writes_require_approval: DELETE FROM users denied
+//   - table_access: DELETE FROM users denied (no YAML ⇒ writes deny)
 //   - multi_statement: SELECT 1; DROP TABLE users denied
 //   - parse_error: garbage input denied
 
@@ -19,7 +19,7 @@ type Trial =
 
 const trials: Trial[] = [
   { sql: "SELECT 1", expect: { allowed: true, rowCount: 1 } },
-  { sql: "DELETE FROM users", expect: { allowed: false, policy_rule: "writes_require_approval" } },
+  { sql: "DELETE FROM users", expect: { allowed: false, policy_rule: "table_access" } },
   { sql: "SELECT 1; DROP TABLE users;", expect: { allowed: false, policy_rule: "multi_statement" } },
   { sql: "this is not sql", expect: { allowed: false, policy_rule: "parse_error" } },
 ];

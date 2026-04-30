@@ -49,4 +49,4 @@ The project is and stays MIT. By contributing you agree your contribution is lic
 
 ## Scope guidance
 
-Some things are deliberately out of scope right now (write-approval flow, function-side-effects denylist, session-scope tracking, column-level reads). PRs that add those should reference the [Roadmap](./README.md#roadmap) so we can stage them. Smaller fixes inside the current surface are easier to land.
+Some things are deliberately out of scope for OSS — approval workflows (Slack-bot, web queue, escalation) ship in Midplane Cloud, not here. Other roadmap items (function-side-effects denylist, session-scope tracking, column-level reads) belong in OSS but are deferred — see the [Roadmap](./README.md#roadmap). PRs that add those should reference the roadmap entry so we can stage them; smaller fixes inside the current surface are easier to land.
