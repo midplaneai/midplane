@@ -93,15 +93,28 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 
 ## Reading the audit log
 
-The audit log is a plain SQLite database. Open it with anything:
+The container ships a `midplane audit` CLI that wraps the local SQLite log. No SQL required.
 
 ```bash
-sqlite3 /var/lib/docker/volumes/midplane-audit/_data/audit.db
-> SELECT event_type, COUNT(*) FROM audit_events GROUP BY event_type;
-> SELECT * FROM audit_events ORDER BY ts DESC LIMIT 10;
+# Live JSON-lines stream (Ctrl-C to stop). Backfills the last 10 events first.
+docker exec midplane midplane audit tail
+
+# One-shot dump of everything in the last hour. Accepts 30m, 7d, 1d12h, etc.
+docker exec midplane midplane audit since 1h
+
+# Summary over a window (default 24h): event types, deny rules, top agents.
+docker exec midplane midplane audit stats
+docker exec midplane midplane audit stats --since 7d --json
 ```
 
-Schema: see [packages/engine/src/audit/schema.sql](../packages/engine/src/audit/schema.sql).
+Each `tail` / `since` line is a single JSON object — pipe through `jq` for filtering:
+
+```bash
+docker exec midplane midplane audit tail \
+  | jq 'select(.event_type == "DECIDED" and .payload.decision == "DENY")'
+```
+
+If you need raw SQL access, the database is still a plain SQLite file at `/data/audit.db` inside the container (volume `midplane-audit`). Schema: see [packages/engine/src/audit/schema.sql](../packages/engine/src/audit/schema.sql).
 
 ## Shipping audit to your own collector
 

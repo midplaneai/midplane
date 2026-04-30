@@ -38,6 +38,13 @@ COPY packages ./packages
 
 RUN mkdir -p /data && chown -R midplane:midplane /app /data
 
+# `midplane` on PATH so `docker exec midplane midplane audit tail` works.
+# Tiny shell wrapper instead of symlinking the .ts file — sidesteps shebang
+# resolution quirks and keeps the entry path in one place.
+RUN printf '#!/bin/sh\nexec bun /app/packages/mcp-server/src/cli.ts "$@"\n' \
+    > /usr/local/bin/midplane \
+  && chmod +x /usr/local/bin/midplane
+
 USER midplane
 
 ENV PORT=8080
@@ -49,4 +56,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -sf "http://localhost:${PORT}/health" || exit 1
 
-CMD ["bun", "run", "packages/mcp-server/src/index.ts"]
+CMD ["midplane", "server"]

@@ -15,7 +15,7 @@ import { logger } from "./logger.ts";
 import { initTelemetry } from "./telemetry/index.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
-async function main(): Promise<void> {
+export async function runServer(): Promise<void> {
   let cfg;
   try {
     cfg = loadConfig(process.env);
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  main().catch((err) => {
+  runServer().catch((err) => {
     logger.error({ err }, "fatal");
     process.exit(1);
   });

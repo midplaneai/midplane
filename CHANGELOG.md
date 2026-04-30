@@ -6,6 +6,7 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ### Added
 
+- **`midplane audit` CLI** (`@midplane/mcp-server`). New unified `midplane` bin with `audit tail | stats | since` subcommands so self-hosters can read the audit log without writing SQL: `docker exec midplane midplane audit tail` for a live JSON-lines stream, `audit stats` for a 24h rollup of event types / deny rules / allow statement types / top agents, `audit since 1h` for a one-shot window dump. Reads SQLite directly (no `INDEXER_TOKEN` needed). Server entry preserved at `midplane server` (default).
 - **Anonymous telemetry** (`@midplane/mcp-server`). On startup the server posts a single ULID-keyed event to `https://t.midplane.ai/v1/events`; every 24h it posts a heartbeat with per-tool call counts, denials grouped by policy rule, statement-type buckets, latency histograms (p50/p95/p99), and Postgres failure counts grouped by 2-char SQLSTATE class. No SQL, no fingerprints, no table/column names, no tenant IDs, no error messages — see [`TELEMETRY.md`](./TELEMETRY.md) for the full schema and the "what we never send" list. Disable with `MIDPLANE_TELEMETRY=0` or `DO_NOT_TRACK=1`. Inspect with `MIDPLANE_TELEMETRY=debug`.
 
 ## [0.1.0] — Unreleased
