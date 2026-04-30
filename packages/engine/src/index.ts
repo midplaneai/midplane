@@ -13,6 +13,7 @@ export type {
 } from "./audit/index.ts";
 export { EventType, Decision as AuditDecision, PolicyRule } from "./audit/types.ts";
 export { SqliteAuditWriter } from "./audit/sqlite.ts";
+export type { AuditEventRow } from "./audit/sqlite.ts";
 export { PostgresAuditWriter } from "./audit/postgres.ts";
 
 export type { CredentialStore } from "./crypto/credential-store.ts";

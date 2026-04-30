@@ -23,14 +23,54 @@ const INSERT_SQL = `
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
+const READ_SINCE_SQL = `
+  SELECT id, query_id, tenant_id, agent_identity, ts, event_type, payload, schema_version
+  FROM audit_events
+  WHERE id > ?
+  ORDER BY id
+  LIMIT ?
+`;
+
+const DELETE_THROUGH_SQL = `
+  DELETE FROM audit_events WHERE id <= ?
+`;
+
+// Row shape returned by readSince — payload is JSON-parsed (TEXT in storage).
+// Mirrors the columns documented in schema.sql.
+export interface AuditEventRow {
+  id: string;
+  query_id: string;
+  tenant_id: string;
+  agent_identity: string | null;
+  ts: number;
+  event_type: string;
+  payload: unknown;
+  schema_version: number;
+}
+
+interface RawAuditRow {
+  id: string;
+  query_id: string;
+  tenant_id: string;
+  agent_identity: string | null;
+  ts: number;
+  event_type: string;
+  payload: string;
+  schema_version: number;
+}
+
 export class SqliteAuditWriter implements AuditWriter {
   private db: Database;
   private insertStmt: ReturnType<Database["prepare"]>;
+  private readSinceStmt: ReturnType<Database["prepare"]>;
+  private deleteThroughStmt: ReturnType<Database["prepare"]>;
 
   constructor(path: string, opts: { create?: boolean } = {}) {
     this.db = new Database(path, { create: opts.create ?? true });
     this.applySchema();
     this.insertStmt = this.db.prepare(INSERT_SQL);
+    this.readSinceStmt = this.db.prepare(READ_SINCE_SQL);
+    this.deleteThroughStmt = this.db.prepare(DELETE_THROUGH_SQL);
   }
 
   private applySchema(): void {
@@ -72,6 +112,30 @@ export class SqliteAuditWriter implements AuditWriter {
         err,
       );
     }
+  }
+
+  // Read events with id strictly greater than `cursor`, ordered by id, capped
+  // at `limit`. Cursor "0" (or any non-ULID lex-smaller value) reads from the
+  // beginning. Payload column is JSON-parsed before return.
+  readSince(cursor: string, limit: number): AuditEventRow[] {
+    const rows = this.readSinceStmt.all(cursor, limit) as RawAuditRow[];
+    return rows.map((r) => ({
+      id: r.id,
+      query_id: r.query_id,
+      tenant_id: r.tenant_id,
+      agent_identity: r.agent_identity,
+      ts: r.ts,
+      event_type: r.event_type,
+      payload: JSON.parse(r.payload),
+      schema_version: r.schema_version,
+    }));
+  }
+
+  // Delete every row with id <= `id` (inclusive). Returns rows affected.
+  // Idempotent: a second call with the same id returns 0.
+  deleteThrough(id: string): number {
+    const result = this.deleteThroughStmt.run(id);
+    return Number(result.changes);
   }
 
   async close(): Promise<void> {

@@ -45,7 +45,10 @@ async function main(): Promise<void> {
       await handle.close();
     };
   } else {
-    const http = await startHttp(() => buildServer({ handle, telemetry }), { port: cfg.port });
+    const http = await startHttp(() => buildServer({ handle, telemetry }), {
+      port: cfg.port,
+      indexer: { audit: handle.audit, token: cfg.indexerToken },
+    });
     close = async () => {
       await http.close();
       await telemetry.shutdown();

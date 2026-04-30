@@ -20,6 +20,10 @@ import { logger } from "./logger.ts";
 export interface EngineHandle {
   engine: Engine;
   ctxBase: EngineContext;
+  // Unwrapped SQLite audit writer — used by the indexer pull routes which
+  // need read/delete access. The engine sees the (possibly telemetry-wrapped)
+  // version; the routes always go through the underlying SQLite store.
+  audit: SqliteAuditWriter;
   close(): Promise<void>;
 }
 
@@ -66,6 +70,7 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
   return {
     engine,
     ctxBase,
+    audit: baseAudit,
     async close() {
       await executor.close();
       // audit may be a wrapper (e.g. telemetry tee); its close() delegates

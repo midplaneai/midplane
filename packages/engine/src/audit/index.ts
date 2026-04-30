@@ -16,4 +16,5 @@ export type {
 } from "./types.ts";
 export { EventType, Decision, PolicyRule } from "./types.ts";
 export { SqliteAuditWriter } from "./sqlite.ts";
+export type { AuditEventRow } from "./sqlite.ts";
 export { PostgresAuditWriter } from "./postgres.ts";

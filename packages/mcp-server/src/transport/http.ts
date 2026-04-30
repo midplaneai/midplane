@@ -20,8 +20,12 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import type { SqliteAuditWriter } from "@midplane/engine";
 import { logger } from "../logger.ts";
+
+const DEFAULT_AUDIT_LIMIT = 500;
+const MAX_AUDIT_LIMIT = 1000;
 
 export interface HttpHandle {
   url: string;
@@ -39,14 +43,21 @@ interface SessionEntry {
   server: McpServer;
 }
 
+export interface IndexerRoutes {
+  audit: SqliteAuditWriter;
+  // Bearer token from env. When undefined, the routes return 404 — audit
+  // access is opt-in on self-host.
+  token?: string;
+}
+
 export async function startHttp(
   serverFactory: ServerFactory,
-  opts: { port: number; host?: string },
+  opts: { port: number; host?: string; indexer?: IndexerRoutes },
 ): Promise<HttpHandle> {
   const sessions = new Map<string, SessionEntry>();
 
   const httpServer = createServer((req, res) =>
-    handle(req, res, serverFactory, sessions).catch((err) => {
+    handle(req, res, serverFactory, sessions, opts.indexer).catch((err) => {
       logger.error({ err }, "http handler threw");
       if (!res.headersSent) {
         res.statusCode = 500;
@@ -96,6 +107,7 @@ async function handle(
   res: ServerResponse,
   serverFactory: ServerFactory,
   sessions: Map<string, SessionEntry>,
+  indexer: IndexerRoutes | undefined,
 ): Promise<void> {
   const url = req.url ?? "/";
 
@@ -103,6 +115,17 @@ async function handle(
     res.statusCode = 200;
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // Audit indexer pull endpoints — opt-in via INDEXER_TOKEN. The unset-token
+  // case 404s so a self-host server reveals nothing about the route's existence.
+  if (req.method === "GET" && url.startsWith("/audit/since/")) {
+    await handleAuditSince(req, res, url, indexer);
+    return;
+  }
+  if (req.method === "DELETE" && url.startsWith("/audit/before/")) {
+    await handleAuditBefore(req, res, url, indexer);
     return;
   }
 
@@ -174,6 +197,85 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+// Constant-time bearer check. Returns "missing" when the server has no
+// expected token configured (route should 404 to avoid revealing it exists);
+// "bad" for any auth failure; "ok" otherwise.
+function checkBearer(
+  req: IncomingMessage,
+  expected: string | undefined,
+): "ok" | "missing" | "bad" {
+  if (!expected) return "missing";
+  const h = req.headers["authorization"];
+  if (typeof h !== "string" || !h.startsWith("Bearer ")) return "bad";
+  const got = Buffer.from(h.slice("Bearer ".length));
+  const want = Buffer.from(expected);
+  if (got.length !== want.length) return "bad";
+  return timingSafeEqual(got, want) ? "ok" : "bad";
+}
+
+function writeJson(res: ServerResponse, status: number, body: unknown): void {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify(body));
+}
+
+async function handleAuditSince(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: string,
+  indexer: IndexerRoutes | undefined,
+): Promise<void> {
+  const auth = checkBearer(req, indexer?.token);
+  if (auth === "missing") {
+    res.statusCode = 404;
+    res.end("not found");
+    return;
+  }
+  if (auth === "bad") {
+    writeJson(res, 401, { error: "unauthorized" });
+    return;
+  }
+
+  // url is "/audit/since/<cursor>[?limit=N]"
+  const parsed = new URL(url, "http://internal");
+  const cursor = decodeURIComponent(parsed.pathname.slice("/audit/since/".length));
+  const limit = clampLimit(parsed.searchParams.get("limit"));
+
+  const rows = indexer!.audit.readSince(cursor, limit);
+  const next_cursor = rows.length < limit ? null : rows[rows.length - 1]!.id;
+  writeJson(res, 200, { rows, next_cursor });
+}
+
+async function handleAuditBefore(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: string,
+  indexer: IndexerRoutes | undefined,
+): Promise<void> {
+  const auth = checkBearer(req, indexer?.token);
+  if (auth === "missing") {
+    res.statusCode = 404;
+    res.end("not found");
+    return;
+  }
+  if (auth === "bad") {
+    writeJson(res, 401, { error: "unauthorized" });
+    return;
+  }
+
+  const parsed = new URL(url, "http://internal");
+  const id = decodeURIComponent(parsed.pathname.slice("/audit/before/".length));
+  const deleted = indexer!.audit.deleteThrough(id);
+  writeJson(res, 200, { deleted });
+}
+
+function clampLimit(raw: string | null): number {
+  if (raw === null) return DEFAULT_AUDIT_LIMIT;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_AUDIT_LIMIT;
+  return Math.min(n, MAX_AUDIT_LIMIT);
 }
 
 // Mirror mcp-session-id → fly-replay: cache_key=<id> on response.

@@ -131,6 +131,88 @@ describe("SqliteAuditWriter — concurrent reads while writer commits (WAL)", ()
   });
 });
 
+describe("SqliteAuditWriter — readSince / deleteThrough", () => {
+  test("readSince orders by id, not insert time", async () => {
+    const w = new SqliteAuditWriter(dbPath);
+    // Insert with descending ids but ascending ts to confirm ordering is by id.
+    await w.write(attempted("01TESTID000000000000ORDR03", "Q1", 1_700_000_000_001));
+    await w.write(attempted("01TESTID000000000000ORDR01", "Q1", 1_700_000_000_002));
+    await w.write(attempted("01TESTID000000000000ORDR02", "Q1", 1_700_000_000_003));
+
+    const rows = w.readSince("0", 100);
+    expect(rows.map((r) => r.id)).toEqual([
+      "01TESTID000000000000ORDR01",
+      "01TESTID000000000000ORDR02",
+      "01TESTID000000000000ORDR03",
+    ]);
+    await w.close();
+  });
+
+  test("readSince cursor is strictly greater than (not inclusive)", async () => {
+    const w = new SqliteAuditWriter(dbPath);
+    await w.write(attempted("01TESTID000000000000CURS01", "Q1", 1_700_000_000_001));
+    await w.write(attempted("01TESTID000000000000CURS02", "Q1", 1_700_000_000_002));
+    await w.write(attempted("01TESTID000000000000CURS03", "Q1", 1_700_000_000_003));
+
+    // Cursor at the middle row → only the one strictly greater comes back.
+    const rows = w.readSince("01TESTID000000000000CURS02", 100);
+    expect(rows.map((r) => r.id)).toEqual(["01TESTID000000000000CURS03"]);
+    await w.close();
+  });
+
+  test("readSince returns payload as parsed object, not JSON string", async () => {
+    const w = new SqliteAuditWriter(dbPath);
+    await w.write(attempted("01TESTID000000000000PARS01", "Q1", 1_700_000_000_000));
+    const rows = w.readSince("0", 10);
+    expect(rows[0]!.payload).toEqual({
+      sql_raw: "SELECT 1",
+      sql_fingerprint: "0123456789abcdef",
+    });
+    await w.close();
+  });
+
+  test("readSince respects limit", async () => {
+    const w = new SqliteAuditWriter(dbPath);
+    for (let i = 0; i < 10; i++) {
+      await w.write(
+        attempted(
+          `01TESTID000000000000LIMI${String(i).padStart(2, "0")}`,
+          "Q1",
+          1_700_000_000_000 + i,
+        ),
+      );
+    }
+    const rows = w.readSince("0", 3);
+    expect(rows.length).toBe(3);
+    await w.close();
+  });
+
+  test("deleteThrough is inclusive of the given id", async () => {
+    const w = new SqliteAuditWriter(dbPath);
+    await w.write(attempted("01TESTID000000000000DELT01", "Q1", 1_700_000_000_001));
+    await w.write(attempted("01TESTID000000000000DELT02", "Q1", 1_700_000_000_002));
+    await w.write(attempted("01TESTID000000000000DELT03", "Q1", 1_700_000_000_003));
+
+    const deleted = w.deleteThrough("01TESTID000000000000DELT02");
+    expect(deleted).toBe(2);
+    const remaining = w.readSince("0", 100);
+    expect(remaining.map((r) => r.id)).toEqual(["01TESTID000000000000DELT03"]);
+    await w.close();
+  });
+
+  test("deleteThrough is idempotent — second call returns 0", async () => {
+    const w = new SqliteAuditWriter(dbPath);
+    await w.write(attempted("01TESTID000000000000IDEM01", "Q1", 1_700_000_000_001));
+    await w.write(attempted("01TESTID000000000000IDEM02", "Q1", 1_700_000_000_002));
+
+    const first = w.deleteThrough("01TESTID000000000000IDEM02");
+    expect(first).toBe(2);
+    const second = w.deleteThrough("01TESTID000000000000IDEM02");
+    expect(second).toBe(0);
+    await w.close();
+  });
+});
+
 describe("SqliteAuditWriter — payload validation", () => {
   test("invalid event_type rejected before insert", async () => {
     const w = new SqliteAuditWriter(dbPath);

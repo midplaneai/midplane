@@ -1,7 +1,7 @@
 // Env-var → typed Config. Schema-validated via zod; refuse to boot on invalid.
 //
 // Honored: DATABASE_URL, PORT, DB_PATH, MIDPLANE_TENANT_ID,
-// MIDPLANE_POLICY_FILE, MIDPLANE_TRANSPORT.
+// MIDPLANE_POLICY_FILE, MIDPLANE_TRANSPORT, INDEXER_TOKEN.
 //
 // loadPolicyFile reads + parses a YAML override file. V1 only consumes the
 // tenant_scope mappings; the four policy rules are hardcoded.
@@ -20,6 +20,8 @@ export const ConfigSchema = z.object({
   tenantId: z.string().default("__self_host__"),
   policyFile: z.string().optional(),
   transport: TransportSchema.default("http"),
+  // Bearer token for the cloud indexer's pull endpoints. Unset → routes 404.
+  indexerToken: z.string().min(1).optional(),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -52,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     tenantId: env.MIDPLANE_TENANT_ID,
     policyFile: env.MIDPLANE_POLICY_FILE,
     transport: env.MIDPLANE_TRANSPORT,
+    indexerToken: env.INDEXER_TOKEN,
   };
   // Strip undefined so zod defaults apply.
   const cleaned: Record<string, unknown> = {};

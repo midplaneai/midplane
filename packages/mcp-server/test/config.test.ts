@@ -67,6 +67,15 @@ describe("loadConfig", () => {
     expect(cfg.port).toBe(9000);
     expect(cfg.policyFile).toBe("/etc/midplane/policy.yaml");
   });
+
+  test("INDEXER_TOKEN is undefined by default and passes through when set", () => {
+    expect(loadConfig({ DATABASE_URL: "postgres://x" }).indexerToken).toBeUndefined();
+    const cfg = loadConfig({
+      DATABASE_URL: "postgres://x",
+      INDEXER_TOKEN: "tok-abc",
+    });
+    expect(cfg.indexerToken).toBe("tok-abc");
+  });
 });
 
 describe("loadPolicyFile", () => {
