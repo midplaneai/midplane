@@ -14,6 +14,7 @@
 // to the Spawner backend via env injection (Docker -e, Fly machine config)
 // and held in process memory only as long as the container is alive.
 
+import type { TableAccessPolicy } from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
 
 export interface SpawnedContainer {
@@ -26,6 +27,13 @@ export interface SpawnOptions {
   token: string;
   region: Region;
   dsn: string;
+  /** Per-token table_access policy. Materialized to YAML at spawn time
+   *  and mounted inside the OSS container at the path read via
+   *  MIDPLANE_POLICY_FILE. The proxy loads it from connections.table_access
+   *  alongside the DSN; passing it here keeps the spawner backends'
+   *  contract symmetric with the policy save → invalidate → respawn
+   *  flow. */
+  tableAccess: TableAccessPolicy;
 }
 
 export interface Spawner {

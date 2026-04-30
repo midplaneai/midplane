@@ -18,7 +18,25 @@ describe("FlyMachineSpawner", () => {
         const env = config.env as Record<string, string>;
         expect(env.DATABASE_URL).toBe("postgres://example");
         expect(env.PORT).toBe("8080");
+        expect(env.MIDPLANE_POLICY_FILE).toBe("/etc/midplane/policy.yaml");
         expect(body.region).toBe("fra");
+
+        // The policy YAML rides in config.files as base64. Decode and
+        // confirm the exact bytes the engine will read at startup —
+        // sorted keys, no quoting, terminating newline.
+        const files = config.files as Array<{
+          guest_path: string;
+          raw_value: string;
+        }>;
+        expect(files).toHaveLength(1);
+        expect(files[0]?.guest_path).toBe("/etc/midplane/policy.yaml");
+        const decoded = Buffer.from(files[0]!.raw_value, "base64").toString(
+          "utf8",
+        );
+        expect(decoded).toBe(
+          "default: read\ntables:\n  orders: read_write\n",
+        );
+
         return new Response(
           JSON.stringify({
             id: "mach-1",
@@ -50,6 +68,7 @@ describe("FlyMachineSpawner", () => {
       token: "tok",
       region: "fra",
       dsn: "postgres://example",
+      tableAccess: { default: "read", tables: { orders: "read_write" } },
     });
 
     expect(c.host).toBe("[fdaa:0:1234::5]");
@@ -86,7 +105,12 @@ describe("FlyMachineSpawner", () => {
     });
 
     await expect(
-      spawner.spawn({ token: "t", region: "fra", dsn: "x" }),
+      spawner.spawn({
+        token: "t",
+        region: "fra",
+        dsn: "x",
+        tableAccess: { default: "deny", tables: {} },
+      }),
     ).rejects.toThrow(/did not start/);
 
     const destroyCall = calls.find((c) => c.startsWith("DELETE "));

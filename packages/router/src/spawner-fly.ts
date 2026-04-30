@@ -11,9 +11,14 @@
 // the proxy fan-outs change. Across the Internet edge, we don't rely on
 // fly-replay; we hold a per-token registry pointing at the specific 6PN IP.
 
+import { serializePolicyToYaml } from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
 import type { RegionConfig } from "./region.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
+
+// Path inside the OSS container where the policy YAML is materialized.
+// The MIDPLANE_POLICY_FILE env var points the engine at this path.
+const POLICY_FILE_GUEST_PATH = "/etc/midplane/policy.yaml";
 
 export interface FlyMachineSpawnerOptions {
   apiToken: string;
@@ -111,10 +116,22 @@ export class FlyMachineSpawner implements Spawner {
             DATABASE_URL: opts.dsn,
             PORT: "8080",
             DB_PATH: "/data/audit.db",
+            MIDPLANE_POLICY_FILE: POLICY_FILE_GUEST_PATH,
             ...(this.indexerToken
               ? { INDEXER_TOKEN: this.indexerToken }
               : {}),
           },
+          // Inline file content per machine. The Fly Machines API base64-
+          // decodes raw_value into the guest filesystem at start. No volume,
+          // no image rebuild — the file lives only as long as the machine
+          // does. Policy changes happen via registry.invalidate(token) +
+          // respawn, so the new YAML appears with the next agent request.
+          files: [
+            {
+              guest_path: POLICY_FILE_GUEST_PATH,
+              raw_value: btoa(serializePolicyToYaml(opts.tableAccess)),
+            },
+          ],
           services: [
             {
               ports: [{ port: 8080, handlers: ["http"] }],

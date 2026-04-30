@@ -24,6 +24,8 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
+import { type TableAccessPolicy } from "./policy.ts";
+
 // --- Region -----------------------------------------------------------------
 
 export const REGIONS = ["fra", "iad"] as const;
@@ -83,6 +85,17 @@ export const connections = pgTable(
     // new sessions after 70 minutes of KMS unreachability — see design doc
     // "KMS degradation"). Updated by the router on each successful decrypt.
     lastKmsSuccessAt: timestamp("last_kms_success_at", { withTimezone: true }),
+    // Per-token table_access policy. The connection-create form sets
+    // `default` (read/deny/read_write); the permission grid on the detail
+    // page edits `tables`. Materialized to YAML at spawn time, mounted
+    // inside the OSS container at the path read via MIDPLANE_POLICY_FILE.
+    // Default (`deny` everywhere) preserves existing behavior for rows
+    // created before this column existed — identical to the engine's
+    // no-YAML default.
+    tableAccess: jsonb("table_access")
+      .$type<TableAccessPolicy>()
+      .notNull()
+      .default(sql`'{"default":"deny","tables":{}}'::jsonb`),
   },
   (t) => ({
     customerRegionFk: foreignKey({

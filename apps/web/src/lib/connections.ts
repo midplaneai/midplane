@@ -5,7 +5,10 @@ import {
   connections,
   getDb,
   indexerCursors,
+  validatePolicy,
+  type AccessLevel,
   type Customer,
+  type TableAccessPolicy,
 } from "@midplane-cloud/db";
 import {
   encryptDsn,
@@ -29,6 +32,7 @@ export async function createConnection(
   customer: Customer,
   dsn: string,
   name: string | null = null,
+  defaultAccess: AccessLevel = "read",
 ): Promise<{ id: string; mcpToken: string }> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
@@ -42,6 +46,16 @@ export async function createConnection(
   // 32 hex chars (~128 bits of entropy) — opaque, URL-safe, no PII.
   const mcpToken = crypto.randomUUID().replace(/-/g, "");
 
+  // Initial policy: default = customer's choice from the create form,
+  // tables = {} (per-table overrides are added later from the permission
+  // grid on the connection detail page). The schema column default
+  // ('deny', {}) is the safety net for any code path that bypasses this
+  // helper; this insert overrides it with the customer's selection.
+  const tableAccess: TableAccessPolicy = {
+    default: defaultAccess,
+    tables: {},
+  };
+
   const db = getDb();
   await db.insert(connections).values({
     id,
@@ -51,6 +65,7 @@ export async function createConnection(
     encryptedDsn: ciphertext,
     kmsKeyId,
     mcpToken,
+    tableAccess,
   });
 
   return { id, mcpToken };
@@ -115,6 +130,54 @@ export async function deleteConnection(
 export interface RotationCaches {
   cache: { invalidate(connectionId: string, region: Region): void };
   registry: { invalidate(token: string): Promise<void> };
+}
+
+// Replace the table_access policy on a connection. The DSN-side cache
+// stays valid (DSN didn't change), but the running OSS container is
+// holding the old policy file, so we invalidate the registry and let
+// the next agent request respawn with the new YAML mounted in.
+//
+// Returns null when the id is unknown OR owned by another customer
+// (mirrors the leakage-avoidance shape of rotateConnection / delete).
+//
+// Validation runs here AND at the spawner boundary; the dashboard form
+// also validates before submitting, so a malformed policy reaches this
+// function only via a hostile / buggy non-browser caller.
+export async function setTableAccess(
+  customer: Customer,
+  id: string,
+  policy: TableAccessPolicy,
+  caches: { registry: { invalidate(token: string): Promise<void> } },
+): Promise<{ mcpToken: string } | null> {
+  const validation = validatePolicy(policy);
+  if (!validation.ok) {
+    const summary = validation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`invalid policy: ${summary}`);
+  }
+
+  const db = getDb();
+  const updated = await db
+    .update(connections)
+    .set({ tableAccess: validation.value })
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .returning({ mcpToken: connections.mcpToken });
+
+  const row = updated[0];
+  if (!row) return null;
+
+  // Same fail-soft posture as rotateConnection: the durable fact (new
+  // policy in Postgres) is committed; if invalidate throws, the next
+  // idle expiry catches up. Worst case is one stale request window —
+  // the same race rotation already accepts.
+  try {
+    await caches.registry.invalidate(row.mcpToken);
+  } catch (err) {
+    console.error("[setTableAccess] registry.invalidate failed", err);
+  }
+
+  return row;
 }
 
 // Rotate a connection's DSN: re-encrypt with the customer's region key,

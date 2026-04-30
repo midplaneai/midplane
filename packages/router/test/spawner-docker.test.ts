@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { DockerSpawner, parseHostPort } from "../src/spawner-docker.ts";
@@ -39,6 +41,7 @@ describe("DockerSpawner", () => {
       token: "tok-abc",
       region: "fra",
       dsn: "postgres://example",
+      tableAccess: { default: "read", tables: { users: "deny" } },
     });
 
     expect(c.host).toBe("127.0.0.1");
@@ -48,6 +51,19 @@ describe("DockerSpawner", () => {
     const runArgs = exec.mock.calls[0]?.[1] ?? [];
     expect(runArgs).toContain("midplane/midplane:0.1.0");
     expect(runArgs).toContain("DATABASE_URL=postgres://example");
+    expect(runArgs).toContain("MIDPLANE_POLICY_FILE=/etc/midplane/policy.yaml");
+
+    // The bind mount is `<host_path>:/etc/midplane/policy.yaml:ro`. Pull
+    // the host path back out and confirm the file exists with the
+    // expected serialized YAML — proves the spawner materialized it
+    // before the docker run.
+    const mountArg = runArgs.find(
+      (a) => typeof a === "string" && a.endsWith(":/etc/midplane/policy.yaml:ro"),
+    );
+    expect(mountArg).toBeDefined();
+    const hostPath = mountArg!.split(":")[0]!;
+    const yaml = await readFile(hostPath, "utf8");
+    expect(yaml).toBe("default: read\ntables:\n  users: deny\n");
 
     await c.stop();
     const stopCall = exec.mock.calls.find((c) => c[1]?.[0] === "stop");
@@ -71,7 +87,12 @@ describe("DockerSpawner", () => {
     });
 
     await expect(
-      spawner.spawn({ token: "t", region: "fra", dsn: "postgres://x" }),
+      spawner.spawn({
+        token: "t",
+        region: "fra",
+        dsn: "postgres://x",
+        tableAccess: { default: "deny", tables: {} },
+      }),
     ).rejects.toThrow(/did not become healthy/);
 
     const rmCall = exec.mock.calls.find((c) => c[1]?.[0] === "rm");
