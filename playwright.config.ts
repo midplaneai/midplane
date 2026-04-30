@@ -48,9 +48,21 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
+    // Setup project: mints a Clerk testing token and stuffs it into
+    // process.env so setupClerkTestingToken({ page }) calls in the
+    // signup suite can attach __clerk_testing_token to FAPI requests.
+    // workers: 1 above keeps setup + dependent tests in the same worker
+    // so process.env mutations survive — Clerk's docs recommend this
+    // shape over function-based globalSetup for exactly that reason.
+    {
+      name: "clerk-setup",
+      testMatch: /_clerk-globalsetup\.ts$/,
+    },
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: /_clerk-globalsetup\.ts$/,
+      dependencies: ["clerk-setup"],
     },
   ],
   webServer: process.env.E2E_BASE_URL
