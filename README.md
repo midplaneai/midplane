@@ -8,9 +8,11 @@ This repo CONSUMES the OSS image; it never reimplements the engine. Hosted/self-
 
 ```
 apps/web              Next.js dashboard + Clerk auth + connections API
+apps/web/Dockerfile   Multi-stage bun + Next.js standalone build (control plane)
 packages/db           Drizzle schema (customers, connections, audit_events_index)
 packages/kms          encryptDsn / decryptDsn (env-mode dev, AWS KMS prod)
 packages/router       Hosted MCP request handler — token → connection → Fly app
+fly-web.toml          Control-plane Fly app (Next.js dashboard + /mcp/<token>)
 fly-fra.toml          Frankfurt regional MCP runtime app
 scripts/bootstrap.sh  One-shot dev setup
 ```
@@ -40,6 +42,59 @@ Or use the convenience script (auto-detects `~/dev/midplane`, override with `OSS
 
 ```bash
 bun run dev:image
+```
+
+## Deploy (control plane)
+
+The Next.js control plane (apps/web) runs on Fly so it shares the same
+6PN private network as the regional runtime apps. `FlyMachineSpawner`
+returns IPv6 private IPs that only same-Fly-org apps can reach — hosting
+the control plane on Vercel/Render would force every customer audit
+request through an extra public-Internet hop.
+
+First-time setup (one-shot, user-driven):
+
+```bash
+# 1. Create the app in your Fly org.
+fly apps create midplane-web --org <your-org>
+
+# 2. Set runtime secrets. NEVER inline these in fly-web.toml.
+fly secrets set --app midplane-web \
+  DATABASE_URL='postgres://...neon.tech/midplane?sslmode=require' \
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...' \
+  CLERK_SECRET_KEY='sk_live_...' \
+  MIDPLANE_KMS_MODE='env' \
+  MIDPLANE_KMS_DEV_KEY_FRA="$(openssl rand -hex 32)" \
+  MIDPLANE_KMS_DEV_KEY_IAD="$(openssl rand -hex 32)" \
+  FLY_API_TOKEN='fly_...' \
+  FLY_APP_FRA='midplane-fra' \
+  FLY_APP_IAD='midplane-iad' \
+  MIDPLANE_PUBLIC_HOST_FRA='fra.midplane.ai' \
+  MIDPLANE_PUBLIC_HOST_IAD='iad.midplane.ai' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.1.0' \
+  INDEXER_TOKEN="$(openssl rand -hex 32)"
+```
+
+Per-deploy:
+
+```bash
+# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is baked into the client bundle at
+# build time — pass it as a Docker build arg (the same value you set as
+# a runtime secret above).
+fly deploy --config fly-web.toml \
+  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...'
+```
+
+Health check: `https://midplane-web.fly.dev/api/health` returns
+`{ "ok": true }`. Fly's `[[http_service.checks]]` polls this every 30s.
+The check intentionally does not touch Postgres — a Neon outage should
+not take down the proxy.
+
+Local Docker smoke test (no fly required):
+
+```bash
+docker build -t midplane-web -f apps/web/Dockerfile \
+  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_local .
 ```
 
 ## What's in scope here
