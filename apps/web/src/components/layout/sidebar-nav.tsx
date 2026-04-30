@@ -1,32 +1,10 @@
 "use client";
 
-import { Database, ScrollText, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { NAV_ITEMS } from "@/components/layout/nav-items";
 import { cn } from "@/lib/utils";
-
-interface NavItem {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  match: (pathname: string) => boolean;
-}
-
-const ITEMS: NavItem[] = [
-  {
-    href: "/dashboard",
-    label: "Connections",
-    icon: Database,
-    match: (p) => p === "/dashboard" || p.startsWith("/connections"),
-  },
-  {
-    href: "/audit",
-    label: "Audit log",
-    icon: ScrollText,
-    match: (p) => p.startsWith("/audit"),
-  },
-];
 
 export function SidebarNav() {
   const pathname = usePathname() ?? "";
@@ -35,7 +13,7 @@ export function SidebarNav() {
       <div className="px-[18px] pb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">
         Workspace
       </div>
-      {ITEMS.map((item) => {
+      {NAV_ITEMS.map((item) => {
         const active = item.match(pathname);
         const Icon = item.icon;
         return (

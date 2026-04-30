@@ -2,6 +2,7 @@ import { UserButton } from "@clerk/nextjs";
 import { MapPin } from "lucide-react";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
+import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { REGION_LABELS } from "@/lib/region";
 import type { Region } from "@midplane-cloud/kms";
@@ -50,7 +51,10 @@ export function AppShell({ email, region, children }: AppShellProps) {
           <UserButton afterSignOutUrl="/" />
         </div>
       </aside>
-      <main className="min-w-0">{children}</main>
+      <main className="min-w-0">
+        <MobileNav />
+        {children}
+      </main>
     </div>
   );
 }
