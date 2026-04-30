@@ -47,10 +47,21 @@ export function getMcpProxyContext(): McpProxyContext {
   const cache = new DecryptCache();
   const regions = loadRegions(process.env);
   const indexerToken = process.env.INDEXER_TOKEN;
+  const flyApiToken = process.env.FLY_API_TOKEN;
 
-  const spawner = process.env.FLY_API_TOKEN
+  // Hosted (FLY_API_TOKEN set) requires the indexer — silent disablement
+  // there means audit data never reaches the dashboard with zero log
+  // signal until a customer notices. Dev (Docker backend) treats it as
+  // optional so the laptop loop doesn't require token plumbing.
+  if (flyApiToken && !indexerToken) {
+    throw new Error(
+      "INDEXER_TOKEN is required when FLY_API_TOKEN is set (hosted audit pipeline cannot start without it)",
+    );
+  }
+
+  const spawner = flyApiToken
     ? new FlyMachineSpawner({
-        apiToken: process.env.FLY_API_TOKEN,
+        apiToken: flyApiToken,
         regions,
         indexerToken,
       })

@@ -26,7 +26,12 @@ interface FakeDbState {
   customerByToken: Map<string, { customerId: string; region: "fra" | "iad" }>;
   cursorByToken: Map<
     string,
-    { lastId: string; region: "fra" | "iad"; lastIndexedAt?: Date }
+    {
+      lastId: string;
+      customerId: string;
+      region: "fra" | "iad";
+      lastIndexedAt?: Date;
+    }
   >;
   auditRows: Array<{
     id: string;
@@ -92,7 +97,9 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
         const row = whereCond.token
           ? state.cursorByToken.get(whereCond.token)
           : undefined;
-        return row ? [{ lastId: row.lastId }] : [];
+        return row
+          ? [{ lastId: row.lastId, customerId: row.customerId }]
+          : [];
       }
       if (table === auditEventsIndex) {
         // Retention max-id query.
@@ -142,12 +149,18 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
         state.inserts.push({ table: "cursor", rows: stagedRows, mode });
         for (const r of stagedRows as Array<{
           mcpToken: string;
+          customerId: string;
           region: "fra" | "iad";
           lastId: string;
           lastIndexedAt?: Date;
         }>) {
+          // onConflictDoUpdate semantics: customerId is immutable, so an
+          // existing row's customerId stays — only lastId/lastIndexedAt
+          // get bumped.
+          const existing = state.cursorByToken.get(r.mcpToken);
           state.cursorByToken.set(r.mcpToken, {
             lastId: r.lastId,
+            customerId: existing?.customerId ?? r.customerId,
             region: r.region,
             ...(r.lastIndexedAt ? { lastIndexedAt: r.lastIndexedAt } : {}),
           });
@@ -360,10 +373,11 @@ describe("Indexer", () => {
     });
     await ix.tick();
 
-    // Cursor row is seeded at lastId="" before fetch; on txn failure it
-    // stays at "" — the txn never commits the advance.
-    expect(state.cursorByToken.get("tok-A")?.lastId).toBe("");
-    expect(state.cursorByToken.get("tok-A")?.lastIndexedAt).toBeUndefined();
+    // No cursor row exists — on txn failure the upsert never happens,
+    // and the indexer no longer pre-seeds an empty cursor (that was
+    // dropped along with the loadCursor() seed path; see Indexer.indexOne
+    // and writeBatch).
+    expect(state.cursorByToken.get("tok-A")).toBeUndefined();
     expect(state.auditRows).toHaveLength(0);
     expect(errors).toHaveLength(1);
   });
@@ -383,7 +397,7 @@ describe("Indexer", () => {
     });
     await ix.tick();
     expect(state.auditRows).toHaveLength(0);
-    expect(state.cursorByToken.get("tok-A")?.lastId).toBe(""); // seeded but never advanced
+    expect(state.cursorByToken.get("tok-A")).toBeUndefined();
     expect(errors).toHaveLength(1);
   });
 
@@ -509,12 +523,52 @@ describe("Indexer", () => {
     expect(deleteCalls).toHaveLength(0);
   });
 
-  it("ignores tokens that have no connections row", async () => {
+  it("ignores tokens that have no connections row AND no cursor row", async () => {
     const { db, state, registry } = await buildHarness();
     state.customerByToken.clear(); // tok-A is now orphaned
     const fetchFn = vi.fn() as unknown as typeof fetch;
     const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
     await ix.tick();
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("keeps draining after the connection row is deleted (cursor-stamped customer_id survives)", async () => {
+    const { db, state, registry } = await buildHarness();
+
+    // Tick 1: first index stamps customer_id on the cursor row.
+    const responses = [
+      jsonResponse({
+        rows: [row("01HX0000000000000000000001")],
+        next_cursor: null,
+      }),
+      jsonResponse({
+        rows: [row("01HX0000000000000000000002")],
+        next_cursor: null,
+      }),
+    ];
+    const fetchFn = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+    const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+    await ix.tick();
+    expect(state.cursorByToken.get("tok-A")?.customerId).toBe("cust-A");
+    expect(state.auditRows).toHaveLength(1);
+
+    // Now the user deletes the connection — connections row gone.
+    // (The cursor row should be deleted too in production via
+    // deleteConnection; that's covered by connections.test.ts. Here we
+    // simulate the racing case where the connection is gone but the
+    // cursor row hasn't been swept yet, since the container has
+    // un-drained rows.)
+    state.customerByToken.clear();
+
+    // Tick 2: indexer reads customer_id from the cursor row, drains the
+    // remaining backlog, and the high-severity data-loss bug is gone.
+    await ix.tick();
+    expect(state.auditRows.map((r) => r.id)).toEqual([
+      "01HX0000000000000000000001",
+      "01HX0000000000000000000002",
+    ]);
+    expect(state.cursorByToken.get("tok-A")?.lastId).toBe(
+      "01HX0000000000000000000002",
+    );
   });
 });

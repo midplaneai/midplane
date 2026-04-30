@@ -132,19 +132,20 @@ export const auditEventsIndex = pgTable(
 
 // --- indexer_cursors --------------------------------------------------------
 //
-// One row per active mcp_token. The cloud-side audit indexer polls each
-// container's GET /audit/since/<lastId> on a fixed cadence (5s); this row
-// is its bookmark across process restarts. Rows are NOT FK'd to connections
-// because the indexer must be able to drain a container after the user has
-// rotated or deleted the connection — the cursor row gets removed only
-// when the connection itself is hard-deleted (handled in the connections
-// API), or when the container is permanently gone with no rows left to
-// drain (handled by the indexer).
+// One row per mcp_token the indexer has ever drained. Holds the bookmark
+// (last_id) the next poll resumes from, plus customer_id stamped on the
+// first successful index — once stamped, the indexer can keep draining
+// even after the user deletes or rotates the underlying connection row,
+// which is exactly the design requirement (audit-grade write-through:
+// rows must reach Postgres regardless of what the user does to the
+// connection mid-flight). Rows are deleted by the connections API on
+// hard-delete to avoid orphan accumulation.
 
 export const indexerCursors = pgTable(
   "indexer_cursors",
   {
     mcpToken: text("mcp_token").primaryKey(),
+    customerId: text("customer_id").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
     lastId: text("last_id").notNull().default(""), // ULIDs sort lex; "" precedes all real ids
     lastIndexedAt: timestamp("last_indexed_at", { withTimezone: true }),
@@ -156,6 +157,7 @@ export const indexerCursors = pgTable(
   },
   (t) => ({
     regionIdx: index("indexer_cursors_region_idx").on(t.region),
+    customerIdx: index("indexer_cursors_customer_id_idx").on(t.customerId),
   }),
 );
 

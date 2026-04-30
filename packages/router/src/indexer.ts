@@ -187,13 +187,22 @@ export class Indexer {
   }
 
   private async indexOne(container: ActiveContainer): Promise<void> {
-    const meta = await this.resolveCustomer(container.token);
-    if (!meta) {
-      // Token not in connections — orphaned container or token race; skip.
-      return;
+    // Prefer the cursor row's customer_id (stamped on first index). It
+    // survives connection deletion/rotation, so backlog drainage works
+    // even when the user deletes a connection 5 seconds after first use.
+    // Fall back to the connections table on first sighting only.
+    const cursorRow = await this.loadCursorRow(container.token);
+    let customerId = cursorRow?.customerId;
+    if (!customerId) {
+      const meta = await this.resolveCustomer(container.token);
+      if (!meta) {
+        // Truly orphaned: no cursor row AND no connection row. Skip.
+        return;
+      }
+      customerId = meta.customerId;
     }
 
-    let cursor = await this.loadCursor(container.token, container.region);
+    let cursor = cursorRow?.lastId ?? "";
     // Drain in-tick: keep polling until next_cursor is null. Bounded by
     // the registry being a fixed-size set per process; no risk of starving
     // other containers because the OSS limit caps response size.
@@ -201,7 +210,7 @@ export class Indexer {
       const resp = await this.fetchSince(container, cursor);
       if (resp.rows.length === 0) return;
       try {
-        await this.writeBatch(container.token, container.region, meta.customerId, resp);
+        await this.writeBatch(container.token, container.region, customerId, resp);
       } catch (err) {
         this.onError?.(err, { token: container.token, phase: "write" });
         return;
@@ -282,6 +291,7 @@ export class Indexer {
         .insert(indexerCursors)
         .values({
           mcpToken: token,
+          customerId,
           region,
           lastId,
           lastIndexedAt: indexedAt,
@@ -289,6 +299,8 @@ export class Indexer {
         .onConflictDoUpdate({
           target: indexerCursors.mcpToken,
           set: {
+            // customerId NOT updated on conflict — once stamped it's
+            // immutable. (Connection rotation doesn't change customer.)
             lastId,
             lastIndexedAt: indexedAt,
             lastError: null,
@@ -298,33 +310,28 @@ export class Indexer {
     });
   }
 
-  private async loadCursor(token: string, region: Region): Promise<string> {
+  private async loadCursorRow(
+    token: string,
+  ): Promise<{ lastId: string; customerId: string } | null> {
     const rows = await this.db
-      .select({ lastId: indexerCursors.lastId })
+      .select({
+        lastId: indexerCursors.lastId,
+        customerId: indexerCursors.customerId,
+      })
       .from(indexerCursors)
       .where(eq(indexerCursors.mcpToken, token))
       .limit(1);
-    if (rows[0]) return rows[0].lastId;
-    // First sighting — seed the row at empty cursor so the staleness
-    // probe (MAX(last_indexed_at)) sees the container immediately.
-    await this.db
-      .insert(indexerCursors)
-      .values({ mcpToken: token, region, lastId: "" })
-      .onConflictDoNothing();
-    return "";
+    return rows[0] ?? null;
   }
 
   private async sweepRetention(container: ActiveContainer): Promise<void> {
-    const meta = await this.resolveCustomer(container.token);
-    if (!meta) return;
-
-    const cursorRows = await this.db
-      .select({ lastId: indexerCursors.lastId })
-      .from(indexerCursors)
-      .where(eq(indexerCursors.mcpToken, container.token))
-      .limit(1);
-    const ackId = cursorRows[0]?.lastId;
-    if (!ackId) return;
+    // Retention reads customer_id off the cursor row — no fallback to
+    // connections needed because the cursor row is always populated by
+    // the time any rows are ack'd into Postgres (writeBatch upserts it).
+    const cursorRow = await this.loadCursorRow(container.token);
+    if (!cursorRow || !cursorRow.lastId) return;
+    const customerId = cursorRow.customerId;
+    const ackId = cursorRow.lastId;
 
     // Largest id within the ack'd set that is also older than the grace
     // window. ULIDs are time-sortable, and audit_events_index also stores
@@ -336,7 +343,7 @@ export class Indexer {
       .from(auditEventsIndex)
       .where(
         and(
-          eq(auditEventsIndex.customerId, meta.customerId),
+          eq(auditEventsIndex.customerId, customerId),
           lt(auditEventsIndex.ts, cutoff),
           drizzleSql`${auditEventsIndex.id} <= ${ackId}`,
         ),

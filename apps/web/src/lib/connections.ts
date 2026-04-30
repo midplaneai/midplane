@@ -1,7 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { ulid } from "ulid";
 
-import { connections, getDb, type Customer } from "@midplane-cloud/db";
+import {
+  connections,
+  getDb,
+  indexerCursors,
+  type Customer,
+} from "@midplane-cloud/db";
 import { encryptDsn, makeKmsContext } from "@midplane-cloud/kms";
 
 // Shared create-connection path used by both the Server Action behind the
@@ -45,17 +50,26 @@ export function isValidDsn(s: unknown): s is string {
 // Delete a connection only if it belongs to the calling customer. Returns
 // the number of rows deleted (0 if the id is unknown OR owned by another
 // customer — the caller can't distinguish, by design, to avoid leaking
-// existence).
+// existence). The matching indexer_cursors row is also removed so the
+// staleness probe and any operational reporting on cursors don't pick
+// up orphans for connections that no longer exist.
 export async function deleteConnection(
   customer: Customer,
   id: string,
 ): Promise<number> {
   const db = getDb();
-  const rows = await db
-    .delete(connections)
-    .where(
-      and(eq(connections.id, id), eq(connections.customerId, customer.id)),
-    )
-    .returning({ id: connections.id });
-  return rows.length;
+  return db.transaction(async (tx) => {
+    const deleted = await tx
+      .delete(connections)
+      .where(
+        and(eq(connections.id, id), eq(connections.customerId, customer.id)),
+      )
+      .returning({ id: connections.id, mcpToken: connections.mcpToken });
+    if (deleted[0]) {
+      await tx
+        .delete(indexerCursors)
+        .where(eq(indexerCursors.mcpToken, deleted[0].mcpToken));
+    }
+    return deleted.length;
+  });
 }
