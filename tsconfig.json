@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [],
+  "references": [
+    { "path": "./apps/web" },
+    { "path": "./packages/db" },
+    { "path": "./packages/kms" },
+    { "path": "./packages/router" }
+  ]
+}
