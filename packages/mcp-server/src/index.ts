@@ -66,7 +66,7 @@ export async function runServer(): Promise<void> {
   let close: () => Promise<void>;
 
   if (cfg.transport === "stdio") {
-    logger.info({ transport: "stdio" }, "starting mcp-server");
+    logger.info({ transport: "stdio", databases: handle.registry.names() }, "starting mcp-server");
     const server = buildServer({ handle, telemetry });
     await startStdio(server);
     close = async () => {
@@ -76,8 +76,8 @@ export async function runServer(): Promise<void> {
   } else {
     const http = await startHttp(() => buildServer({ handle, telemetry }), {
       port: cfg.port,
-      indexer: { audit: handle.audit, token: cfg.indexerToken },
-      admin: { setPolicy: (yaml) => handle.setPolicy(yaml) },
+      indexer: { audit: handle.registry.audit, token: cfg.indexerToken },
+      admin: { setPolicy: (yaml) => handle.registry.setPolicy(yaml) },
     });
     close = async () => {
       await http.close();

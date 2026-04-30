@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startHttp, type HttpHandle } from "../../src/transport/http.ts";
 import { buildServer } from "../../src/server.ts";
-import { makeTestEngine, baseCtx, type MockExecutor } from "../_helpers.ts";
+import { makeTestEngine, makeTestHandle, type MockExecutor } from "../_helpers.ts";
 import { verifyHandshake } from "../../verify-mcp-handshake.ts";
 
 let httpHandle: HttpHandle;
@@ -19,11 +19,7 @@ beforeAll(async () => {
   // whatever we set here. Denials don't reach the executor at all.
   executor.result = { rows: [{ "?column?": 1 }], rowCount: 1 };
 
-  const handle = {
-    engine: harness.engine,
-    ctxBase: baseCtx,
-    async close() {},
-  };
+  const handle = makeTestHandle({ engine: harness.engine, audit: harness.audit });
   httpHandle = await startHttp(() => buildServer({ handle }), {
     port: 0,
     host: "127.0.0.1",

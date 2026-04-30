@@ -99,6 +99,33 @@ Restart Claude Desktop after editing. Hosted Midplane (HTTPS endpoint) uses Cust
 
 All three [verified 2026-04-29](./docs/agent-setup.md) against a local container.
 
+## Multiple databases (0.2.0)
+
+One container can serve N Postgres DBs through a single MCP endpoint. Add a `databases:` block to `MIDPLANE_POLICY_FILE`; each entry has its own `url`, `table_access`, and `tenant_scope`. `${ENV_VAR}` is interpolated in `url`, so DSNs stay out of YAML files.
+
+```yaml
+databases:
+  - name: prod
+    url: ${PROD_DATABASE_URL}
+    table_access:
+      default: read
+      tables:
+        feature_flags: read_write
+    tenant_scope:
+      enabled: true
+      mappings:
+        users: customer_id
+        orders: customer_id
+  - name: analytics
+    url: ${ANALYTICS_DATABASE_URL}
+    table_access:
+      default: read_write
+```
+
+When N ≥ 2, `query` and `describe_table` require a `database` arg, `list_tables` accepts an optional `database` (omitted = fan out across all DBs and group results by name), and a new `list_databases` tool reports each DB's name and policy summary. Single-DB users see no change to the tool surface — `database` doesn't appear and `list_databases` isn't registered.
+
+When `databases:` is absent, the `DATABASE_URL` env var + top-level `table_access` / `tenant_scope` shape from 0.1.x keeps working byte-for-byte.
+
 ## How it works
 
 1. Agent sends a SQL query via MCP.
@@ -135,7 +162,7 @@ If your agent already has DB tooling, Midplane sits in front of it as a separate
 
 ## Status
 
-`0.1.0` — first OSS release. The engine, MCP server, and Docker image are tagged and verified across Cursor, Claude Code, and Claude Desktop on a local self-host. Expect to stay on `0.x` for a while; the hosted tier ships separately on its own cadence and is not gated on OSS releases.
+`0.2.0` — adds multi-database support (one container, N Postgres DBs through one MCP endpoint). Single-DB users upgrade with no config changes; the existing `DATABASE_URL` + top-level `table_access` shape keeps working byte-for-byte. The audit SQLite gains a `database` column with a one-time `ALTER TABLE` migration on first 0.2.0 boot. `0.1.0` shipped as the first OSS release. Expect to stay on `0.x` for a while; the hosted tier ships separately on its own cadence and is not gated on OSS releases.
 
 Performance against locked spike targets: 154 MB image (under 200 MB budget), cold start ~470 ms (under 500 ms target), ~3.9 ms/call smoketest throughput.
 

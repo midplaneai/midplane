@@ -7,7 +7,13 @@ import { describe, expect, test } from "bun:test";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig, loadPolicyFile } from "../src/config.ts";
+import {
+  DEFAULT_DB_NAME,
+  loadConfig,
+  loadPolicyFile,
+  parsePolicyYaml,
+  resolveDatabasesFromConfig,
+} from "../src/config.ts";
 
 describe("loadConfig", () => {
   test("missing DATABASE_URL throws", () => {
@@ -138,5 +144,112 @@ describe("loadPolicyFile", () => {
     );
     const policy = loadPolicyFile(path);
     expect(policy.mappings).toEqual({});
+  });
+});
+
+describe("parsePolicyYaml — databases[]", () => {
+  test("databases[] with two entries parses + interpolates env", () => {
+    const yaml = `databases:
+  - name: prod
+    url: \${PROD_URL}
+    table_access:
+      default: read
+      tables:
+        feature_flags: read_write
+    tenant_scope:
+      enabled: true
+      mappings:
+        users: org_id
+  - name: analytics
+    url: postgres://analytics
+    table_access:
+      default: read_write
+`;
+    const policy = parsePolicyYaml(yaml, "test", { PROD_URL: "postgres://prod" } as any);
+    expect(policy.hasDatabasesBlock).toBe(true);
+    expect(policy.databases).toHaveLength(2);
+
+    expect(policy.databases[0]!.name).toBe("prod");
+    expect(policy.databases[0]!.url).toBe("postgres://prod");
+    expect(policy.databases[0]!.mappings).toEqual({ users: "org_id" });
+    expect(policy.databases[0]!.tableAccess).toEqual({
+      default: "read",
+      tables: { feature_flags: "read_write" },
+    });
+
+    expect(policy.databases[1]!.name).toBe("analytics");
+    expect(policy.databases[1]!.url).toBe("postgres://analytics");
+    expect(policy.databases[1]!.tableAccess).toEqual({
+      default: "read_write",
+      tables: {},
+    });
+  });
+
+  test("env interpolation on missing var throws with field path", () => {
+    const yaml = `databases:
+  - name: prod
+    url: \${MISSING_VAR}
+`;
+    expect(() => parsePolicyYaml(yaml, "test", {} as any)).toThrow(/MISSING_VAR/);
+  });
+
+  test("name validation: lowercase, starts with letter", () => {
+    const bad = `databases:
+  - name: 1prod
+    url: postgres://x
+`;
+    expect(() => parsePolicyYaml(bad, "test")).toThrow(/databases\[0\]\.name/);
+    const upper = `databases:
+  - name: Prod
+    url: postgres://x
+`;
+    expect(() => parsePolicyYaml(upper, "test")).toThrow(/databases\[0\]\.name/);
+  });
+
+  test("name __default__ is reserved", () => {
+    const yaml = `databases:
+  - name: __default__
+    url: postgres://x
+`;
+    expect(() => parsePolicyYaml(yaml, "test")).toThrow(/__default__/);
+  });
+
+  test("duplicate names rejected", () => {
+    const yaml = `databases:
+  - name: prod
+    url: postgres://a
+  - name: prod
+    url: postgres://b
+`;
+    expect(() => parsePolicyYaml(yaml, "test")).toThrow(/duplicate database name/);
+  });
+});
+
+describe("resolveDatabasesFromConfig", () => {
+  test("legacy single-DB shape fills url from env DATABASE_URL", () => {
+    const policy = parsePolicyYaml("table_access:\n  default: read\n  tables: {}\n", "test");
+    const cfg = loadConfig({ DATABASE_URL: "postgres://legacy" });
+    const dbs = resolveDatabasesFromConfig(policy, cfg);
+    expect(dbs).toHaveLength(1);
+    expect(dbs[0]!.name).toBe(DEFAULT_DB_NAME);
+    expect(dbs[0]!.url).toBe("postgres://legacy");
+  });
+
+  test("legacy shape with no env DATABASE_URL throws", () => {
+    const policy = parsePolicyYaml("table_access:\n  default: read\n  tables: {}\n", "test");
+    const cfg = loadConfig({ MIDPLANE_POLICY_FILE: "/tmp/anything.yaml" });
+    expect(() => resolveDatabasesFromConfig(policy, cfg)).toThrow(/DATABASE_URL/);
+  });
+
+  test("multi-DB shape ignores env DATABASE_URL but warns", () => {
+    const policy = parsePolicyYaml(
+      "databases:\n  - name: a\n    url: postgres://a\n",
+      "test",
+    );
+    const cfg = loadConfig({ DATABASE_URL: "postgres://leg", MIDPLANE_POLICY_FILE: "/tmp/x.yaml" });
+    const warnings: string[] = [];
+    const dbs = resolveDatabasesFromConfig(policy, cfg, (m) => warnings.push(m));
+    expect(dbs[0]!.url).toBe("postgres://a");
+    expect(warnings.some((w) => /DATABASE_URL/.test(w))).toBe(true);
   });
 });

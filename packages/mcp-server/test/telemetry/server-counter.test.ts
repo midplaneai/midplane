@@ -12,18 +12,19 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "../../src/server.ts";
 import type { TelemetryHandle } from "../../src/telemetry/index.ts";
 import type { ToolName } from "../../src/telemetry/schema.ts";
-import { makeTestEngine, baseCtx } from "../_helpers.ts";
+import { makeTestEngine, makeTestHandle } from "../_helpers.ts";
 
 interface Recorded {
   name: ToolName;
   allowed: boolean;
+  database: string | null;
 }
 
 function recordingTelemetry(): { handle: TelemetryHandle; calls: Recorded[] } {
   const calls: Recorded[] = [];
   const handle: TelemetryHandle = {
     wrap: (w) => w,
-    recordToolCall: (name, allowed) => calls.push({ name, allowed }),
+    recordToolCall: (name, allowed, database) => calls.push({ name, allowed, database }),
     markReady: () => {},
     async shutdown() {},
   };
@@ -38,7 +39,7 @@ async function connect(opts: {
 
   const { handle: telemetry, calls } = recordingTelemetry();
   const server = buildServer({
-    handle: { engine, ctxBase: baseCtx, async close() {} },
+    handle: makeTestHandle({ engine, audit }),
     telemetry,
   });
 
@@ -57,7 +58,7 @@ describe("tool counter — consistency across exit paths", () => {
 
     await client.callTool({ name: "query", arguments: { sql: "SELECT 1" } });
 
-    expect(calls).toEqual([{ name: "query", allowed: true }]);
+    expect(calls).toEqual([{ name: "query", allowed: true, database: "__default__" }]);
     await client.close();
   });
 
@@ -65,7 +66,7 @@ describe("tool counter — consistency across exit paths", () => {
     const { client, calls } = await connect();
     await client.callTool({ name: "query", arguments: { sql: "DELETE FROM users" } });
 
-    expect(calls).toEqual([{ name: "query", allowed: false }]);
+    expect(calls).toEqual([{ name: "query", allowed: false, database: "__default__" }]);
     await client.close();
   });
 
@@ -87,7 +88,7 @@ describe("tool counter — consistency across exit paths", () => {
     // The MCP SDK surfaces the engine's rethrow as a tool error response.
     // Either path counts as a deny for telemetry purposes — what matters
     // is that the counter fired.
-    expect(calls).toEqual([{ name: "query", allowed: false }]);
+    expect(calls).toEqual([{ name: "query", allowed: false, database: "__default__" }]);
 
     // Audit should reflect the same: ATTEMPTED + DECIDED(ALLOW) + FAILED.
     const types = audit.events.map((e) => e.event_type);
@@ -105,7 +106,7 @@ describe("tool counter — consistency across exit paths", () => {
     } catch {
       // ignore
     }
-    expect(calls).toEqual([{ name: "list_tables", allowed: false }]);
+    expect(calls).toEqual([{ name: "list_tables", allowed: false, database: "__default__" }]);
     await client.close();
   });
 
@@ -118,7 +119,7 @@ describe("tool counter — consistency across exit paths", () => {
     } catch {
       // ignore
     }
-    expect(calls).toEqual([{ name: "describe_table", allowed: false }]);
+    expect(calls).toEqual([{ name: "describe_table", allowed: false, database: "__default__" }]);
     await client.close();
   });
 });

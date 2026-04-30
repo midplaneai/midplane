@@ -24,7 +24,12 @@ import {
   sqlstateClassOf,
 } from "./schema.ts";
 
-const TOOL_NAMES: readonly ToolName[] = ["query", "list_tables", "describe_table"];
+const TOOL_NAMES: readonly ToolName[] = [
+  "query",
+  "list_tables",
+  "describe_table",
+  "list_databases",
+];
 
 const LATENCY_BUFFER_SIZE = 1024;
 
@@ -32,6 +37,12 @@ export class TelemetryCollector {
   private windowStart: number;
 
   private toolCounters: Map<ToolName, ToolCounters>;
+  // 0.2.0: per-DB tool counters. Outer key is the database name (the same
+  // value Engine.databaseName stamps on audit events); inner shape mirrors
+  // the aggregate `toolCounters` exactly so the heartbeat can serialize
+  // both with the same helper. `null` (passed by tools that aren't bound
+  // to one DB, like list_databases) is recorded only in the aggregate map.
+  private toolCountersByDb: Map<string, Map<ToolName, ToolCounters>>;
   private denialsByRule: Map<PolicyRuleName, number>;
   private statementTypes: Map<StatementTypeBucket, number>;
   private latencies: number[];           // overhead_ms samples, circular
@@ -41,6 +52,7 @@ export class TelemetryCollector {
   constructor(private readonly now: () => number = Date.now) {
     this.windowStart = now();
     this.toolCounters = new Map();
+    this.toolCountersByDb = new Map();
     this.denialsByRule = new Map();
     this.statementTypes = new Map();
     this.latencies = [];
@@ -48,12 +60,29 @@ export class TelemetryCollector {
     this.execFailures = { count: 0, bySqlstateClass: new Map() };
   }
 
-  recordToolCall(name: ToolName, allowed: boolean): void {
+  // `database` is the per-DB tag; null for tools (currently `list_databases`)
+  // that don't operate against a specific DB. The aggregate counter is
+  // always bumped — the per-DB map is bumped only when database !== null
+  // so we don't synthesize a fake bucket for non-DB tools.
+  recordToolCall(name: ToolName, allowed: boolean, database: string | null): void {
     const c = this.toolCounters.get(name) ?? { calls: 0, allow: 0, deny: 0 };
     c.calls += 1;
     if (allowed) c.allow += 1;
     else c.deny += 1;
     this.toolCounters.set(name, c);
+
+    if (database !== null) {
+      let perDb = this.toolCountersByDb.get(database);
+      if (!perDb) {
+        perDb = new Map();
+        this.toolCountersByDb.set(database, perDb);
+      }
+      const cd = perDb.get(name) ?? { calls: 0, allow: 0, deny: 0 };
+      cd.calls += 1;
+      if (allowed) cd.allow += 1;
+      else cd.deny += 1;
+      perDb.set(name, cd);
+    }
   }
 
   // Receives every audit event the engine produces. The collector reads
@@ -129,6 +158,7 @@ export class TelemetryCollector {
     uptime_s: number;
     window_s: number;
     tools: Record<ToolName, ToolCounters>;
+    tools_by_database?: Record<string, Record<ToolName, ToolCounters>>;
     denials_by_rule: Record<PolicyRuleName, number>;
     statement_types: Record<StatementTypeBucket, number>;
     latency_overhead_ms: LatencyHistogram;
@@ -147,6 +177,27 @@ export class TelemetryCollector {
     for (const t of TOOL_NAMES) {
       const c = this.toolCounters.get(t);
       if (c) tools[t] = c;
+    }
+
+    // tools_by_database is omitted entirely on single-DB installs (only
+    // __default__ ever appears). Non-trivial multi-DB installs surface
+    // the per-DB breakdown so downstream telemetry can chart per-DB
+    // adoption / denial patterns. The aggregate `tools` is always sent.
+    let tools_by_database: Record<string, Record<ToolName, ToolCounters>> | undefined;
+    const dbKeys = [...this.toolCountersByDb.keys()];
+    const onlyDefault =
+      dbKeys.length === 0 ||
+      (dbKeys.length === 1 && dbKeys[0] === "__default__");
+    if (!onlyDefault) {
+      tools_by_database = {};
+      for (const [db, m] of this.toolCountersByDb) {
+        const dbBucket: Partial<Record<ToolName, ToolCounters>> = {};
+        for (const t of TOOL_NAMES) {
+          const c = m.get(t);
+          if (c) dbBucket[t] = c;
+        }
+        tools_by_database[db] = dbBucket as Record<ToolName, ToolCounters>;
+      }
     }
 
     const denials_by_rule: Partial<Record<PolicyRuleName, number>> = {};
@@ -168,6 +219,7 @@ export class TelemetryCollector {
       uptime_s: 0, // process-uptime is filled in by the entrypoint; collector only knows window_s
       window_s,
       tools: tools as Record<ToolName, ToolCounters>,
+      tools_by_database,
       denials_by_rule: denials_by_rule as Record<PolicyRuleName, number>,
       statement_types: statement_types as Record<StatementTypeBucket, number>,
       latency_overhead_ms,
@@ -178,6 +230,7 @@ export class TelemetryCollector {
   private reset(now: number): void {
     this.windowStart = now;
     this.toolCounters = new Map();
+    this.toolCountersByDb = new Map();
     this.denialsByRule = new Map();
     this.statementTypes = new Map();
     this.latencies = [];

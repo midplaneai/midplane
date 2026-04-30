@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   id              TEXT    PRIMARY KEY,           -- ULID; sortable by creation time
   query_id        TEXT    NOT NULL,              -- ULID; groups all events of one query
   tenant_id       TEXT    NOT NULL,              -- '__self_host__' for OSS, customer ULID for hosted
+  database        TEXT    NOT NULL DEFAULT '__default__', -- DB name from `databases:` YAML or '__default__' for legacy single-DB
   agent_identity  TEXT,                          -- MCP token id or agent fingerprint; NULL if anonymous
   ts              INTEGER NOT NULL,              -- ms epoch (use unixepoch * 1000 for ts in Postgres mirror)
   event_type      TEXT    NOT NULL,              -- ATTEMPTED | DECIDED | EXECUTED | FAILED | POLICY_RELOADED
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 CREATE INDEX IF NOT EXISTS idx_audit_query_id   ON audit_events(query_id);
 CREATE INDEX IF NOT EXISTS idx_audit_tenant_ts  ON audit_events(tenant_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_type_ts    ON audit_events(event_type, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_db_ts      ON audit_events(database, ts DESC);
 
 -- WAL mode for concurrent reads while a single writer commits. Single writer per Midplane
 -- process is the audit pipeline; the indexer (or local read tooling) is the only reader.
@@ -42,6 +44,7 @@ PRAGMA temp_store = MEMORY;
 --   id              TEXT        PRIMARY KEY,
 --   customer_id     TEXT        NOT NULL,            -- Midplane customer (ULID); not the same as tenant_id
 --   tenant_id       TEXT        NOT NULL,            -- customer's internal tenant scope (e.g. their org_id)
+--   database        TEXT        NOT NULL DEFAULT '__default__',  -- DB name from `databases:` YAML
 --   query_id        TEXT        NOT NULL,
 --   agent_identity  TEXT,
 --   ts              TIMESTAMPTZ NOT NULL,

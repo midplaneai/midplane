@@ -29,6 +29,7 @@ function attempted(id: string, queryId: string, ts: number): AuditEvent {
     id,
     query_id: queryId,
     tenant_id: "42",
+    database: "__default__",
     agent_identity: "tok-1",
     ts,
     schema_version: 1,
@@ -213,6 +214,52 @@ describe("SqliteAuditWriter — readSince / deleteThrough", () => {
   });
 });
 
+describe("SqliteAuditWriter — 0.1 → 0.2 migration", () => {
+  test("existing audit DB without `database` column gets ALTER + default __default__", async () => {
+    // Simulate a 0.1.x audit DB: build the legacy schema by hand, insert a
+    // row, then open it with SqliteAuditWriter (which should ALTER it).
+    const probe = new Database(dbPath);
+    probe.run(`
+      CREATE TABLE audit_events (
+        id TEXT PRIMARY KEY,
+        query_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        agent_identity TEXT,
+        ts INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        schema_version INTEGER NOT NULL DEFAULT 1
+      );
+    `);
+    probe.run(
+      "INSERT INTO audit_events (id, query_id, tenant_id, agent_identity, ts, event_type, payload, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        "01LEGACY00000000000000000A",
+        "Q-LEG",
+        "42",
+        null,
+        1_700_000_000_000,
+        "ATTEMPTED",
+        '{"sql_raw":"SELECT 1","sql_fingerprint":"0123456789abcdef"}',
+        1,
+      ],
+    );
+    probe.close();
+
+    const w = new SqliteAuditWriter(dbPath);
+    const rows = w.readSince("0", 100);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.database).toBe("__default__");
+
+    // New writes also work and tag the new column.
+    await w.write(attempted("01LEGACY00000000000000000B", "Q-NEW", 1_700_000_000_001));
+    const after = w.readSince("0", 100);
+    expect(after).toHaveLength(2);
+    expect(after.map((r) => r.database)).toEqual(["__default__", "__default__"]);
+    await w.close();
+  });
+});
+
 describe("SqliteAuditWriter — payload validation", () => {
   test("invalid event_type rejected before insert", async () => {
     const w = new SqliteAuditWriter(dbPath);
@@ -220,6 +267,7 @@ describe("SqliteAuditWriter — payload validation", () => {
       id: "01TESTID000000000000BADD01",
       query_id: "Q1",
       tenant_id: "42",
+      database: "__default__",
       agent_identity: null,
       ts: 1_700_000_000_000,
       schema_version: 1 as const,
@@ -237,6 +285,7 @@ describe("SqliteAuditWriter — payload validation", () => {
       id: "01TESTID000000000000BADFP1",
       query_id: "Q1",
       tenant_id: "42",
+      database: "__default__",
       agent_identity: null,
       ts: 1_700_000_000_000,
       schema_version: 1,

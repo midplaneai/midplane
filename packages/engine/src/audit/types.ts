@@ -101,11 +101,18 @@ export type PolicyReloadedPayload = z.infer<typeof PolicyReloadedPayload>;
 
 // ─── Discriminated event union ──────────────────────────────────────────────
 
+// `database` names the DB the event applied to. Always written; legacy
+// single-DB deploys see "__default__" — the same value the EngineRegistry
+// uses internally for the synthetic legacy entry. The hosted indexer adds a
+// dimension on this without renaming any existing payload field.
+const DatabaseName = z.string().min(1).max(32);
+
 export const AuditEvent = z.discriminatedUnion("event_type", [
   z.object({
     id: z.string(),
     query_id: z.string(),
     tenant_id: z.string(),
+    database: DatabaseName,
     agent_identity: z.string().nullable(),
     ts: z.number().int(),
     schema_version: z.literal(1),
@@ -116,6 +123,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     id: z.string(),
     query_id: z.string(),
     tenant_id: z.string(),
+    database: DatabaseName,
     agent_identity: z.string().nullable(),
     ts: z.number().int(),
     schema_version: z.literal(1),
@@ -126,6 +134,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     id: z.string(),
     query_id: z.string(),
     tenant_id: z.string(),
+    database: DatabaseName,
     agent_identity: z.string().nullable(),
     ts: z.number().int(),
     schema_version: z.literal(1),
@@ -136,6 +145,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     id: z.string(),
     query_id: z.string(),
     tenant_id: z.string(),
+    database: DatabaseName,
     agent_identity: z.string().nullable(),
     ts: z.number().int(),
     schema_version: z.literal(1),
@@ -146,6 +156,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     id: z.string(),
     query_id: z.string(),
     tenant_id: z.string(),
+    database: DatabaseName,
     agent_identity: z.string().nullable(),
     ts: z.number().int(),
     schema_version: z.literal(1),

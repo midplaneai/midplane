@@ -7,15 +7,11 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "../src/server.ts";
-import { makeTestEngine, baseCtx } from "./_helpers.ts";
+import { makeTestEngine, makeTestHandle } from "./_helpers.ts";
 
 async function connectClient() {
   const { engine, executor, audit } = makeTestEngine();
-  const handle = {
-    engine,
-    ctxBase: baseCtx,
-    async close() {},
-  };
+  const handle = makeTestHandle({ engine, audit });
   const server = buildServer({ handle });
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

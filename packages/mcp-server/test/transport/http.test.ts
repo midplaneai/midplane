@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { SqliteAuditWriter, type AuditEvent } from "@midplane/engine";
 import { startHttp, type HttpHandle } from "../../src/transport/http.ts";
 import { buildServer } from "../../src/server.ts";
-import { makeTestEngine, baseCtx, type MockExecutor } from "../_helpers.ts";
+import { makeTestEngine, makeTestHandle, type MockExecutor } from "../_helpers.ts";
 
 let httpHandle: HttpHandle;
 let executor: MockExecutor;
@@ -19,11 +19,7 @@ let executor: MockExecutor;
 beforeAll(async () => {
   const harness = makeTestEngine();
   executor = harness.executor;
-  const handle = {
-    engine: harness.engine,
-    ctxBase: baseCtx,
-    async close() {},
-  };
+  const handle = makeTestHandle({ engine: harness.engine, audit: harness.audit });
   // Port 0 = OS picks free port.
   httpHandle = await startHttp(() => buildServer({ handle }), {
     port: 0,
@@ -104,11 +100,7 @@ describe("http transport", () => {
 
     try {
       const harness = makeTestEngine();
-      const handle = {
-        engine: harness.engine,
-        ctxBase: baseCtx,
-        async close() {},
-      };
+      const handle = makeTestHandle({ engine: harness.engine, audit: harness.audit });
       await expect(
         startHttp(() => buildServer({ handle }), {
           port: blockedPort,
@@ -168,6 +160,7 @@ describe("http transport — audit indexer pull endpoints", () => {
       id: idAt(n),
       query_id: `Q${n}`,
       tenant_id: "__self_host__",
+      database: "__default__",
       agent_identity: null,
       ts: 1_700_000_000_000 + n,
       schema_version: 1,
@@ -185,12 +178,7 @@ describe("http transport — audit indexer pull endpoints", () => {
     audit = new SqliteAuditWriter(dbPath);
 
     const harness = makeTestEngine();
-    const handle = {
-      engine: harness.engine,
-      ctxBase: baseCtx,
-      audit,
-      async close() {},
-    };
+    const handle = makeTestHandle({ engine: harness.engine, audit: harness.audit });
 
     server = await startHttp(() => buildServer({ handle }), {
       port: 0,

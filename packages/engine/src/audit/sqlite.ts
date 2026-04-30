@@ -19,12 +19,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(__dirname, "schema.sql");
 
 const INSERT_SQL = `
-  INSERT INTO audit_events (id, query_id, tenant_id, agent_identity, ts, event_type, payload, schema_version)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO audit_events (id, query_id, tenant_id, database, agent_identity, ts, event_type, payload, schema_version)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const READ_SINCE_SQL = `
-  SELECT id, query_id, tenant_id, agent_identity, ts, event_type, payload, schema_version
+  SELECT id, query_id, tenant_id, database, agent_identity, ts, event_type, payload, schema_version
   FROM audit_events
   WHERE id > ?
   ORDER BY id
@@ -41,6 +41,7 @@ export interface AuditEventRow {
   id: string;
   query_id: string;
   tenant_id: string;
+  database: string;
   agent_identity: string | null;
   ts: number;
   event_type: string;
@@ -52,6 +53,7 @@ interface RawAuditRow {
   id: string;
   query_id: string;
   tenant_id: string;
+  database: string;
   agent_identity: string | null;
   ts: number;
   event_type: string;
@@ -74,6 +76,24 @@ export class SqliteAuditWriter implements AuditWriter {
   }
 
   private applySchema(): void {
+    // 0.1 → 0.2 migration: a pre-existing audit DB is missing the `database`
+    // column. We ALTER it in place BEFORE running the bundled DDL, because
+    // schema.sql now declares a `CREATE INDEX ... ON audit_events(database,
+    // ts DESC)` that would crash against the legacy table shape. The CREATE
+    // TABLE in schema.sql is `IF NOT EXISTS`, so it's a no-op once the
+    // legacy table exists.
+    const tableExists =
+      (this.db
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'",
+        )
+        .get()?.name ?? null) !== null;
+    if (tableExists && !this.hasColumn("audit_events", "database")) {
+      this.db.run(
+        "ALTER TABLE audit_events ADD COLUMN database TEXT NOT NULL DEFAULT '__default__'",
+      );
+    }
+
     // PRAGMAs in the schema file run during table create. We also explicitly
     // ensure WAL mode in case the file pre-existed without it.
     const ddl = readFileSync(SCHEMA_PATH, "utf8");
@@ -82,6 +102,13 @@ export class SqliteAuditWriter implements AuditWriter {
     this.db.run(sqliteOnly);
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.run("PRAGMA synchronous = NORMAL");
+  }
+
+  private hasColumn(table: string, col: string): boolean {
+    const rows = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+    }>;
+    return rows.some((r) => r.name === col);
   }
 
   async write(event: AuditEvent): Promise<void> {
@@ -100,6 +127,7 @@ export class SqliteAuditWriter implements AuditWriter {
         event.id,
         event.query_id,
         event.tenant_id,
+        event.database,
         event.agent_identity,
         event.ts,
         event.event_type,
@@ -123,6 +151,7 @@ export class SqliteAuditWriter implements AuditWriter {
       id: r.id,
       query_id: r.query_id,
       tenant_id: r.tenant_id,
+      database: r.database,
       agent_identity: r.agent_identity,
       ts: r.ts,
       event_type: r.event_type,

@@ -10,13 +10,13 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "../../src/server.ts";
-import { makeTestEngine, baseCtx } from "../_helpers.ts";
+import { makeTestEngine, makeTestHandle } from "../_helpers.ts";
 
 describe("stdio transport (in-process pair)", () => {
   test("client + server complete an end-to-end query through engine.handle()", async () => {
     const { engine, executor, audit } = makeTestEngine();
     executor.result = { rows: [{ ok: 1 }], rowCount: 1 };
-    const handle = { engine, ctxBase: baseCtx, async close() {} };
+    const handle = makeTestHandle({ engine, audit });
     const server = buildServer({ handle });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

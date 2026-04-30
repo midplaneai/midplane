@@ -45,6 +45,7 @@ async function writeEvent(
     id: explicitId ?? id(n),
     query_id: `Q${n}`,
     tenant_id: "__self_host__",
+    database: "__default__",
     agent_identity: "test-agent",
     ts,
     schema_version: 1 as const,

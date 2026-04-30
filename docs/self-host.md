@@ -84,11 +84,11 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `DATABASE_URL` | (required) | Your Postgres connection string. Best practice: a scoped role with least privilege. |
+| `DATABASE_URL` | (required for single-DB; ignored when YAML `databases:` is set) | Your Postgres connection string. Best practice: a scoped role with least privilege. |
 | `PORT` | `8080` | HTTP port for the MCP endpoint. |
 | `DB_PATH` | `/data/audit.db` | Path to the local SQLite audit log. |
 | `MIDPLANE_TENANT_ID` | (none) | Used by the `tenant_scope` policy rule. See [policy-rules.md](./policy-rules.md). |
-| `MIDPLANE_POLICY_FILE` | (none) | Path to a YAML policy override file. Defaults apply if unset. |
+| `MIDPLANE_POLICY_FILE` | (none) | Path to a YAML policy override file. Defaults apply if unset. **0.2.0:** may carry a top-level `databases:` block for serving multiple Postgres DBs through one MCP endpoint — see the README's "Multiple databases" section. |
 | `MIDPLANE_DENY_WEBHOOK` | (none) | If set to an `http(s)://` URL, every policy denial fires a JSON `POST` to it. See [deny-webhook.md](./deny-webhook.md). |
 | `MIDPLANE_DENY_WEBHOOK_RULES` | (all rules) | Comma-separated allowlist of policy rule names that trigger the webhook. |
 | `INDEXER_TOKEN` | (none) | Bearer token for the audit pull endpoints. Unset → endpoints return 404. See [Shipping audit to your own collector](#shipping-audit-to-your-own-collector). |

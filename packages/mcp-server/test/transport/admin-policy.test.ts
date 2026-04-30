@@ -77,8 +77,8 @@ describe("POST /admin/policy", () => {
     server = await startHttp(() => buildServer({ handle }), {
       port: 0,
       host: "127.0.0.1",
-      indexer: { audit: handle.audit, token: TOKEN },
-      admin: { setPolicy: handle.setPolicy },
+      indexer: { audit: handle.registry.audit, token: TOKEN },
+      admin: { setPolicy: handle.registry.setPolicy },
     });
   });
 
@@ -250,7 +250,7 @@ describe("POST /admin/policy", () => {
   test("audit log contains POLICY_RELOADED event with payload", async () => {
     // Read the audit DB directly — POLICY_RELOADED is the new event_type
     // we expect to find for every successful swap above.
-    const rows = handle.audit.readSince("0", 1000);
+    const rows = handle.registry.audit.readSince("0", 1000);
     const reloads = rows.filter((r) => r.event_type === "POLICY_RELOADED");
     expect(reloads.length).toBeGreaterThanOrEqual(1);
     const last = reloads[reloads.length - 1]!;
@@ -282,7 +282,7 @@ describe("POST /admin/policy — INDEXER_TOKEN unset", () => {
     server = await startHttp(() => buildServer({ handle }), {
       port: 0,
       host: "127.0.0.1",
-      admin: { setPolicy: handle.setPolicy },
+      admin: { setPolicy: handle.registry.setPolicy },
     });
   });
 
@@ -334,8 +334,8 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap rejected", () =>
     server = await startHttp(() => buildServer({ handle }), {
       port: 0,
       host: "127.0.0.1",
-      indexer: { audit: handle.audit, token: TOKEN },
-      admin: { setPolicy: handle.setPolicy },
+      indexer: { audit: handle.registry.audit, token: TOKEN },
+      admin: { setPolicy: handle.registry.setPolicy },
     });
   });
 
@@ -372,7 +372,7 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap rejected", () =>
     expect(body.error).toContain("tenant_scope.mappings");
 
     // No POLICY_RELOADED event was written for this attempt.
-    const reloads = handle.audit
+    const reloads = handle.registry.audit
       .readSince("0", 1000)
       .filter((r) => r.event_type === "POLICY_RELOADED");
     expect(reloads.length).toBe(0);

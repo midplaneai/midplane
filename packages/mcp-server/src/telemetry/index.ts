@@ -31,7 +31,10 @@ import {
 
 export interface TelemetryHandle {
   wrap(writer: AuditWriter): AuditWriter;
-  recordToolCall(name: ToolName, allowed: boolean): void;
+  // 0.2.0: `database` carries the DB name for tools that target one DB
+  // (query / list_tables / describe_table); pass null for tools that
+  // operate on the registry itself (currently `list_databases`).
+  recordToolCall(name: ToolName, allowed: boolean, database: string | null): void;
   // Call once the transport is listening. Sends the startup event and
   // starts the heartbeat timer. Idempotent — repeat calls are noops so a
   // caller can defensively call from multiple paths without double-sending.
@@ -50,7 +53,7 @@ export interface InitOptions {
 
 const NOOP_HANDLE: TelemetryHandle = {
   wrap: (w) => w,
-  recordToolCall: () => {},
+  recordToolCall: (_n, _a, _db) => {},
   markReady: () => {},
   async shutdown() {},
 };
@@ -84,8 +87,8 @@ export function initTelemetry(opts: InitOptions): TelemetryHandle {
     wrap(writer) {
       return new TelemetryAuditWriter(writer, collector);
     },
-    recordToolCall(name, allowed) {
-      collector.recordToolCall(name, allowed);
+    recordToolCall(name, allowed, database) {
+      collector.recordToolCall(name, allowed, database);
     },
     markReady() {
       if (ready) return;
@@ -142,6 +145,12 @@ async function emitHeartbeat(args: {
     uptime_s: Math.max(0, Math.floor((Date.now() - args.startedAt) / 1000)),
     window_s: drained.window_s,
     tools: drained.tools,
+    // Only include the per-DB dimension when the collector observed
+    // multiple DBs in this window. Single-DB installs send byte-identical
+    // v2 payloads to 0.1.x — no proxy migration needed.
+    ...(drained.tools_by_database
+      ? { tools_by_database: drained.tools_by_database }
+      : {}),
     denials_by_rule: drained.denials_by_rule,
     statement_types: drained.statement_types,
     latency_overhead_ms: drained.latency_overhead_ms,

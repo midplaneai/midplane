@@ -1,5 +1,9 @@
 // describe_table tool — canned information_schema.columns query for a
 // specific table. Identifier regex enforced BEFORE the SQL string is built.
+//
+// Multi-DB shape: required `database` enum arg. Cross-DB ambiguity on a
+// schema lookup is a footgun; we always require the operator to name the
+// target DB.
 
 import { z } from "zod";
 import type { Engine, EngineContext } from "@midplane/engine";
@@ -13,6 +17,22 @@ export const DescribeTableInputSchema = {
 };
 
 export interface DescribeTableArgs {
+  table: string;
+  schema?: string;
+}
+
+export function DescribeTableMultiInputSchema<T extends [string, ...string[]]>(
+  dbEnum: z.ZodEnum<{ [K in T[number]]: K }>,
+) {
+  return {
+    database: dbEnum,
+    table: z.string().regex(IDENT),
+    schema: z.string().regex(IDENT).optional(),
+  };
+}
+
+export interface DescribeTableMultiArgs {
+  database: string;
   table: string;
   schema?: string;
 }

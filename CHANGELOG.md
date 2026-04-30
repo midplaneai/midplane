@@ -4,6 +4,22 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.0] — Unreleased
+
+### Added
+
+- **Multi-database support.** A single `midplane/midplane` container can now serve N Postgres DBs through one MCP endpoint. Configure them under a top-level `databases:` block in `MIDPLANE_POLICY_FILE`; each entry has its own `url`, `table_access`, and `tenant_scope`. `${ENV_VAR}` interpolation is supported on `url` so DSNs stay out of YAML files. Single-DB users see no change — the existing `DATABASE_URL` env + top-level `table_access` / `tenant_scope` shape keeps working byte-for-byte.
+- **Dynamic MCP tool surface.** When N databases are configured (N ≥ 2), `query` and `describe_table` get a required `database` enum arg, `list_tables` gets an optional `database` (omitted = fan out across all DBs and group results by name), and a new `list_databases` tool reports each DB's name, tenant_scope status, and table_access default. When N == 1 (the legacy path) the tool schema is identical to 0.1.x — no `database` field appears anywhere and `list_databases` is not registered. Agents that only ever talked to one DB notice nothing.
+- **Audit row carries `database`.** Every audit event is tagged with the originating DB name (or `__default__` for the legacy single-DB path). The `audit_events` SQLite table grows a `database TEXT NOT NULL` column with a one-time `ALTER TABLE` migration on first 0.2.0 boot — existing audit DBs upgrade in place. `GET /audit/since` payloads include `database` on every row; `midplane audit tail | since` JSON output does too. The hosted Postgres mirror schema (`audit_events_index`) gains the same column.
+- **Per-DB telemetry dimension.** Heartbeats include a `tools_by_database` field with per-DB tool counters when more than one DB is observed in the window. The aggregate `tools.{name}.calls/allow/deny` shape is preserved byte-identical to v2 — single-DB installs send the same heartbeat as 0.1.x, the proxy needs no migration. New `list_databases` tool counted alongside existing tool names.
+- **Hot-swap of `databases:`.** `POST /admin/policy` accepts the new shape. Adding a DB spins up a fresh pool; removing a DB drains and drops; editing a DB's `table_access` is an in-place pointer swap; editing a DB's `url` rebuilds the pool with a loud log line. Tool schemas reshape on the next session — clients reconnecting see the updated `database` enum on their next `tools/list`. Per-DB `tenant_scope.mappings` changes are still rejected (same rule as 0.1.x) and require a restart.
+
+### Changed
+
+- **Engine version bumped to 0.2.0** across `@midplane/engine`, `@midplane/mcp-server`, and the MCP server identification. The audit schema migration warrants a minor bump even though the user-facing tool surface is additive on the legacy path.
+
+## [0.1.x] — Unreleased pre-0.2.0 changes
+
 ### Changed (Breaking)
 
 - **`writes_require_approval` → `table_access`.** The binary read-only sentinel is replaced by a per-table read/read_write/deny YAML policy loaded via `MIDPLANE_POLICY_FILE`. Default behavior with no YAML file is preserved exactly: every SELECT allows, every write denies, regardless of target. With YAML, agents get per-table `read_write` opt-in (e.g. `feature_flags: read_write`, `audit_log: deny`). Wire-level rule name in audit + telemetry payloads changes from `"writes_require_approval"` to `"table_access"`. Recursive AST detection (CTEs, subqueries, UNION arms, JOINs) is preserved. See [`docs/policy-rules.md`](./docs/policy-rules.md) for the schema and [`docs/adversarial-corpus.md`](./docs/adversarial-corpus.md#1-table_access-per-table-rw-recursive-ast-detection) for the full bypass set.

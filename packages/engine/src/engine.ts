@@ -40,6 +40,11 @@ export interface EngineOptions {
   audit: AuditWriter;
   credentials: CredentialStore;
   executor: Executor;
+  // Identifies which DB this Engine is bound to. Stamped on every audit
+  // event the engine writes so consumers can group/filter per-DB. Defaults
+  // to '__default__' for legacy single-DB callers and tests that don't
+  // care to supply one.
+  databaseName?: string;
   now?: () => number;
   idGen?: () => string;
 }
@@ -49,6 +54,7 @@ export class Engine {
   private readonly audit: AuditWriter;
   private readonly executor: Executor;
   private readonly credentials: CredentialStore;
+  private readonly databaseName: string;
   private readonly now: () => number;
   private readonly idGen: () => string;
 
@@ -57,6 +63,7 @@ export class Engine {
     this.audit = opts.audit;
     this.executor = opts.executor;
     this.credentials = opts.credentials;
+    this.databaseName = opts.databaseName ?? "__default__";
     this.now = opts.now ?? Date.now;
     this.idGen = opts.idGen ?? ulid;
   }
@@ -86,6 +93,7 @@ export class Engine {
       id: this.idGen(),
       query_id: queryId,
       tenant_id: input.ctx.tenant_id,
+      database: this.databaseName,
       agent_identity: input.ctx.agent_identity,
       ts: this.now(),
       schema_version: 1,
@@ -128,6 +136,7 @@ export class Engine {
             id: decidedId,
             query_id: queryId,
             tenant_id: input.ctx.tenant_id,
+            database: this.databaseName,
             agent_identity: input.ctx.agent_identity,
             ts: this.now(),
             schema_version: 1,
@@ -142,6 +151,7 @@ export class Engine {
             id: decidedId,
             query_id: queryId,
             tenant_id: input.ctx.tenant_id,
+            database: this.databaseName,
             agent_identity: input.ctx.agent_identity,
             ts: this.now(),
             schema_version: 1,
@@ -181,6 +191,7 @@ export class Engine {
         id: this.idGen(),
         query_id: queryId,
         tenant_id: input.ctx.tenant_id,
+        database: this.databaseName,
         agent_identity: input.ctx.agent_identity,
         ts: this.now(),
         schema_version: 1,
@@ -205,6 +216,7 @@ export class Engine {
       id: this.idGen(),
       query_id: queryId,
       tenant_id: input.ctx.tenant_id,
+      database: this.databaseName,
       agent_identity: input.ctx.agent_identity,
       ts: this.now(),
       schema_version: 1,

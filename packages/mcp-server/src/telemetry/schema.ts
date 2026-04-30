@@ -11,7 +11,14 @@ export const TELEMETRY_SCHEMA_VERSION = 2;
 
 // ─── Locked enums ──────────────────────────────────────────────────────────
 
-export const ToolName = z.enum(["query", "list_tables", "describe_table"]);
+export const ToolName = z.enum([
+  "query",
+  "list_tables",
+  "describe_table",
+  // 0.2.0: only registered on multi-DB instances. Counted in the same
+  // tools.* histogram for consistency.
+  "list_databases",
+]);
 export type ToolName = z.infer<typeof ToolName>;
 
 // Mirrors PolicyRule from packages/engine/src/audit/types.ts.
@@ -92,6 +99,12 @@ export const ExecFailuresSchema = z
   .strict();
 export type ExecFailures = z.infer<typeof ExecFailuresSchema>;
 
+// DB-name regex matches the policy YAML (lowercase ASCII, ≤32 chars,
+// dash/underscore/digits OK) plus the reserved synthetic '__default__'.
+// Mirrored by the proxy as a defense-in-depth gate against a misconfigured
+// engine sending arbitrary strings through this dimension.
+const DatabaseLabel = z.string().regex(/^(__default__|[a-z][a-z0-9_-]{0,31})$/);
+
 export const HeartbeatEventSchema = z
   .object({
     schema_version: z.literal(2),
@@ -102,6 +115,16 @@ export const HeartbeatEventSchema = z
     uptime_s: z.number().int().nonnegative(),
     window_s: z.number().int().nonnegative().max(86_400),
     tools: z.partialRecord(ToolName, ToolCountersSchema),
+    // 0.2.0: per-DB tool counters. The aggregate `tools.*` is preserved
+    // byte-identical to v2 (sums across DBs); this nested map carries the
+    // same counter shape per database. Optional and only populated for
+    // multi-DB instances — single-DB installs continue to send only the
+    // top-level `tools` field, so the proxy needs no migration to keep
+    // ingesting them. Receivers seeing this field on schema_version 2 can
+    // treat it as additive metadata.
+    tools_by_database: z
+      .record(DatabaseLabel, z.partialRecord(ToolName, ToolCountersSchema))
+      .optional(),
     denials_by_rule: z.partialRecord(PolicyRuleName, z.number().int().nonnegative()),
     statement_types: z.partialRecord(StatementTypeBucket, z.number().int().nonnegative()),
     latency_overhead_ms: LatencyHistogramSchema,

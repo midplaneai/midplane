@@ -3,7 +3,7 @@
 // Mocks the engine's executor + audit so we can drive query/list_tables/
 // describe_table tools end-to-end without spinning up Postgres.
 
-import type { EngineContext } from "@midplane/engine";
+import type { EngineContext, TableAccessConfig } from "@midplane/engine";
 import {
   Engine,
   EnvCredentialStore,
@@ -17,6 +17,7 @@ import {
   tableAccess,
   tenantScope,
 } from "@midplane/engine";
+import type { EngineHandle, EngineRegistry } from "../src/engine-factory.ts";
 
 export class MemoryAuditWriter implements AuditWriter {
   events: AuditEvent[] = [];
@@ -51,6 +52,7 @@ export class MockExecutor implements Executor {
 export function makeTestEngine(opts: {
   audit?: MemoryAuditWriter;
   executor?: MockExecutor;
+  databaseName?: string;
 } = {}): { engine: Engine; audit: MemoryAuditWriter; executor: MockExecutor } {
   const audit = opts.audit ?? new MemoryAuditWriter();
   const executor = opts.executor ?? new MockExecutor();
@@ -69,6 +71,7 @@ export function makeTestEngine(opts: {
     audit,
     credentials,
     executor,
+    databaseName: opts.databaseName ?? "__default__",
     now: () => 1_700_000_000_000,
     idGen: () => `01TESTID${(counter++).toString().padStart(18, "0")}`,
   });
@@ -81,3 +84,58 @@ export const baseCtx: EngineContext = {
   agent_identity: "test-agent",
   role: "agent_readonly",
 };
+
+// Wrap a single Engine in a single-DB EngineHandle so the new buildServer
+// signature works in tests that previously used the flat handle shape.
+// Audit on this stub is the in-memory writer that backs the engine.
+export function makeTestHandle(opts: {
+  engine: Engine;
+  ctxBase?: EngineContext;
+  audit?: MemoryAuditWriter;
+  databaseName?: string;
+}): EngineHandle {
+  const name = opts.databaseName ?? "__default__";
+  const entry = {
+    name,
+    engine: opts.engine,
+    ctxBase: opts.ctxBase ?? baseCtx,
+    holder: { tableAccess: undefined as TableAccessConfig | undefined },
+    mappings: {},
+    executor: { execute: async () => ({ rows: [], rowCount: 0 }) } as Executor,
+    url: "postgres://stub",
+  };
+  const memoryAudit = opts.audit;
+  const registry: EngineRegistry = {
+    get(n) {
+      if (n !== name) throw new Error(`Unknown database "${n}"`);
+      return entry;
+    },
+    has(n) {
+      return n === name;
+    },
+    names() {
+      return [name];
+    },
+    count() {
+      return 1;
+    },
+    audit: memoryAudit as unknown as EngineRegistry["audit"],
+    describe() {
+      return [
+        {
+          name,
+          tenant_scope_enabled: false,
+          table_access_default: null,
+        },
+      ];
+    },
+    async setPolicy() {
+      return { applied_at: new Date().toISOString() };
+    },
+    async close() {},
+  };
+  return {
+    registry,
+    async close() {},
+  };
+}

@@ -114,6 +114,7 @@ tool calls, the heartbeat is suppressed (idle installs don't beacon daily).
 | `tools.{tool}.calls`             | int    | Total invocations per tool                   |
 | `tools.{tool}.allow`             | int    | ALLOW decisions per tool                     |
 | `tools.{tool}.deny`              | int    | DENY decisions per tool                      |
+| `tools_by_database.{db}.{tool}.{calls,allow,deny}` | int | 0.2.0+: per-DB tool counters. **Only present when more than one DB was observed in the window.** Single-DB installs (the `__default__`-only legacy path) omit this field entirely so v2 receivers see no change. The `{db}` key is the operator-supplied DB name from `databases:` YAML (`^[a-z][a-z0-9_-]{0,31}$`) or the literal `__default__`. |
 | `denials_by_rule.{rule}`         | int    | Denials grouped by policy rule name (only)   |
 | `statement_types.{bucket}`       | int    | Coarse statement type bucket counts          |
 | `latency_overhead_ms.p50/p95/p99`| int    | Midplane-added latency only (parse+policy+audit) |
@@ -121,7 +122,7 @@ tool calls, the heartbeat is suppressed (idle installs don't beacon daily).
 | `exec_failures.count`            | int    | Postgres rejected an allowed query           |
 | `exec_failures.by_sqlstate_class.{cc}` | int | First two chars of SQLSTATE only           |
 
-Tool names are the fixed v1 set: `query`, `list_tables`, `describe_table`.
+Tool names are the fixed set: `query`, `list_tables`, `describe_table`, `list_databases` (`list_databases` is only registered on multi-DB installs but the enum carries it for forward-compat in either case).
 Policy rule names are the fixed set: `table_access`, `multi_statement`,
 `tenant_scope_missing`, `parse_error`, `internal_error`.
 Statement type buckets are the fixed set: `SELECT`, `INSERT`, `UPDATE`,
