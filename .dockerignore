@@ -1,0 +1,51 @@
+# Keep the build context tight — Fly uploads everything not listed here.
+# Mirrors .gitignore plus a few build-product directories to avoid bloating
+# the image and breaking standalone tracing.
+
+node_modules
+**/node_modules
+
+.git
+.gitignore
+
+# env files: never copy real secrets into a layer
+.env
+.env.local
+.env.*.local
+
+# build outputs (regenerated inside the image)
+.next
+**/.next
+dist
+**/dist
+.turbo
+**/.turbo
+out
+**/out
+*.tsbuildinfo
+
+# bun + logs
+.bun
+**/.bun
+bun-debug.log*
+*.log
+
+# test/CI artifacts
+coverage
+**/coverage
+test-results
+**/test-results
+playwright-report
+playwright/.cache
+
+# editor / OS
+.DS_Store
+.vscode
+.idea
+
+# Conductor workspace scratch space
+.context
+
+# stuff that doesn't belong in the control-plane image
+e2e
+infra/telemetry-proxy/.wrangler

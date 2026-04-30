@@ -28,3 +28,4 @@ drizzle/.snapshots/
 
 # local
 .context/
+.claude/
