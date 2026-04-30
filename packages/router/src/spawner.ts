@@ -111,6 +111,16 @@ export class ContainerRegistry {
   }
 
   async invalidate(token: string): Promise<void> {
+    // A concurrent acquire() may have a spawn in flight when we're called
+    // (typical during connection rotation: a request started just before
+    // the customer paste-rotated). If we returned now without awaiting it,
+    // the spawn would land in `entries` AFTER our invalidate and run with
+    // the pre-rotation DSN until the next idle expiry. Wait for it to
+    // settle (success or failure), then evict whatever ended up there.
+    const pending = this.inflight.get(token);
+    if (pending) {
+      await pending.catch(() => undefined);
+    }
     const entry = this.entries.get(token);
     if (!entry) return;
     clearTimeout(entry.idleTimer);

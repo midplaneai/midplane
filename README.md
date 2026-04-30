@@ -27,7 +27,12 @@ cp .env.example .env.local   # fill in Clerk, Neon, KMS dev key
 bun db:generate              # generate drizzle migrations from schema
 bun db:migrate               # apply migrations to your Neon dev branch
 bun dev                      # localhost:3000
-bun test                     # vitest baseline
+bun run test                 # vitest baseline — note `bun run test`, not
+                             # `bun test`. The bare form invokes Bun's
+                             # built-in runner which doesn't load the
+                             # vitest module-mock layer the unit suites
+                             # rely on.
+bun run test:e2e             # Playwright smoke (E2E_LIVE=1 for live)
 ```
 
 ## OSS image dependency

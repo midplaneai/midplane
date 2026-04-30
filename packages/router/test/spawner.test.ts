@@ -89,6 +89,24 @@ describe("ContainerRegistry", () => {
     expect(stub.calls).toBe(2);
   });
 
+  it("invalidate awaits an in-flight spawn and stops the resulting container", async () => {
+    // Race: a request started acquire() (which is now mid-spawn with the
+    // OLD DSN env) just before rotation. invalidate() must NOT return early
+    // — if it does, the spawn lands in `entries` after rotation and the
+    // container keeps serving the leaked DSN until idle expiry.
+    const stub = new StubSpawner();
+    stub.delayMs = 30;
+    const reg = new ContainerRegistry(stub);
+    const spawning = reg.acquire(opts());
+    // Fire invalidate while spawn is still pending.
+    const invalidating = reg.invalidate("tok-a");
+    const spawned = await spawning;
+    const stopSpy = spawned.stop as ReturnType<typeof vi.fn>;
+    await invalidating;
+    expect(stopSpy).toHaveBeenCalled();
+    expect(reg.size()).toBe(0);
+  });
+
   it("idle timer triggers stop after idleMs", async () => {
     vi.useFakeTimers();
     try {

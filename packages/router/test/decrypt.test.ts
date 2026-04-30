@@ -157,6 +157,47 @@ describe("DsnResolver", () => {
     await new Promise((r) => setTimeout(r, 0));
   });
 
+  it("rotation race: an in-flight grace refresh that lands AFTER invalidate cannot repopulate the cache with old plaintext", async () => {
+    // Reproduces the security-critical race the rotation flow guards against.
+    // 1. cache is in grace; resolve() schedules a KMS refresh
+    // 2. while KMS is in flight, rotation invalidates the cache
+    // 3. KMS resolves with the OLD plaintext (its conn snapshot was the
+    //    pre-rotation row); without the fence, cache.set would happily
+    //    accept the write and the next request would see "fresh" old plaintext.
+    const clock = { t: 1_000_000 };
+    const cache = new DecryptCache({ now: () => clock.t });
+    cache.set("conn-1", "fra", "postgres://stale");
+    clock.t += 11 * 60_000; // past TTL → grace
+
+    let resolveRefresh!: (v: string) => void;
+    const decrypt = vi.fn(
+      () => new Promise<string>((res) => (resolveRefresh = res)),
+    );
+    const { db } = fakeDb();
+    const resolver = new DsnResolver({
+      db,
+      cache,
+      kms,
+      decrypt,
+      now: () => clock.t,
+    });
+
+    // Phase 1: grace path schedules the refresh; KMS is now in flight.
+    await resolver.resolve(conn);
+
+    // Phase 2: rotation invalidates while KMS is still pending.
+    clock.t += 10;
+    cache.invalidate("conn-1", "fra");
+
+    // Phase 3: KMS finally resolves with the pre-rotation plaintext. The
+    // refresh's cache.set must be dropped by the fence.
+    clock.t += 10;
+    resolveRefresh("postgres://stale");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(cache.get("conn-1", "fra").kind).toBe("miss");
+  });
+
   it("calls onRefreshError when grace refresh fails", async () => {
     const start = 1_000_000;
     const clock = { t: start };

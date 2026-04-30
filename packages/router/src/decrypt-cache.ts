@@ -7,6 +7,16 @@
 //
 // Bounded size: simple LRU cap. Capacity sized so a single tenant pinning
 // one entry can't push out other tenants' working sets in steady state.
+//
+// Rotation fence: invalidate() records the timestamp it fired at. set()
+// takes an optional `decryptStartedAt` — the time the caller began the
+// KMS round-trip whose plaintext is now arriving. If the call started
+// before the most recent invalidate, the write is dropped. Without this
+// the in-flight grace refresh + miss-path KMS calls that are already
+// outstanding when a customer rotates would land OLD plaintext into the
+// cache after rotation evicted it, and the cache would serve the leaked
+// credential for up to TTL minutes (the security incident the rotation
+// path is meant to prevent).
 
 import type { Region } from "@midplane-cloud/kms";
 
@@ -37,6 +47,12 @@ export type DecryptResult =
 
 export class DecryptCache {
   private readonly map = new Map<string, CacheEntry>();
+  // Per-key high-water mark of the most recent invalidate(). set() rejects
+  // writes whose decryption started before this. Survives the entry being
+  // evicted because the fence isn't tied to entry presence — a caller mid
+  // round-trip during invalidate must still be denied even when the entry
+  // map is empty.
+  private readonly invalidatedAt = new Map<string, number>();
   private readonly ttlMs: number;
   private readonly graceMs: number;
   private readonly capacity: number;
@@ -49,9 +65,31 @@ export class DecryptCache {
     this.now = opts.now ?? Date.now;
   }
 
-  set(connectionId: string, region: Region, plaintext: string): void {
+  /**
+   * Cache a freshly-decrypted plaintext.
+   *
+   * `decryptStartedAt` is the time the caller began the KMS round-trip
+   * that produced this plaintext. If a rotation invalidated the entry
+   * after that point, the write is dropped (returns false) and the cache
+   * is left empty so the next request re-decrypts the new ciphertext.
+   * Callers without rotation concerns may omit it; the implicit value is
+   * `now()`, which never trips the fence.
+   */
+  set(
+    connectionId: string,
+    region: Region,
+    plaintext: string,
+    decryptStartedAt?: number,
+  ): boolean {
     const now = this.now();
     const key = `${region}:${connectionId}`;
+    const fenceAt = this.invalidatedAt.get(key);
+    if (fenceAt !== undefined && decryptStartedAt !== undefined && decryptStartedAt < fenceAt) {
+      // The decryption began before the most recent invalidate; this
+      // plaintext is from the pre-rotation ciphertext and would resurrect
+      // the leaked credential if cached.
+      return false;
+    }
     // Move-to-front via delete + set; Map iteration is insertion order.
     this.map.delete(key);
     this.map.set(key, {
@@ -64,6 +102,7 @@ export class DecryptCache {
       if (!oldestKey) break;
       this.evict(oldestKey);
     }
+    return true;
   }
 
   /**
@@ -94,7 +133,9 @@ export class DecryptCache {
   }
 
   invalidate(connectionId: string, region: Region): void {
-    this.evict(`${region}:${connectionId}`);
+    const key = `${region}:${connectionId}`;
+    this.invalidatedAt.set(key, this.now());
+    this.evict(key);
   }
 
   size(): number {

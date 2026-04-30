@@ -2,6 +2,7 @@
   "name": "@midplane-cloud/web",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev --turbo --port 3000",
     "build": "next build",

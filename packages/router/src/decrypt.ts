@@ -72,9 +72,17 @@ export class DsnResolver {
     // miss → must hit KMS now. If KMS fails and the row says we're past the
     // 70-minute window, refuse. If we have no row history at all, refuse —
     // a freshly-rotated row with no prior success counts as expired here.
+    //
+    // decryptStartedAt is captured BEFORE the KMS round-trip so the cache
+    // can fence-out a write that races a concurrent rotation: if the row
+    // is rotated and cache.invalidate fires while we're awaiting KMS, our
+    // cache.set lands AFTER the invalidate but encodes the OLD plaintext;
+    // the cache compares decryptStartedAt to its invalidatedAt watermark
+    // and drops the stale write.
+    const decryptStartedAt = this.deps.now ? this.deps.now() : Date.now();
     try {
       const plaintext = await this.callKms(conn);
-      cache.set(conn.id, region, plaintext);
+      cache.set(conn.id, region, plaintext, decryptStartedAt);
       await this.persistSuccess(conn);
       return { ok: true, plaintext, source: "miss" };
     } catch {
@@ -84,10 +92,16 @@ export class DsnResolver {
 
   private scheduleRefresh(conn: Connection): void {
     if (this.state.inflight.has(conn.id)) return;
+    const decryptStartedAt = this.deps.now ? this.deps.now() : Date.now();
     const promise = (async () => {
       try {
         const plaintext = await this.callKms(conn);
-        this.deps.cache.set(conn.id, conn.region as Region, plaintext);
+        this.deps.cache.set(
+          conn.id,
+          conn.region as Region,
+          plaintext,
+          decryptStartedAt,
+        );
         await this.persistSuccess(conn);
       } catch (err) {
         this.deps.onRefreshError?.(err, conn);
