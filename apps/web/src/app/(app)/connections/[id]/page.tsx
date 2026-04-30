@@ -7,14 +7,14 @@ import { connections, getDb, parsePolicyOrThrow } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { ClientConfigTabs } from "@/components/client-config-tabs";
 import { CopyButton } from "@/components/copy-button";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
 import { EditableConnectionTitle } from "@/components/editable-connection-title";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   deleteConnection,
   isValidDsn,
@@ -41,11 +41,6 @@ export default async function ConnectionDetail({
   if (!conn || conn.customerId !== customer.id) notFound();
 
   const mcpUrl = mintMcpUrl(conn.region, conn.mcpToken, process.env);
-  const cursorConfig = JSON.stringify(
-    { mcpServers: { midplane: { url: mcpUrl } } },
-    null,
-    2,
-  );
 
   // Server Actions live alongside the page so the rotateConnection /
   // deleteConnection dependency closure is server-only — neither helper
@@ -163,42 +158,37 @@ export default async function ConnectionDetail({
             action={renameAction}
           />
           <p className="mt-2 text-sm text-muted-foreground">
-            Hosted in {REGION_LABELS[conn.region]}. Your DSN is encrypted at
-            rest; we never log or persist the plaintext.
+            Hosted in {REGION_LABELS[conn.region]}. Your Postgres connection
+            string is encrypted at rest; we never log or persist the plaintext.
           </p>
 
-          <section className="mt-8 space-y-2">
-            <Label htmlFor="mcp-url">MCP endpoint URL</Label>
-            <div className="flex items-center gap-2">
-              <Input
-                id="mcp-url"
-                readOnly
-                value={mcpUrl}
-                className="font-mono"
-              />
-              <CopyButton value={mcpUrl} />
+          <section className="mt-8 space-y-5 rounded-lg border border-border-strong bg-card p-6">
+            <div>
+              <h2 className="text-base font-medium text-foreground">
+                Connect your client
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Point any MCP-aware tool at the Midplane endpoint below.
+              </p>
             </div>
-          </section>
 
-          <section className="mt-8 space-y-2">
-            <Label>Cursor config (~/.cursor/mcp.json)</Label>
-            <div className="relative rounded-md border border-border bg-muted">
-              <pre className="overflow-x-auto p-4 font-mono text-xs text-foreground">
-                {cursorConfig}
-              </pre>
-              <div className="absolute right-2 top-2">
-                <CopyButton value={cursorConfig} label="Copy config" />
+            <div className="space-y-2">
+              <Label htmlFor="mcp-url">MCP endpoint URL</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="mcp-url"
+                  readOnly
+                  value={mcpUrl}
+                  className="font-mono"
+                />
+                <CopyButton value={mcpUrl} />
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              For Claude Code:{" "}
-              <code className="font-mono text-foreground">
-                claude mcp add --transport http midplane {mcpUrl}
-              </code>
-            </p>
+
+            <ClientConfigTabs mcpUrl={mcpUrl} />
           </section>
 
-          <section className="mt-12 space-y-3 rounded-lg border border-border bg-card p-6">
+          <section className="mt-6 space-y-3 rounded-lg border border-border-strong bg-card p-6">
             <h2 className="text-base font-medium text-foreground">
               Table permissions
             </h2>
@@ -216,9 +206,9 @@ export default async function ConnectionDetail({
             </div>
           </section>
 
-          <section className="mt-6 space-y-3 rounded-lg border border-border bg-card p-6">
+          <section className="mt-6 space-y-3 rounded-lg border border-border-strong bg-card p-6">
             <h2 className="text-base font-medium text-foreground">
-              Rotate DSN
+              Rotate connection string
             </h2>
             <p className="text-xs text-muted-foreground">
               Paste a new Postgres URL to replace the encrypted ciphertext. The
@@ -231,24 +221,16 @@ export default async function ConnectionDetail({
             <RotateConnectionForm id={conn.id} action={rotateAction} />
           </section>
 
-          <section className="mt-6 flex items-center justify-between gap-4 rounded-lg border border-[hsl(var(--deny)/0.4)] bg-card p-6">
-            <div>
-              <h2 className="text-base font-medium text-foreground">
-                Delete connection
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                Stops the MCP endpoint and removes the encrypted row. Audit
-                history stays in the dashboard for compliance.
-              </p>
-            </div>
+          <section className="mt-6 space-y-3 rounded-lg border border-[hsl(var(--deny)/0.4)] bg-card p-6">
+            <h2 className="text-base font-medium text-foreground">
+              Delete connection
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Stops the MCP endpoint and removes the encrypted row. Audit
+              history stays in the dashboard for compliance.
+            </p>
             <DeleteConnectionButton id={conn.id} action={deleteAction} />
           </section>
-
-          <div className="mt-8">
-            <Link href="/dashboard">
-              <Button variant="outline">Back to dashboard</Button>
-            </Link>
-          </div>
         </div>
       </PageContainer>
     </>

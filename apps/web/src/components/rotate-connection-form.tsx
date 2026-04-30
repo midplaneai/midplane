@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 // Inline rotate form rendered on /connections/[id]. The Server Action passed
 // in via `action` re-encrypts and atomically swaps the ciphertext + invalidates
@@ -41,19 +42,23 @@ export function RotateConnectionForm({
       className="space-y-3"
     >
       <input type="hidden" name="id" value={id} />
-      <Input
-        type="password"
-        name="dsn"
-        required
-        autoComplete="new-password"
-        data-1p-ignore
-        data-lpignore="true"
-        placeholder="postgres://user:pass@host:5432/db"
-        className="font-mono"
-      />
+      <div className="space-y-2">
+        <Label htmlFor="rotate-dsn">New connection string</Label>
+        <Input
+          id="rotate-dsn"
+          type="password"
+          name="dsn"
+          required
+          autoComplete="new-password"
+          data-1p-ignore
+          data-lpignore="true"
+          placeholder="postgres://user:pass@host:5432/db"
+          className="font-mono"
+        />
+      </div>
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" disabled={pending}>
-          {pending ? "Rotating…" : "Rotate DSN"}
+          {pending ? "Rotating…" : "Rotate connection string"}
         </Button>
         {error ? (
           <span className="text-sm text-destructive">{error}</span>

@@ -13,10 +13,11 @@
   "dependencies": {
     "@clerk/nextjs": "^6.10.0",
     "@midplane-cloud/db": "workspace:*",
-    "@radix-ui/react-alert-dialog": "^1.1.2",
-    "@radix-ui/react-slot": "^1.1.0",
     "@midplane-cloud/kms": "workspace:*",
     "@midplane-cloud/router": "workspace:*",
+    "@radix-ui/react-alert-dialog": "^1.1.2",
+    "@radix-ui/react-slot": "^1.1.0",
+    "@radix-ui/react-tabs": "^1.1.13",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.38.0",
