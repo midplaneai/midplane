@@ -29,11 +29,6 @@ import {
   indexerCursors,
 } from "@midplane-cloud/db";
 import { encryptDsn, makeKmsContext } from "@midplane-cloud/kms";
-import {
-  ContainerRegistry,
-  DockerSpawner,
-  Indexer,
-} from "@midplane-cloud/router";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -120,15 +115,16 @@ test.afterAll(async () => {
   }
 });
 
-test("indexer drains container audit rows into audit_events_index within 5s", async ({
+test("indexer drains container audit rows into audit_events_index within 15s", async ({
   request,
   baseURL,
 }) => {
   // Step 1: drive the proxy so a container spawns with INDEXER_TOKEN set.
-  // The web app's getMcpProxyContext() picks INDEXER_TOKEN out of env and
-  // passes it through DockerSpawner — which means the playwright runner
-  // must be started with INDEXER_TOKEN in the environment for this path
-  // to work. (Sanity check below.)
+  // getMcpProxyContext() in the dev server reads INDEXER_TOKEN from env
+  // (the playwright config forwards .env.local), passes it through
+  // DockerSpawner, and starts the singleton Indexer that drives the
+  // 5-second polling cadence. We don't construct a competing Indexer
+  // here — we observe the live one.
   await runMcpQuery(request, baseURL!);
 
   // Sanity-check: the container actually got the token.
@@ -137,96 +133,100 @@ test("indexer drains container audit rows into audit_events_index within 5s", as
   ).toString();
   expect(envOut).toContain(`INDEXER_TOKEN=${INDEXER_TOKEN}`);
 
-  // Step 2: run a one-shot indexer (no continuous loop) against the live
-  // container. Reusing the production Indexer with tickMs=high so we
-  // explicitly call tick() and assert post-conditions.
-  const db = getDb();
-  const registry = new ContainerRegistry(
-    new DockerSpawner({ indexerToken: INDEXER_TOKEN }),
-    { idleMs: 60_000 },
+  // Sanity-check: OSS wrote audit rows to its SQLite (proves the engine
+  // pipeline ran end-to-end).
+  const containerCount = Number(
+    execSync(
+      `docker exec ${containerName} sqlite3 /data/audit.db 'SELECT COUNT(*) FROM audit_events'`,
+    )
+      .toString()
+      .trim(),
   );
-  // Don't actually spawn — re-register pointing at the existing container.
-  // Easiest path: ask Docker for the host port and bypass acquire().
+  expect(containerCount).toBeGreaterThanOrEqual(3);
+
+  // Sanity-check: OSS exposes the new endpoint and accepts our bearer.
   const mappedPort = parseDockerPort(
     execSync(`docker port ${containerName} 8080`).toString(),
   );
-  await registry.acquire({
-    token: mcpToken,
-    region: "fra",
-    dsn: "postgres://placeholder", // not used because container is already up
-  }).catch(() => undefined); // acquire may try to start a second container; if it does we just skip
-
-  const ix = new Indexer({
-    db,
-    registry,
-    indexerToken: INDEXER_TOKEN,
-    tickMs: 60_000,
-  });
-
-  // Hit it directly via fetch since the registry's container host might
-  // not match (acquire spawned a separate container). We need a minimal
-  // override path — wire the test directly to the OSS endpoint.
-  const auditUrl = `http://127.0.0.1:${mappedPort}/audit/since/0?limit=500`;
-  const since = await fetch(auditUrl, {
-    headers: { authorization: `Bearer ${INDEXER_TOKEN}` },
-  });
+  const since = await fetch(
+    `http://127.0.0.1:${mappedPort}/audit/since/0?limit=500`,
+    { headers: { authorization: `Bearer ${INDEXER_TOKEN}` } },
+  );
   expect(
     since.status,
     "OSS image must expose /audit/since (upstream PR not yet shipped?)",
   ).toBe(200);
-  const body = (await since.json()) as {
-    rows: unknown[];
-    next_cursor: string | null;
-  };
-  expect(body.rows.length).toBeGreaterThanOrEqual(3); // ATTEMPTED+DECIDED+EXECUTED
 
-  await ix.tick();
-
-  // Step 3: assert rows landed in audit_events_index within 5s of the query.
-  const indexed = await db
-    .select()
-    .from(auditEventsIndex)
-    .where(
-      and(
-        eq(auditEventsIndex.customerId, customerId),
-        gte(auditEventsIndex.ts, new Date(Date.now() - 60_000)),
-      ),
-    );
+  // Step 2: poll audit_events_index for up to 15s. Default tick cadence
+  // is 5s, so 15s is one cold-start tick + buffer.
+  const db = getDb();
+  const indexed = await waitFor(async () => {
+    const rows = await db
+      .select()
+      .from(auditEventsIndex)
+      .where(
+        and(
+          eq(auditEventsIndex.customerId, customerId),
+          gte(auditEventsIndex.ts, new Date(Date.now() - 60_000)),
+        ),
+      );
+    return rows.length >= 3 ? rows : null;
+  }, 15_000);
   expect(indexed.length).toBeGreaterThanOrEqual(3);
   const types = new Set(indexed.map((r) => r.eventType));
   expect(types.has("ATTEMPTED")).toBe(true);
   expect(types.has("EXECUTED")).toBe(true);
 
-  // Step 4: cursor row updated.
+  // Step 3: cursor row updated.
   const cursorRows = await db
     .select()
     .from(indexerCursors)
     .where(eq(indexerCursors.mcpToken, mcpToken));
   expect(cursorRows[0]?.lastId).toBeTruthy();
 
-  // Step 5: clock-injected retention sweep. Set retentionGraceMs to 0 so
-  // every ack'd row is delete-eligible; verify a follow-up sweep hits the
-  // container's DELETE /audit/before and the SQLite count drops to 0.
-  const ix2 = new Indexer({
-    db,
-    registry,
-    indexerToken: INDEXER_TOKEN,
-    tickMs: 60_000,
-    retentionGraceMs: 0,
-    retentionSweepMs: 0,
-  });
-  await ix2.tick();
-
-  const remaining = execSync(
-    `docker exec ${containerName} sqlite3 /data/audit.db 'SELECT COUNT(*) FROM audit_events'`,
-  )
-    .toString()
-    .trim();
-  expect(Number(remaining)).toBe(0);
-
-  await ix.stop();
-  await ix2.stop();
+  // Step 4: prove DELETE /audit/before honors the bearer and prunes rows.
+  // We hit the container directly rather than spinning up a second
+  // Indexer with retentionGraceMs=0 (which would race the dev server's
+  // singleton). The unit suite covers the indexer's grace-window logic;
+  // here we just exercise the OSS endpoint contract.
+  const lastId = (await fetch(
+    `http://127.0.0.1:${mappedPort}/audit/since/0?limit=500`,
+    { headers: { authorization: `Bearer ${INDEXER_TOKEN}` } },
+  ).then((r) => r.json())) as { rows: Array<{ id: string }> };
+  const cutoffId = lastId.rows[lastId.rows.length - 1]!.id;
+  const delRes = await fetch(
+    `http://127.0.0.1:${mappedPort}/audit/before/${encodeURIComponent(cutoffId)}`,
+    {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${INDEXER_TOKEN}` },
+    },
+  );
+  expect(delRes.status).toBe(200);
+  const remaining = Number(
+    execSync(
+      `docker exec ${containerName} sqlite3 /data/audit.db 'SELECT COUNT(*) FROM audit_events'`,
+    )
+      .toString()
+      .trim(),
+  );
+  expect(remaining).toBe(0);
 });
+
+async function waitFor<T>(
+  probe: () => Promise<T | null>,
+  timeoutMs: number,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let lastResult: T | null = null;
+  while (Date.now() < deadline) {
+    lastResult = await probe();
+    if (lastResult !== null) return lastResult;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(
+    `waitFor timed out after ${timeoutMs}ms (last result: ${JSON.stringify(lastResult)})`,
+  );
+}
 
 async function runMcpQuery(
   request: import("@playwright/test").APIRequestContext,
