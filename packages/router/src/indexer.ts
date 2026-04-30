@@ -92,6 +92,8 @@ const VALID_EVENT_TYPES = new Set([
   "FAILED",
 ]);
 
+const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
 export class Indexer {
   private readonly db: Db;
   private readonly registry: ContainerRegistry;
@@ -265,8 +267,23 @@ export class Indexer {
     }
     const lastId = resp.rows[resp.rows.length - 1]!.id;
     const indexedAt = new Date(this.nowFn());
+    if (!ULID_RE.test(customerId)) {
+      // customer_id is the value the RLS policy in 0001_constraints.sql
+      // matches against; an unsanitized string here would let a stray
+      // single-quote break the SET LOCAL statement. Connection rows
+      // populate customer_id via ulid() at signup, so this should be
+      // unreachable — guard anyway, fail closed.
+      throw new Error(`indexer: invalid customer_id ${customerId}`);
+    }
 
     await this.db.transaction(async (tx) => {
+      // Bind RLS so the INSERT passes the audit_events_index policy after
+      // 0004_force_rls. Without this, the policy's USING clause
+      // (customer_id = current_setting('app.customer_id', true)) would
+      // reject every insert under FORCE ROW LEVEL SECURITY.
+      await tx.execute(
+        drizzleSql.raw(`SET LOCAL app.customer_id = '${customerId}'`),
+      );
       if (valid.length > 0) {
         await tx
           .insert(auditEventsIndex)
@@ -333,21 +350,31 @@ export class Indexer {
     const customerId = cursorRow.customerId;
     const ackId = cursorRow.lastId;
 
+    if (!ULID_RE.test(customerId)) {
+      throw new Error(`indexer: invalid customer_id ${customerId}`);
+    }
+
     // Largest id within the ack'd set that is also older than the grace
     // window. ULIDs are time-sortable, and audit_events_index also stores
     // ts as TIMESTAMPTZ, so MAX(id) WHERE ts < cutoff AND id <= ackId is
-    // exact. Customer scoping keeps RLS effective even from this path.
+    // exact. RLS bind keeps this scoped to the cursor's customer even
+    // under FORCE ROW LEVEL SECURITY (0004_force_rls).
     const cutoff = new Date(this.nowFn() - this.retentionGraceMs);
-    const rows = await this.db
-      .select({ maxId: drizzleSql<string>`max(${auditEventsIndex.id})` })
-      .from(auditEventsIndex)
-      .where(
-        and(
-          eq(auditEventsIndex.customerId, customerId),
-          lt(auditEventsIndex.ts, cutoff),
-          drizzleSql`${auditEventsIndex.id} <= ${ackId}`,
-        ),
+    const rows = await this.db.transaction(async (tx) => {
+      await tx.execute(
+        drizzleSql.raw(`SET LOCAL app.customer_id = '${customerId}'`),
       );
+      return tx
+        .select({ maxId: drizzleSql<string>`max(${auditEventsIndex.id})` })
+        .from(auditEventsIndex)
+        .where(
+          and(
+            eq(auditEventsIndex.customerId, customerId),
+            lt(auditEventsIndex.ts, cutoff),
+            drizzleSql`${auditEventsIndex.id} <= ${ackId}`,
+          ),
+        );
+    });
     const deleteThrough = rows[0]?.maxId ?? null;
     if (!deleteThrough) return;
 
