@@ -68,6 +68,10 @@ export const connections = pgTable(
     id: text("id").primaryKey(), // ULID
     customerId: text("customer_id").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
+    // User-supplied label so a customer with multiple connections can tell
+    // them apart in the dashboard. Nullable for rows created before this
+    // column existed; the UI falls back to the MCP URL when null.
+    name: text("name"),
     encryptedDsn: bytea("encrypted_dsn").notNull(),
     kmsKeyId: text("kms_key_id").notNull(),
     mcpToken: text("mcp_token").notNull().unique(),

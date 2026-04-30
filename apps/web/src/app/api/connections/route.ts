@@ -2,12 +2,15 @@ import { z } from "zod";
 
 import { mintMcpUrl } from "@midplane-cloud/router";
 
-import { createConnection } from "@/lib/connections";
+import {
+  createConnection,
+  MAX_CONNECTION_NAME_LENGTH,
+} from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 
 // POST /api/connections — JSON API (programmatic / non-browser callers).
 //
-// Body: { dsn: string }
+// Body: { dsn: string, name?: string }
 // Response: { id, mcpUrl, region }
 //
 // The browser paste-DSN form uses a Server Action instead, so it can redirect
@@ -20,6 +23,7 @@ const Body = z.object({
     .refine((s) => /^postgres(ql)?:\/\//i.test(s), {
       message: "must be a postgres:// or postgresql:// URL",
     }),
+  name: z.string().max(MAX_CONNECTION_NAME_LENGTH).optional(),
 });
 
 export async function POST(req: Request) {
@@ -45,7 +49,11 @@ export async function POST(req: Request) {
     );
   }
 
-  const { id, mcpToken } = await createConnection(customer, parsed.data.dsn);
+  const { id, mcpToken } = await createConnection(
+    customer,
+    parsed.data.dsn,
+    parsed.data.name ?? null,
+  );
   const mcpUrl = mintMcpUrl(customer.region, mcpToken, process.env);
   return Response.json({ id, mcpUrl, region: customer.region }, { status: 201 });
 }

@@ -145,6 +145,20 @@ const customer = {
   createdAt: new Date(),
 };
 
+describe("normalizeName", () => {
+  it("trims whitespace, collapses empty to null, clamps overlong input", async () => {
+    const { normalizeName, MAX_CONNECTION_NAME_LENGTH } = await import(
+      "../src/lib/connections.ts"
+    );
+    expect(normalizeName(null)).toBe(null);
+    expect(normalizeName(undefined)).toBe(null);
+    expect(normalizeName("   ")).toBe(null);
+    expect(normalizeName("  prod db  ")).toBe("prod db");
+    const long = "x".repeat(MAX_CONNECTION_NAME_LENGTH + 20);
+    expect(normalizeName(long)).toHaveLength(MAX_CONNECTION_NAME_LENGTH);
+  });
+});
+
 describe("deleteConnection", () => {
   it("returns null when nothing was deleted (no cursor delete fires)", async () => {
     handle.setConnectionsReturning([]);

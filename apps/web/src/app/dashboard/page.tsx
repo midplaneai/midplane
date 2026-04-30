@@ -67,10 +67,19 @@ export default async function Dashboard() {
                 <div className="min-w-0 flex-1 space-y-1">
                   <Link
                     href={`/connections/${c.id}`}
-                    className="block truncate font-mono text-sm hover:underline"
+                    className="block truncate text-sm font-medium hover:underline"
                   >
-                    {mcpUrl}
+                    {c.name ?? (
+                      <span className="font-mono text-muted-foreground">
+                        {mcpUrl}
+                      </span>
+                    )}
                   </Link>
+                  {c.name ? (
+                    <p className="truncate font-mono text-xs text-muted-foreground">
+                      {mcpUrl}
+                    </p>
+                  ) : null}
                   <p className="text-xs text-muted-foreground">
                     Created {formatRelative(c.createdAt)}
                   </p>

@@ -9,10 +9,12 @@ import { mintMcpUrl } from "@midplane-cloud/router";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/copy-button";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
+import { EditableConnectionTitle } from "@/components/editable-connection-title";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
 import {
   deleteConnection,
   isValidDsn,
+  renameConnection,
   rotateConnection,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
@@ -43,6 +45,26 @@ export default async function ConnectionDetail({
   // Server Actions live alongside the page so the rotateConnection /
   // deleteConnection dependency closure is server-only — neither helper
   // touches client code paths.
+
+  async function renameAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+
+    const formId = formData.get("id");
+    if (typeof formId !== "string" || formId.length === 0) {
+      throw new Error("missing id");
+    }
+    const nameRaw = formData.get("name");
+    const name = typeof nameRaw === "string" ? nameRaw : null;
+
+    const renamed = await renameConnection(customer, formId, name);
+    if (!renamed) notFound();
+    revalidatePath(`/connections/${formId}`);
+    // The dashboard list also renders c.name, so its prefetched/cached
+    // render goes stale on rename — bust it too.
+    revalidatePath("/dashboard");
+  }
 
   async function rotateAction(formData: FormData) {
     "use server";
@@ -92,9 +114,12 @@ export default async function ConnectionDetail({
 
   return (
     <main className="container mx-auto max-w-2xl px-4 py-12">
-      <h1 className="text-2xl font-semibold tracking-tight">
-        Your MCP endpoint is ready
-      </h1>
+      <EditableConnectionTitle
+        id={conn.id}
+        initialName={conn.name}
+        placeholder="Your MCP endpoint is ready"
+        action={renameAction}
+      />
       <p className="mt-2 text-sm text-muted-foreground">
         Hosted in {REGION_LABELS[conn.region]}. Your DSN is encrypted at rest;
         we never log or persist the plaintext.

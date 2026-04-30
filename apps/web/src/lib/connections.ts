@@ -13,6 +13,13 @@ import {
   type Region,
 } from "@midplane-cloud/kms";
 
+import { normalizeName } from "./connection-name.ts";
+
+export {
+  MAX_CONNECTION_NAME_LENGTH,
+  normalizeName,
+} from "./connection-name.ts";
+
 // Shared create-connection path used by both the Server Action behind the
 // paste-DSN form and the JSON POST /api/connections route. Encrypts the DSN
 // with the customer's region key, persists the ciphertext, mints an opaque
@@ -21,6 +28,7 @@ import {
 export async function createConnection(
   customer: Customer,
   dsn: string,
+  name: string | null = null,
 ): Promise<{ id: string; mcpToken: string }> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
@@ -39,6 +47,7 @@ export async function createConnection(
     id,
     customerId: customer.id,
     region: customer.region,
+    name: normalizeName(name),
     encryptedDsn: ciphertext,
     kmsKeyId,
     mcpToken,
@@ -49,6 +58,24 @@ export async function createConnection(
 
 export function isValidDsn(s: unknown): s is string {
   return typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8;
+}
+
+// Update the user-supplied name. Cosmetic — no caches to invalidate, no
+// container to restart, no token rotation. Returns null when the id is
+// unknown OR owned by another customer (matches deleteConnection's
+// leakage-avoidance shape).
+export async function renameConnection(
+  customer: Customer,
+  id: string,
+  name: string | null,
+): Promise<{ name: string | null } | null> {
+  const db = getDb();
+  const updated = await db
+    .update(connections)
+    .set({ name: normalizeName(name) })
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .returning({ name: connections.name });
+  return updated[0] ?? null;
 }
 
 // Delete a connection only if it belongs to the calling customer. Returns
