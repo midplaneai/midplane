@@ -12,6 +12,7 @@ export { resolveByToken } from "./resolve.ts";
 export type { Db } from "./resolve.ts";
 export { ContainerRegistry } from "./spawner.ts";
 export type {
+  ActiveContainer,
   ContainerRegistryOptions,
   SpawnedContainer,
   Spawner,
@@ -21,3 +22,5 @@ export { DockerSpawner, parseHostPort } from "./spawner-docker.ts";
 export type { DockerSpawnerOptions } from "./spawner-docker.ts";
 export { FlyMachineSpawner } from "./spawner-fly.ts";
 export type { FlyMachineSpawnerOptions } from "./spawner-fly.ts";
+export { Indexer } from "./indexer.ts";
+export type { ContainerAuditRow, IndexerOptions } from "./indexer.ts";

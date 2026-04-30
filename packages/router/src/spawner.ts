@@ -34,8 +34,16 @@ export interface Spawner {
 
 interface RegistryEntry {
   container: SpawnedContainer;
+  region: Region;
   idleTimer: ReturnType<typeof setTimeout>;
   lastTouchedAt: number;
+}
+
+export interface ActiveContainer {
+  token: string;
+  region: Region;
+  host: string;
+  port: number;
 }
 
 export interface ContainerRegistryOptions {
@@ -72,6 +80,7 @@ export class ContainerRegistry {
         const container = await this.spawner.spawn(opts);
         const entry: RegistryEntry = {
           container,
+          region: opts.region,
           idleTimer: this.scheduleStop(opts.token),
           lastTouchedAt: this.now(),
         };
@@ -83,6 +92,22 @@ export class ContainerRegistry {
     })();
     this.inflight.set(opts.token, promise);
     return promise;
+  }
+
+  /** Snapshot of active containers — used by the audit indexer to know
+   *  who to poll. Returned as a plain array so callers can iterate without
+   *  holding a reference into the live map. */
+  list(): ActiveContainer[] {
+    const out: ActiveContainer[] = [];
+    for (const [token, entry] of this.entries) {
+      out.push({
+        token,
+        region: entry.region,
+        host: entry.container.host,
+        port: entry.container.port,
+      });
+    }
+    return out;
   }
 
   async invalidate(token: string): Promise<void> {

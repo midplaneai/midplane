@@ -130,6 +130,37 @@ export const auditEventsIndex = pgTable(
   }),
 );
 
+// --- indexer_cursors --------------------------------------------------------
+//
+// One row per mcp_token the indexer has ever drained. Holds the bookmark
+// (last_id) the next poll resumes from, plus customer_id stamped on the
+// first successful index — once stamped, the indexer can keep draining
+// even after the user deletes or rotates the underlying connection row,
+// which is exactly the design requirement (audit-grade write-through:
+// rows must reach Postgres regardless of what the user does to the
+// connection mid-flight). Rows are deleted by the connections API on
+// hard-delete to avoid orphan accumulation.
+
+export const indexerCursors = pgTable(
+  "indexer_cursors",
+  {
+    mcpToken: text("mcp_token").primaryKey(),
+    customerId: text("customer_id").notNull(),
+    region: text("region", { enum: REGIONS }).notNull(),
+    lastId: text("last_id").notNull().default(""), // ULIDs sort lex; "" precedes all real ids
+    lastIndexedAt: timestamp("last_indexed_at", { withTimezone: true }),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    regionIdx: index("indexer_cursors_region_idx").on(t.region),
+    customerIdx: index("indexer_cursors_customer_id_idx").on(t.customerId),
+  }),
+);
+
 // --- types ------------------------------------------------------------------
 
 export type Customer = typeof customers.$inferSelect;
@@ -138,5 +169,7 @@ export type Connection = typeof connections.$inferSelect;
 export type NewConnection = typeof connections.$inferInsert;
 export type AuditEvent = typeof auditEventsIndex.$inferSelect;
 export type NewAuditEvent = typeof auditEventsIndex.$inferInsert;
+export type IndexerCursor = typeof indexerCursors.$inferSelect;
+export type NewIndexerCursor = typeof indexerCursors.$inferInsert;
 
 export { sql };
