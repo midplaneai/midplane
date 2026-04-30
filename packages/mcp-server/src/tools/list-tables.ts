@@ -1,7 +1,7 @@
 // list_tables tool — canned information_schema.tables query, routed through
 // engine.handle() so audit + policy still record the call (table_access
-// allows information_schema reads under the default `read` policy;
-// tenant_scope mappings shouldn't include it).
+// has an unconditional carve-out for information_schema so this works under
+// default-deny policies too; tenant_scope mappings shouldn't include it).
 
 import { z } from "zod";
 import type { Engine, EngineContext } from "@midplane/engine";

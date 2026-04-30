@@ -396,6 +396,19 @@ function rangeVarToRef(rv: Record<string, unknown>): TableRef | null {
 }
 
 function resolvePermission(ref: TableRef, cfg: TableAccessConfig): TableAccessLevel {
+  // information_schema is a read-only set of SQL-standard views over schema
+  // (not row data), and Postgres itself blocks writes to it. Granting
+  // unconditional `read` is structurally required: agents on default-deny
+  // tokens need it to discover what tables exist before they can ask the
+  // operator for access (the MCP `list_tables` and `describe_table` tools
+  // both query information_schema). Placed before the qualified lookup so
+  // an explicit `tables: { "information_schema.tables": "deny" }` can't
+  // lock discovery out. pg_catalog is intentionally NOT carved out — it
+  // exposes pg_roles, pg_proc bodies, pg_settings, etc. which go beyond
+  // schema discovery and stay subject to policy.
+  if (ref.schema === "information_schema") {
+    return "read";
+  }
   if (ref.schema !== null) {
     const qualified = `${ref.schema}.${ref.relname}`;
     if (Object.prototype.hasOwnProperty.call(cfg.tables, qualified)) {

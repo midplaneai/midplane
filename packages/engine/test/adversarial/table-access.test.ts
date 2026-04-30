@@ -667,6 +667,109 @@ describe("adversarial/table-access: CTE-name shadowing", () => {
   });
 });
 
+// ─── information_schema discovery carve-out ───────────────────────────────
+//
+// information_schema (read-only SQL-standard views over schema, not row
+// data) gets an unconditional `read` so agents on default-deny tokens can
+// discover what tables exist before asking the operator for access.
+// Without this, list_tables / describe_table tools deny under default-deny
+// and the human can never be asked "may I read public.users?" — the agent
+// doesn't know public.users is a thing. pg_catalog is intentionally NOT
+// carved out (pg_roles, pg_proc bodies, pg_settings exceed discovery scope).
+
+describe("adversarial/table-access: information_schema discovery", () => {
+  test("default deny + SELECT from information_schema.tables → allow", async () => {
+    const cfg: TableAccessConfig = { default: "deny", tables: {} };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectAllow(
+      engine,
+      baseCtx,
+      "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+    );
+  });
+
+  test("default deny + SELECT from information_schema.columns → allow (describe_table)", async () => {
+    const cfg: TableAccessConfig = { default: "deny", tables: {} };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectAllow(
+      engine,
+      baseCtx,
+      "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'",
+    );
+  });
+
+  test("default deny + JOIN information_schema.tables with public.users → deny on user table", async () => {
+    // The metadata-schema RangeVar is allowed but the public.users RangeVar
+    // still gets checked against the policy and resolves to default deny.
+    const cfg: TableAccessConfig = { default: "deny", tables: {} };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT t.table_name, u.id FROM information_schema.tables t JOIN public.users u ON true",
+      TABLE_ACCESS,
+    );
+  });
+
+  test("explicit `information_schema.tables: deny` ignored — carve-out is unconditional", async () => {
+    const cfg: TableAccessConfig = {
+      default: "deny",
+      tables: { "information_schema.tables": "deny" },
+    };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectAllow(
+      engine,
+      baseCtx,
+      "SELECT table_name FROM information_schema.tables",
+    );
+  });
+
+  test("default deny + UPDATE on information_schema.* → still deny via write path", async () => {
+    // Carve-out resolves to "read", which fails the read_write requirement
+    // a write target imposes — so writes against metadata schemas still deny.
+    const cfg: TableAccessConfig = { default: "deny", tables: {} };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(
+      engine,
+      baseCtx,
+      "UPDATE information_schema.tables SET table_name = 'x'",
+      TABLE_ACCESS,
+    );
+  });
+
+  test("pg_catalog is NOT carved out — default deny + SELECT pg_catalog.pg_roles → deny", async () => {
+    // Catalog leaks beyond schema discovery (pg_roles names, pg_proc bodies,
+    // pg_settings server config) so it stays subject to policy.
+    const cfg: TableAccessConfig = { default: "deny", tables: {} };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT rolname FROM pg_catalog.pg_roles",
+      TABLE_ACCESS,
+    );
+  });
+
+  test("pg_catalog allowed when default permits or table explicitly listed", async () => {
+    // Sanity: pg_catalog isn't blacklisted, just not carved out. With
+    // default `read` it allows, matching the V1 trust posture.
+    const cfg: TableAccessConfig = { default: "read", tables: {} };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectAllow(engine, baseCtx, "SELECT tablename FROM pg_catalog.pg_tables");
+  });
+
+  test("carve-out does NOT extend to pg_temp_* or other schemas", async () => {
+    const cfg: TableAccessConfig = { default: "deny", tables: {} };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT * FROM pg_temp_3.scratch",
+      TABLE_ACCESS,
+    );
+  });
+});
+
 // ─── COPY / LOCK side-effect denials (regression for review feedback) ─────
 //
 // COPY moves data on the server filesystem; LOCK takes a transaction-scoped
