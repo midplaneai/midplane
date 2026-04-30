@@ -8,6 +8,12 @@
 // Backend selection:
 //   FLY_API_TOKEN set → FlyMachineSpawner (production shape).
 //   else            → DockerSpawner (laptop / Playwright).
+//
+// The audit Indexer is also a singleton: started lazily on first proxy
+// request, runs forever, drains every active container's SQLite into the
+// cloud audit_events_index on a 5s cadence. Off when INDEXER_TOKEN is
+// unset (dev convenience — OSS containers without the token don't expose
+// the /audit endpoints anyway).
 
 import {
   ContainerRegistry,
@@ -15,6 +21,7 @@ import {
   DockerSpawner,
   DsnResolver,
   FlyMachineSpawner,
+  Indexer,
   loadRegions,
 } from "@midplane-cloud/router";
 import { getDb } from "@midplane-cloud/db";
@@ -24,6 +31,7 @@ interface McpProxyContext {
   cache: DecryptCache;
   registry: ContainerRegistry;
   resolver: DsnResolver;
+  indexer: Indexer | null;
 }
 
 const GLOBAL_KEY = "__midplane_mcp_proxy__";
@@ -38,22 +46,41 @@ export function getMcpProxyContext(): McpProxyContext {
 
   const cache = new DecryptCache();
   const regions = loadRegions(process.env);
+  const indexerToken = process.env.INDEXER_TOKEN;
 
   const spawner = process.env.FLY_API_TOKEN
     ? new FlyMachineSpawner({
         apiToken: process.env.FLY_API_TOKEN,
         regions,
+        indexerToken,
       })
-    : new DockerSpawner();
+    : new DockerSpawner({ indexerToken });
 
   const registry = new ContainerRegistry(spawner);
+  const db = getDb();
   const resolver = new DsnResolver({
-    db: getDb(),
+    db,
     cache,
     kms: makeKmsContext(process.env),
   });
 
-  const ctx: McpProxyContext = { cache, registry, resolver };
+  let indexer: Indexer | null = null;
+  if (indexerToken) {
+    indexer = new Indexer({
+      db,
+      registry,
+      indexerToken,
+      onError: (err, ctx) => {
+        // Audit indexing failures are operationally significant but not
+        // fatal — log via console for now; the dashboard staleness banner
+        // is the user-visible signal.
+        console.error("[indexer]", ctx.phase, ctx.token.slice(0, 8), err);
+      },
+    });
+    indexer.start();
+  }
+
+  const ctx: McpProxyContext = { cache, registry, resolver, indexer };
   g[GLOBAL_KEY] = ctx;
   return ctx;
 }

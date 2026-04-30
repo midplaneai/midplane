@@ -130,6 +130,35 @@ export const auditEventsIndex = pgTable(
   }),
 );
 
+// --- indexer_cursors --------------------------------------------------------
+//
+// One row per active mcp_token. The cloud-side audit indexer polls each
+// container's GET /audit/since/<lastId> on a fixed cadence (5s); this row
+// is its bookmark across process restarts. Rows are NOT FK'd to connections
+// because the indexer must be able to drain a container after the user has
+// rotated or deleted the connection — the cursor row gets removed only
+// when the connection itself is hard-deleted (handled in the connections
+// API), or when the container is permanently gone with no rows left to
+// drain (handled by the indexer).
+
+export const indexerCursors = pgTable(
+  "indexer_cursors",
+  {
+    mcpToken: text("mcp_token").primaryKey(),
+    region: text("region", { enum: REGIONS }).notNull(),
+    lastId: text("last_id").notNull().default(""), // ULIDs sort lex; "" precedes all real ids
+    lastIndexedAt: timestamp("last_indexed_at", { withTimezone: true }),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    regionIdx: index("indexer_cursors_region_idx").on(t.region),
+  }),
+);
+
 // --- types ------------------------------------------------------------------
 
 export type Customer = typeof customers.$inferSelect;
@@ -138,5 +167,7 @@ export type Connection = typeof connections.$inferSelect;
 export type NewConnection = typeof connections.$inferInsert;
 export type AuditEvent = typeof auditEventsIndex.$inferSelect;
 export type NewAuditEvent = typeof auditEventsIndex.$inferInsert;
+export type IndexerCursor = typeof indexerCursors.$inferSelect;
+export type NewIndexerCursor = typeof indexerCursors.$inferInsert;
 
 export { sql };

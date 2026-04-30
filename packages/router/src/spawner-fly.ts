@@ -22,6 +22,12 @@ export interface FlyMachineSpawnerOptions {
   regions: Record<Region, RegionConfig>;
   /** Default 60s — Fly cold start is slower than local Docker. */
   bootTimeoutMs?: number;
+  /** Shared bearer the audit indexer presents to the container's
+   *  GET /audit/since endpoint. Injected as INDEXER_TOKEN env on the
+   *  Fly machine so OSS can compare. Required in production (the audit
+   *  pipeline is non-optional on hosted) — caller should fail fast if
+   *  unset. */
+  indexerToken?: string;
   /** Injected for tests. */
   fetch?: typeof fetch;
 }
@@ -42,6 +48,7 @@ export class FlyMachineSpawner implements Spawner {
   private readonly apiBase: string;
   private readonly image: string;
   private readonly token: string;
+  private readonly indexerToken: string | undefined;
   private readonly regions: Record<Region, RegionConfig>;
   private readonly bootTimeoutMs: number;
   private readonly fetchFn: typeof fetch;
@@ -49,6 +56,7 @@ export class FlyMachineSpawner implements Spawner {
   constructor(opts: FlyMachineSpawnerOptions) {
     if (!opts.apiToken) throw new Error("FlyMachineSpawner: apiToken required");
     this.token = opts.apiToken;
+    this.indexerToken = opts.indexerToken;
     this.apiBase = opts.apiBase ?? "https://api.machines.dev";
     this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.1.0";
     this.regions = opts.regions;
@@ -103,6 +111,9 @@ export class FlyMachineSpawner implements Spawner {
             DATABASE_URL: opts.dsn,
             PORT: "8080",
             DB_PATH: "/data/audit.db",
+            ...(this.indexerToken
+              ? { INDEXER_TOKEN: this.indexerToken }
+              : {}),
           },
           services: [
             {

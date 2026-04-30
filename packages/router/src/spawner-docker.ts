@@ -17,6 +17,11 @@ export interface DockerSpawnerOptions {
   image?: string;
   /** Default 30s; raise on slow hosts. */
   bootTimeoutMs?: number;
+  /** Shared bearer the audit indexer presents to the container's
+   *  GET /audit/since endpoint. Injected as INDEXER_TOKEN env on the
+   *  container so OSS can compare. Optional in dev — when absent, the
+   *  container's audit endpoints stay 404. */
+  indexerToken?: string;
   /** Injected for tests so we don't shell out. */
   exec?: (cmd: string, args: string[]) => Promise<{ stdout: string }>;
   /** Injected for tests. */
@@ -26,6 +31,7 @@ export interface DockerSpawnerOptions {
 export class DockerSpawner implements Spawner {
   private readonly image: string;
   private readonly bootTimeoutMs: number;
+  private readonly indexerToken: string | undefined;
   private readonly exec: (
     cmd: string,
     args: string[],
@@ -35,6 +41,7 @@ export class DockerSpawner implements Spawner {
   constructor(opts: DockerSpawnerOptions = {}) {
     this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.1.0";
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 30_000;
+    this.indexerToken = opts.indexerToken;
     this.exec = opts.exec ?? execProcess;
     this.fetchFn = opts.fetch ?? fetch;
   }
@@ -44,7 +51,7 @@ export class DockerSpawner implements Spawner {
     // -p 0:8080 asks Docker for a random host port; -d --rm so the container
     // self-removes on stop. DATABASE_URL is the only place the decrypted DSN
     // surfaces; it lives in the container's env, not on disk.
-    const runRes = await this.exec("docker", [
+    const args = [
       "run",
       "-d",
       "--rm",
@@ -54,10 +61,12 @@ export class DockerSpawner implements Spawner {
       `DATABASE_URL=${opts.dsn}`,
       "-e",
       "PORT=8080",
-      "-p",
-      "0:8080",
-      this.image,
-    ]);
+    ];
+    if (this.indexerToken) {
+      args.push("-e", `INDEXER_TOKEN=${this.indexerToken}`);
+    }
+    args.push("-p", "0:8080", this.image);
+    const runRes = await this.exec("docker", args);
     const containerId = runRes.stdout.trim();
     if (!containerId) throw new Error("docker run returned empty container id");
 
