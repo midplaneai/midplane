@@ -121,10 +121,17 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   request,
   baseURL,
 }) => {
-  // 1. Real Clerk user + session.
+  // 1. Real Clerk user + session. The onUserCreated callback records the
+  // Clerk id the instant the Backend API returns, so afterAll() can still
+  // delete the user if any subsequent step (clerk.signIn, the region
+  // form, the connection form, the MCP request) throws — otherwise a
+  // mid-test failure leaks a Clerk row and gradually exhausts the dev
+  // instance's user cap.
   testEmail = freshTestEmail();
-  const result = await signUp(page, testEmail);
-  clerkUserId = result.clerkUserId;
+  const result = await signUp(page, testEmail, (id) => {
+    clerkUserId = id;
+  });
+  expect(result.clerkUserId).toBe(clerkUserId);
 
   // 2. Region picker — real Server Action upserts the customer row.
   await page.goto("/signup/region");
@@ -257,6 +264,32 @@ async function runMcpQuery(
     },
   });
   expect(callRes.status(), await callRes.text()).toBe(200);
+
+  // JSON-RPC errors travel as HTTP 200 with an `error` field, so a status
+  // check alone can't distinguish a real query result from a parser /
+  // policy / exec failure that still produced an audit row. Parse the
+  // body and assert (a) no top-level `error`, (b) the SELECT actually
+  // returned the row we inserted in beforeAll. If this ever flakes,
+  // critical-path #1 is silently broken.
+  const body = await readJsonRpc(callRes);
+  expect(
+    body.error,
+    `tools/call returned JSON-RPC error: ${JSON.stringify(body.error)}`,
+  ).toBeUndefined();
+  expect(JSON.stringify(body.result)).toContain("1");
+}
+
+async function readJsonRpc(
+  res: import("@playwright/test").APIResponse,
+): Promise<{ result?: unknown; error?: unknown }> {
+  const ct = res.headers()["content-type"] ?? "";
+  if (ct.includes("text/event-stream")) {
+    const text = await res.text();
+    const lines = text.split(/\r?\n/).filter((l) => l.startsWith("data:"));
+    const last = lines[lines.length - 1] ?? "";
+    return JSON.parse(last.slice(5).trim());
+  }
+  return res.json();
 }
 
 async function waitFor<T>(

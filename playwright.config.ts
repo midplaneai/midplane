@@ -58,11 +58,20 @@ export default defineConfig({
       name: "clerk-setup",
       testMatch: /_clerk-globalsetup\.ts$/,
     },
+    // signup-chromium runs ONLY the Clerk-driven critical-path suite and
+    // is the one project that depends on clerk-setup. Pulling Clerk in as
+    // a chromium-wide dependency would force every non-auth live suite
+    // (mcp-proxy, indexer) to require Clerk keys, which they don't use.
+    {
+      name: "signup-chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /signup\.live\.e2e\.ts$/,
+      dependencies: ["clerk-setup"],
+    },
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /_clerk-globalsetup\.ts$/,
-      dependencies: ["clerk-setup"],
+      testIgnore: [/_clerk-globalsetup\.ts$/, /signup\.live\.e2e\.ts$/],
     },
   ],
   webServer: process.env.E2E_BASE_URL

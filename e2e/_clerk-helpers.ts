@@ -39,14 +39,12 @@ export function freshTestEmail(): string {
   return `midplane-e2e-${tag}+clerk_test@example.com`;
 }
 
-// Create a real Clerk user, then establish a browser session as that user.
-// Returns the Clerk userId so afterAll() can clean up.
-//
-// password is fixed-but-strong; Clerk requires a password by default on dev
-// instances. The test never actually re-types it — sign-in uses a sign-in
-// token, not the password.
-export async function signUp(
-  page: Page,
+// Create a real Clerk user via the Backend API. Split out from signUp() so
+// the test can capture the resulting userId BEFORE the browser session-
+// establishment step runs. If clerk.signIn() throws (network blip, bad
+// state, whatever), afterAll still has the id and can delete the user —
+// otherwise we'd leak Clerk users until the dev instance hits its cap.
+export async function createTestUser(
   email: string,
 ): Promise<{ clerkUserId: string }> {
   const client = backend();
@@ -72,6 +70,23 @@ export async function signUp(
         { cause: e },
       );
     });
+  return { clerkUserId: user.id };
+}
+
+// Create a real Clerk user, then establish a browser session as that user.
+// Calls onUserCreated as soon as the user exists so callers can record the
+// id for cleanup before the session-establishment step (which can fail).
+//
+// password used at creation is random+strong; Clerk requires one on dev
+// instances by default. The test never re-types it — sign-in uses a
+// short-lived sign-in token minted by the Backend API.
+export async function signUp(
+  page: Page,
+  email: string,
+  onUserCreated?: (clerkUserId: string) => void,
+): Promise<{ clerkUserId: string }> {
+  const { clerkUserId } = await createTestUser(email);
+  onUserCreated?.(clerkUserId);
 
   await setupClerkTestingToken({ page });
   // Clerk.js needs a page where ClerkProvider has loaded before signIn can
@@ -80,7 +95,7 @@ export async function signUp(
   await clerk.loaded({ page });
   await clerk.signIn({ page, emailAddress: email });
 
-  return { clerkUserId: user.id };
+  return { clerkUserId };
 }
 
 // Sign-in helper for tests that already have a user. Same session-establishment
