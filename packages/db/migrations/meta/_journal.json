@@ -36,6 +36,13 @@
       "when": 1777644000000,
       "tag": "0004_force_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777556981319,
+      "tag": "0005_charming_karma",
+      "breakpoints": true
     }
   ]
 }

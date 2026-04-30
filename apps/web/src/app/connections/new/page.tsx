@@ -2,7 +2,11 @@ import { redirect } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { currentCustomer } from "@/lib/customer";
-import { createConnection, isValidDsn } from "@/lib/connections";
+import {
+  createConnection,
+  isValidDsn,
+  MAX_CONNECTION_NAME_LENGTH,
+} from "@/lib/connections";
 
 export default async function NewConnection() {
   const customer = await currentCustomer();
@@ -19,6 +23,22 @@ export default async function NewConnection() {
       </p>
 
       <form action={createAction} className="mt-8 space-y-4">
+        <div className="space-y-2">
+          <label htmlFor="name" className="text-sm font-medium">
+            Name
+          </label>
+          <input
+            id="name"
+            name="name"
+            type="text"
+            maxLength={MAX_CONNECTION_NAME_LENGTH}
+            placeholder="Production read-replica"
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <p className="text-xs text-muted-foreground">
+            A short label to tell this connection apart from others. Optional.
+          </p>
+        </div>
         <div className="space-y-2">
           <label htmlFor="dsn" className="text-sm font-medium">
             DATABASE_URL
@@ -53,7 +73,9 @@ async function createAction(formData: FormData) {
   if (!isValidDsn(dsn)) {
     throw new Error("DSN must be a postgres:// URL");
   }
+  const nameRaw = formData.get("name");
+  const name = typeof nameRaw === "string" ? nameRaw : null;
 
-  const { id } = await createConnection(customer, dsn);
+  const { id } = await createConnection(customer, dsn, name);
   redirect(`/connections/${id}`);
 }

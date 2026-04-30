@@ -34,6 +34,7 @@ const conn: Connection = {
   id: "conn-1",
   customerId: "cust-1",
   region: "fra",
+  name: null,
   encryptedDsn: Buffer.from("ciphertext"),
   kmsKeyId: "env:fra",
   mcpToken: "tok",
