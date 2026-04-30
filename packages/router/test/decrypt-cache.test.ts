@@ -68,4 +68,58 @@ describe("DecryptCache", () => {
     c.invalidate("a", "fra");
     expect(c.get("a", "fra").kind).toBe("miss");
   });
+
+  it("rotation fence: drops a set whose decryption started before invalidate", () => {
+    // Race: caller began KMS at t=100; rotation invalidated at t=200; the
+    // KMS plaintext arrives at t=300 and tries to set. Without the fence,
+    // the cache would now hold OLD plaintext and serve the rotated-away
+    // credential until TTL expires.
+    const clock = fakeNow();
+    const c = new DecryptCache({ now: clock.now });
+    const decryptStartedAt = clock.now();
+    clock.advance(100);
+    c.invalidate("a", "fra");
+    clock.advance(100);
+    const ok = c.set("a", "fra", "old-plaintext", decryptStartedAt);
+    expect(ok).toBe(false);
+    expect(c.get("a", "fra").kind).toBe("miss");
+  });
+
+  it("rotation fence: accepts a set whose decryption started AFTER invalidate", () => {
+    // Post-rotation request: cache miss → KMS with NEW ciphertext → set
+    // arrives strictly after the invalidate fence and must succeed,
+    // otherwise the cache would never repopulate.
+    const clock = fakeNow();
+    const c = new DecryptCache({ now: clock.now });
+    c.invalidate("a", "fra");
+    clock.advance(50);
+    const decryptStartedAt = clock.now();
+    clock.advance(50);
+    const ok = c.set("a", "fra", "new-plaintext", decryptStartedAt);
+    expect(ok).toBe(true);
+    const r = c.get("a", "fra");
+    expect(r.kind).toBe("fresh");
+    if (r.kind === "fresh") expect(r.plaintext).toBe("new-plaintext");
+  });
+
+  it("rotation fence: a late stale set does NOT overwrite an already-fresh entry", () => {
+    // Compound race: post-rotation request landed NEW plaintext; a
+    // stragglier pre-rotation grace refresh arrives later. The fence must
+    // drop the straggler so it doesn't replace the new value.
+    const clock = fakeNow();
+    const c = new DecryptCache({ now: clock.now });
+    const stragglerStartedAt = clock.now();
+    clock.advance(100);
+    c.invalidate("a", "fra");
+    clock.advance(100);
+    const freshStartedAt = clock.now();
+    c.set("a", "fra", "new-plaintext", freshStartedAt);
+    clock.advance(100);
+    // Straggler arrives now with the OLD timestamp.
+    const ok = c.set("a", "fra", "old-plaintext", stragglerStartedAt);
+    expect(ok).toBe(false);
+    const r = c.get("a", "fra");
+    expect(r.kind).toBe("fresh");
+    if (r.kind === "fresh") expect(r.plaintext).toBe("new-plaintext");
+  });
 });

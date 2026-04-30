@@ -98,16 +98,25 @@ function makeFakeDb(): FakeDbHandle {
   };
 }
 
-vi.mock("@midplane-cloud/db", async (orig) => {
-  const real = (await orig()) as typeof import("@midplane-cloud/db");
+// Note: we use vi.importActual rather than the (orig) callback overload of
+// vi.mock — vitest supports both, but vi.importActual works uniformly across
+// runners and is the modern API. The mock factory replaces a few exports
+// (getDb, encryptDsn) while preserving the rest (the schema tables we
+// import as values).
+vi.mock("@midplane-cloud/db", async () => {
+  const real = await vi.importActual<typeof import("@midplane-cloud/db")>(
+    "@midplane-cloud/db",
+  );
   return {
     ...real,
     getDb: () => handle.db,
   };
 });
 
-vi.mock("@midplane-cloud/kms", async (orig) => {
-  const real = (await orig()) as typeof import("@midplane-cloud/kms");
+vi.mock("@midplane-cloud/kms", async () => {
+  const real = await vi.importActual<typeof import("@midplane-cloud/kms")>(
+    "@midplane-cloud/kms",
+  );
   return {
     ...real,
     // Bypass KMS — return deterministic ciphertext shape so we can assert
