@@ -116,13 +116,25 @@ type DenialCause =
   | { kind: "read_blocked"; table: string; resolved: TableAccessLevel }
   | { kind: "no_target"; statement: string };
 
-export function tableAccess(config?: TableAccessConfig): Rule {
+// Accepts either a static TableAccessConfig (snapshot at construction) or a
+// getter that returns the current config on each evaluation. The getter form
+// lets the mcp-server hot-swap policy via POST /admin/policy without
+// rebuilding the engine: the rule reads the holder's pointer once per query,
+// so a swap mid-traffic flips queries cleanly between old and new config.
+type TableAccessConfigSource =
+  | TableAccessConfig
+  | (() => TableAccessConfig | undefined)
+  | undefined;
+
+export function tableAccess(source?: TableAccessConfigSource): Rule {
+  const resolveConfig = (): TableAccessConfig | undefined =>
+    typeof source === "function" ? source() : source;
   return {
     name: PolicyRule.TABLE_ACCESS,
     reset() {},
     finalize(rctx: RuleEvalContext): RuleVerdict {
       if (!rctx.parse.ok) return { decision: "ALLOW" }; // parse_error owns
-      const cfg = config ?? LEGACY_NO_YAML_CONFIG;
+      const cfg = resolveConfig() ?? LEGACY_NO_YAML_CONFIG;
 
       let cause: DenialCause | null = null;
       const flag = (c: DenialCause) => {

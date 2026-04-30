@@ -21,6 +21,7 @@ export const EventType = {
   DECIDED: "DECIDED",
   EXECUTED: "EXECUTED",
   FAILED: "FAILED",
+  POLICY_RELOADED: "POLICY_RELOADED",
 } as const;
 export type EventType = (typeof EventType)[keyof typeof EventType];
 
@@ -83,6 +84,21 @@ export const FailedPayload = z.object({
 });
 export type FailedPayload = z.infer<typeof FailedPayload>;
 
+// POLICY_RELOADED — the in-memory policy was hot-swapped via the admin endpoint.
+// Not tied to a query; query_id is a synthetic ULID for groupability. The
+// payload captures what changed so operators can confirm the swap landed.
+const TableAccessLevelEnum = z.enum(["deny", "read", "read_write"]);
+export const PolicyReloadedPayload = z.object({
+  source: z.string(),                                      // "admin_endpoint" today; reserves room for "fs_watch" etc.
+  table_access: z
+    .object({
+      default: TableAccessLevelEnum,
+      tables: z.record(z.string(), TableAccessLevelEnum),
+    })
+    .nullable(),
+});
+export type PolicyReloadedPayload = z.infer<typeof PolicyReloadedPayload>;
+
 // ─── Discriminated event union ──────────────────────────────────────────────
 
 export const AuditEvent = z.discriminatedUnion("event_type", [
@@ -125,6 +141,16 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     schema_version: z.literal(1),
     event_type: z.literal("FAILED"),
     payload: FailedPayload,
+  }),
+  z.object({
+    id: z.string(),
+    query_id: z.string(),
+    tenant_id: z.string(),
+    agent_identity: z.string().nullable(),
+    ts: z.number().int(),
+    schema_version: z.literal(1),
+    event_type: z.literal("POLICY_RELOADED"),
+    payload: PolicyReloadedPayload,
   }),
 ]);
 export type AuditEvent = z.infer<typeof AuditEvent>;

@@ -46,18 +46,31 @@ interface SessionEntry {
 export interface IndexerRoutes {
   audit: SqliteAuditWriter;
   // Bearer token from env. When undefined, the routes return 404 — audit
-  // access is opt-in on self-host.
+  // access is opt-in on self-host. The admin policy endpoint reuses this
+  // same token (no second secret to plumb).
   token?: string;
+}
+
+export interface AdminRoutes {
+  // Hot-swap the in-memory policy. Throws on YAML parse / schema errors;
+  // the throw is mapped to a 400 response with the error message in the
+  // body. Returns the wall-clock time the swap was applied.
+  setPolicy: (yamlText: string) => Promise<{ applied_at: string }>;
 }
 
 export async function startHttp(
   serverFactory: ServerFactory,
-  opts: { port: number; host?: string; indexer?: IndexerRoutes },
+  opts: {
+    port: number;
+    host?: string;
+    indexer?: IndexerRoutes;
+    admin?: AdminRoutes;
+  },
 ): Promise<HttpHandle> {
   const sessions = new Map<string, SessionEntry>();
 
   const httpServer = createServer((req, res) =>
-    handle(req, res, serverFactory, sessions, opts.indexer).catch((err) => {
+    handle(req, res, serverFactory, sessions, opts.indexer, opts.admin).catch((err) => {
       logger.error({ err }, "http handler threw");
       if (!res.headersSent) {
         res.statusCode = 500;
@@ -108,6 +121,7 @@ async function handle(
   serverFactory: ServerFactory,
   sessions: Map<string, SessionEntry>,
   indexer: IndexerRoutes | undefined,
+  admin: AdminRoutes | undefined,
 ): Promise<void> {
   const url = req.url ?? "/";
 
@@ -126,6 +140,12 @@ async function handle(
   }
   if (req.method === "DELETE" && url.startsWith("/audit/before/")) {
     await handleAuditBefore(req, res, url, indexer);
+    return;
+  }
+  // Admin policy hot-swap — same INDEXER_TOKEN, same 404-when-unset posture
+  // so self-hosts without the token reveal nothing.
+  if (req.method === "POST" && url === "/admin/policy") {
+    await handleAdminPolicy(req, res, indexer, admin);
     return;
   }
 
@@ -269,6 +289,51 @@ async function handleAuditBefore(
   const id = decodeURIComponent(parsed.pathname.slice("/audit/before/".length));
   const deleted = indexer!.audit.deleteThrough(id);
   writeJson(res, 200, { deleted });
+}
+
+async function handleAdminPolicy(
+  req: IncomingMessage,
+  res: ServerResponse,
+  indexer: IndexerRoutes | undefined,
+  admin: AdminRoutes | undefined,
+): Promise<void> {
+  const auth = checkBearer(req, indexer?.token);
+  if (auth === "missing") {
+    res.statusCode = 404;
+    res.end("not found");
+    return;
+  }
+  if (auth === "bad") {
+    writeJson(res, 401, { error: "unauthorized" });
+    return;
+  }
+  // Token configured but no admin handle wired (e.g. shared http transport
+  // bootstrapped without an engine yet). Surface as 503 so the cloud retries
+  // rather than treating it as a config error.
+  if (!admin) {
+    writeJson(res, 503, { ok: false, error: "engine not ready" });
+    return;
+  }
+
+  const text = await readText(req);
+  let result: { applied_at: string };
+  try {
+    result = await admin.setPolicy(text);
+  } catch (err) {
+    // Parse / schema errors thrown by parsePolicyYaml are operator-facing —
+    // pass the message through verbatim so the cloud UI can show it.
+    writeJson(res, 400, { ok: false, error: (err as Error).message });
+    return;
+  }
+  writeJson(res, 200, { ok: true, applied_at: result.applied_at });
+}
+
+async function readText(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function clampLimit(raw: string | null): number {

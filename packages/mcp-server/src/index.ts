@@ -77,6 +77,7 @@ export async function runServer(): Promise<void> {
     const http = await startHttp(() => buildServer({ handle, telemetry }), {
       port: cfg.port,
       indexer: { audit: handle.audit, token: cfg.indexerToken },
+      admin: { setPolicy: (yaml) => handle.setPolicy(yaml) },
     });
     close = async () => {
       await http.close();

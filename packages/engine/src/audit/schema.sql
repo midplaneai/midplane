@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   tenant_id       TEXT    NOT NULL,              -- '__self_host__' for OSS, customer ULID for hosted
   agent_identity  TEXT,                          -- MCP token id or agent fingerprint; NULL if anonymous
   ts              INTEGER NOT NULL,              -- ms epoch (use unixepoch * 1000 for ts in Postgres mirror)
-  event_type      TEXT    NOT NULL,              -- ATTEMPTED | DECIDED | EXECUTED | FAILED
+  event_type      TEXT    NOT NULL,              -- ATTEMPTED | DECIDED | EXECUTED | FAILED | POLICY_RELOADED
   payload         TEXT    NOT NULL,              -- JSON; shape determined by event_type (see audit-types.ts)
   schema_version  INTEGER NOT NULL DEFAULT 1     -- bump on payload schema break; indexer reads multiple versions
   -- Hash-chain extension (added in V2 for compliance buyer):
@@ -45,7 +45,7 @@ PRAGMA temp_store = MEMORY;
 --   query_id        TEXT        NOT NULL,
 --   agent_identity  TEXT,
 --   ts              TIMESTAMPTZ NOT NULL,
---   event_type      TEXT        NOT NULL CHECK (event_type IN ('ATTEMPTED','DECIDED','EXECUTED','FAILED')),
+--   event_type      TEXT        NOT NULL CHECK (event_type IN ('ATTEMPTED','DECIDED','EXECUTED','FAILED','POLICY_RELOADED')),
 --   payload         JSONB       NOT NULL,
 --   schema_version  INTEGER     NOT NULL DEFAULT 1
 -- );

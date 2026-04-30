@@ -52,6 +52,13 @@ export interface LoadedPolicy {
     default: TableAccessLevel;
     tables: Record<string, TableAccessLevel>;
   } | null;
+  // True iff the source document explicitly contained the section. Lets the
+  // hot-reload endpoint distinguish "operator omitted the section" (don't
+  // touch its current state) from "operator set it to empty" (apply as
+  // empty), which the normalized fields above can't represent on their own.
+  // Boot-time loadPolicyFile callers can ignore these.
+  hasTenantScope: boolean;
+  hasTableAccess: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -88,26 +95,48 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 
 export function loadPolicyFile(path: string): LoadedPolicy {
   const text = readFileSync(path, "utf8");
+  return parsePolicyYaml(text, `file ${path}`);
+}
 
+// Shared YAML-text → LoadedPolicy path. Used by loadPolicyFile (boot) and the
+// /admin/policy hot-reload endpoint, so both validate identically.
+// `source` is a label baked into thrown error messages to disambiguate where
+// the bad YAML came from in operator-facing diagnostics.
+export function parsePolicyYaml(text: string, source: string): LoadedPolicy {
   let doc: unknown;
   try {
     doc = yaml.load(text);
   } catch (err) {
     throw new Error(
-      `Policy file YAML parse error at ${path}: ${(err as Error).message}`,
+      `Policy YAML parse error from ${source}: ${(err as Error).message}`,
     );
   }
 
   if (doc === null || doc === undefined) {
-    return { mappings: {}, tableAccess: null };
+    return {
+      mappings: {},
+      tableAccess: null,
+      hasTenantScope: false,
+      hasTableAccess: false,
+    };
   }
 
   const parsed = PolicyFileSchema.safeParse(doc);
   if (!parsed.success) {
     throw new Error(
-      `Policy file schema error at ${path}: ${formatZodIssues(parsed.error.issues)}`,
+      `Policy schema error from ${source}: ${formatZodIssues(parsed.error.issues)}`,
     );
   }
+
+  // Section presence is captured from the raw doc (pre-zod) because zod's
+  // .optional() collapses "absent" and "explicitly absent". A plain object
+  // check on the raw map is enough — yaml.load returns plain objects for
+  // mappings.
+  const rawDoc = (typeof doc === "object" && doc !== null
+    ? (doc as Record<string, unknown>)
+    : {});
+  const hasTenantScope = Object.prototype.hasOwnProperty.call(rawDoc, "tenant_scope");
+  const hasTableAccess = Object.prototype.hasOwnProperty.call(rawDoc, "table_access");
 
   const ts = parsed.data.tenant_scope;
   const mappings = ts && ts.enabled !== false ? ts.mappings : {};
@@ -117,7 +146,7 @@ export function loadPolicyFile(path: string): LoadedPolicy {
     ? { default: ta.default, tables: ta.tables }
     : null;
 
-  return { mappings, tableAccess };
+  return { mappings, tableAccess, hasTenantScope, hasTableAccess };
 }
 
 function formatZodIssues(issues: z.core.$ZodIssue[]): string {
