@@ -1,6 +1,6 @@
 # midplane-cloud
 
-Hosted Midplane. Sign up via Clerk, paste a Postgres URL, get an MCP endpoint that runs the locked OSS engine (`midplaneai/midplane`) with your encrypted credentials.
+Hosted Midplane. Sign up via Clerk, paste a Postgres URL, get an MCP endpoint that runs the locked OSS engine (`midplane/midplane`) with your encrypted credentials.
 
 This repo CONSUMES the OSS image; it never reimplements the engine. Hosted/self-host parity is mechanically enforced by spawning the same Docker image self-host users run.
 
@@ -30,10 +30,16 @@ bun test                     # vitest baseline
 
 ## OSS image dependency
 
-The router spawns `midplaneai/midplane:0.1.0`. For local dev before that tag is published, build from source:
+The router spawns `midplane/midplane:0.1.0`. The OSS workflow publishes to `midplane/midplane` on Docker Hub; that tag isn't pushed yet, so for local dev build from source:
 
 ```bash
-docker build -t midplaneai/midplane:0.1.0 /path/to/midplaneai/midplane
+docker build -t midplane/midplane:0.1.0 /path/to/midplaneai/midplane
+```
+
+Or use the convenience script (auto-detects `~/dev/midplane`, override with `OSS_REPO=...`):
+
+```bash
+bun run dev:image
 ```
 
 ## What's in scope here
