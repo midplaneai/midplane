@@ -1,6 +1,6 @@
-# Production Dockerfile for `midplaneai/midplane`. Built from the workspace root.
+# Production Dockerfile for `midplane/midplane`. Built from the workspace root.
 #
-#   docker build -f docker/Dockerfile -t midplaneai/midplane:dev .
+#   docker build -f docker/Dockerfile -t midplane/midplane:dev .
 
 # ── Stage 1: deps ─────────────────────────────────────────────────────────────
 FROM oven/bun:1.3-alpine AS deps

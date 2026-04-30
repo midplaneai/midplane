@@ -4,7 +4,7 @@
 #
 # Callers may override these env vars before sourcing; defaults below.
 
-: "${IMAGE:=midplaneai/midplane:dev}"
+: "${IMAGE:=midplane/midplane:dev}"
 : "${PG_NAME:=midplane-test-pg}"
 : "${APP_NAME:=midplane-test-app}"
 : "${NETWORK:=midplane-test-net}"

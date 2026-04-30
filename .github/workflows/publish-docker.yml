@@ -43,7 +43,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            midplaneai/midplane:${{ steps.version.outputs.tag }}
-            midplaneai/midplane:latest
+            midplane/midplane:${{ steps.version.outputs.tag }}
+            midplane/midplane:latest
             ghcr.io/midplaneai/midplane:${{ steps.version.outputs.tag }}
             ghcr.io/midplaneai/midplane:latest

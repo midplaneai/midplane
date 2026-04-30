@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 
 # Friendlier names than the test-image defaults — these will show up in
 # `docker ps` while the user is poking around.
-export IMAGE="${IMAGE:-midplaneai/midplane:dev}"
+export IMAGE="${IMAGE:-midplane/midplane:dev}"
 export PG_NAME="${PG_NAME:-midplane-smoke-pg}"
 export APP_NAME="${APP_NAME:-midplane-smoke-app}"
 export NETWORK="${NETWORK:-midplane-smoke-net}"

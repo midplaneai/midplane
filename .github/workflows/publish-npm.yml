@@ -32,6 +32,26 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
 
+      # npm publish does not rewrite the workspace: protocol, so the published
+      # mcp-server would otherwise ship `"@midplane/engine": "workspace:*"` and
+      # fail to install for downstream consumers. Substitute the literal engine
+      # version we just published before publishing mcp-server.
+      - name: Pin @midplane/engine in mcp-server before publish
+        run: |
+          node -e "
+            const fs = require('fs');
+            const engineVersion = require('./packages/engine/package.json').version;
+            const path = './packages/mcp-server/package.json';
+            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+            for (const dep of Object.keys(pkg.dependencies || {})) {
+              if (pkg.dependencies[dep] === 'workspace:*') {
+                pkg.dependencies[dep] = engineVersion;
+              }
+            }
+            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+            console.log('rewrote workspace:* ->', engineVersion);
+          "
+
       - name: Publish @midplane/mcp-server
         working-directory: packages/mcp-server
         env:

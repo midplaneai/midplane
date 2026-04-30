@@ -10,7 +10,7 @@ docker run -d \
   -e DATABASE_URL=postgres://your-readonly-agent:pass@your-db:5432/your-db \
   -p 8080:8080 \
   -v midplane-audit:/data \
-  midplaneai/midplane:latest
+  midplane/midplane:latest
 ```
 
 The MCP endpoint is at `http://localhost:8080/mcp`. The audit log persists at `/data/audit.db` inside the container; mount a volume to survive restarts.
@@ -87,7 +87,7 @@ Schema: see [packages/engine/src/audit/schema.sql](../packages/engine/src/audit/
 ## Updating
 
 ```bash
-docker pull midplaneai/midplane:latest
+docker pull midplane/midplane:latest
 docker stop midplane && docker rm midplane
 # re-run with the same volume mount; audit log carries over
 ```

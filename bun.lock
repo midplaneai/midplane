@@ -16,7 +16,7 @@
     },
     "packages/engine": {
       "name": "@midplane/engine",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "dependencies": {
         "libpg-query": "^16.7.0",
         "pg": "^8.13.0",
@@ -29,7 +29,7 @@
     },
     "packages/mcp-server": {
       "name": "@midplane/mcp-server",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "bin": {
         "midplane-mcp-server": "./src/index.ts",
       },

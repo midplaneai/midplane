@@ -13,7 +13,7 @@ docker run -d --name midplane \
   -e DATABASE_URL=postgres://your-readonly-agent:pass@your-db:5432/your-db \
   -p 8080:8080 \
   -v midplane-audit:/data \
-  midplaneai/midplane:latest
+  midplane/midplane:latest
 ```
 
 Or, from a clone of this repo, run [`scripts/agent-smoke.sh`](../scripts/agent-smoke.sh). It boots the image with a sidecar Postgres, **seeds a tiny demo schema** (`public.users` and `public.posts`, two rows each), prints all three configs below pre-filled with the right port, and tails `/data/audit.db` so you can watch your agent's traffic land in real time.

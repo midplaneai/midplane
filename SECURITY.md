@@ -18,7 +18,7 @@ Please do not open public issues for vulnerabilities. We treat security reports 
 In scope:
 - The engine (`@midplane/engine`) — parse, policy, audit, execute pipeline
 - The MCP server (`@midplane/mcp-server`)
-- The published Docker image (`midplaneai/midplane`)
+- The published Docker image (`midplane/midplane` on Docker Hub, `ghcr.io/midplaneai/midplane` on GHCR)
 
 Out of scope:
 - Third-party dependencies (libpg_query, MCP SDK, bun:sqlite, etc.) — please report upstream
