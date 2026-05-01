@@ -23,7 +23,7 @@
 // contain "SET LOCAL", which makes the RLS-bind audit harder for
 // reviewers and tests.
 
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 
 import {
   auditEventsIndex,
@@ -59,6 +59,10 @@ export interface ListAuditOpts {
   eventTypes?: readonly EventType[];
   /** Empty/undefined = all tenants. Single value per V1 mockup. */
   tenantId?: string;
+  /** Empty/undefined = all databases. The name is the OSS-side `database:`
+   *  on a connection (the per-DB row in `connection_databases`), not a
+   *  per-client connection. Hits audit_customer_region_database_ts_idx. */
+  database?: string;
   /** Substring match against payload->>'sql_fingerprint' OR query_id. */
   search?: string;
   /** Last id from the previous page (id DESC ordering). Cursor is exclusive. */
@@ -90,6 +94,9 @@ export async function listAuditEvents(
     }
     if (opts.tenantId) {
       filters.push(eq(auditEventsIndex.tenantId, opts.tenantId));
+    }
+    if (opts.database) {
+      filters.push(eq(auditEventsIndex.database, opts.database));
     }
     if (opts.search && opts.search.trim().length > 0) {
       const needle = `%${opts.search.trim()}%`;
@@ -124,8 +131,10 @@ export async function listAuditEvents(
 }
 
 /** Distinct tenant_ids the current customer has audit rows for, used to
- *  populate the tenant filter chip. Capped at 50 — past that, the chip UI
- *  stops being useful and the search box is the better tool. */
+ *  populate the tenant filter chip. ORDER BY before LIMIT so the visible
+ *  set is deterministic when a customer has more than 50 tenants — without
+ *  the sort, Postgres can return any 50 distinct names per query and chips
+ *  would shuffle between requests, hiding some tenants from the UI entirely. */
 export async function listTenantIds(
   customerId: string,
   region: Region,
@@ -140,9 +149,193 @@ export async function listTenantIds(
           eq(auditEventsIndex.region, region),
         ),
       )
+      .orderBy(asc(auditEventsIndex.tenantId))
       .limit(50);
-    return rows.map((r) => r.tenantId).sort();
+    return rows.map((r) => r.tenantId);
   });
+}
+
+/** Distinct database names for the customer in this region. The values are
+ *  the OSS-side `database:` field stamped on each audit row (one row per DB
+ *  attached to a connection). Same ORDER BY before LIMIT contract as
+ *  listTenantIds — without it, customers with >50 DBs would see the chip
+ *  set shuffle and lose the ability to pick certain databases. */
+export async function listDatabases(
+  customerId: string,
+  region: Region,
+): Promise<string[]> {
+  return withCustomerScope(customerId, async (tx) => {
+    const rows = await tx
+      .selectDistinct({ database: auditEventsIndex.database })
+      .from(auditEventsIndex)
+      .where(
+        and(
+          eq(auditEventsIndex.customerId, customerId),
+          eq(auditEventsIndex.region, region),
+        ),
+      )
+      .orderBy(asc(auditEventsIndex.database))
+      .limit(50);
+    return rows.map((r) => r.database);
+  });
+}
+
+export const TERMINAL_STATUSES = ["executed", "denied", "failed"] as const;
+export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
+
+export interface VolumeBucket {
+  /** Bucket start, hour-aligned UTC. */
+  ts: Date;
+  /** Per-terminal-status query counts; missing keys = 0. */
+  counts: Partial<Record<TerminalStatus, number>>;
+}
+
+/** Hourly query volume for the trailing `hours` window, bucketed by terminal
+ *  outcome. One query (one query_id) contributes one count to one bucket —
+ *  not one per lifecycle event — so the chart reads as "queries per hour"
+ *  not "audit rows per hour" (which would triple-count attempted/decided/
+ *  executed). Bucket time = the terminal event's ts.
+ *
+ *  Terminal precedence per query_id:
+ *    EXECUTED          → executed   (allow → ran fine)
+ *    FAILED            → failed     (allow → DB errored)
+ *    DECIDED+deny      → denied     (policy blocked)
+ *    everything else   → dropped    (in-flight ATTEMPTED, allow-only DECIDED
+ *                                    waiting on EXECUTED/FAILED)
+ *
+ *  Hits audit_customer_region_ts_idx for the range scan, then audit_query_id_idx
+ *  via DISTINCT ON. Within a 24h window over one customer this is small. */
+export interface VolumeFilters {
+  /** Empty/undefined = all tenants. Same shape as listAuditEvents. */
+  tenantId?: string;
+  /** Empty/undefined = all databases. */
+  database?: string;
+  /** Substring against query_id OR payload->>'sql_fingerprint'. Restricts
+   *  which queries contribute via a query_id IN (...) subquery so the chart
+   *  matches what the table below it shows. */
+  search?: string;
+}
+
+export async function eventVolumeByHour(
+  customerId: string,
+  region: Region,
+  opts: { hours?: number; now?: () => Date } & VolumeFilters = {},
+): Promise<VolumeBucket[]> {
+  const hours = opts.hours ?? 24;
+  const now = (opts.now ?? (() => new Date()))();
+  // Align to the top of the current hour so buckets land on clean boundaries.
+  const endHour = new Date(now);
+  endHour.setUTCMinutes(0, 0, 0);
+  const since = new Date(endHour.getTime() - (hours - 1) * 3_600_000);
+
+  // Boundary is sent as ISO text + cast to timestamptz on the server side.
+  // postgres-js's raw-unsafe parameter path (used by Drizzle for tx.execute
+  // on a sql template) does not auto-serialize Date — passing a Date directly
+  // throws "argument must be string or Buffer". String + ::timestamptz is
+  // the same wire format the tagged-template path produces.
+  const sinceIso = since.toISOString();
+
+  // Filter fragments composed onto the inner query so the chart honors
+  // exactly the same chips the audit table does. Without this, filtering
+  // to a quiet tenant/db can leave a non-zero chart above an empty table,
+  // which reads as a broken filter.
+  const tenantClause = opts.tenantId
+    ? sql`AND tenant_id = ${opts.tenantId}`
+    : sql``;
+  const databaseClause = opts.database
+    ? sql`AND database = ${opts.database}`
+    : sql``;
+  const searchClause =
+    opts.search && opts.search.trim().length > 0
+      ? (() => {
+          const needle = `%${opts.search.trim()}%`;
+          // Search lives across all lifecycle rows in the listing
+          // (sql_fingerprint is on ATTEMPTED, query_id is everywhere), so
+          // the volume chart inherits the same shape via a query_id IN
+          // (matching) subquery rather than restricting only the inner
+          // EXECUTED/FAILED/DECIDED-deny set.
+          return sql`AND query_id IN (
+            SELECT DISTINCT query_id FROM audit_events_index
+            WHERE customer_id = ${customerId}
+              AND region = ${region}
+              AND ts >= ${sinceIso}::timestamptz
+              AND (
+                query_id ILIKE ${needle}
+                OR payload ->> 'sql_fingerprint' ILIKE ${needle}
+              )
+          )`;
+        })()
+      : sql``;
+
+  const rows = await withCustomerScope(customerId, async (tx) => {
+    // DISTINCT ON (query_id) keeps the row with the lowest precedence_rank
+    // per query, which is the terminal event we want to bucket on.
+    // Allow-only DECIDED rows are filtered out in the WHERE so they don't
+    // shadow the matching EXECUTED/FAILED row for the same query.
+    const rankedSql = sql<{
+      bucket: Date;
+      terminal: string;
+      count: number;
+    }>`
+      SELECT
+        date_trunc('hour', ts) AS bucket,
+        terminal,
+        count(*)::int AS count
+      FROM (
+        SELECT DISTINCT ON (query_id)
+          query_id,
+          ts,
+          CASE event_type
+            WHEN 'EXECUTED' THEN 'executed'
+            WHEN 'FAILED' THEN 'failed'
+            ELSE 'denied'
+          END AS terminal
+        FROM audit_events_index
+        WHERE customer_id = ${customerId}
+          AND region = ${region}
+          AND ts >= ${sinceIso}::timestamptz
+          AND (
+            event_type IN ('EXECUTED', 'FAILED')
+            OR (event_type = 'DECIDED' AND payload ->> 'decision' = 'deny')
+          )
+          ${tenantClause}
+          ${databaseClause}
+          ${searchClause}
+        ORDER BY
+          query_id,
+          CASE event_type
+            WHEN 'EXECUTED' THEN 1
+            WHEN 'FAILED' THEN 2
+            WHEN 'DECIDED' THEN 3
+          END
+      ) AS terminals
+      GROUP BY 1, 2
+    `;
+    const result = await tx.execute(rankedSql);
+    return result as unknown as Array<{
+      bucket: Date | string;
+      terminal: string;
+      count: number;
+    }>;
+  });
+
+  const buckets: VolumeBucket[] = [];
+  const byKey = new Map<number, VolumeBucket>();
+  for (let i = 0; i < hours; i++) {
+    const ts = new Date(since.getTime() + i * 3_600_000);
+    const b: VolumeBucket = { ts, counts: {} };
+    buckets.push(b);
+    byKey.set(ts.getTime(), b);
+  }
+  for (const r of rows) {
+    const key = new Date(r.bucket).getTime();
+    const b = byKey.get(key);
+    if (!b) continue;
+    if ((TERMINAL_STATUSES as readonly string[]).includes(r.terminal)) {
+      b.counts[r.terminal as TerminalStatus] = Number(r.count);
+    }
+  }
+  return buckets;
 }
 
 /** Counts per event_type, used to render the badges next to each filter

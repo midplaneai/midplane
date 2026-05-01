@@ -27,14 +27,17 @@ interface RecordedQuery {
 interface FakeHandle {
   db: ReturnType<typeof drizzle>;
   queries: RecordedQuery[];
-  setNextResult(rows: unknown[][]): void;
+  /** Loose by design: column-decoded SELECTs use tuples; raw `tx.execute()`
+   *  paths return whatever postgres-js would (row objects). Tests pass
+   *  whichever shape matches the call site they're exercising. */
+  setNextResult(rows: readonly unknown[]): void;
 }
 
 let handle: FakeHandle;
 
 function makeFakeDb(): FakeHandle {
   const queries: RecordedQuery[] = [];
-  let nextResult: unknown[][] = [];
+  let nextResult: readonly unknown[] = [];
 
   const makeClient = (inTransaction: boolean): FakeSql => {
     const unsafe = (sql: string, params: unknown[]) => {
@@ -44,7 +47,7 @@ function makeFakeDb(): FakeHandle {
       // (Drizzle uses .values() for SELECTs that go through prepareQuery,
       // and bare .then for ad-hoc client.unsafe in the session.execute path).
       const thenable: PromiseLike<unknown> & {
-        values: () => Promise<unknown[][]>;
+        values: () => Promise<readonly unknown[]>;
         then: PromiseLike<unknown>["then"];
       } = {
         values: () => Promise.resolve(rows),
@@ -191,6 +194,18 @@ describe("listAuditEvents query shape", () => {
     expect(sel.params).toContain("tenant_42");
   });
 
+  it("applies database filter when present (the per-DB connection child)", async () => {
+    handle.setNextResult([]);
+    const { listAuditEvents } = await import("../src/lib/audit.ts");
+    await listAuditEvents(VALID_CUSTOMER_ID, {
+      region: "fra",
+      database: "analytics",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("database");
+    expect(sel.params).toContain("analytics");
+  });
+
   it("emits ILIKE clauses against fingerprint and query_id for search", async () => {
     handle.setNextResult([]);
     const { listAuditEvents } = await import("../src/lib/audit.ts");
@@ -245,6 +260,161 @@ describe("listAuditEvents query shape", () => {
     const result = await listAuditEvents(VALID_CUSTOMER_ID, { region: "fra" });
     expect(result.nextCursor).toBeNull();
     expect(result.rows).toHaveLength(1);
+  });
+});
+
+describe("listDatabases", () => {
+  it("selects distinct database under RLS bind", async () => {
+    handle.setNextResult([["analytics"], ["main"]]);
+    const { listDatabases } = await import("../src/lib/audit.ts");
+    const result = await listDatabases(VALID_CUSTOMER_ID, "fra");
+    expect(result).toEqual(["analytics", "main"]);
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql.toLowerCase()).toContain("distinct");
+    expect(sel.sql).toContain("database");
+    expect(sel.params).toContain(VALID_CUSTOMER_ID);
+    expect(sel.params).toContain("fra");
+    expect(sel.inTransaction).toBe(true);
+  });
+
+  it("orders by database asc BEFORE the LIMIT (deterministic >50 rows)", async () => {
+    handle.setNextResult([]);
+    const { listDatabases } = await import("../src/lib/audit.ts");
+    await listDatabases(VALID_CUSTOMER_ID, "fra");
+    const sel = lastSelect(handle.queries);
+    const lower = sel.sql.toLowerCase();
+    const orderIdx = lower.indexOf("order by");
+    const limitIdx = lower.indexOf("limit");
+    expect(orderIdx, "ORDER BY must be present").toBeGreaterThan(-1);
+    expect(limitIdx, "LIMIT must be present").toBeGreaterThan(-1);
+    expect(orderIdx, "ORDER BY must precede LIMIT").toBeLessThan(limitIdx);
+    expect(sel.params).toContain(50);
+  });
+});
+
+describe("listTenantIds", () => {
+  it("orders by tenant_id asc BEFORE the LIMIT (deterministic >50 rows)", async () => {
+    handle.setNextResult([]);
+    const { listTenantIds } = await import("../src/lib/audit.ts");
+    await listTenantIds(VALID_CUSTOMER_ID, "fra");
+    const sel = lastSelect(handle.queries);
+    const lower = sel.sql.toLowerCase();
+    const orderIdx = lower.indexOf("order by");
+    const limitIdx = lower.indexOf("limit");
+    expect(orderIdx).toBeGreaterThan(-1);
+    expect(limitIdx).toBeGreaterThan(-1);
+    expect(orderIdx).toBeLessThan(limitIdx);
+  });
+});
+
+describe("eventVolumeByHour", () => {
+  it("returns exactly `hours` zero-filled buckets aligned to the hour", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:34:56Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+      hours: 24,
+      now,
+    });
+    expect(buckets).toHaveLength(24);
+    expect(buckets[buckets.length - 1]!.ts.toISOString()).toBe(
+      "2026-04-30T12:00:00.000Z",
+    );
+    expect(buckets[0]!.ts.toISOString()).toBe("2026-04-29T13:00:00.000Z");
+    for (const b of buckets) {
+      expect(b.counts).toEqual({});
+    }
+  });
+
+  it("merges per-terminal-status rows into the matching bucket", async () => {
+    handle.setNextResult([
+      { bucket: new Date("2026-04-30T11:00:00Z"), terminal: "denied", count: 3 },
+      { bucket: new Date("2026-04-30T11:00:00Z"), terminal: "failed", count: 1 },
+      { bucket: new Date("2026-04-30T12:00:00Z"), terminal: "executed", count: 7 },
+    ]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:30:00Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+      hours: 24,
+      now,
+    });
+    const last = buckets[buckets.length - 1]!;
+    const prior = buckets[buckets.length - 2]!;
+    expect(last.counts).toEqual({ executed: 7 });
+    expect(prior.counts).toEqual({ denied: 3, failed: 1 });
+  });
+
+  it("ignores unknown terminal values from the SQL CASE", async () => {
+    handle.setNextResult([
+      { bucket: new Date("2026-04-30T12:00:00Z"), terminal: "wat", count: 9 },
+    ]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:30:00Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+      hours: 24,
+      now,
+    });
+    expect(buckets[buckets.length - 1]!.counts).toEqual({});
+  });
+
+  it("sends the time boundary as ISO text, not a Date (postgres-js raw-unsafe codec rejects Date)", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:30:00Z");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", { hours: 24, now });
+    const sel = lastSelect(handle.queries);
+    const dateParam = sel.params.find((p) => p instanceof Date);
+    expect(dateParam, "no Date should reach the unsafe codec").toBeUndefined();
+    expect(sel.params).toContain("2026-04-29T13:00:00.000Z");
+    expect(sel.sql).toContain("::timestamptz");
+  });
+
+  it("threads tenantId / database / search filters into the volume query (matches table filters)", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+      tenantId: "tenant_42",
+      database: "analytics",
+      search: "users",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("tenant_id");
+    expect(sel.params).toContain("tenant_42");
+    expect(sel.sql).toContain("database");
+    expect(sel.params).toContain("analytics");
+    // Search lifts via a query_id IN (...) subquery so the chart matches
+    // exactly what the listing's search shows.
+    expect(sel.sql.toLowerCase()).toContain("query_id in (");
+    expect(sel.sql.toLowerCase()).toContain("ilike");
+    expect(sel.params).toContain("%users%");
+  });
+
+  it("omits filter clauses when none are passed (no spurious AND fragments)", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra");
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).not.toContain("tenant_id =");
+    expect(sel.sql).not.toContain("database =");
+    expect(sel.sql.toLowerCase()).not.toContain("query_id in (");
+  });
+
+  it("scopes the volume query under the RLS bind, dedupes per query_id, treats deny-only DECIDED as terminal", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra");
+    const sel = lastSelect(handle.queries);
+    expect(sel.inTransaction).toBe(true);
+    const lower = sel.sql.toLowerCase();
+    expect(lower).toContain("date_trunc");
+    expect(lower).toContain("distinct on (query_id)");
+    expect(lower).toContain("group by 1, 2");
+    // DECIDED-allow rows must be filtered out so they don't shadow the
+    // matching EXECUTED row for the same query under DISTINCT ON precedence.
+    expect(sel.sql).toContain("'decision'");
+    expect(sel.sql).toContain("'deny'");
+    expect(sel.sql).toContain("'EXECUTED'");
+    expect(sel.sql).toContain("'FAILED'");
   });
 });
 
