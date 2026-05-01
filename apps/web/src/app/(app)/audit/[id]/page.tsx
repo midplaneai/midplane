@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { EventBadge } from "@/components/audit/event-badge";
+import { PayloadView } from "@/components/audit/payload-view";
 import { relativeTime } from "@/components/audit/relative-time";
 import { StalenessBanner } from "@/components/audit/staleness-banner";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -63,7 +64,6 @@ export default async function AuditDetailPage({ params }: PageProps) {
   }
 
   const related = await getRelatedEvents(customer.id, event.queryId);
-  const payloadJson = JSON.stringify(event.payload, null, 2);
 
   return (
     <>
@@ -131,12 +131,7 @@ export default async function AuditDetailPage({ params }: PageProps) {
               <CardTitle>Payload</CardTitle>
             </CardHeader>
             <CardContent>
-              <pre
-                data-testid="audit-payload"
-                className="whitespace-pre-wrap break-all rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground"
-              >
-                {payloadJson}
-              </pre>
+              <PayloadView eventType={event.eventType} payload={event.payload} />
             </CardContent>
           </Card>
         </div>
