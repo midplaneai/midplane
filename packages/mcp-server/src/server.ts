@@ -11,11 +11,19 @@
 // buildServer() via the transport's serverFactory, so an `/admin/policy`
 // reload that adds or removes a DB will be reflected the next time the
 // agent reconnects (or asks tools/list on a new session).
+//
+// 0.3.0: every tool handler resolves the calling agent's identity via
+// `server.server.getClientVersion()` (populated by the SDK after the
+// MCP `initialize` handshake) and the per-call agent intent via
+// resolveAgentIntent(). Both ride on every audit row the engine emits
+// from this session.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { AgentIntent, EngineContext } from "@midplane/engine";
 import type { EngineHandle } from "./engine-factory.ts";
 import type { TelemetryHandle } from "./telemetry/index.ts";
+import { resolveAgentIntent } from "./intent.ts";
 import {
   QueryInputSchema,
   QueryMultiInputSchema,
@@ -42,7 +50,6 @@ import { handleListDatabases } from "./tools/list-databases.ts";
 
 export interface BuildServerOptions {
   handle: EngineHandle;
-  agentIdentity?: () => string | null;
   telemetry?: TelemetryHandle;
 }
 
@@ -53,25 +60,66 @@ const NOOP_TELEMETRY: TelemetryHandle = {
   async shutdown() {},
 };
 
+// Subset of the SDK's RequestHandlerExtra we read inside tool handlers.
+// Pulling it out keeps the imports off the public surface (the SDK type
+// is generic over server request/notification unions which we don't need).
+interface ToolExtra {
+  _meta?: Record<string, unknown> | undefined;
+  requestInfo?: {
+    headers?: Record<string, string | string[] | undefined> | undefined;
+  };
+}
+
 export function buildServer(opts: BuildServerOptions): McpServer {
   const server = new McpServer({
     name: "midplane-mcp-server",
-    version: "0.2.0",
+    version: "0.3.0",
   });
 
   const telemetry = opts.telemetry ?? NOOP_TELEMETRY;
   const registry = opts.handle.registry;
 
-  // Resolve agent_identity dynamically from the entry's ctxBase. The base
-  // ctx (tenant_id, role, tenant_scope) is per-DB; agent_identity overrides
-  // come from the per-session HTTP transport.
-  const ctxFor = (dbName: string) => {
+  // Resolve agent name+version dynamically from the SDK's per-session
+  // clientInfo (populated after MCP `initialize`). Both fields are
+  // optional in the MCP spec — we coerce missing/empty to null. For
+  // non-MCP callers (audit CLI, raw HTTP) the path that builds the ctx
+  // never runs through here, so this seam is MCP-only by construction.
+  const agentInfo = (): { name: string | null; version: string | null } => {
+    const info = server.server.getClientVersion();
+    if (!info) return { name: null, version: null };
+    const name = typeof info.name === "string" ? info.name.trim() : "";
+    const version =
+      typeof info.version === "string" ? info.version.trim() : "";
+    return {
+      name: name.length > 0 ? name : null,
+      version: version.length > 0 ? version : null,
+    };
+  };
+
+  const ctxFor = (dbName: string): EngineContext => {
     const entry = registry.get(dbName);
+    const { name, version } = agentInfo();
     return {
       ...entry.ctxBase,
-      agent_identity:
-        opts.agentIdentity?.() ?? entry.ctxBase.agent_identity,
+      agent_name: name,
+      agent_version: version,
     };
+  };
+
+  // Per-call: pick intent from `_meta`/SQL comment/header. The resolver
+  // also strips a recognized SQL-comment hint from the forwarded SQL —
+  // tools that pass synthetic SQL (list_tables, describe_table) just see
+  // the original string back since they never include the hint.
+  const resolveIntent = (
+    sql: string,
+    extra: ToolExtra,
+  ): { cleanSql: string; intent: AgentIntent | null } => {
+    const r = resolveAgentIntent({
+      meta: extra._meta,
+      sql,
+      headers: extra.requestInfo?.headers,
+    });
+    return { cleanSql: r.cleanSql, intent: r.intent };
   };
 
   // Tool handlers wrap their engine call in try/finally so the per-tool
@@ -92,14 +140,16 @@ export function buildServer(opts: BuildServerOptions): McpServer {
           "Parses the SQL with libpg_query, applies Midplane policy (table_access, multi_statement, tenant_scope, parse_error), audits the call, and returns rows on ALLOW. Denials return policy_rule + reason; the call is still audited.",
         inputSchema: QueryInputSchema,
       },
-      async (args: QueryArgs) => {
+      async (args: QueryArgs, extra: ToolExtra) => {
         let allowed = false;
         try {
           const entry = registry.get(onlyDb);
+          const { cleanSql, intent } = resolveIntent(args.sql, extra);
           const result = await handleQuery({
             engine: entry.engine,
             ctx: ctxFor(onlyDb),
-            args,
+            args: { sql: cleanSql },
+            intent,
           });
           allowed = !result.isError;
           return result;
@@ -117,14 +167,20 @@ export function buildServer(opts: BuildServerOptions): McpServer {
           "Routed through the same policy + audit pipeline. Defaults to the 'public' schema.",
         inputSchema: ListTablesInputSchema,
       },
-      async (args: ListTablesArgs) => {
+      async (args: ListTablesArgs, extra: ToolExtra) => {
         let allowed = false;
         try {
           const entry = registry.get(onlyDb);
+          // Server-generated SQL — no comment hint can ride on it; only
+          // _meta + header channels meaningfully apply. Pass the SQL
+          // through resolveAgentIntent anyway for consistency (it's a
+          // no-op on synthetic queries).
+          const { intent } = resolveIntent("", extra);
           const result = await handleListTables({
             engine: entry.engine,
             ctx: ctxFor(onlyDb),
             args,
+            intent,
           });
           allowed = !result.isError;
           return result;
@@ -142,14 +198,16 @@ export function buildServer(opts: BuildServerOptions): McpServer {
           "Returns column name, data type, nullability, and default. Routed through the policy + audit pipeline.",
         inputSchema: DescribeTableInputSchema,
       },
-      async (args: DescribeTableArgs) => {
+      async (args: DescribeTableArgs, extra: ToolExtra) => {
         let allowed = false;
         try {
           const entry = registry.get(onlyDb);
+          const { intent } = resolveIntent("", extra);
           const result = await handleDescribeTable({
             engine: entry.engine,
             ctx: ctxFor(onlyDb),
             args,
+            intent,
           });
           allowed = !result.isError;
           return result;
@@ -179,15 +237,17 @@ export function buildServer(opts: BuildServerOptions): McpServer {
         "Parses the SQL with libpg_query, applies Midplane policy for that DB (table_access, multi_statement, tenant_scope, parse_error), audits the call, and returns rows on ALLOW. Denials return policy_rule + reason; the call is still audited.",
       inputSchema: queryMultiSchema,
     },
-    async (args: QueryMultiArgs) => {
+    async (args: QueryMultiArgs, extra: ToolExtra) => {
       let allowed = false;
       const dbName = args.database;
       try {
         const entry = registry.get(dbName);
+        const { cleanSql, intent } = resolveIntent(args.sql, extra);
         const result = await handleQuery({
           engine: entry.engine,
           ctx: ctxFor(dbName),
-          args: { sql: args.sql },
+          args: { sql: cleanSql },
+          intent,
         });
         allowed = !result.isError;
         return result;
@@ -207,16 +267,18 @@ export function buildServer(opts: BuildServerOptions): McpServer {
         "Each underlying call is routed through the per-DB policy + audit pipeline.",
       inputSchema: listTablesMultiSchema,
     },
-    async (args: ListTablesMultiArgs) => {
+    async (args: ListTablesMultiArgs, extra: ToolExtra) => {
       let allowed = false;
       const dbName = args.database;
       try {
+        const { intent } = resolveIntent("", extra);
         if (dbName !== undefined) {
           const entry = registry.get(dbName);
           const result = await handleListTables({
             engine: entry.engine,
             ctx: ctxFor(dbName),
             args: { schema: args.schema },
+            intent,
           });
           allowed = !result.isError;
           return result;
@@ -227,6 +289,7 @@ export function buildServer(opts: BuildServerOptions): McpServer {
           registry,
           ctxFor,
           args: { schema: args.schema },
+          intent,
           recordToolCall: (db, allow) => telemetry.recordToolCall("list_tables", allow, db),
         });
         allowed = !result.isError;
@@ -251,15 +314,17 @@ export function buildServer(opts: BuildServerOptions): McpServer {
         "Returns column name, data type, nullability, and default. Routed through the policy + audit pipeline.",
       inputSchema: describeMultiSchema,
     },
-    async (args: DescribeTableMultiArgs) => {
+    async (args: DescribeTableMultiArgs, extra: ToolExtra) => {
       let allowed = false;
       const dbName = args.database;
       try {
         const entry = registry.get(dbName);
+        const { intent } = resolveIntent("", extra);
         const result = await handleDescribeTable({
           engine: entry.engine,
           ctx: ctxFor(dbName),
           args: { table: args.table, schema: args.schema },
+          intent,
         });
         allowed = !result.isError;
         return result;

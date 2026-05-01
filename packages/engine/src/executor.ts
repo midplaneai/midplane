@@ -14,7 +14,13 @@ export interface ExecutionResult {
 
 export interface ExecuteContext {
   tenant_id: string;
-  agent_identity: string | null;
+  // MCP `clientInfo.name`/`version`, captured at session establish. Both
+  // null for non-MCP callers. The PgPoolExecutor doesn't read these today,
+  // but they're plumbed through so future executors (connection labels,
+  // per-agent rate limits, structured backend logs) can use them without
+  // touching the engine API.
+  agent_name: string | null;
+  agent_version: string | null;
 }
 
 export interface Executor {

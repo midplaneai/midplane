@@ -92,7 +92,8 @@ export function makeEngine(opts: {
 
 export const baseCtx: EngineContext = {
   tenant_id: "42",
-  agent_identity: "test-agent",
+  agent_name: "test-agent",
+  agent_version: "0.0.1",
   role: "agent_readonly",
 };
 

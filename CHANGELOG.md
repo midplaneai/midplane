@@ -4,6 +4,22 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.0] — Unreleased
+
+### Changed (Breaking)
+
+- **Audit row `agent_identity` split into `agent_name` + `agent_version`.** The single combined string was a User-Agent-style cautionary tale — combined strings kill grouping, filtering, and sorting. MCP `initialize` already sends `clientInfo: { name, version }` as separate fields; the audit row now stores them separately. SQLite `audit_events` migrates in place on first 0.3.0 boot: the legacy `agent_identity` column is dropped (it was always `null` because no transport ever populated it) and four new columns are added — `agent_name`, `agent_version`, `agent_intent`, `intent_source`. The `audit_events_index` Postgres mirror schema gains the same columns. **`audit.schema_version` bumps `1 → 2`.** The deny-webhook payload `schema_version` also bumps `1 → 2` and `agent_identity` is replaced with the same four fields. Receivers that pinned to schema 1 must widen their handler.
+- **`EngineContext` and `ExecuteContext`: `agent_identity` removed.** Replaced by `agent_name: string \| null` + `agent_version: string \| null`. Both default to `null` for non-MCP callers.
+
+### Added
+
+- **Agent identity stamped on every audit row.** When the calling agent is an MCP client, `clientInfo.name` and `clientInfo.version` (captured once at the `initialize` handshake) are stamped on every audit row emitted from that session — `ATTEMPTED`, `DECIDED`, `EXECUTED`, `FAILED`. Non-MCP callers (raw HTTP audit pull, admin endpoints) leave both fields `null`. No agent action required: every MCP client already sends `clientInfo`.
+- **Agent intent (per-call) with three resolution channels.** Every audit row now carries an `agent_intent` free-text task description (≤ 500 chars) plus an `intent_source` enum recording which channel won. Channels, in priority order:
+    1. **MCP `_meta.intent`** — MCP reserves `_meta` on requests for implementation-specific data; this is the standards-aligned, first-class slot.
+    2. **SQL comment hint** — `/* midplane:intent="..." */` or `-- midplane:intent: ...` at the head of the query. Stripped from the SQL before it's forwarded to the database (don't change query semantics — just don't send the hint downstream).
+    3. **HTTP header `X-Midplane-Intent`** — for non-MCP HTTP callers. Lowest priority because intermediaries can strip headers.
+  Sanitization trims whitespace, drops control chars, and truncates at 500 chars (truncate, never reject the query). Stamping `intent_source` on the row lets the cloud audit log UI surface "richness of signal" and nudge customers toward the standards-aligned channel.
+
 ## [0.2.0] — Unreleased
 
 ### Added

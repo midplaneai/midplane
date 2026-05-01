@@ -40,9 +40,13 @@ function attempted(opts: {
     id: opts.id ?? "01ATTEMPTED00",
     query_id: opts.query_id,
     tenant_id: "tenant-1",
-    agent_identity: "agent-x",
+    database: "__default__",
+    agent_name: "claude-code",
+    agent_version: "0.42.1",
+    agent_intent: null,
+    intent_source: null,
     ts: opts.ts ?? 1_700_000_000_000,
-    schema_version: 1,
+    schema_version: 2,
     event_type: "ATTEMPTED",
     payload: {
       sql_raw: opts.sql_raw,
@@ -64,9 +68,13 @@ function decidedDeny(opts: {
     id: opts.id ?? "01DECIDED0001",
     query_id: opts.query_id,
     tenant_id: "tenant-1",
-    agent_identity: "agent-x",
+    database: "__default__",
+    agent_name: "claude-code",
+    agent_version: "0.42.1",
+    agent_intent: null,
+    intent_source: null,
     ts: opts.ts ?? 1_700_000_000_000,
-    schema_version: 1,
+    schema_version: 2,
     event_type: "DECIDED",
     payload: {
       decision: "DENY",
@@ -87,9 +95,13 @@ function decidedAllow(opts: {
     id: "01DECIDEDALLOW",
     query_id: opts.query_id,
     tenant_id: "tenant-1",
-    agent_identity: "agent-x",
+    database: "__default__",
+    agent_name: "claude-code",
+    agent_version: "0.42.1",
+    agent_intent: null,
+    intent_source: null,
     ts: 1_700_000_000_000,
-    schema_version: 1,
+    schema_version: 2,
     event_type: "DECIDED",
     payload: {
       decision: "ALLOW",
@@ -218,10 +230,11 @@ describe("DenyWebhookAuditWriter", () => {
     expect(poster.posts).toHaveLength(1);
     const p = poster.posts[0];
     expect(p.event).toBe("denial");
-    expect(p.schema_version).toBe(1);
+    expect(p.schema_version).toBe(2);
     expect(p.query_id).toBe("q1");
     expect(p.tenant_id).toBe("tenant-1");
-    expect(p.agent_identity).toBe("agent-x");
+    expect(p.agent_name).toBe("claude-code");
+    expect(p.agent_version).toBe("0.42.1");
     expect(p.policy_rule).toBe("table_access");
     expect(p.reason).toBe("writes denied");
     expect(p.statement_type).toBe("DELETE");
@@ -399,12 +412,15 @@ describe("DenyWebhookAuditWriter", () => {
 describe("createHttpPoster", () => {
   const samplePayload: DenyWebhookPayload = {
     event: "denial",
-    schema_version: 1,
+    schema_version: 2,
     ts: 1_700_000_000_000,
     query_id: "q1",
     audit_id: "a1",
     tenant_id: "t",
-    agent_identity: null,
+    agent_name: null,
+    agent_version: null,
+    agent_intent: null,
+    intent_source: null,
     policy_rule: "table_access",
     reason: "denied",
     statement_type: null,

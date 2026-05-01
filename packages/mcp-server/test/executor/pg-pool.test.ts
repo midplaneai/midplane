@@ -29,7 +29,11 @@ import {
 } from "../../src/executor/pg-pool.ts";
 import type { ExecuteContext } from "@midplane/engine";
 
-const ctx: ExecuteContext = { tenant_id: "t", agent_identity: null };
+const ctx: ExecuteContext = {
+  tenant_id: "t",
+  agent_name: null,
+  agent_version: null,
+};
 
 // Minimal pg-shaped fake. PgPoolExecutor.execute() calls pool.connect(),
 // then client.query() multiple times, then client.release(). The fake

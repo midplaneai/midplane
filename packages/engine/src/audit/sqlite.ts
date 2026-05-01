@@ -19,12 +19,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(__dirname, "schema.sql");
 
 const INSERT_SQL = `
-  INSERT INTO audit_events (id, query_id, tenant_id, database, agent_identity, ts, event_type, payload, schema_version)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO audit_events (
+    id, query_id, tenant_id, database,
+    agent_name, agent_version, agent_intent, intent_source,
+    ts, event_type, payload, schema_version
+  )
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const READ_SINCE_SQL = `
-  SELECT id, query_id, tenant_id, database, agent_identity, ts, event_type, payload, schema_version
+  SELECT id, query_id, tenant_id, database,
+         agent_name, agent_version, agent_intent, intent_source,
+         ts, event_type, payload, schema_version
   FROM audit_events
   WHERE id > ?
   ORDER BY id
@@ -42,7 +48,10 @@ export interface AuditEventRow {
   query_id: string;
   tenant_id: string;
   database: string;
-  agent_identity: string | null;
+  agent_name: string | null;
+  agent_version: string | null;
+  agent_intent: string | null;
+  intent_source: string | null;
   ts: number;
   event_type: string;
   payload: unknown;
@@ -54,7 +63,10 @@ interface RawAuditRow {
   query_id: string;
   tenant_id: string;
   database: string;
-  agent_identity: string | null;
+  agent_name: string | null;
+  agent_version: string | null;
+  agent_intent: string | null;
+  intent_source: string | null;
   ts: number;
   event_type: string;
   payload: string;
@@ -68,7 +80,18 @@ export class SqliteAuditWriter implements AuditWriter {
   private deleteThroughStmt: ReturnType<Database["prepare"]>;
 
   constructor(path: string, opts: { create?: boolean } = {}) {
-    this.db = new Database(path, { create: opts.create ?? true });
+    // bun:sqlite requires an explicit readwrite/readonly flag whenever
+    // `create` is false; passing `{ create: false }` alone trips its
+    // validation. With `create: true` (our default) the readwrite mode
+    // is implied. Callers like the audit CLI pass `create: false` to
+    // surface a friendly error on a typo'd DB_PATH instead of silently
+    // creating an empty file.
+    this.db = new Database(
+      path,
+      opts.create === false
+        ? { readwrite: true, create: false }
+        : { create: true },
+    );
     this.applySchema();
     this.insertStmt = this.db.prepare(INSERT_SQL);
     this.readSinceStmt = this.db.prepare(READ_SINCE_SQL);
@@ -76,22 +99,46 @@ export class SqliteAuditWriter implements AuditWriter {
   }
 
   private applySchema(): void {
-    // 0.1 → 0.2 migration: a pre-existing audit DB is missing the `database`
-    // column. We ALTER it in place BEFORE running the bundled DDL, because
-    // schema.sql now declares a `CREATE INDEX ... ON audit_events(database,
-    // ts DESC)` that would crash against the legacy table shape. The CREATE
-    // TABLE in schema.sql is `IF NOT EXISTS`, so it's a no-op once the
-    // legacy table exists.
+    // Migrate pre-existing audit DBs in place BEFORE running the bundled DDL,
+    // because schema.sql declares indexes/columns that would crash against a
+    // legacy table shape. The CREATE TABLE in schema.sql is `IF NOT EXISTS`,
+    // so it's a no-op once the legacy table exists.
     const tableExists =
       (this.db
         .query<{ name: string }, []>(
           "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'",
         )
         .get()?.name ?? null) !== null;
-    if (tableExists && !this.hasColumn("audit_events", "database")) {
-      this.db.run(
-        "ALTER TABLE audit_events ADD COLUMN database TEXT NOT NULL DEFAULT '__default__'",
-      );
+    if (tableExists) {
+      // 0.1 → 0.2: add `database` column.
+      if (!this.hasColumn("audit_events", "database")) {
+        this.db.run(
+          "ALTER TABLE audit_events ADD COLUMN database TEXT NOT NULL DEFAULT '__default__'",
+        );
+      }
+      // 0.2 → 0.3: replace single `agent_identity` column with split
+      // `agent_name`/`agent_version`, and add `agent_intent`/`intent_source`.
+      // We add the new columns first; the legacy column is dropped last so a
+      // partially-migrated DB can be re-run idempotently. SQLite's ALTER
+      // TABLE DROP COLUMN landed in 3.35 (March 2021) — Bun ships well past
+      // that, so DROP is the cleanest path. Old rows lose their
+      // agent_identity value, which was always NULL in 0.1.x/0.2.x because
+      // no transport ever populated it.
+      if (!this.hasColumn("audit_events", "agent_name")) {
+        this.db.run("ALTER TABLE audit_events ADD COLUMN agent_name TEXT");
+      }
+      if (!this.hasColumn("audit_events", "agent_version")) {
+        this.db.run("ALTER TABLE audit_events ADD COLUMN agent_version TEXT");
+      }
+      if (!this.hasColumn("audit_events", "agent_intent")) {
+        this.db.run("ALTER TABLE audit_events ADD COLUMN agent_intent TEXT");
+      }
+      if (!this.hasColumn("audit_events", "intent_source")) {
+        this.db.run("ALTER TABLE audit_events ADD COLUMN intent_source TEXT");
+      }
+      if (this.hasColumn("audit_events", "agent_identity")) {
+        this.db.run("ALTER TABLE audit_events DROP COLUMN agent_identity");
+      }
     }
 
     // PRAGMAs in the schema file run during table create. We also explicitly
@@ -128,7 +175,10 @@ export class SqliteAuditWriter implements AuditWriter {
         event.query_id,
         event.tenant_id,
         event.database,
-        event.agent_identity,
+        event.agent_name,
+        event.agent_version,
+        event.agent_intent,
+        event.intent_source,
         event.ts,
         event.event_type,
         JSON.stringify(event.payload),
@@ -152,7 +202,10 @@ export class SqliteAuditWriter implements AuditWriter {
       query_id: r.query_id,
       tenant_id: r.tenant_id,
       database: r.database,
-      agent_identity: r.agent_identity,
+      agent_name: r.agent_name,
+      agent_version: r.agent_version,
+      agent_intent: r.agent_intent,
+      intent_source: r.intent_source,
       ts: r.ts,
       event_type: r.event_type,
       payload: JSON.parse(r.payload),

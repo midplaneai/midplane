@@ -11,11 +11,14 @@ CREATE TABLE IF NOT EXISTS audit_events (
   query_id        TEXT    NOT NULL,              -- ULID; groups all events of one query
   tenant_id       TEXT    NOT NULL,              -- '__self_host__' for OSS, customer ULID for hosted
   database        TEXT    NOT NULL DEFAULT '__default__', -- DB name from `databases:` YAML or '__default__' for legacy single-DB
-  agent_identity  TEXT,                          -- MCP token id or agent fingerprint; NULL if anonymous
+  agent_name      TEXT,                          -- MCP clientInfo.name (e.g. "claude-code"); NULL for non-MCP callers
+  agent_version   TEXT,                          -- MCP clientInfo.version (e.g. "0.42.1"); NULL for non-MCP callers
+  agent_intent    TEXT,                          -- per-call free-text task description (≤ 500 chars); NULL when no channel populated
+  intent_source   TEXT,                          -- 'mcp_meta' | 'sql_comment' | 'http_header'; NULL when agent_intent is NULL
   ts              INTEGER NOT NULL,              -- ms epoch (use unixepoch * 1000 for ts in Postgres mirror)
   event_type      TEXT    NOT NULL,              -- ATTEMPTED | DECIDED | EXECUTED | FAILED | POLICY_RELOADED
   payload         TEXT    NOT NULL,              -- JSON; shape determined by event_type (see audit-types.ts)
-  schema_version  INTEGER NOT NULL DEFAULT 1     -- bump on payload schema break; indexer reads multiple versions
+  schema_version  INTEGER NOT NULL DEFAULT 2     -- bump on payload schema break; indexer reads multiple versions
   -- Hash-chain extension (added in V2 for compliance buyer):
   -- prev_hash    TEXT,                           -- SHA-256 of previous row's (id || payload)
   -- signature    TEXT                            -- HMAC-SHA-256 of (id || prev_hash || payload) with per-tenant key
@@ -46,15 +49,19 @@ PRAGMA temp_store = MEMORY;
 --   tenant_id       TEXT        NOT NULL,            -- customer's internal tenant scope (e.g. their org_id)
 --   database        TEXT        NOT NULL DEFAULT '__default__',  -- DB name from `databases:` YAML
 --   query_id        TEXT        NOT NULL,
---   agent_identity  TEXT,
+--   agent_name      TEXT,                            -- MCP clientInfo.name
+--   agent_version   TEXT,                            -- MCP clientInfo.version
+--   agent_intent    TEXT,                            -- per-call task description (≤ 500 chars)
+--   intent_source   TEXT        CHECK (intent_source IS NULL OR intent_source IN ('mcp_meta','sql_comment','http_header')),
 --   ts              TIMESTAMPTZ NOT NULL,
 --   event_type      TEXT        NOT NULL CHECK (event_type IN ('ATTEMPTED','DECIDED','EXECUTED','FAILED','POLICY_RELOADED')),
 --   payload         JSONB       NOT NULL,
---   schema_version  INTEGER     NOT NULL DEFAULT 1
+--   schema_version  INTEGER     NOT NULL DEFAULT 2
 -- );
 -- CREATE INDEX ON audit_events_index (customer_id, ts DESC);
 -- CREATE INDEX ON audit_events_index (customer_id, event_type, ts DESC);
 -- CREATE INDEX ON audit_events_index (query_id);
+-- CREATE INDEX ON audit_events_index (customer_id, agent_name, ts DESC);  -- group/filter by agent in the audit UI
 -- CREATE INDEX ON audit_events_index ((payload->>'sql_fingerprint')) WHERE event_type = 'ATTEMPTED';
 -- ALTER TABLE audit_events_index ENABLE ROW LEVEL SECURITY;
 -- CREATE POLICY tenant_isolation ON audit_events_index USING (customer_id = current_setting('app.customer_id'));

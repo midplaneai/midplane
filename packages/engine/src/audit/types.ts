@@ -39,6 +39,16 @@ export const PolicyRule = {
 } as const;
 export type PolicyRule = (typeof PolicyRule)[keyof typeof PolicyRule];
 
+// Channels a per-call agent intent string can come from. Stamped on every
+// audit row alongside `agent_intent` so consumers can show where the signal
+// came from and nudge customers toward the standards-aligned channel.
+export const IntentSource = {
+  MCP_META: "mcp_meta",
+  SQL_COMMENT: "sql_comment",
+  HTTP_HEADER: "http_header",
+} as const;
+export type IntentSource = (typeof IntentSource)[keyof typeof IntentSource];
+
 // ─── Payload schemas (one per event type) ───────────────────────────────────
 
 // ATTEMPTED — agent intent. Recorded before policy evaluation. Cannot be redacted later.
@@ -107,15 +117,34 @@ export type PolicyReloadedPayload = z.infer<typeof PolicyReloadedPayload>;
 // dimension on this without renaming any existing payload field.
 const DatabaseName = z.string().min(1).max(32);
 
+// `agent_name`/`agent_version` are split (NOT a combined User-Agent-style
+// string) because MCP `initialize` carries `clientInfo: { name, version }`
+// as separate fields and we want the cloud's audit log UI to group, filter,
+// and sort on each independently.
+const AgentName = z.string().min(1).max(128).nullable();
+const AgentVersion = z.string().min(1).max(64).nullable();
+
+// `agent_intent` is the per-call free-text task description. Resolved from
+// MCP `_meta.intent`, an SQL comment hint, or an HTTP header (in that
+// priority order). Capped at 500 chars at the resolver — zod is the
+// belt-and-suspenders defense.
+const AgentIntent = z.string().min(1).max(500).nullable();
+const IntentSourceEnum = z
+  .enum([IntentSource.MCP_META, IntentSource.SQL_COMMENT, IntentSource.HTTP_HEADER])
+  .nullable();
+
 export const AuditEvent = z.discriminatedUnion("event_type", [
   z.object({
     id: z.string(),
     query_id: z.string(),
     tenant_id: z.string(),
     database: DatabaseName,
-    agent_identity: z.string().nullable(),
+    agent_name: AgentName,
+    agent_version: AgentVersion,
+    agent_intent: AgentIntent,
+    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     event_type: z.literal("ATTEMPTED"),
     payload: AttemptedPayload,
   }),
@@ -124,9 +153,12 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     query_id: z.string(),
     tenant_id: z.string(),
     database: DatabaseName,
-    agent_identity: z.string().nullable(),
+    agent_name: AgentName,
+    agent_version: AgentVersion,
+    agent_intent: AgentIntent,
+    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     event_type: z.literal("DECIDED"),
     payload: DecidedPayload,
   }),
@@ -135,9 +167,12 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     query_id: z.string(),
     tenant_id: z.string(),
     database: DatabaseName,
-    agent_identity: z.string().nullable(),
+    agent_name: AgentName,
+    agent_version: AgentVersion,
+    agent_intent: AgentIntent,
+    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     event_type: z.literal("EXECUTED"),
     payload: ExecutedPayload,
   }),
@@ -146,9 +181,12 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     query_id: z.string(),
     tenant_id: z.string(),
     database: DatabaseName,
-    agent_identity: z.string().nullable(),
+    agent_name: AgentName,
+    agent_version: AgentVersion,
+    agent_intent: AgentIntent,
+    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     event_type: z.literal("FAILED"),
     payload: FailedPayload,
   }),
@@ -157,9 +195,16 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     query_id: z.string(),
     tenant_id: z.string(),
     database: DatabaseName,
-    agent_identity: z.string().nullable(),
+    // POLICY_RELOADED has no calling agent; both names and intent are
+    // always null. They're still on the row so every event in the union
+    // has the same column shape (the indexer's `isValidAuditRow` check
+    // doesn't have to special-case POLICY_RELOADED).
+    agent_name: z.null(),
+    agent_version: z.null(),
+    agent_intent: z.null(),
+    intent_source: z.null(),
     ts: z.number().int(),
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     event_type: z.literal("POLICY_RELOADED"),
     payload: PolicyReloadedPayload,
   }),

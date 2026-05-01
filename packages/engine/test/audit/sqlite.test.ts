@@ -30,9 +30,12 @@ function attempted(id: string, queryId: string, ts: number): AuditEvent {
     query_id: queryId,
     tenant_id: "42",
     database: "__default__",
-    agent_identity: "tok-1",
+    agent_name: "claude-code",
+    agent_version: "0.42.1",
+    agent_intent: null,
+    intent_source: null,
     ts,
-    schema_version: 1,
+    schema_version: 2,
     event_type: "ATTEMPTED",
     payload: {
       sql_raw: "SELECT 1",
@@ -49,11 +52,11 @@ describe("SqliteAuditWriter — schema + basic write", () => {
     await w.close();
   });
 
-  test("schema_version round-trips as integer 1", async () => {
+  test("schema_version round-trips as integer 2", async () => {
     const w = new SqliteAuditWriter(dbPath);
     await w.write(attempted("01TESTID000000000000000002", "Q1", 1_700_000_000_000));
     const rows = w._readAll() as Array<{ schema_version: number }>;
-    expect(rows[0]!.schema_version).toBe(1);
+    expect(rows[0]!.schema_version).toBe(2);
     await w.close();
   });
 
@@ -260,6 +263,84 @@ describe("SqliteAuditWriter — 0.1 → 0.2 migration", () => {
   });
 });
 
+describe("SqliteAuditWriter — 0.2 → 0.3 migration", () => {
+  test("legacy DB with agent_identity column has it dropped + new columns added", async () => {
+    // Simulate a 0.2.x audit DB shape: post-`database` ALTER but pre-split.
+    const probe = new Database(dbPath);
+    probe.run(`
+      CREATE TABLE audit_events (
+        id TEXT PRIMARY KEY,
+        query_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        database TEXT NOT NULL DEFAULT '__default__',
+        agent_identity TEXT,
+        ts INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        schema_version INTEGER NOT NULL DEFAULT 1
+      );
+    `);
+    probe.run(
+      "INSERT INTO audit_events (id, query_id, tenant_id, database, agent_identity, ts, event_type, payload, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        "01LEGACY00000000000000023A",
+        "Q-LEG",
+        "42",
+        "__default__",
+        null,
+        1_700_000_000_000,
+        "ATTEMPTED",
+        '{"sql_raw":"SELECT 1","sql_fingerprint":"0123456789abcdef"}',
+        1,
+      ],
+    );
+    probe.close();
+
+    const w = new SqliteAuditWriter(dbPath);
+
+    // Verify the column shape changed in place.
+    const probe2 = new Database(dbPath);
+    const cols = probe2.query("PRAGMA table_info(audit_events)").all() as Array<{
+      name: string;
+    }>;
+    probe2.close();
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).not.toContain("agent_identity");
+    expect(colNames).toContain("agent_name");
+    expect(colNames).toContain("agent_version");
+    expect(colNames).toContain("agent_intent");
+    expect(colNames).toContain("intent_source");
+
+    // Pre-existing row survives with NULL on the new columns.
+    const rows = w.readSince("0", 100);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.agent_name).toBeNull();
+    expect(rows[0]!.agent_version).toBeNull();
+    expect(rows[0]!.agent_intent).toBeNull();
+    expect(rows[0]!.intent_source).toBeNull();
+
+    // New writes populate the split columns.
+    await w.write(attempted("01LEGACY00000000000000023B", "Q-NEW", 1_700_000_000_001));
+    const after = w.readSince("0", 100);
+    expect(after[1]!.agent_name).toBe("claude-code");
+    expect(after[1]!.agent_version).toBe("0.42.1");
+    await w.close();
+  });
+
+  test("re-running migration on already-migrated DB is a no-op", async () => {
+    // First open creates the new schema from scratch.
+    const w1 = new SqliteAuditWriter(dbPath);
+    await w1.write(attempted("01TESTID000000000000IDEM01", "Q1", 1_700_000_000_000));
+    await w1.close();
+
+    // Second open against the same file should not throw — every ALTER is
+    // gated on hasColumn() so the migration is idempotent.
+    const w2 = new SqliteAuditWriter(dbPath);
+    expect(w2._count()).toBe(1);
+    await w2.close();
+  });
+});
+
 describe("SqliteAuditWriter — payload validation", () => {
   test("invalid event_type rejected before insert", async () => {
     const w = new SqliteAuditWriter(dbPath);
@@ -268,9 +349,12 @@ describe("SqliteAuditWriter — payload validation", () => {
       query_id: "Q1",
       tenant_id: "42",
       database: "__default__",
-      agent_identity: null,
+      agent_name: null,
+      agent_version: null,
+      agent_intent: null,
+      intent_source: null,
       ts: 1_700_000_000_000,
-      schema_version: 1 as const,
+      schema_version: 2 as const,
       event_type: "BANANA" as never,
       payload: { sql_raw: "x", sql_fingerprint: "0123456789abcdef" },
     };
@@ -286,9 +370,12 @@ describe("SqliteAuditWriter — payload validation", () => {
       query_id: "Q1",
       tenant_id: "42",
       database: "__default__",
-      agent_identity: null,
+      agent_name: null,
+      agent_version: null,
+      agent_intent: null,
+      intent_source: null,
       ts: 1_700_000_000_000,
-      schema_version: 1,
+      schema_version: 2,
       event_type: "ATTEMPTED",
       payload: { sql_raw: "x", sql_fingerprint: "not-hex" },
     };

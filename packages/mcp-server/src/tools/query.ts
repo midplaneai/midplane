@@ -10,7 +10,7 @@
 // values come from the registry's names).
 
 import { z } from "zod";
-import type { Engine, EngineContext } from "@midplane/engine";
+import type { AgentIntent, Engine, EngineContext } from "@midplane/engine";
 
 const SqlSchema = z
   .string()
@@ -51,10 +51,12 @@ export async function handleQuery(input: {
   engine: Engine;
   ctx: EngineContext;
   args: QueryArgs;
+  intent?: AgentIntent | null;
 }): Promise<ToolResult> {
   const decision = await input.engine.handle({
     sql: input.args.sql,
     ctx: input.ctx,
+    intent: input.intent ?? null,
   });
 
   if (decision.allowed) {

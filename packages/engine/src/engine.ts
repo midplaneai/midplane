@@ -18,14 +18,27 @@ import type { Executor, ExecutionResult } from "./executor.ts";
 import type { Rule } from "./policy/rules/index.ts";
 import { evaluate } from "./policy/index.ts";
 import { parse } from "./parser/parse.ts";
-import { AuditEvent } from "./audit/types.ts";
+import { AuditEvent, type IntentSource } from "./audit/types.ts";
 import { AuditUnavailableError } from "./errors.ts";
 
 export type EngineContext = {
   tenant_id: string;
-  agent_identity: string | null;
+  // MCP `clientInfo.name`/`version`, captured at MCP `initialize` and
+  // cached on the session. Both null for non-MCP callers (raw HTTP, CLI).
+  // Stamped on every audit row emitted from the session.
+  agent_name: string | null;
+  agent_version: string | null;
   role?: string;
   tenant_scope?: { mappings: Record<string, string> };
+};
+
+// Per-call free-text task description plus the channel it was resolved
+// from. Resolution lives in the transport layer (mcp-server) because the
+// channels — MCP `_meta.intent`, SQL comment hint, HTTP header — are
+// transport-specific. The engine only sees the post-resolution result.
+export type AgentIntent = {
+  value: string;
+  source: IntentSource;
 };
 
 export type Decision =
@@ -68,9 +81,14 @@ export class Engine {
     this.idGen = opts.idGen ?? ulid;
   }
 
-  async handle(input: { sql: string; ctx: EngineContext }): Promise<Decision> {
+  async handle(input: {
+    sql: string;
+    ctx: EngineContext;
+    intent?: AgentIntent | null;
+  }): Promise<Decision> {
     const start = this.now();
     const queryId = this.idGen();
+    const intent = input.intent ?? null;
 
     // ── 1. parse — never throws past here. A WASM crash converts to a
     //    synthetic parse-failure ParseResult so ATTEMPTED still records
@@ -94,9 +112,12 @@ export class Engine {
       query_id: queryId,
       tenant_id: input.ctx.tenant_id,
       database: this.databaseName,
-      agent_identity: input.ctx.agent_identity,
+      agent_name: input.ctx.agent_name,
+      agent_version: input.ctx.agent_version,
+      agent_intent: intent?.value ?? null,
+      intent_source: intent?.source ?? null,
       ts: this.now(),
-      schema_version: 1,
+      schema_version: 2,
       event_type: "ATTEMPTED",
       payload: {
         sql_raw: input.sql.length === 0 ? " " : input.sql.slice(0, 1_048_576),
@@ -137,9 +158,12 @@ export class Engine {
             query_id: queryId,
             tenant_id: input.ctx.tenant_id,
             database: this.databaseName,
-            agent_identity: input.ctx.agent_identity,
+            agent_name: input.ctx.agent_name,
+            agent_version: input.ctx.agent_version,
+            agent_intent: intent?.value ?? null,
+            intent_source: intent?.source ?? null,
             ts: this.now(),
-            schema_version: 1,
+            schema_version: 2,
             event_type: "DECIDED",
             payload: {
               decision: "ALLOW",
@@ -152,9 +176,12 @@ export class Engine {
             query_id: queryId,
             tenant_id: input.ctx.tenant_id,
             database: this.databaseName,
-            agent_identity: input.ctx.agent_identity,
+            agent_name: input.ctx.agent_name,
+            agent_version: input.ctx.agent_version,
+            agent_intent: intent?.value ?? null,
+            intent_source: intent?.source ?? null,
             ts: this.now(),
-            schema_version: 1,
+            schema_version: 2,
             event_type: "DECIDED",
             payload: {
               decision: "DENY",
@@ -184,7 +211,8 @@ export class Engine {
     try {
       execResult = await this.executor.execute(input.sql, {
         tenant_id: input.ctx.tenant_id,
-        agent_identity: input.ctx.agent_identity,
+        agent_name: input.ctx.agent_name,
+        agent_version: input.ctx.agent_version,
       });
     } catch (err) {
       const failed: AuditEvent = {
@@ -192,9 +220,12 @@ export class Engine {
         query_id: queryId,
         tenant_id: input.ctx.tenant_id,
         database: this.databaseName,
-        agent_identity: input.ctx.agent_identity,
+        agent_name: input.ctx.agent_name,
+        agent_version: input.ctx.agent_version,
+        agent_intent: intent?.value ?? null,
+        intent_source: intent?.source ?? null,
         ts: this.now(),
-        schema_version: 1,
+        schema_version: 2,
         event_type: "FAILED",
         payload: {
           exec_ms: Math.max(0, this.now() - execStart),
@@ -217,9 +248,12 @@ export class Engine {
       query_id: queryId,
       tenant_id: input.ctx.tenant_id,
       database: this.databaseName,
-      agent_identity: input.ctx.agent_identity,
+      agent_name: input.ctx.agent_name,
+      agent_version: input.ctx.agent_version,
+      agent_intent: intent?.value ?? null,
+      intent_source: intent?.source ?? null,
       ts: this.now(),
-      schema_version: 1,
+      schema_version: 2,
       event_type: "EXECUTED",
       payload: {
         exec_ms: Math.max(0, this.now() - execStart),

@@ -310,7 +310,12 @@ function makeEngineEntry(
 
   const ctxBase: EngineContext = {
     tenant_id: cfg.tenantId,
-    agent_identity: null,
+    // Per-session agent name/version come from MCP `clientInfo` and are
+    // overlaid by buildServer's ctxFor — ctxBase carries the null
+    // defaults so non-MCP callers (admin endpoints, future tooling) get
+    // a well-typed ctx without crossing the MCP layer.
+    agent_name: null,
+    agent_version: null,
     role: "agent_readonly",
     ...(Object.keys(spec.mappings).length > 0
       ? { tenant_scope: { mappings: spec.mappings } }
@@ -460,9 +465,14 @@ async function finalizeReload(
       query_id: ulid(),
       tenant_id: cfg.tenantId,
       database: s.name,
-      agent_identity: null,
+      // POLICY_RELOADED is operator-driven — there's no calling agent
+      // and no per-call intent. Always null.
+      agent_name: null,
+      agent_version: null,
+      agent_intent: null,
+      intent_source: null,
       ts: Date.now(),
-      schema_version: 1,
+      schema_version: 2,
       event_type: "POLICY_RELOADED",
       payload: {
         source,

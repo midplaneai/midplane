@@ -8,7 +8,8 @@ import type { VisitorRule, VisitorScope } from "../visitor.ts";
 
 export interface EngineContextLike {
   tenant_id: string;
-  agent_identity: string | null;
+  agent_name: string | null;
+  agent_version: string | null;
   role?: string;
   tenant_scope?: { mappings: Record<string, string> };
 }

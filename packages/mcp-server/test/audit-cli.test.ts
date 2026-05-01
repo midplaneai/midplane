@@ -9,6 +9,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { SqliteAuditWriter, type AuditEvent } from "@midplane/engine";
 import { parseDuration } from "../src/audit-cli.ts";
 
@@ -46,9 +47,12 @@ async function writeEvent(
     query_id: `Q${n}`,
     tenant_id: "__self_host__",
     database: "__default__",
-    agent_identity: "test-agent",
+    agent_name: "test-agent",
+    agent_version: "0.0.1",
+    agent_intent: null,
+    intent_source: null,
     ts,
-    schema_version: 1 as const,
+    schema_version: 2 as const,
   };
   switch (partial.event_type) {
     case "ATTEMPTED":
@@ -342,6 +346,60 @@ describe("midplane audit dispatch", () => {
     });
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/cannot open/);
+  });
+});
+
+describe("midplane audit on a pre-migration audit DB", () => {
+  test("0.2-shape DB (agent_identity column, no agent_name) is migrated on first invocation", async () => {
+    // Tear down the writer the test harness created so we can replace
+    // its file with a 0.2-shape DB that the CLI must migrate.
+    await writer.close();
+    rmSync(dbPath, { force: true });
+
+    const probe = new Database(dbPath);
+    probe.run(`
+      CREATE TABLE audit_events (
+        id              TEXT    PRIMARY KEY,
+        query_id        TEXT    NOT NULL,
+        tenant_id       TEXT    NOT NULL,
+        database        TEXT    NOT NULL DEFAULT '__default__',
+        agent_identity  TEXT,
+        ts              INTEGER NOT NULL,
+        event_type      TEXT    NOT NULL,
+        payload         TEXT    NOT NULL,
+        schema_version  INTEGER NOT NULL DEFAULT 1
+      );
+    `);
+    probe.run(
+      "INSERT INTO audit_events (id, query_id, tenant_id, database, agent_identity, ts, event_type, payload, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        "01LEGACY000000000000000001",
+        "Q-LEG",
+        "__self_host__",
+        "__default__",
+        null,
+        // Recent ts so `audit since 1h` includes the row.
+        Date.now() - 60_000,
+        "ATTEMPTED",
+        '{"sql_raw":"SELECT 1","sql_fingerprint":"0123456789abcdef"}',
+        1,
+      ],
+    );
+    probe.close();
+
+    // Reopen the writer so afterEach has something valid to close.
+    writer = new SqliteAuditWriter(dbPath);
+
+    const r = await runCli(["audit", "since", "1h"]);
+    expect(r.exitCode).toBe(0);
+    // Pre-migration row surfaces with the new column shape (nulls on the
+    // split fields) instead of the binary crashing.
+    expect(r.stdout).toContain("01LEGACY000000000000000001");
+    const parsed = JSON.parse(r.stdout.trim());
+    expect(parsed.agent_name).toBeNull();
+    expect(parsed.agent_version).toBeNull();
+    expect(parsed.agent_intent).toBeNull();
+    expect(parsed.intent_source).toBeNull();
   });
 });
 

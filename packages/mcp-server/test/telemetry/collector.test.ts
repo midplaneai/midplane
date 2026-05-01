@@ -6,16 +6,19 @@ import {
 } from "../../src/telemetry/collector.ts";
 
 const TID = "tenant-x";
-const AID = "agent-x";
 
 function event(partial: Partial<AuditEvent> & { event_type: AuditEvent["event_type"]; payload: AuditEvent["payload"] }): AuditEvent {
   return {
     id: "01TEST000000000000000000",
     query_id: "01QUERY00000000000000000",
     tenant_id: TID,
-    agent_identity: AID,
+    database: "__default__",
+    agent_name: "agent-x",
+    agent_version: "1.0.0",
+    agent_intent: null,
+    intent_source: null,
     ts: 1_700_000_000_000,
-    schema_version: 1,
+    schema_version: 2,
     ...partial,
   } as AuditEvent;
 }

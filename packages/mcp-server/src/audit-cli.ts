@@ -11,6 +11,7 @@
 // admin shouldn't need to provision just to read their own log.
 
 import { Database } from "bun:sqlite";
+import { SqliteAuditWriter } from "@midplane/engine";
 
 const DEFAULT_DB_PATH = "/data/audit.db";
 // Override only used by the regression test for the rowid-cursor fix.
@@ -23,7 +24,10 @@ interface RawRow {
   query_id: string;
   tenant_id: string;
   database: string;
-  agent_identity: string | null;
+  agent_name: string | null;
+  agent_version: string | null;
+  agent_intent: string | null;
+  intent_source: string | null;
   ts: number;
   event_type: string;
   payload: string;
@@ -62,6 +66,24 @@ function dbPath(): string {
 }
 
 function openDb(): Database {
+  // Run schema migrations BEFORE the read-only handle opens. An operator
+  // who upgraded the binary to 0.3.x but whose audit DB is still 0.2-shape
+  // would otherwise hit `no such column: agent_name` on the very first
+  // SELECT — the CLI's column list assumes the post-migration shape. By
+  // constructing an SqliteAuditWriter here we let its applySchema() walk
+  // the same in-place ALTERs the server runs at boot. The writer is
+  // closed immediately; subsequent opens hit the fast-path (every
+  // hasColumn() check returns true, no ALTERs run).
+  try {
+    const migrator = new SqliteAuditWriter(dbPath(), { create: false });
+    migrator.close();
+  } catch (err) {
+    process.stderr.write(
+      `midplane audit: cannot open ${dbPath()}: ${(err as Error).message}\n`,
+    );
+    process.exit(1);
+  }
+
   // readwrite (not readonly) because the audit DB is in WAL mode: a pure
   // readonly connection can't initialize the -shm file when no writer is
   // attached, and fails with SQLITE_CANTOPEN on the first query. We compensate
@@ -87,7 +109,10 @@ function rowToJson(r: RawRow): string {
     query_id: r.query_id,
     tenant_id: r.tenant_id,
     database: r.database,
-    agent_identity: r.agent_identity,
+    agent_name: r.agent_name,
+    agent_version: r.agent_version,
+    agent_intent: r.agent_intent,
+    intent_source: r.intent_source,
     ts: r.ts,
     event_type: r.event_type,
     payload: JSON.parse(r.payload),
@@ -102,7 +127,7 @@ function rowToJson(r: RawRow): string {
 // insert whose random suffix happens to sort below the previously emitted id.
 // `rowid` is strictly monotonic for new inserts, which is what tail needs.
 const SELECT_COLS =
-  "rowid, id, query_id, tenant_id, database, agent_identity, ts, event_type, payload, schema_version";
+  "rowid, id, query_id, tenant_id, database, agent_name, agent_version, agent_intent, intent_source, ts, event_type, payload, schema_version";
 
 async function tail(args: string[]): Promise<void> {
   const opts = parseFlags(args, { backfill: String(TAIL_BACKFILL_DEFAULT), follow: "true" });
@@ -225,9 +250,12 @@ async function stats(args: string[]): Promise<void> {
     )
     .all(cutoff);
 
+  // Group by agent_name (not agent_version) — version granularity drowns
+  // out the top-N. Operators digging into a specific agent can filter
+  // further with `audit since` + jq.
   const byAgent = db
     .query<StatsRow, [number]>(
-      `SELECT COALESCE(agent_identity, '<anon>') AS k, COUNT(DISTINCT query_id) AS n
+      `SELECT COALESCE(agent_name, '<anon>') AS k, COUNT(DISTINCT query_id) AS n
        FROM audit_events WHERE ts >= ? GROUP BY k ORDER BY n DESC LIMIT 10`,
     )
     .all(cutoff);

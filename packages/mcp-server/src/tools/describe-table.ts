@@ -6,7 +6,7 @@
 // target DB.
 
 import { z } from "zod";
-import type { Engine, EngineContext } from "@midplane/engine";
+import type { AgentIntent, Engine, EngineContext } from "@midplane/engine";
 import type { ToolResult } from "./query.ts";
 
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -41,6 +41,7 @@ export async function handleDescribeTable(input: {
   engine: Engine;
   ctx: EngineContext;
   args: DescribeTableArgs;
+  intent?: AgentIntent | null;
 }): Promise<ToolResult> {
   const table = input.args.table;
   const schema = input.args.schema ?? "public";
@@ -59,7 +60,11 @@ export async function handleDescribeTable(input: {
     `WHERE table_schema = '${schema}' AND table_name = '${table}' ` +
     `ORDER BY ordinal_position`;
 
-  const decision = await input.engine.handle({ sql, ctx: input.ctx });
+  const decision = await input.engine.handle({
+    sql,
+    ctx: input.ctx,
+    intent: input.intent ?? null,
+  });
 
   if (!decision.allowed) {
     return {

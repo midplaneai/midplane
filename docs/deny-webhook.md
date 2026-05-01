@@ -22,12 +22,15 @@ URL must be `http://` or `https://`; anything else fails fast at boot.
 ```json
 {
   "event": "denial",
-  "schema_version": 1,
+  "schema_version": 2,
   "ts": 1730000000000,
   "query_id": "01HXXX...",
   "audit_id": "01HXXX...",
   "tenant_id": "__self_host__",
-  "agent_identity": null,
+  "agent_name": "claude-code",
+  "agent_version": "0.42.1",
+  "agent_intent": "investigating slow query",
+  "intent_source": "mcp_meta",
   "policy_rule": "writes_require_approval",
   "reason": "Midplane denied this query because writes require approval.",
   "statement_type": "DELETE",
@@ -36,6 +39,19 @@ URL must be `http://` or `https://`; anything else fails fast at boot.
   "sql_truncated": false
 }
 ```
+
+`agent_name` and `agent_version` come from the MCP `clientInfo` sent on
+`initialize`; both are `null` for non-MCP callers. `agent_intent` is the
+free-text task description resolved from (in priority) MCP `_meta.intent`,
+an `/* midplane:intent="..." */` SQL comment, or the
+`X-Midplane-Intent` HTTP header — `null` when no channel populated it.
+`intent_source` records which channel won (`"mcp_meta"`, `"sql_comment"`,
+`"http_header"`, or `null`).
+
+Receivers that pinned to `schema_version: 1` should widen their handler:
+the prior `agent_identity` field is gone, replaced by separate
+`agent_name`/`agent_version`, plus the new `agent_intent` and
+`intent_source` keys.
 
 `sql_preview` is truncated at 1024 characters; `sql_truncated` flags when truncation occurred. Both are empty/false when the engine could not match an `ATTEMPTED` row to the denial (rare — only happens under buffer pressure).
 
