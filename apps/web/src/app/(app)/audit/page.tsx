@@ -134,6 +134,13 @@ export default async function AuditListPage({ searchParams }: PageProps) {
             </thead>
             <tbody>
               {list.rows.map((r) => (
+                // Whole-row click target via the stretched-link pattern:
+                // the <tr> is `relative`, the first cell carries a
+                // <Link> with a `before:absolute before:inset-0`
+                // pseudo-element that fills the row, and the rest of the
+                // cells are inert. Single anchor (so middle-click for new
+                // tab and keyboard nav still work) and the entire row is
+                // clickable, including dead space between cells.
                 <tr
                   key={r.attemptedEventId}
                   data-testid="audit-row"
@@ -141,38 +148,36 @@ export default async function AuditListPage({ searchParams }: PageProps) {
                   data-status={r.status}
                   data-tenant-id={r.tenantId}
                   data-database={r.database}
-                  className="border-b border-card transition-colors hover:bg-card"
+                  className="relative border-b border-card transition-colors hover:bg-card"
                 >
                   <Td className="whitespace-nowrap font-mono text-[11px] text-subtle">
-                    <Link href={`/audit/${r.headEventId}`}>
+                    <Link
+                      href={`/audit/${r.headEventId}`}
+                      aria-label={`Open audit event ${r.queryId ?? r.attemptedEventId}`}
+                      className="before:absolute before:inset-0 before:z-0 before:content-['']"
+                    >
                       {relativeTime(r.startedAt)}
                     </Link>
                   </Td>
                   <Td>
-                    <Link href={`/audit/${r.headEventId}`}>
-                      <StatusBadge status={r.status} />
-                    </Link>
+                    <StatusBadge status={r.status} />
                   </Td>
                   <Td>
-                    <Link href={`/audit/${r.headEventId}`}>
-                      <AgentCell
-                        name={r.agentName}
-                        version={r.agentVersion}
-                      />
-                    </Link>
+                    <AgentCell
+                      name={r.agentName}
+                      version={r.agentVersion}
+                    />
                   </Td>
                   <Td>
-                    <Link
-                      href={`/audit/${r.headEventId}`}
+                    <span
                       title={r.agentIntent ?? undefined}
                       className="block max-w-[280px] truncate text-foreground"
                     >
                       {r.agentIntent ?? <span className="text-subtle">—</span>}
-                    </Link>
+                    </span>
                   </Td>
                   <Td>
-                    <Link
-                      href={`/audit/${r.headEventId}`}
+                    <span
                       title={r.sqlRaw ?? r.sqlFingerprint ?? undefined}
                       className="block max-w-[420px] truncate font-mono text-xs text-foreground"
                     >
@@ -181,12 +186,10 @@ export default async function AuditListPage({ searchParams }: PageProps) {
                           {r.sqlFingerprint ?? "—"}
                         </span>
                       )}
-                    </Link>
+                    </span>
                   </Td>
                   <Td className="whitespace-nowrap text-right font-mono text-[11px] text-subtle">
-                    <Link href={`/audit/${r.headEventId}`}>
-                      {formatDuration(r.execMs)}
-                    </Link>
+                    {formatDuration(r.execMs)}
                   </Td>
                 </tr>
               ))}
