@@ -246,6 +246,34 @@ export function serializeMultiDbPolicyToYaml(
 // no quoting required for unquoted YAML emission.
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+// --- Legacy single-DB serializer (admin hot-reload) -------------------------
+//
+// Used only by the admin /admin/policy hot-reload path (packages/router/
+// src/admin.ts), which sends a single-DB policy body to a running engine.
+// Spawn-time YAML emission goes through serializeMultiDbPolicyToYaml above;
+// once the multi-DB hot-reload story lands (PR-B / PR-C), this can collapse
+// into a single emitter that wraps either shape.
+//
+// The `table_access:` wrapper is required — OSS PolicyFileSchema reads
+// `table_access.default` and `table_access.tables` as the legacy shape.
+// Table names pass TABLE_NAME_RE so they never need YAML quoting.
+export function serializePolicyToYaml(policy: TableAccessPolicy): string {
+  const lines: string[] = ["table_access:"];
+  lines.push(`  default: ${policy.default}`);
+  const entries = Object.entries(policy.tables).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  if (entries.length === 0) {
+    lines.push("  tables: {}");
+  } else {
+    lines.push("  tables:");
+    for (const [name, level] of entries) {
+      lines.push(`    ${name}: ${level}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
 function isAccessLevel(v: unknown): v is AccessLevel {
   return (
     typeof v === "string" &&

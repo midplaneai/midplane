@@ -155,13 +155,48 @@ export interface RotationCaches {
   registry: { invalidate(token: string): Promise<void> };
 }
 
-// Replace the table_access policy on a connection's main DB. The DSN-side
-// cache stays valid (DSN didn't change), but the running OSS container is
-// holding the old policy file, so we invalidate the registry and let the
-// next agent request respawn with the new YAML mounted in.
+// Dependencies setTableAccess needs to push the new policy to the
+// running engine (preferred path) or, if that fails non-recoverably,
+// fall back to stop-and-respawn.
+export interface PolicyPushDeps {
+  registry: { invalidate(token: string): Promise<void> };
+  pushPolicy(
+    token: string,
+    policy: TableAccessPolicy,
+  ): Promise<
+    | { delivered: true }
+    | { delivered: false }
+    | { rejected: { status: number; body: string } }
+  >;
+}
+
+// Thrown when the engine's POST /admin/policy returned 400 — engine
+// kept the previous policy intact, so the running session is fine; the
+// caller (server action) should surface `body` to the user. Cloud's
+// validatePolicy already passed, so this signals validator drift
+// between cloud and engine — should be unreachable.
+export class EnginePolicyRejected extends Error {
+  constructor(public readonly engineMessage: string) {
+    super(`engine rejected policy: ${engineMessage}`);
+    this.name = "EnginePolicyRejected";
+  }
+}
+
+// Replace the table_access policy on a connection's main DB. Preferred
+// path is hot-reload via POST /admin/policy on the running engine — the
+// agent's MCP session stays alive and a POLICY_RELOADED audit event is
+// emitted. If no container is running OR the engine doesn't expose the
+// endpoint, the Postgres write alone is enough; the next spawn reads
+// the new policy from PG. On a 5xx/401/network failure we fall back to
+// stop-and-respawn (matches rotateConnection's fail-soft posture). On
+// 400 we do NOT fall back — engine kept the old policy, so the running
+// session is fine; respawn would re-read the now-rejected policy from
+// PG and fail the spawn. Caller surfaces the engine's validator
+// message to the user.
 //
-// PR-A scope: single-DB. The main child is the only DB on each connection;
-// add-second-DB flow lands in PR-C with an explicit dbName argument.
+// PR-A scope: single-DB. The main child is the only DB on each
+// connection; add-second-DB flow lands in PR-C with an explicit dbName
+// argument.
 //
 // Returns null when the id is unknown OR owned by another customer
 // (mirrors the leakage-avoidance shape of rotateConnection / delete).
@@ -173,7 +208,7 @@ export async function setTableAccess(
   customer: Customer,
   id: string,
   policy: TableAccessPolicy,
-  caches: { registry: { invalidate(token: string): Promise<void> } },
+  deps: PolicyPushDeps,
 ): Promise<{ mcpToken: string } | null> {
   const validation = validatePolicy(policy);
   if (!validation.ok) {
@@ -211,14 +246,30 @@ export async function setTableAccess(
 
   if (!result) return null;
 
-  // Same fail-soft posture as rotateConnection: the durable fact (new
-  // policy in Postgres) is committed; if invalidate throws, the next
-  // idle expiry catches up. Worst case is one stale request window —
-  // the same race rotation already accepts.
   try {
-    await caches.registry.invalidate(result.mcpToken);
+    const pushResult = await deps.pushPolicy(result.mcpToken, validation.value);
+    if ("rejected" in pushResult) {
+      // Engine kept the previous policy. Don't fall back — respawn
+      // would re-read this same (rejected) policy from PG and fail to
+      // boot. Surface the engine's message to the caller.
+      console.error(
+        "[setTableAccess] engine rejected policy (validator drift)",
+        pushResult.rejected,
+      );
+      throw new EnginePolicyRejected(pushResult.rejected.body);
+    }
+    // delivered=true → engine swapped in place; delivered=false → no
+    // active container, next spawn reads from PG. Either way we're done.
   } catch (err) {
-    console.error("[setTableAccess] registry.invalidate failed", err);
+    if (err instanceof EnginePolicyRejected) throw err;
+    // 5xx / 401 / network — fall back to invalidate so the next agent
+    // request respawns with the new policy from PG. Same fail-soft
+    // posture as rotateConnection.
+    console.error(
+      "[setTableAccess] hot reload failed; falling back to respawn",
+      err,
+    );
+    await deps.registry.invalidate(result.mcpToken).catch(() => undefined);
   }
 
   return result;

@@ -161,7 +161,14 @@ function makeFakeDb(): FakeDbHandle {
       childUpdate = rows;
     },
     setConnectionsReturning(rows) {
+      // Used by both deleteConnection (DELETE…RETURNING on connections)
+      // and setTableAccess (SELECT mcpToken FROM connections for the
+      // ownership check). Same fixture data, different read paths in the
+      // post-0009 (multi-DB) shape; populating both keeps the existing
+      // setTableAccess tests working without forcing each call site to
+      // pick the right setter.
       deletedConnections = rows;
+      parentSelect = rows.map((r) => ({ ...r, region: "fra" }));
     },
   };
 }
@@ -243,7 +250,7 @@ describe("deleteConnection", () => {
     const { indexerCursors } = await import("@midplane-cloud/db");
     const { deleteConnection } = await import("../src/lib/connections.ts");
     const result = await deleteConnection(customer, "conn-1");
-    expect(result).toEqual({ mcpToken: "tok-1" });
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
     const cursorDelete = handle.calls.find(
       (c) => c.table === indexerCursors,
     );
@@ -374,5 +381,124 @@ describe("rotateConnection", () => {
     expect(caches.registry.invalidate).toHaveBeenCalledTimes(1);
     expect(caches.registry.invalidate).toHaveBeenCalledWith("tok-1");
     errorSpy.mockRestore();
+  });
+});
+
+interface PolicyDepsSpy {
+  registry: { invalidate: ReturnType<typeof vi.fn> };
+  pushPolicy: ReturnType<typeof vi.fn>;
+}
+
+function makePolicyDeps(
+  pushResult: unknown | (() => unknown | Promise<unknown>) = {
+    delivered: true,
+  },
+): PolicyDepsSpy {
+  return {
+    registry: { invalidate: vi.fn(async () => undefined) },
+    pushPolicy: vi.fn(async () => {
+      if (typeof pushResult === "function") {
+        return (pushResult as () => unknown)();
+      }
+      return pushResult;
+    }),
+  };
+}
+
+const goodPolicy = {
+  default: "read",
+  tables: { "public.users": "deny" },
+} as const;
+
+describe("setTableAccess", () => {
+  it("happy path: writes Postgres, hot-reloads engine, does NOT invalidate", async () => {
+    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    const { setTableAccess } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", goodPolicy);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("idle-agent path: delivered=false short-circuits without invalidate", async () => {
+    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    const { setTableAccess } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: false });
+
+    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
+    expect(deps.pushPolicy).toHaveBeenCalledTimes(1);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rejected (400): throws EnginePolicyRejected, does NOT fall back to invalidate", async () => {
+    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    const { setTableAccess, EnginePolicyRejected } = await import(
+      "../src/lib/connections.ts"
+    );
+    const deps = makePolicyDeps({
+      rejected: { status: 400, body: "tables.foo: must be one of …" },
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      setTableAccess(customer, "conn-1", goodPolicy, deps),
+    ).rejects.toBeInstanceOf(EnginePolicyRejected);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("network failure: falls back to registry.invalidate (fail-soft, like rotateConnection)", async () => {
+    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    const { setTableAccess } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps(() => {
+      throw new Error("ECONNREFUSED");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
+    expect(deps.registry.invalidate).toHaveBeenCalledWith("tok-1");
+    errorSpy.mockRestore();
+  });
+
+  it("404 path: returns null and skips push/invalidate when ownership mismatches", async () => {
+    handle.setConnectionsReturning([]);
+    const { setTableAccess } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    const result = await setTableAccess(
+      customer,
+      "conn-other",
+      goodPolicy,
+      deps,
+    );
+
+    expect(result).toBeNull();
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed policies before touching Postgres", async () => {
+    const { setTableAccess } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    await expect(
+      setTableAccess(
+        customer,
+        "conn-1",
+        { default: "bogus", tables: {} } as unknown as Parameters<
+          typeof setTableAccess
+        >[2],
+        deps,
+      ),
+    ).rejects.toThrow(/invalid policy/);
+    expect(handle.calls).toHaveLength(0);
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
   });
 });

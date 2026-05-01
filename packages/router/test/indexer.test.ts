@@ -504,6 +504,40 @@ describe("Indexer", () => {
     expect((inserted as { schemaVersion: number }).schemaVersion).toBe(99);
   });
 
+  it("accepts POLICY_RELOADED rows (cloud-driven hot reload event)", async () => {
+    // Engine emits POLICY_RELOADED on a successful POST /admin/policy
+    // hot-swap. Cloud must index it like any other audit event so
+    // operators see the change in the connection-detail audit log.
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [
+          {
+            ...row("01HX0000000000000000000001"),
+            event_type: "POLICY_RELOADED",
+            payload: { reason: "cloud admin POST" },
+          },
+        ],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const errors: unknown[] = [];
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onError: (err) => errors.push(err),
+    });
+    await ix.tick();
+
+    expect(state.auditRows).toHaveLength(1);
+    expect(
+      (state.auditRows[0] as unknown as { eventType: string }).eventType,
+    ).toBe("POLICY_RELOADED");
+    expect(errors).toHaveLength(0);
+  });
+
   it("drops schema-invalid rows but advances cursor past them", async () => {
     const { db, state, registry } = await buildHarness();
     const fetchFn = vi.fn(async () =>
