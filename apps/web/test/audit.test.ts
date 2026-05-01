@@ -328,7 +328,7 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql).toContain("attempted_event_id <");
   });
 
-  it("threads the now() cutoff into the STUCK threshold parameter", async () => {
+  it("threads the now() cutoff into the STUCK threshold as ISO text + ::timestamptz cast", async () => {
     handle.setNextResult([]);
     const fixedNow = new Date("2026-04-30T12:00:30Z"); // 30s after a target last_ts
     const { listAuditQueries } = await import("../src/lib/audit.ts");
@@ -337,13 +337,14 @@ describe("listAuditQueries query shape", () => {
       now: () => fixedNow,
     });
     const sel = lastSelect(handle.queries);
-    // Cutoff = now - 30s = 2026-04-30T12:00:00Z. Drizzle binds Date as a
-    // Date object in params, so check by ISO equivalence.
-    const stuckBind = sel.params.find(
-      (p): p is Date => p instanceof Date,
-    );
-    expect(stuckBind).toBeDefined();
-    expect(stuckBind!.toISOString()).toBe("2026-04-30T12:00:00.000Z");
+    // Cutoff = now - 30s = 2026-04-30T12:00:00Z, sent as ISO text. A bare
+    // Date here would 500 at runtime — postgres-js's raw-unsafe parameter
+    // codec rejects Date with "argument must be string or Buffer". Guard
+    // the shape so the regression can't reappear silently.
+    const dateParam = sel.params.find((p) => p instanceof Date);
+    expect(dateParam, "no Date should reach the unsafe codec").toBeUndefined();
+    expect(sel.params).toContain("2026-04-30T12:00:00.000Z");
+    expect(sel.sql).toContain("::timestamptz");
   });
 
   it("computes nextCursor when pageSize+1 rows are returned", async () => {

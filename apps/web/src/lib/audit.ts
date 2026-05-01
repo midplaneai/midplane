@@ -147,7 +147,11 @@ export async function listAuditQueries(
 ): Promise<ListAuditResult> {
   const limit = opts.pageSize ?? 50;
   const nowMs = (opts.now?.() ?? new Date()).getTime();
-  const stuckCutoff = new Date(nowMs - STUCK_THRESHOLD_MS);
+  // ISO text + ::timestamptz cast: postgres-js's raw-unsafe parameter
+  // codec (the path Drizzle uses for tx.execute on a sql template) does
+  // not auto-serialize Date, so binding a Date here throws
+  // "argument must be string or Buffer". Same pattern as eventVolumeByHour.
+  const stuckCutoffIso = new Date(nowMs - STUCK_THRESHOLD_MS).toISOString();
 
   return withCustomerScope(customerId, async (tx) => {
     // Inner WHERE narrows the rows that participate in aggregation. Search
@@ -262,7 +266,7 @@ export async function listAuditQueries(
             WHEN has_executed THEN 'ALLOWED'
             WHEN has_failed THEN 'FAILED'
             WHEN has_decided AND lower(decision) = 'deny' THEN 'DENIED'
-            WHEN last_ts < ${stuckCutoff} THEN 'STUCK'
+            WHEN last_ts < ${stuckCutoffIso}::timestamptz THEN 'STUCK'
             ELSE 'PENDING'
           END AS status
         FROM agg
@@ -562,7 +566,11 @@ export async function countByStatus(
     PENDING: 0,
     POLICY_RELOAD: 0,
   };
-  const stuckCutoff = new Date(now().getTime() - STUCK_THRESHOLD_MS);
+  // ISO text + ::timestamptz cast: see listAuditQueries above for the
+  // postgres-js raw-unsafe Date-codec rationale. Same fix applies here.
+  const stuckCutoffIso = new Date(
+    now().getTime() - STUCK_THRESHOLD_MS,
+  ).toISOString();
   return withCustomerScope(customerId, async (tx) => {
     // Single statement: query lifecycles classified by status, plus a
     // POLICY_RELOAD bucket so operators can see at a glance how many
@@ -587,7 +595,7 @@ export async function countByStatus(
           WHEN has_executed THEN 'ALLOWED'
           WHEN has_failed THEN 'FAILED'
           WHEN has_decided AND lower(decision) = 'deny' THEN 'DENIED'
-          WHEN last_ts < ${stuckCutoff} THEN 'STUCK'
+          WHEN last_ts < ${stuckCutoffIso}::timestamptz THEN 'STUCK'
           ELSE 'PENDING'
         END AS status,
         count(*)::int AS count
