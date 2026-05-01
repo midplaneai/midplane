@@ -1,5 +1,12 @@
+"use client";
+
 import {
-  TERMINAL_STATUSES,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   type TerminalStatus,
   type VolumeBucket,
 } from "@/lib/audit";
@@ -27,7 +34,10 @@ const LABEL: Record<TerminalStatus, string> = {
   failed: "Failed",
 };
 
-export function VolumeSparkline({ buckets, label = "Query volume, last 24 hours" }: Props) {
+export function VolumeSparkline({
+  buckets,
+  label = "Query volume, last 24 hours",
+}: Props) {
   const totalQueries = buckets.reduce(
     (sum, b) => sum + sumBucket(b.counts),
     0,
@@ -57,47 +67,111 @@ export function VolumeSparkline({ buckets, label = "Query volume, last 24 hours"
         </span>
         <Legend />
       </div>
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={label}
-        className="block h-10 w-full"
-      >
-        {buckets.map((b, i) => {
-          const total = sumBucket(b.counts);
-          if (total === 0) return null;
-          const x = i * (colW + gap);
-          let yCursor = h;
-          const segs: React.ReactNode[] = [];
-          for (const t of STACK_ORDER) {
-            const c = b.counts[t] ?? 0;
-            if (c === 0) continue;
-            const segH = (c / max) * h;
-            yCursor -= segH;
-            segs.push(
-              <rect
-                key={t}
-                x={x}
-                y={yCursor}
-                width={colW}
-                height={segH}
-                fill={FILL[t]}
-              />,
+      <TooltipProvider delayDuration={80} skipDelayDuration={120}>
+        <svg
+          viewBox={`0 0 ${w} ${h}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={label}
+          className="block h-10 w-full overflow-visible"
+        >
+          {buckets.map((b, i) => {
+            const total = sumBucket(b.counts);
+            const x = i * (colW + gap);
+            // Empty buckets get an invisible hover catcher so users can still
+            // hit them — otherwise hover gaps make the chart feel laggy.
+            return (
+              <Tooltip key={i}>
+                <TooltipTrigger asChild>
+                  <g
+                    className="cursor-default outline-none focus:outline-none"
+                    tabIndex={-1}
+                  >
+                    <rect
+                      x={x}
+                      y={0}
+                      width={colW}
+                      height={h}
+                      fill="transparent"
+                    />
+                    {(() => {
+                      if (total === 0) return null;
+                      let yCursor = h;
+                      const segs: React.ReactNode[] = [];
+                      for (const t of STACK_ORDER) {
+                        const c = b.counts[t] ?? 0;
+                        if (c === 0) continue;
+                        const segH = (c / max) * h;
+                        yCursor -= segH;
+                        segs.push(
+                          <rect
+                            key={t}
+                            x={x}
+                            y={yCursor}
+                            width={colW}
+                            height={segH}
+                            fill={FILL[t]}
+                          />,
+                        );
+                      }
+                      return segs;
+                    })()}
+                  </g>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="center">
+                  <BucketTooltip bucket={b} />
+                </TooltipContent>
+              </Tooltip>
             );
-          }
-          return (
-            <g key={i}>
-              {segs}
-              <title>{tooltip(b)}</title>
-            </g>
-          );
-        })}
-      </svg>
+          })}
+        </svg>
+      </TooltipProvider>
       <div className="mt-1 flex justify-between font-mono text-[10px] text-subtle">
         <span>{first ? hourLabel(first) : ""}</span>
         <span>{last ? hourLabel(last) : ""}</span>
       </div>
+    </div>
+  );
+}
+
+function BucketTooltip({ bucket }: { bucket: VolumeBucket }) {
+  const total = sumBucket(bucket.counts);
+  return (
+    <div className="min-w-[140px] space-y-1">
+      <div className="flex items-baseline justify-between gap-3 border-b border-border pb-1">
+        <span className="font-mono text-[11px] text-subtle">
+          {hourRange(bucket.ts)}
+        </span>
+        <span className="font-mono text-[11px] text-foreground">
+          {total} {total === 1 ? "query" : "queries"}
+        </span>
+      </div>
+      {total === 0 ? (
+        <div className="text-[11px] text-muted-foreground">No queries</div>
+      ) : (
+        <ul className="space-y-0.5">
+          {STACK_ORDER.map((t) => {
+            const c = bucket.counts[t] ?? 0;
+            if (c === 0) return null;
+            return (
+              <li
+                key={t}
+                className="flex items-center justify-between gap-3 text-[11px]"
+              >
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <span
+                    className="inline-block h-2 w-2 rounded-[1px]"
+                    style={{ background: FILL[t] }}
+                    aria-hidden
+                  />
+                  {LABEL[t]}
+                </span>
+                <span className="font-mono text-foreground">{c}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -125,17 +199,13 @@ function sumBucket(c: VolumeBucket["counts"]): number {
   return s;
 }
 
-function tooltip(b: VolumeBucket): string {
-  const total = sumBucket(b.counts);
-  const parts = STACK_ORDER.filter((t) => (b.counts[t] ?? 0) > 0).map(
-    (t) => `${b.counts[t]} ${t}`,
-  );
-  return `${hourLabel(b.ts)} · ${total} ${total === 1 ? "query" : "queries"}${
-    parts.length > 0 ? ` (${parts.join(", ")})` : ""
-  }`;
-}
-
 function hourLabel(d: Date): string {
   const hh = d.getUTCHours().toString().padStart(2, "0");
   return `${hh}:00`;
+}
+
+function hourRange(d: Date): string {
+  const start = hourLabel(d);
+  const end = hourLabel(new Date(d.getTime() + 3_600_000));
+  return `${start}–${end} UTC`;
 }
