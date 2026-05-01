@@ -181,7 +181,7 @@ function DatabaseList({
   return (
     <div className="ml-4 mb-4 mt-1 overflow-hidden rounded-md border border-border bg-card">
       <Link
-        href={`/connections/${connectionId}`}
+        href={`/connections/${connectionId}/databases/${dbName}`}
         className="flex min-h-[44px] items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
       >
         <FreshnessDot state={freshness} />
@@ -252,10 +252,11 @@ async function renameAction(formData: FormData) {
   const renamed = await renameConnection(customer, formId, name);
   if (!renamed) notFound();
   revalidatePath("/dashboard");
-  // Detail page renders conn.name in the title and topbar; settings page
-  // renders it in the topbar + delete-confirm label. Both go stale on
-  // rename if they were prefetched or recently visited — bust both.
-  revalidatePath(`/connections/${formId}`);
+  // Per-DB detail pages render conn.name in the topbar; settings renders
+  // it in the topbar + delete-confirm label. Bust both. The bracketed
+  // path revalidates every concrete /connections/[id]/databases/[name]
+  // path under this connection without us having to enumerate them.
+  revalidatePath(`/connections/[id]/databases/[name]`, "page");
   revalidatePath(`/connections/${formId}/settings`);
 }
 

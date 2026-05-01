@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-// Inline rotate form rendered on /connections/[id]. The Server Action passed
-// in via `action` re-encrypts and atomically swaps the ciphertext + invalidates
-// the in-memory caches; this component just collects the new DSN and shows a
+// Inline rotate form rendered on the per-DB detail page. The Server Action
+// passed in via `action` closes over the URL's connection id + db name,
+// re-encrypts, and atomically swaps the ciphertext + invalidates the
+// in-memory caches; this component just collects the new DSN and shows a
 // pending state during the round-trip.
 //
 // We keep error rendering simple (a small banner). Server Actions surface
