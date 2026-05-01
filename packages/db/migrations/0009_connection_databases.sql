@@ -33,10 +33,12 @@ CREATE INDEX "connection_databases_connection_id_idx"
 --> statement-breakpoint
 
 -- Backfill: one child row per existing connection, name='main', credentials
--- copied verbatim. The child id is freshly generated (random hex) so it does
--- not collide with the parent id; parent and child remain joinable on
--- connection_id. Pre-launch — hex IDs are acceptable here even though new
--- code generates ULIDs; the column is text and nothing parses the format.
+-- copied verbatim. The child id is freshly generated via gen_random_uuid
+-- (built-in to PG 13+ — no extension required, unlike pgcrypto's
+-- gen_random_bytes) so it does not collide with the parent id; parent
+-- and child remain joinable on connection_id. Pre-launch — UUID-shaped
+-- IDs are acceptable here even though new code generates ULIDs; the
+-- column is text and nothing parses the format.
 INSERT INTO "connection_databases" (
   "id",
   "connection_id",
@@ -50,7 +52,7 @@ INSERT INTO "connection_databases" (
   "created_at"
 )
 SELECT
-  encode(gen_random_bytes(16), 'hex'),
+  gen_random_uuid()::text,
   "id",
   'main',
   "encrypted_dsn",
