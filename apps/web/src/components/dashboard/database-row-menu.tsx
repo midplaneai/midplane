@@ -14,8 +14,9 @@ import {
 
 // Per-DB [⋯] menu rendered next to each database row on the dashboard.
 // Three items: rotate DSN (links to the per-DB detail route, where the
-// rotate form lives), rename DB, and remove DB. Rename/remove are
-// stubbed in this commit and become functional in PR-C step 4.
+// rotate form lives), rename DB, and remove DB. The parent row owns
+// the rename / remove modals and passes click handlers down so the
+// menu's onSelect can flip them into the visible state.
 //
 // Removal of the only DB on a connection is blocked at the lib layer
 // (LastDatabaseProtected); the menu also disables the Remove item when
@@ -26,10 +27,14 @@ export function DatabaseRowMenu({
   connectionId,
   dbName,
   disableRemove,
+  onRename,
+  onRemove,
 }: {
   connectionId: string;
   dbName: string;
   disableRemove: boolean;
+  onRename: () => void;
+  onRemove: () => void;
 }) {
   return (
     <DropdownMenu>
@@ -52,8 +57,10 @@ export function DatabaseRowMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          disabled
-          title="Rename arrives in the next release"
+          onSelect={(e) => {
+            e.preventDefault();
+            onRename();
+          }}
         >
           Rename database
         </DropdownMenuItem>
@@ -65,6 +72,10 @@ export function DatabaseRowMenu({
               ? "A connection must keep at least one database"
               : undefined
           }
+          onSelect={(e) => {
+            e.preventDefault();
+            if (!disableRemove) onRemove();
+          }}
         >
           Remove database
         </DropdownMenuItem>

@@ -1,20 +1,17 @@
-import { Database, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
-import {
-  type ConnectionDatabase,
-  type TableAccessPolicy,
-} from "@midplane-cloud/db";
+import { type ConnectionDatabase } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { CopyButton } from "@/components/copy-button";
 import { AddDatabaseForm } from "@/components/dashboard/add-database-form";
 import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
-import { DatabaseRowMenu } from "@/components/dashboard/database-row-menu";
+import { DatabaseRow } from "@/components/dashboard/database-row";
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
 import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
 import { SetupAgentControl } from "@/components/dashboard/setup-agent-control";
@@ -32,8 +29,11 @@ import {
   deleteConnection,
   isValidDatabaseName,
   isValidDsn,
+  LastDatabaseProtected,
   listDashboardConnections,
+  removeDatabase,
   renameConnection,
+  renameDatabase,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
@@ -181,46 +181,22 @@ function DatabaseList({
   freshness: Freshness;
 }) {
   const disableRemove = databases.length <= 1;
+  const lastQuery = lastQueryLabel(lastQueryAt);
   return (
     <div className="ml-4 mb-4 mt-1 overflow-hidden rounded-md border border-border bg-card">
       <ul className="divide-y divide-border">
-        {databases.map((db) => {
-          const policy = db.tableAccess as TableAccessPolicy;
-          const tableCount = Object.keys(policy.tables ?? {}).length;
-          return (
-            <li
-              key={db.id}
-              className="group relative flex min-h-[44px] items-center"
-            >
-              <Link
-                href={`/connections/${connectionId}/databases/${db.name}`}
-                className="flex flex-1 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
-              >
-                <FreshnessDot state={freshness} />
-                <Database
-                  className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-                  strokeWidth={1.5}
-                  aria-hidden
-                />
-                <span className="font-mono text-sm text-foreground">
-                  {db.name}
-                </span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {accessLabel(policy.default)} · {tableCount}{" "}
-                  {tableCount === 1 ? "table" : "tables"} ·{" "}
-                  {lastQueryLabel(lastQueryAt)}
-                </span>
-              </Link>
-              <div className="pr-2">
-                <DatabaseRowMenu
-                  connectionId={connectionId}
-                  dbName={db.name}
-                  disableRemove={disableRemove}
-                />
-              </div>
-            </li>
-          );
-        })}
+        {databases.map((db) => (
+          <DatabaseRow
+            key={db.id}
+            connectionId={connectionId}
+            database={db}
+            freshness={freshness}
+            lastQueryLabel={lastQuery}
+            disableRemove={disableRemove}
+            removeAction={removeDatabaseAction}
+            renameAction={renameDatabaseAction}
+          />
+        ))}
       </ul>
       <AddDatabaseForm
         connectionId={connectionId}
@@ -228,13 +204,6 @@ function DatabaseList({
       />
     </div>
   );
-}
-
-function accessLabel(level: string): string {
-  if (level === "read") return "read";
-  if (level === "deny") return "deny";
-  if (level === "read_write") return "read · write";
-  return level;
 }
 
 function lastQueryLabel(lastIndexedAt: Date | null): string {
@@ -293,6 +262,77 @@ async function deleteAction(formData: FormData) {
     });
   }
   revalidatePath("/dashboard");
+}
+
+async function removeDatabaseAction(formData: FormData) {
+  "use server";
+  const customer = await currentCustomer();
+  if (!customer) redirect("/");
+
+  const connectionId = formData.get("connectionId");
+  const dbName = formData.get("name");
+  if (typeof connectionId !== "string" || connectionId.length === 0) {
+    throw new Error("missing connectionId");
+  }
+  if (typeof dbName !== "string" || dbName.length === 0) {
+    throw new Error("missing name");
+  }
+
+  const ctx = getMcpProxyContext();
+  try {
+    const result = await removeDatabase(customer, connectionId, dbName, ctx);
+    if (!result) notFound();
+  } catch (err) {
+    if (err instanceof LastDatabaseProtected) {
+      throw new Error(
+        "Can't remove the only database. Add another first or delete the connection.",
+      );
+    }
+    throw err;
+  }
+  revalidatePath("/dashboard");
+}
+
+async function renameDatabaseAction(formData: FormData) {
+  "use server";
+  const customer = await currentCustomer();
+  if (!customer) redirect("/");
+
+  const connectionId = formData.get("connectionId");
+  const oldName = formData.get("name");
+  const newName = formData.get("newName");
+  if (typeof connectionId !== "string" || connectionId.length === 0) {
+    throw new Error("missing connectionId");
+  }
+  if (typeof oldName !== "string" || oldName.length === 0) {
+    throw new Error("missing name");
+  }
+  if (typeof newName !== "string" || !isValidDatabaseName(newName)) {
+    throw new Error(
+      "Name must be 1–32 lowercase letters / digits / _ - , starting with a letter.",
+    );
+  }
+
+  const ctx = getMcpProxyContext();
+  try {
+    const result = await renameDatabase(
+      customer,
+      connectionId,
+      oldName,
+      newName,
+      ctx,
+    );
+    if (!result) notFound();
+  } catch (err) {
+    if (err instanceof DatabaseNameTaken) {
+      throw new Error(`A database named "${err.takenName}" already exists.`);
+    }
+    throw err;
+  }
+  revalidatePath("/dashboard");
+  // Per-DB detail route lives at /databases/[name]; bust both old and new
+  // so a stale cached instance under either path doesn't linger.
+  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }
 
 async function addDatabaseAction(formData: FormData) {
