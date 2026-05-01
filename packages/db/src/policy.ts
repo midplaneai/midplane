@@ -171,12 +171,27 @@ export interface DatabaseEntry {
   tenantScopeMappings: Record<string, string>;
 }
 
+// Mirrors OSS ENV_INTERP_RE so the cloud refuses to derive an env var name
+// that the engine's `${VAR}` substitution wouldn't match. A raw UUID
+// (lowercase letters + hyphens) would slip past the spawner's run command
+// just to fail at engine boot — fail loud here instead.
+const OSS_ENV_INTERP_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
 /** Env var name the spawner injects this DB's plaintext DSN under, and
- *  that the YAML `url:` field references via ${...} interpolation. ULIDs
- *  are uppercase Crockford base32; "MIDPLANE_DSN_" is uppercase ASCII —
- *  the resulting name matches OSS ENV_INTERP_RE `[A-Z_][A-Z0-9_]*`. */
+ *  that the YAML `url:` field references via ${...} interpolation. The
+ *  full name (prefix + id) must match OSS ENV_INTERP_RE
+ *  `[A-Z_][A-Z0-9_]*` — ULIDs (uppercase Crockford base32) and uppercase
+ *  hex IDs both qualify; raw UUIDs (lowercase + hyphens) do NOT. Throws
+ *  rather than silently mis-substituting, since OSS would treat an
+ *  unmatched `${...}` as a literal url and refuse the connection. */
 export function dsnEnvVarFor(connectionDatabaseId: string): string {
-  return `MIDPLANE_DSN_${connectionDatabaseId}`;
+  const name = `MIDPLANE_DSN_${connectionDatabaseId}`;
+  if (!OSS_ENV_INTERP_NAME_RE.test(name)) {
+    throw new Error(
+      `dsnEnvVarFor: connection_database id "${connectionDatabaseId}" produces env var name "${name}" that does not match OSS env-interpolation regex [A-Z_][A-Z0-9_]* (lowercase letters, hyphens, or other punctuation are not allowed)`,
+    );
+  }
+  return name;
 }
 
 export function serializeMultiDbPolicyToYaml(

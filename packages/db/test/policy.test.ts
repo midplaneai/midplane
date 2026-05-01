@@ -197,12 +197,40 @@ describe("isValidDbName", () => {
 });
 
 describe("dsnEnvVarFor", () => {
-  it("produces a name matching the OSS env-interpolation regex", () => {
-    // ULID = uppercase Crockford base32, 26 chars. Combined prefix is
-    // uppercase ASCII so the result matches OSS ENV_INTERP_RE [A-Z_][A-Z0-9_]*.
-    const id = "01HXYZ123ABC456DEF789GHI01"; // ULID-shaped fixture
+  it("accepts ULID ids (uppercase Crockford base32)", () => {
+    // 26-char uppercase alphanumeric — the shape new code generates via ulid().
+    const id = "01HXYZ123ABC456DEF789GHI01";
     expect(dsnEnvVarFor(id)).toBe(`MIDPLANE_DSN_${id}`);
     expect(/^[A-Z_][A-Z0-9_]*$/.test(dsnEnvVarFor(id))).toBe(true);
+  });
+
+  it("accepts 32-char uppercase hex (the migration 0009 backfill shape)", () => {
+    // Matches `upper(replace(gen_random_uuid()::text, '-', ''))` in the
+    // backfill — every character is in [A-F0-9], a strict subset of the
+    // OSS-accepted [A-Z0-9_]. This is the case the reviewer flagged: a
+    // raw lowercase-with-hyphens UUID would have failed engine boot.
+    const id = "A1B2C3D4E5F67890ABCDEF1234567890";
+    expect(dsnEnvVarFor(id)).toBe(`MIDPLANE_DSN_${id}`);
+    expect(/^[A-Z_][A-Z0-9_]*$/.test(dsnEnvVarFor(id))).toBe(true);
+  });
+
+  it("throws on raw UUIDs (lowercase + hyphens) so we fail at the boundary", () => {
+    // What gen_random_uuid()::text would have produced before the
+    // backfill was upper+strip-dashed. OSS env-interpolation regex
+    // would silently fail to substitute, leaving `${MIDPLANE_DSN_…}`
+    // as a literal url string; the engine then refuses the connection.
+    expect(() => dsnEnvVarFor("a1b2c3d4-e5f6-7890-abcd-ef1234567890")).toThrow(
+      /OSS env-interpolation regex/,
+    );
+  });
+
+  it("throws on lowercase-only ids", () => {
+    expect(() => dsnEnvVarFor("lowercase")).toThrow(/OSS env-interpolation regex/);
+  });
+
+  it("throws on ids containing dots or other punctuation", () => {
+    expect(() => dsnEnvVarFor("ABC.DEF")).toThrow(/OSS env-interpolation regex/);
+    expect(() => dsnEnvVarFor("ABC DEF")).toThrow(/OSS env-interpolation regex/);
   });
 });
 

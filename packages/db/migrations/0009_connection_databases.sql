@@ -33,12 +33,15 @@ CREATE INDEX "connection_databases_connection_id_idx"
 --> statement-breakpoint
 
 -- Backfill: one child row per existing connection, name='main', credentials
--- copied verbatim. The child id is freshly generated via gen_random_uuid
--- (built-in to PG 13+ — no extension required, unlike pgcrypto's
--- gen_random_bytes) so it does not collide with the parent id; parent
--- and child remain joinable on connection_id. Pre-launch — UUID-shaped
--- IDs are acceptable here even though new code generates ULIDs; the
--- column is text and nothing parses the format.
+-- copied verbatim. The child id is generated as 32-char uppercase hex
+-- (gen_random_uuid stripped of dashes, then uppercased) so it does not
+-- collide with the parent ULID and — critically — matches the OSS
+-- env-interpolation regex [A-Z_][A-Z0-9_]*. The cloud spawner derives
+-- MIDPLANE_DSN_<id> env vars from this id and references them in YAML
+-- via ${...}; lowercase letters or hyphens (i.e. raw UUIDs) would fail
+-- to substitute on engine boot and brick the migrated connection. New
+-- rows created in TS code use ulid() which is also regex-safe; the
+-- column is text and nothing parses the specific format.
 INSERT INTO "connection_databases" (
   "id",
   "connection_id",
@@ -52,7 +55,7 @@ INSERT INTO "connection_databases" (
   "created_at"
 )
 SELECT
-  gen_random_uuid()::text,
+  upper(replace(gen_random_uuid()::text, '-', '')),
   "id",
   'main',
   "encrypted_dsn",
