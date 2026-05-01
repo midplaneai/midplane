@@ -23,7 +23,7 @@
 // contain "SET LOCAL", which makes the RLS-bind audit harder for
 // reviewers and tests.
 
-import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 
 import {
   auditEventsIndex,
@@ -174,17 +174,31 @@ export async function listDatabases(
   });
 }
 
+export const TERMINAL_STATUSES = ["executed", "denied", "failed"] as const;
+export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
+
 export interface VolumeBucket {
   /** Bucket start, hour-aligned UTC. */
   ts: Date;
-  /** Per-event-type counts; missing keys are treated as 0 by the renderer. */
-  counts: Partial<Record<EventType, number>>;
+  /** Per-terminal-status query counts; missing keys = 0. */
+  counts: Partial<Record<TerminalStatus, number>>;
 }
 
-/** Hourly event volume for the trailing `hours` window, stacked by
- *  event_type. Returns exactly `hours` buckets (zero-filled), oldest first,
- *  so the sparkline renders a stable width regardless of traffic shape.
- *  Hits audit_customer_region_ts_idx (range scan on ts). */
+/** Hourly query volume for the trailing `hours` window, bucketed by terminal
+ *  outcome. One query (one query_id) contributes one count to one bucket —
+ *  not one per lifecycle event — so the chart reads as "queries per hour"
+ *  not "audit rows per hour" (which would triple-count attempted/decided/
+ *  executed). Bucket time = the terminal event's ts.
+ *
+ *  Terminal precedence per query_id:
+ *    EXECUTED          → executed   (allow → ran fine)
+ *    FAILED            → failed     (allow → DB errored)
+ *    DECIDED+deny      → denied     (policy blocked)
+ *    everything else   → dropped    (in-flight ATTEMPTED, allow-only DECIDED
+ *                                    waiting on EXECUTED/FAILED)
+ *
+ *  Hits audit_customer_region_ts_idx for the range scan, then audit_query_id_idx
+ *  via DISTINCT ON. Within a 24h window over one customer this is small. */
 export async function eventVolumeByHour(
   customerId: string,
   region: Region,
@@ -198,21 +212,52 @@ export async function eventVolumeByHour(
   const since = new Date(endHour.getTime() - (hours - 1) * 3_600_000);
 
   const rows = await withCustomerScope(customerId, async (tx) => {
-    return tx
-      .select({
-        bucket: sql<Date>`date_trunc('hour', ${auditEventsIndex.ts})`,
-        eventType: auditEventsIndex.eventType,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(auditEventsIndex)
-      .where(
-        and(
-          eq(auditEventsIndex.customerId, customerId),
-          eq(auditEventsIndex.region, region),
-          gte(auditEventsIndex.ts, since),
-        ),
-      )
-      .groupBy(sql`1`, auditEventsIndex.eventType);
+    // DISTINCT ON (query_id) keeps the row with the lowest precedence_rank
+    // per query, which is the terminal event we want to bucket on.
+    // Allow-only DECIDED rows are filtered out in the WHERE so they don't
+    // shadow the matching EXECUTED/FAILED row for the same query.
+    const rankedSql = sql<{
+      bucket: Date;
+      terminal: string;
+      count: number;
+    }>`
+      SELECT
+        date_trunc('hour', ts) AS bucket,
+        terminal,
+        count(*)::int AS count
+      FROM (
+        SELECT DISTINCT ON (query_id)
+          query_id,
+          ts,
+          CASE event_type
+            WHEN 'EXECUTED' THEN 'executed'
+            WHEN 'FAILED' THEN 'failed'
+            ELSE 'denied'
+          END AS terminal
+        FROM audit_events_index
+        WHERE customer_id = ${customerId}
+          AND region = ${region}
+          AND ts >= ${since}
+          AND (
+            event_type IN ('EXECUTED', 'FAILED')
+            OR (event_type = 'DECIDED' AND payload ->> 'decision' = 'deny')
+          )
+        ORDER BY
+          query_id,
+          CASE event_type
+            WHEN 'EXECUTED' THEN 1
+            WHEN 'FAILED' THEN 2
+            WHEN 'DECIDED' THEN 3
+          END
+      ) AS terminals
+      GROUP BY 1, 2
+    `;
+    const result = await tx.execute(rankedSql);
+    return result as unknown as Array<{
+      bucket: Date | string;
+      terminal: string;
+      count: number;
+    }>;
   });
 
   const buckets: VolumeBucket[] = [];
@@ -227,8 +272,8 @@ export async function eventVolumeByHour(
     const key = new Date(r.bucket).getTime();
     const b = byKey.get(key);
     if (!b) continue;
-    if ((EVENT_TYPES as readonly string[]).includes(r.eventType)) {
-      b.counts[r.eventType as EventType] = Number(r.count);
+    if ((TERMINAL_STATUSES as readonly string[]).includes(r.terminal)) {
+      b.counts[r.terminal as TerminalStatus] = Number(r.count);
     }
   }
   return buckets;

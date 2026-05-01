@@ -1,4 +1,8 @@
-import { EVENT_TYPES, type EventType, type VolumeBucket } from "@/lib/audit";
+import {
+  TERMINAL_STATUSES,
+  type TerminalStatus,
+  type VolumeBucket,
+} from "@/lib/audit";
 
 interface Props {
   buckets: readonly VolumeBucket[];
@@ -6,28 +10,29 @@ interface Props {
   label?: string;
 }
 
-// Stack order from bottom up. Mirrors the lifecycle so the "FAILED" cap
-// (deny color) sits on top and is the most visible signal.
-const STACK_ORDER: readonly EventType[] = [
-  "ATTEMPTED",
-  "DECIDED",
-  "EXECUTED",
-  "FAILED",
-];
+// Stack order from bottom up. Executed sits at the base (the dominant
+// happy-path color), denied/failed cap on top so policy + error signals
+// are the most visible.
+const STACK_ORDER: readonly TerminalStatus[] = ["executed", "denied", "failed"];
 
-const FILL: Record<EventType, string> = {
-  ATTEMPTED: "hsl(var(--subtle))",
-  DECIDED: "hsl(var(--brand))",
-  EXECUTED: "hsl(var(--allow))",
-  FAILED: "hsl(var(--deny))",
+const FILL: Record<TerminalStatus, string> = {
+  executed: "hsl(var(--allow))",
+  denied: "hsl(var(--deny))",
+  failed: "hsl(var(--warn))",
 };
 
-export function VolumeSparkline({ buckets, label = "Audit volume, last 24 hours" }: Props) {
-  const totalEvents = buckets.reduce(
+const LABEL: Record<TerminalStatus, string> = {
+  executed: "Executed",
+  denied: "Denied",
+  failed: "Failed",
+};
+
+export function VolumeSparkline({ buckets, label = "Query volume, last 24 hours" }: Props) {
+  const totalQueries = buckets.reduce(
     (sum, b) => sum + sumBucket(b.counts),
     0,
   );
-  if (totalEvents === 0) return null;
+  if (totalQueries === 0) return null;
 
   const max = buckets.reduce((m, b) => Math.max(m, sumBucket(b.counts)), 0);
   const w = 100;
@@ -41,14 +46,14 @@ export function VolumeSparkline({ buckets, label = "Audit volume, last 24 hours"
     <div
       className="mb-3 border-b border-border pb-3"
       data-testid="volume-sparkline"
-      data-total={totalEvents}
+      data-total={totalQueries}
     >
       <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-[0.04em] text-subtle">
         <span>
           <b className="font-medium text-foreground">
-            {totalEvents.toLocaleString()}
+            {totalQueries.toLocaleString()}
           </b>{" "}
-          events · last 24h
+          {totalQueries === 1 ? "query" : "queries"} · last 24h
         </span>
         <Legend />
       </div>
@@ -100,16 +105,14 @@ export function VolumeSparkline({ buckets, label = "Audit volume, last 24 hours"
 function Legend() {
   return (
     <span className="flex items-center gap-2 text-[10px] normal-case tracking-normal">
-      {EVENT_TYPES.map((t) => (
+      {STACK_ORDER.map((t) => (
         <span key={t} className="flex items-center gap-1">
           <span
             className="inline-block h-2 w-2 rounded-[1px]"
             style={{ background: FILL[t] }}
             aria-hidden
           />
-          <span className="text-muted-foreground">
-            {t.charAt(0) + t.slice(1).toLowerCase()}
-          </span>
+          <span className="text-muted-foreground">{LABEL[t]}</span>
         </span>
       ))}
     </span>
@@ -125,9 +128,9 @@ function sumBucket(c: VolumeBucket["counts"]): number {
 function tooltip(b: VolumeBucket): string {
   const total = sumBucket(b.counts);
   const parts = STACK_ORDER.filter((t) => (b.counts[t] ?? 0) > 0).map(
-    (t) => `${t.toLowerCase()} ${b.counts[t]}`,
+    (t) => `${b.counts[t]} ${t}`,
   );
-  return `${hourLabel(b.ts)} · ${total} event${total === 1 ? "" : "s"}${
+  return `${hourLabel(b.ts)} · ${total} ${total === 1 ? "query" : "queries"}${
     parts.length > 0 ? ` (${parts.join(", ")})` : ""
   }`;
 }

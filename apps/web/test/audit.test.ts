@@ -27,14 +27,17 @@ interface RecordedQuery {
 interface FakeHandle {
   db: ReturnType<typeof drizzle>;
   queries: RecordedQuery[];
-  setNextResult(rows: unknown[][]): void;
+  /** Loose by design: column-decoded SELECTs use tuples; raw `tx.execute()`
+   *  paths return whatever postgres-js would (row objects). Tests pass
+   *  whichever shape matches the call site they're exercising. */
+  setNextResult(rows: readonly unknown[]): void;
 }
 
 let handle: FakeHandle;
 
 function makeFakeDb(): FakeHandle {
   const queries: RecordedQuery[] = [];
-  let nextResult: unknown[][] = [];
+  let nextResult: readonly unknown[] = [];
 
   const makeClient = (inTransaction: boolean): FakeSql => {
     const unsafe = (sql: string, params: unknown[]) => {
@@ -44,7 +47,7 @@ function makeFakeDb(): FakeHandle {
       // (Drizzle uses .values() for SELECTs that go through prepareQuery,
       // and bare .then for ad-hoc client.unsafe in the session.execute path).
       const thenable: PromiseLike<unknown> & {
-        values: () => Promise<unknown[][]>;
+        values: () => Promise<readonly unknown[]>;
         then: PromiseLike<unknown>["then"];
       } = {
         values: () => Promise.resolve(rows),
@@ -294,11 +297,11 @@ describe("eventVolumeByHour", () => {
     }
   });
 
-  it("merges grouped rows into the matching bucket by ts key", async () => {
+  it("merges per-terminal-status rows into the matching bucket", async () => {
     handle.setNextResult([
-      [new Date("2026-04-30T11:00:00Z"), "DECIDED", 3],
-      [new Date("2026-04-30T11:00:00Z"), "FAILED", 1],
-      [new Date("2026-04-30T12:00:00Z"), "EXECUTED", 7],
+      { bucket: new Date("2026-04-30T11:00:00Z"), terminal: "denied", count: 3 },
+      { bucket: new Date("2026-04-30T11:00:00Z"), terminal: "failed", count: 1 },
+      { bucket: new Date("2026-04-30T12:00:00Z"), terminal: "executed", count: 7 },
     ]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
     const now = () => new Date("2026-04-30T12:30:00Z");
@@ -308,18 +311,39 @@ describe("eventVolumeByHour", () => {
     });
     const last = buckets[buckets.length - 1]!;
     const prior = buckets[buckets.length - 2]!;
-    expect(last.counts).toEqual({ EXECUTED: 7 });
-    expect(prior.counts).toEqual({ DECIDED: 3, FAILED: 1 });
+    expect(last.counts).toEqual({ executed: 7 });
+    expect(prior.counts).toEqual({ denied: 3, failed: 1 });
   });
 
-  it("scopes the volume query under the RLS bind", async () => {
+  it("ignores unknown terminal values from the SQL CASE", async () => {
+    handle.setNextResult([
+      { bucket: new Date("2026-04-30T12:00:00Z"), terminal: "wat", count: 9 },
+    ]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:30:00Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+      hours: 24,
+      now,
+    });
+    expect(buckets[buckets.length - 1]!.counts).toEqual({});
+  });
+
+  it("scopes the volume query under the RLS bind, dedupes per query_id, treats deny-only DECIDED as terminal", async () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
     await eventVolumeByHour(VALID_CUSTOMER_ID, "fra");
     const sel = lastSelect(handle.queries);
     expect(sel.inTransaction).toBe(true);
-    expect(sel.sql.toLowerCase()).toContain("date_trunc");
-    expect(sel.sql.toLowerCase()).toContain("group by");
+    const lower = sel.sql.toLowerCase();
+    expect(lower).toContain("date_trunc");
+    expect(lower).toContain("distinct on (query_id)");
+    expect(lower).toContain("group by 1, 2");
+    // DECIDED-allow rows must be filtered out so they don't shadow the
+    // matching EXECUTED row for the same query under DISTINCT ON precedence.
+    expect(sel.sql).toContain("'decision'");
+    expect(sel.sql).toContain("'deny'");
+    expect(sel.sql).toContain("'EXECUTED'");
+    expect(sel.sql).toContain("'FAILED'");
   });
 });
 
