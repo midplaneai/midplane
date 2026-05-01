@@ -100,8 +100,10 @@ export function makeTestHandle(opts: {
     name,
     engine: opts.engine,
     ctxBase: opts.ctxBase ?? baseCtx,
-    holder: { tableAccess: undefined as TableAccessConfig | undefined },
-    mappings: {},
+    holder: {
+      tableAccess: undefined as TableAccessConfig | undefined,
+      tenantScope: {} as Record<string, string>,
+    },
     executor: { execute: async () => ({ rows: [], rowCount: 0 }) } as Executor,
     url: "postgres://stub",
   };
@@ -126,6 +128,7 @@ export function makeTestHandle(opts: {
         {
           name,
           tenant_scope_enabled: false,
+          tenant_scope_mappings: {},
           table_access_default: null,
         },
       ];

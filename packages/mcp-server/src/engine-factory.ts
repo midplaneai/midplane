@@ -7,12 +7,13 @@
 // Engine per `databases:` entry. The MCP layer queries `count` /
 // `databaseNames` to reshape its tool surface.
 //
-// Hot-reload: each Engine carries its own table_access holder (pointer
-// swap on policy reload, identical to 0.1.x). The registry exposes a
-// single `setPolicy(yamlText)` entrypoint that handles both shapes:
-// the legacy single-DB body re-routes to engines.get('__default__'); the
-// multi-DB shape diffs `databases[]` and adds/removes/updates engines as
-// needed.
+// Hot-reload: each Engine carries its own table_access + tenant_scope
+// holder (pointer swap on policy reload). The registry exposes a single
+// `setPolicy(yamlText)` entrypoint that handles both shapes: the legacy
+// single-DB body re-routes to engines.get('__default__'); the multi-DB
+// shape diffs `databases[]` and adds/removes/updates engines as needed.
+// Both `table_access` and `tenant_scope.mappings` swap in place via the
+// holder — the engine never rebuilds for a policy edit.
 
 import { ulid } from "ulid";
 import {
@@ -43,16 +44,24 @@ import {
 import type { Config } from "./config.ts";
 import { logger } from "./logger.ts";
 
+// Per-DB pointer-swap target for hot reloads. Both rules read these once
+// per query (tableAccess via getter, tenantScope via getter), so an
+// in-flight query never sees a half-applied swap.
+export interface PolicyHolder {
+  tableAccess: TableAccessConfig | undefined;
+  // Mappings dict (table→tenant_id-column). Always defined; empty `{}` is
+  // semantically "no enforcement" (matches the rule's allow-on-empty
+  // branch). Swapping to a non-empty dict starts enforcement; swapping
+  // back to `{}` stops it.
+  tenantScope: Record<string, string>;
+}
+
 // What the MCP layer holds per registered DB.
 interface EngineEntry {
   name: string;
   engine: Engine;
   ctxBase: EngineContext;
-  // Pointer swap target for table_access reloads. Same pattern as 0.1.x.
-  holder: { tableAccess: TableAccessConfig | undefined };
-  // Captured at construction; mappings can't be hot-swapped (same rule as
-  // 0.1.x — engine.ctxBase is captured at construction).
-  mappings: Record<string, string>;
+  holder: PolicyHolder;
   // Owning executor so the registry can close the pool when the entry is
   // dropped. Tests inject a stub Executor that may not have close().
   executor: Executor;
@@ -78,10 +87,13 @@ export interface EngineRegistry {
   // For the indexer pull endpoint and the audit CLI.
   audit: SqliteAuditWriter;
   // For `list_databases` — surfaces per-DB metadata without exposing the
-  // EngineEntry internals.
+  // EngineEntry internals. `tenant_scope_mappings` is the live mappings
+  // dict; cloud callers use it to verify engine state matches what their
+  // DB row says they pushed.
   describe(): Array<{
     name: string;
     tenant_scope_enabled: boolean;
+    tenant_scope_mappings: Record<string, string>;
     table_access_default: TableAccessLevel | null;
   }>;
   // Hot-swap entrypoint. Same body as 0.1.x's setPolicy — the registry
@@ -175,13 +187,14 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
       return swapMultiDb(next, cfg, audit, credentials, opts, entries, baseAudit);
     }
 
-    // Legacy single-DB shape. Same validation rules as 0.1.x: body MUST
-    // contain table_access, mappings can't change.
+    // Legacy single-DB shape. Body MUST contain table_access (omitting it
+    // would silently reset to the no-YAML default and widen permissions);
+    // tenant_scope is optional — omitted means "don't touch".
     if (!next.hasTableAccess || !next.tableAccess) {
       throw new Error(
         "Policy body is missing the required `table_access` section. " +
-          "Hot-swap is supported for table_access only; sending other " +
-          "sections alone would clear the current policy.",
+          "Hot-swap requires table_access — sending other sections alone " +
+          "would clear the current table_access policy.",
       );
     }
     const target = entries.get(DEFAULT_DB_NAME);
@@ -194,27 +207,36 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
           "Send a `databases:` body whose entries name the DBs to update.",
       );
     }
-    // Same mappings-change rejection as 0.1.x: only enforced when the
-    // body explicitly carries `tenant_scope`. Omitted = "don't touch",
-    // so we don't compare against the empty default in that case.
-    if (next.hasTenantScope && !sameMappings(next.mappings, target.mappings)) {
-      throw new Error(
-        "Policy body changes tenant_scope.mappings, which is not " +
-          "hot-swappable in this version. Restart the engine to apply " +
-          "mapping changes (table_access changes can still be hot-swapped " +
-          "by omitting the tenant_scope section or sending it unchanged).",
-      );
-    }
-    target.holder.tableAccess = {
+    // Compute diffs against the current holder BEFORE mutating, so the
+    // POLICY_RELOADED audit row can name what changed. Tenant scope
+    // section semantics: explicit body = swap; omitted = "don't touch"
+    // (matches table_access — the absent-section rule is preserved
+    // identically across both sections so a body editing one alone never
+    // accidentally clears the other).
+    const newTableAccess: TableAccessConfig = {
       default: next.tableAccess.default,
       tables: next.tableAccess.tables,
     };
-    return finalizeReload(
-      cfg,
-      baseAudit,
-      "admin_endpoint",
-      [{ name: target.name, tableAccess: target.holder.tableAccess }],
-    );
+    const tableAccessDiff = diffTableAccess(target.holder.tableAccess, newTableAccess);
+    const tenantScopeDiff = next.hasTenantScope
+      ? diffTenantScopeMappings(target.holder.tenantScope, next.mappings)
+      : null;
+
+    target.holder.tableAccess = newTableAccess;
+    if (next.hasTenantScope) {
+      target.holder.tenantScope = next.mappings;
+    }
+
+    return finalizeReload(cfg, baseAudit, "admin_endpoint", [
+      {
+        name: target.name,
+        tableAccess: target.holder.tableAccess,
+        tenantScope: target.holder.tenantScope,
+        tableAccessDiff,
+        tenantScopeDiff,
+        kind: "swapped",
+      },
+    ]);
   };
 
   const registry: EngineRegistry = {
@@ -242,7 +264,10 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((e) => ({
           name: e.name,
-          tenant_scope_enabled: Object.keys(e.mappings).length > 0,
+          tenant_scope_enabled: Object.keys(e.holder.tenantScope).length > 0,
+          // Shallow-copy so callers (including JSON serializers) can't
+          // mutate the live holder.
+          tenant_scope_mappings: { ...e.holder.tenantScope },
           table_access_default: e.holder.tableAccess
             ? e.holder.tableAccess.default
             : null,
@@ -281,10 +306,11 @@ function makeEngineEntry(
   credentials: CredentialStore,
   opts: BuildEngineOptions,
 ): EngineEntry {
-  const holder: { tableAccess: TableAccessConfig | undefined } = {
+  const holder: PolicyHolder = {
     tableAccess: spec.tableAccess
       ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
       : undefined,
+    tenantScope: { ...spec.mappings },
   };
 
   // Tests inject one shared executor across DBs (for back-compat with
@@ -299,7 +325,10 @@ function makeEngineEntry(
         parseError(),
         multiStatement(),
         tableAccess(() => holder.tableAccess),
-        tenantScope(),
+        // Same getter pattern as tableAccess: the rule reads holder.tenantScope
+        // once per finalize() so a swap mid-traffic flips queries cleanly
+        // between old and new mappings without rebuilding the engine.
+        tenantScope(() => holder.tenantScope),
       ],
     },
     audit,
@@ -308,6 +337,9 @@ function makeEngineEntry(
     databaseName: spec.name,
   });
 
+  // The rule now reads mappings from the holder (via getter), not from
+  // ctx. Keep ctxBase free of `tenant_scope` so there's a single source of
+  // truth for the live mappings: engineEntry.holder.tenantScope.
   const ctxBase: EngineContext = {
     tenant_id: cfg.tenantId,
     // Per-session agent name/version come from MCP `clientInfo` and are
@@ -317,9 +349,6 @@ function makeEngineEntry(
     agent_name: null,
     agent_version: null,
     role: "agent_readonly",
-    ...(Object.keys(spec.mappings).length > 0
-      ? { tenant_scope: { mappings: spec.mappings } }
-      : {}),
   };
 
   return {
@@ -327,7 +356,6 @@ function makeEngineEntry(
     engine,
     ctxBase,
     holder,
-    mappings: spec.mappings,
     executor,
     url: spec.url,
   };
@@ -362,17 +390,11 @@ async function swapMultiDb(
     seen.add(s.name);
     const existing = entries.get(s.name);
 
-    // Mappings change rejection per-DB. Only enforced for entries that
-    // already exist AND whose body explicitly carries `tenant_scope`.
-    // Omitted = "don't touch" (matches the legacy single-DB hot-reload
-    // semantics) — without this gate, a body that only tweaks
-    // table_access would falsely register as a mappings change because
-    // s.mappings normalizes to {} when the section is absent.
-    if (existing && s.hasTenantScope && !sameMappings(s.mappings, existing.mappings)) {
-      throw new Error(
-        `Hot-swap of databases[name=${s.name}].tenant_scope.mappings is not supported in this version. Restart the engine to apply mapping changes.`,
-      );
-    }
+    // tenant_scope.mappings now hot-swap via the holder (same pattern as
+    // table_access). Body explicitly carrying `tenant_scope` ⇒ swap;
+    // omitted ⇒ "don't touch". The omit-vs-set distinction matches
+    // table_access so a body editing one section never silently clears
+    // the other.
 
     // table_access requirement on existing entries. If the body omits
     // table_access for a DB that's already in the registry, applying
@@ -389,7 +411,7 @@ async function swapMultiDb(
     }
   }
 
-  const summaries: Array<{ name: string; tableAccess: TableAccessConfig | undefined }> = [];
+  const summaries: ReloadSummary[] = [];
   const toRemove = new Set(entries.keys());
 
   for (const spec of specs) {
@@ -399,7 +421,25 @@ async function swapMultiDb(
       const fresh = makeEngineEntry(spec, cfg, audit, credentials, opts);
       entries.set(spec.name, fresh);
       logger.info({ db: spec.name }, "hot reload added database");
-      summaries.push({ name: spec.name, tableAccess: fresh.holder.tableAccess });
+      // New DB: prior state is nothing. Compute diffs against the empty
+      // baseline so the audit row names exactly which tables/mappings
+      // the operator just added — and so `databases_changed` /
+      // `sections_changed` pick this DB up. (Without this, a successful
+      // /admin/policy that adds a DB would emit a row reporting "no
+      // changes", invisible to the cloud audit dashboard's change feed.)
+      summaries.push({
+        name: spec.name,
+        tableAccess: fresh.holder.tableAccess,
+        tenantScope: fresh.holder.tenantScope,
+        tableAccessDiff: fresh.holder.tableAccess
+          ? diffTableAccess(undefined, fresh.holder.tableAccess)
+          : null,
+        tenantScopeDiff:
+          Object.keys(fresh.holder.tenantScope).length > 0
+            ? diffTenantScopeMappings({}, fresh.holder.tenantScope)
+            : null,
+        kind: "added",
+      });
       continue;
     }
 
@@ -411,6 +451,11 @@ async function swapMultiDb(
         { db: spec.name, oldUrl: maskDsn(existing.url), newUrl: maskDsn(spec.url) },
         "hot reload changing database url — pool will be rebuilt",
       );
+      // Snapshot the OLD holder before we replace the entry — the diff
+      // is meaningful: an operator pointing prod's URL at staging
+      // should see what their stricter prod policy turned into.
+      const prevTableAccess = existing.holder.tableAccess;
+      const prevTenantScope = existing.holder.tenantScope;
       const maybeClose = (existing.executor as { close?: () => Promise<void> }).close;
       if (typeof maybeClose === "function") {
         await maybeClose.call(existing.executor).catch((err) => {
@@ -419,15 +464,49 @@ async function swapMultiDb(
       }
       const fresh = makeEngineEntry(spec, cfg, audit, credentials, opts);
       entries.set(spec.name, fresh);
-      summaries.push({ name: spec.name, tableAccess: fresh.holder.tableAccess });
+      summaries.push({
+        name: spec.name,
+        tableAccess: fresh.holder.tableAccess,
+        tenantScope: fresh.holder.tenantScope,
+        // URL change is validated to require table_access, so
+        // fresh.holder.tableAccess is always defined here.
+        tableAccessDiff: fresh.holder.tableAccess
+          ? diffTableAccess(prevTableAccess, fresh.holder.tableAccess)
+          : null,
+        tenantScopeDiff: diffTenantScopeMappings(
+          prevTenantScope,
+          fresh.holder.tenantScope,
+        ),
+        kind: "rebuilt",
+      });
       continue;
     }
 
-    // Same url — in-place table_access swap. Pointer swap on the holder.
-    existing.holder.tableAccess = spec.tableAccess
-      ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
-      : undefined;
-    summaries.push({ name: spec.name, tableAccess: existing.holder.tableAccess });
+    // Same url — in-place swap. Pointer swap on the holder for both
+    // sections. table_access is required (validated above); tenant_scope
+    // is opt-in per body (omit ⇒ "don't touch", carries through unchanged).
+    const newTableAccess: TableAccessConfig = {
+      default: spec.tableAccess!.default,
+      tables: spec.tableAccess!.tables,
+    };
+    const tableAccessDiff = diffTableAccess(existing.holder.tableAccess, newTableAccess);
+    const tenantScopeDiff = spec.hasTenantScope
+      ? diffTenantScopeMappings(existing.holder.tenantScope, spec.mappings)
+      : null;
+
+    existing.holder.tableAccess = newTableAccess;
+    if (spec.hasTenantScope) {
+      existing.holder.tenantScope = spec.mappings;
+    }
+
+    summaries.push({
+      name: spec.name,
+      tableAccess: existing.holder.tableAccess,
+      tenantScope: existing.holder.tenantScope,
+      tableAccessDiff,
+      tenantScopeDiff,
+      kind: "swapped",
+    });
   }
 
   for (const name of toRemove) {
@@ -445,21 +524,79 @@ async function swapMultiDb(
   return finalizeReload(cfg, baseAudit, "admin_endpoint", summaries);
 }
 
+// Per-DB summary the swap path hands to finalizeReload. Carries the
+// post-swap state plus a coarse diff against the pre-swap state so the
+// POLICY_RELOADED audit row is self-describing — operators can verify
+// "I changed orders.tenant_id at 14:03" from the audit row alone, no
+// dashboard cross-reference required.
+interface ReloadSummary {
+  name: string;
+  tableAccess: TableAccessConfig | undefined;
+  tenantScope: Record<string, string>;
+  tableAccessDiff: TableAccessDiff | null;
+  tenantScopeDiff: TenantScopeDiff | null;
+  // What kind of change happened to this DB. "added" + "rebuilt" both
+  // count as DB-level changes regardless of section diffs (the DB
+  // itself appearing or having its pool destroyed IS the event), so
+  // they always appear in `databases_changed`. "swapped" only counts
+  // when a section diff is non-empty — re-sending the same body
+  // emits a no-op row.
+  kind: "added" | "rebuilt" | "swapped";
+}
+
+// Coarse diff: just enough to read the audit row and understand what
+// changed. Empty objects/null are omitted by the JSON serializer so a
+// no-op swap (re-sending the same body) writes a row that records the
+// reload happened but doesn't lie about a change.
+interface TableAccessDiff {
+  // The default level changed, e.g. "deny" → "read_write".
+  default?: { from: TableAccessLevel | null; to: TableAccessLevel };
+  // Tables present in `to` but not in `from`.
+  tables_added?: Record<string, TableAccessLevel>;
+  // Tables present in `from` but not in `to`.
+  tables_removed?: Record<string, TableAccessLevel>;
+  // Tables in both, but the level changed.
+  tables_changed?: Record<string, { from: TableAccessLevel; to: TableAccessLevel }>;
+}
+
+interface TenantScopeDiff {
+  mappings_added?: Record<string, string>;
+  mappings_removed?: Record<string, string>;
+  mappings_changed?: Record<string, { from: string; to: string }>;
+}
+
 // Write the POLICY_RELOADED audit row. Best-effort — the swap already
 // applied; an audit failure is logged but doesn't roll back.
 async function finalizeReload(
   cfg: Config,
   audit: SqliteAuditWriter,
   source: string,
-  summaries: Array<{ name: string; tableAccess: TableAccessConfig | undefined }>,
+  summaries: ReloadSummary[],
 ): Promise<{ applied_at: string }> {
   const appliedAt = new Date().toISOString();
+  // The "databases_changed" field on every row in this batch — the names
+  // of every DB whose policy actually changed in this swap call. Lets a
+  // viewer see "this row is one of N DBs reloaded together" from a single
+  // event without joining across rows. A no-op swap (matching mappings
+  // re-sent) doesn't list the DB here.
+  const databasesChanged = summaries
+    .filter((s) => summaryHasChange(s))
+    .map((s) => s.name)
+    .sort();
 
   // For multi-DB reloads we emit one POLICY_RELOADED row per affected DB
   // so the audit log carries the per-DB granularity that the column
   // exists for. For legacy single-DB this is just one row keyed on
   // __default__, identical in effect to 0.1.x.
   for (const s of summaries) {
+    const sectionsChanged: string[] = [];
+    // A section appears in `sections_changed` only when it actually
+    // moved — re-sending the same body produces an empty diff and the
+    // section is omitted, so consumers can trust the field as a
+    // change-feed rather than "what was touched".
+    if (diffHasChange(s.tableAccessDiff)) sectionsChanged.push("table_access");
+    if (diffHasChange(s.tenantScopeDiff)) sectionsChanged.push("tenant_scope");
+
     const event: AuditEvent = {
       id: ulid(),
       query_id: ulid(),
@@ -476,9 +613,30 @@ async function finalizeReload(
       event_type: "POLICY_RELOADED",
       payload: {
         source,
+        // Self-describing fields (added in 0.4.0). The cloud audit
+        // dashboard indexes against these to render "what changed"
+        // without re-fetching adjacent rows. `sections_changed` is the
+        // sections that changed for THIS row's DB; `databases_changed`
+        // is every DB that changed in this swap call (same value on
+        // every row in the batch).
+        sections_changed: sectionsChanged,
+        databases_changed: databasesChanged,
+        // Current full state of each section (kept for backward compat
+        // with consumers that read `payload.table_access`).
         table_access: s.tableAccess
           ? { default: s.tableAccess.default, tables: s.tableAccess.tables }
           : null,
+        tenant_scope:
+          Object.keys(s.tenantScope).length > 0
+            ? { mappings: s.tenantScope }
+            : null,
+        // Coarse diff of what changed for THIS row's DB. `null` for
+        // brand-new entries (no prior state to diff against) or sections
+        // that weren't touched.
+        diff: {
+          table_access: s.tableAccessDiff,
+          tenant_scope: s.tenantScopeDiff,
+        },
       },
     };
     try {
@@ -507,21 +665,85 @@ async function finalizeReload(
   return { applied_at: appliedAt };
 }
 
-// Order-independent map equality. JSON.stringify would false-diff on key
-// order, and the cloud has no reason to preserve YAML key ordering across
-// saves.
-function sameMappings(
-  a: Record<string, string>,
-  b: Record<string, string>,
-): boolean {
-  const ak = Object.keys(a);
-  const bk = Object.keys(b);
-  if (ak.length !== bk.length) return false;
-  for (const k of ak) {
-    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
-    if (a[k] !== b[k]) return false;
+// Should this DB appear in the audit row's `databases_changed` field?
+// Adding or rebuilding a DB is itself a DB-level event regardless of
+// what's in the policy (a brand-new DB exposes new query surface; a
+// URL change destroys + recreates the pool). For "swapped" — pure
+// pointer swaps on the same DB — we only count it as a change when at
+// least one section's diff is non-empty, so a no-op re-post (operator
+// re-sends matching policy) doesn't lie about a change happening.
+function summaryHasChange(s: ReloadSummary): boolean {
+  if (s.kind === "added" || s.kind === "rebuilt") return true;
+  return diffHasChange(s.tableAccessDiff) || diffHasChange(s.tenantScopeDiff);
+}
+
+function diffHasChange(diff: TableAccessDiff | TenantScopeDiff | null): boolean {
+  if (diff === null) return false;
+  for (const key of Object.keys(diff)) {
+    const v = (diff as Record<string, unknown>)[key];
+    if (v === undefined) continue;
+    if (typeof v === "object" && v !== null && Object.keys(v).length === 0) {
+      continue;
+    }
+    return true;
   }
-  return true;
+  return false;
+}
+
+// Compute the field-level changes between the prior table_access (may be
+// undefined) and the post-swap config. Empty buckets are omitted so the
+// JSON payload stays compact when only one thing flipped.
+function diffTableAccess(
+  prev: TableAccessConfig | undefined,
+  next: TableAccessConfig,
+): TableAccessDiff {
+  const diff: TableAccessDiff = {};
+  if (!prev || prev.default !== next.default) {
+    diff.default = { from: prev?.default ?? null, to: next.default };
+  }
+  const prevTables = prev?.tables ?? {};
+  const added: Record<string, TableAccessLevel> = {};
+  const removed: Record<string, TableAccessLevel> = {};
+  const changed: Record<string, { from: TableAccessLevel; to: TableAccessLevel }> = {};
+  for (const k of Object.keys(next.tables)) {
+    const nextLevel = next.tables[k]!;
+    const prevLevel = prevTables[k];
+    if (prevLevel === undefined) {
+      added[k] = nextLevel;
+    } else if (prevLevel !== nextLevel) {
+      changed[k] = { from: prevLevel, to: nextLevel };
+    }
+  }
+  for (const k of Object.keys(prevTables)) {
+    if (!(k in next.tables)) removed[k] = prevTables[k]!;
+  }
+  if (Object.keys(added).length > 0) diff.tables_added = added;
+  if (Object.keys(removed).length > 0) diff.tables_removed = removed;
+  if (Object.keys(changed).length > 0) diff.tables_changed = changed;
+  return diff;
+}
+
+function diffTenantScopeMappings(
+  prev: Record<string, string>,
+  next: Record<string, string>,
+): TenantScopeDiff {
+  const diff: TenantScopeDiff = {};
+  const added: Record<string, string> = {};
+  const removed: Record<string, string> = {};
+  const changed: Record<string, { from: string; to: string }> = {};
+  for (const k of Object.keys(next)) {
+    const nextCol = next[k]!;
+    const prevCol = prev[k];
+    if (prevCol === undefined) added[k] = nextCol;
+    else if (prevCol !== nextCol) changed[k] = { from: prevCol, to: nextCol };
+  }
+  for (const k of Object.keys(prev)) {
+    if (!(k in next)) removed[k] = prev[k]!;
+  }
+  if (Object.keys(added).length > 0) diff.mappings_added = added;
+  if (Object.keys(removed).length > 0) diff.mappings_removed = removed;
+  if (Object.keys(changed).length > 0) diff.mappings_changed = changed;
+  return diff;
 }
 
 // Crude DSN masking for log lines so the password never lands in logs.

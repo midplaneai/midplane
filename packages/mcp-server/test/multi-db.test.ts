@@ -195,11 +195,13 @@ describe("multi-DB tool surface", () => {
       {
         name: "analytics",
         tenant_scope_enabled: false,
+        tenant_scope_mappings: {},
         table_access_default: "read_write",
       },
       {
         name: "prod",
         tenant_scope_enabled: true,
+        tenant_scope_mappings: { users: "org_id" },
         table_access_default: "deny",
       },
     ]);
@@ -400,6 +402,123 @@ describe("multi-DB hot reload", () => {
     await client.close();
   });
 
+  test("adding a DB writes a self-describing POLICY_RELOADED row (not a no-op)", async () => {
+    // Reviewer-flagged regression: a successful /admin/policy that adds
+    // a DB previously emitted a row with sections_changed: [],
+    // databases_changed: [], and null diffs — the add was invisible to
+    // the cloud audit dashboard's change feed. New DBs must show up in
+    // databases_changed and have non-empty section diffs covering
+    // whatever sections the spec carries.
+    const h = bootMultiDb(TWO_DB_YAML);
+
+    await h.registry.setPolicy(`databases:
+  - name: prod
+    url: postgres://prod
+    table_access:
+      default: deny
+      tables:
+        users: read
+        feature_flags: read_write
+  - name: analytics
+    url: postgres://analytics
+    table_access:
+      default: read_write
+  - name: staging
+    url: postgres://staging
+    tenant_scope:
+      enabled: true
+      mappings:
+        users: org_id
+    table_access:
+      default: deny
+      tables:
+        users: read
+`);
+
+    const reloads = h.registry.audit
+      .readSince("0", 1000)
+      .filter((r) => r.event_type === "POLICY_RELOADED");
+    const stagingRow = reloads.find((r) => r.database === "staging");
+    expect(stagingRow).toBeDefined();
+    const payload = stagingRow!.payload as {
+      sections_changed: string[];
+      databases_changed: string[];
+      diff: {
+        table_access: { default?: { from: string | null; to: string }; tables_added?: Record<string, string> } | null;
+        tenant_scope: { mappings_added?: Record<string, string> } | null;
+      };
+    };
+    expect(payload.databases_changed).toContain("staging");
+    expect(payload.sections_changed.sort()).toEqual([
+      "table_access",
+      "tenant_scope",
+    ]);
+    expect(payload.diff.table_access?.default).toEqual({
+      from: null,
+      to: "deny",
+    });
+    expect(payload.diff.table_access?.tables_added).toEqual({ users: "read" });
+    expect(payload.diff.tenant_scope?.mappings_added).toEqual({
+      users: "org_id",
+    });
+  });
+
+  test("rebuilding a DB on URL change writes a self-describing POLICY_RELOADED row", async () => {
+    // Same reviewer regression: changing a DB's URL rebuilt the pool
+    // but emitted a no-op audit row. The diff should now reflect the
+    // OLD policy → NEW policy transition for the URL-changed DB.
+    const h = bootMultiDb(`databases:
+  - name: prod
+    url: postgres://prod
+    table_access:
+      default: deny
+      tables:
+        users: read
+  - name: analytics
+    url: postgres://analytics
+    table_access:
+      default: read_write
+`);
+
+    await h.registry.setPolicy(`databases:
+  - name: prod
+    url: postgres://prod-replica
+    table_access:
+      default: read
+      tables:
+        users: read_write
+  - name: analytics
+    url: postgres://analytics
+    table_access:
+      default: read_write
+`);
+
+    const reloads = h.registry.audit
+      .readSince("0", 1000)
+      .filter((r) => r.event_type === "POLICY_RELOADED");
+    const prodRow = reloads.find((r) => r.database === "prod");
+    expect(prodRow).toBeDefined();
+    const payload = prodRow!.payload as {
+      sections_changed: string[];
+      databases_changed: string[];
+      diff: {
+        table_access: {
+          default?: { from: string | null; to: string };
+          tables_changed?: Record<string, { from: string; to: string }>;
+        } | null;
+      };
+    };
+    expect(payload.databases_changed).toContain("prod");
+    expect(payload.sections_changed).toContain("table_access");
+    expect(payload.diff.table_access?.default).toEqual({
+      from: "deny",
+      to: "read",
+    });
+    expect(payload.diff.table_access?.tables_changed).toEqual({
+      users: { from: "read", to: "read_write" },
+    });
+  });
+
   test("omitting table_access on an existing DB is rejected (won't silently widen)", async () => {
     // Regression: previously, an entry with no table_access section had
     // spec.tableAccess === null, which the in-place swap converted to
@@ -489,7 +608,11 @@ describe("multi-DB hot reload", () => {
     await client.close();
   });
 
-  test("rejecting mappings change in place — existing DB", async () => {
+  test("hot-swap of tenant_scope.mappings on existing DB updates the live mapping", async () => {
+    // 0.4.0: tenant_scope.mappings hot-swap via the holder, same pattern
+    // as table_access. Pre-0.4.0 this rejected with /tenant_scope\.mappings/
+    // and forced a restart; the cloud dashboard's per-DB mapping editor
+    // pushes through this path.
     const yaml = `databases:
   - name: prod
     url: postgres://prod
@@ -507,8 +630,7 @@ describe("multi-DB hot reload", () => {
 `;
     const h = bootMultiDb(yaml);
 
-    await expect(
-      h.registry.setPolicy(`databases:
+    const result = await h.registry.setPolicy(`databases:
   - name: prod
     url: postgres://prod
     tenant_scope:
@@ -522,8 +644,27 @@ describe("multi-DB hot reload", () => {
     url: postgres://analytics
     table_access:
       default: read_write
-`),
-    ).rejects.toThrow(/tenant_scope\.mappings/);
+`);
+    expect(result.applied_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    // describe() reports the live (post-swap) mappings.
+    const desc = h.registry.describe();
+    const prod = desc.find((d) => d.name === "prod")!;
+    expect(prod.tenant_scope_mappings).toEqual({ users: "customer_id" });
+
+    // Next query observes the new mapping: a bare SELECT on prod's
+    // `users` now demands `customer_id = <tenant_id>`, not `org_id`.
+    const { client } = await connect(h);
+    const res = await client.callTool({
+      name: "query",
+      arguments: { database: "prod", sql: "SELECT id FROM users" },
+    });
+    expect(res.isError).toBe(true);
+    const data = JSON.parse((res.content as Array<{ text: string }>)[0]!.text);
+    expect(data.policy_rule).toBe("tenant_scope_missing");
+    expect(data.reason).toContain("customer_id");
+    expect(data.reason).not.toContain("org_id");
+    await client.close();
   });
 });
 
@@ -532,7 +673,7 @@ describe("per-DB tenant_scope independence", () => {
     // Both DBs have a tenant_scope mapping on `users`, but the column
     // names differ. A bare `SELECT FROM users` denies under both, but the
     // denial message must name the right column for each DB — confirming
-    // the engines are wired with their own ctxBase.tenant_scope.
+    // the engines are wired with their own holder.tenantScope.
     const h = bootMultiDb(`databases:
   - name: a
     url: postgres://a

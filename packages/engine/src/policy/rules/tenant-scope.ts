@@ -29,13 +29,32 @@ interface ScopeFailure {
   column: string;
 }
 
-export function tenantScope(): Rule {
+// Accepts either a static mappings object (snapshot at construction), a
+// getter that returns the current mappings on each evaluation, or undefined
+// (rule reads `ctx.tenant_scope.mappings` from the per-call EngineContext).
+// The getter form mirrors `tableAccess` and lets the mcp-server hot-swap
+// mappings via POST /admin/policy without rebuilding the engine: the rule
+// reads the holder once per finalize() so a swap mid-traffic flips queries
+// cleanly between old and new mappings.
+export type TenantScopeMappingsSource =
+  | Record<string, string>
+  | (() => Record<string, string> | undefined)
+  | undefined;
+
+export function tenantScope(source?: TenantScopeMappingsSource): Rule {
+  const resolveMappings = (
+    rctx: RuleEvalContext,
+  ): Record<string, string> | undefined => {
+    if (typeof source === "function") return source();
+    if (source !== undefined) return source;
+    return rctx.ctx.tenant_scope?.mappings;
+  };
   return {
     name: PolicyRule.TENANT_SCOPE_MISSING,
     reset() {},
     finalize(rctx: RuleEvalContext): RuleVerdict {
       if (!rctx.parse.ok) return { decision: "ALLOW" };
-      const mappings = rctx.ctx.tenant_scope?.mappings;
+      const mappings = resolveMappings(rctx);
       if (!mappings || Object.keys(mappings).length === 0) {
         return { decision: "ALLOW" };
       }

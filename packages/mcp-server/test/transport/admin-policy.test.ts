@@ -247,19 +247,111 @@ describe("POST /admin/policy", () => {
     expect(stillAllowed.isError).toBe(false);
   });
 
-  test("audit log contains POLICY_RELOADED event with payload", async () => {
+  test("audit log contains POLICY_RELOADED event with self-describing payload", async () => {
     // Read the audit DB directly — POLICY_RELOADED is the new event_type
-    // we expect to find for every successful swap above.
+    // we expect to find for every successful swap above. The payload
+    // shape is the contract the cloud audit dashboard indexes against
+    // (sections_changed / databases_changed / diff). This test pins
+    // every required key so an accidental rename breaks here.
     const rows = handle.registry.audit.readSince("0", 1000);
     const reloads = rows.filter((r) => r.event_type === "POLICY_RELOADED");
     expect(reloads.length).toBeGreaterThanOrEqual(1);
     const last = reloads[reloads.length - 1]!;
     const payload = last.payload as {
       source: string;
+      sections_changed: string[];
+      databases_changed: string[];
       table_access: { default: string; tables: Record<string, string> };
+      tenant_scope: { mappings: Record<string, string> } | null;
+      diff: {
+        table_access: {
+          default?: { from: string | null; to: string };
+          tables_added?: Record<string, string>;
+          tables_removed?: Record<string, string>;
+          tables_changed?: Record<string, { from: string; to: string }>;
+        } | null;
+        tenant_scope: {
+          mappings_added?: Record<string, string>;
+          mappings_removed?: Record<string, string>;
+          mappings_changed?: Record<string, { from: string; to: string }>;
+        } | null;
+      };
     };
     expect(payload.source).toBe("admin_endpoint");
     expect(payload.table_access.default).toBe("deny");
+    // The most-recent successful swap in this describe block changed
+    // table_access (default: maybe → deny path was via the "valid bearer
+    // + valid YAML" test that flipped users to deny + posts to read_write).
+    expect(payload.sections_changed).toContain("table_access");
+    expect(payload.databases_changed).toContain("__default__");
+    expect(payload.diff.table_access).not.toBeNull();
+  });
+
+  test("POLICY_RELOADED diff names which tables flipped", async () => {
+    // Run two swaps and inspect the second swap's diff. The first
+    // installs a baseline; the second adds a table, removes one, and
+    // flips one — the diff payload's three buckets should each name
+    // exactly the affected key.
+    const baseline =
+      "table_access:\n" +
+      "  default: deny\n" +
+      "  tables:\n" +
+      "    users: read\n" +
+      "    posts: read\n" +
+      "    archive: read_write\n";
+    const r1 = await fetch(url("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: baseline,
+    });
+    expect(r1.status).toBe(200);
+
+    const next =
+      "table_access:\n" +
+      "  default: deny\n" +
+      "  tables:\n" +
+      "    users: read_write\n" + // changed: read → read_write
+      "    archive: read_write\n" + // unchanged
+      "    new_table: read\n"; // added; `posts` removed
+    const r2 = await fetch(url("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: next,
+    });
+    expect(r2.status).toBe(200);
+
+    // ULIDs generated in the same millisecond sort non-deterministically
+    // (the engine's `ulid()` calls are not monotonic). Two POSTs back-to-
+    // back in CI's fast runner can land in the same ms, so reading the
+    // "last" reload by id position is racy. Instead, locate the row by
+    // content — the only POLICY_RELOADED row in this entire test file
+    // whose diff carries `new_table` is the one we're asserting against.
+    const reloads = handle.registry.audit
+      .readSince("0", 1000)
+      .filter((r) => r.event_type === "POLICY_RELOADED");
+    const target = reloads.find((r) => {
+      const ta = (r.payload as { diff?: { table_access?: { tables_added?: Record<string, string> } } })
+        .diff?.table_access?.tables_added;
+      return ta !== undefined && Object.prototype.hasOwnProperty.call(ta, "new_table");
+    });
+    expect(target).toBeDefined();
+    const diff = (target!.payload as { diff: { table_access: any } }).diff
+      .table_access as {
+      tables_added?: Record<string, string>;
+      tables_removed?: Record<string, string>;
+      tables_changed?: Record<string, { from: string; to: string }>;
+    };
+    expect(diff.tables_added).toEqual({ new_table: "read" });
+    expect(diff.tables_removed).toEqual({ posts: "read" });
+    expect(diff.tables_changed).toEqual({
+      users: { from: "read", to: "read_write" },
+    });
   });
 });
 
@@ -302,10 +394,11 @@ describe("POST /admin/policy — INDEXER_TOKEN unset", () => {
   });
 });
 
-describe("POST /admin/policy — tenant_scope.mappings hot-swap rejected", () => {
-  // Engine booted with non-empty mappings. Any payload that changes them
-  // (or omits them when they're set, which would normalize to empty) must
-  // 400 — silently accepting would 200 a request the engine never applied.
+describe("POST /admin/policy — tenant_scope.mappings hot-swap", () => {
+  // 0.4.0: tenant_scope.mappings now hot-swaps via the holder, same
+  // pattern as table_access. The cloud dashboard's per-DB mapping editor
+  // pushes through this endpoint, so the swap is required to round-trip
+  // (200 → describe() reports new mappings → next query observes them).
   let dir: string;
   let dbPath: string;
   let executor: MockExecutor;
@@ -349,7 +442,7 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap rejected", () =>
     return `http://127.0.0.1:${server.port}${path}`;
   }
 
-  test("payload that adds a mapping → 400, holder unchanged", async () => {
+  test("payload that adds a mapping → 200, describe() reports the new mapping", async () => {
     const yaml =
       "tenant_scope:\n" +
       "  enabled: true\n" +
@@ -367,29 +460,40 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap rejected", () =>
       },
       body: yaml,
     });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { ok: boolean; error: string };
-    expect(body.error).toContain("tenant_scope.mappings");
+    expect(res.status).toBe(200);
 
-    // No POLICY_RELOADED event was written for this attempt.
+    const desc = handle.registry.describe();
+    expect(desc[0]!.tenant_scope_mappings).toEqual({
+      users: "org_id",
+      posts: "tenant_id",
+    });
+
+    // POLICY_RELOADED row was written and names tenant_scope as a changed
+    // section.
     const reloads = handle.registry.audit
       .readSince("0", 1000)
       .filter((r) => r.event_type === "POLICY_RELOADED");
-    expect(reloads.length).toBe(0);
+    expect(reloads.length).toBeGreaterThanOrEqual(1);
+    const last = reloads[reloads.length - 1]!;
+    const payload = last.payload as {
+      sections_changed: string[];
+      diff: { tenant_scope: { mappings_added?: Record<string, string> } | null };
+    };
+    expect(payload.sections_changed).toContain("tenant_scope");
+    expect(payload.diff.tenant_scope?.mappings_added).toEqual({
+      posts: "tenant_id",
+    });
   });
 
-  test("payload that omits tenant_scope (would clear mappings) → 400", async () => {
+  test("payload that omits tenant_scope is a no-op for mappings — current state preserved", async () => {
     const yaml =
       "table_access:\n" +
       "  default: deny\n" +
       "  tables:\n" +
       "    users: read\n";
-    // Note: no tenant_scope section. Without strict validation this would
-    // 200 and leave mappings in force — but a future restart would drop
-    // them, so the cloud's view of the engine state would be wrong.
-    // Strict validation accepts this case (omitted section means "don't
-    // touch"), so this should be 200, not 400. Confirms the hasTenantScope
-    // distinction.
+    // Omitted section means "don't touch" — the prior swap left
+    // mappings = { users, posts }; this body changes only table_access
+    // and must leave the mappings alone.
     const res = await fetch(url("/admin/policy"), {
       method: "POST",
       headers: {
@@ -399,14 +503,20 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap rejected", () =>
       body: yaml,
     });
     expect(res.status).toBe(200);
+    const desc = handle.registry.describe();
+    expect(desc[0]!.tenant_scope_mappings).toEqual({
+      users: "org_id",
+      posts: "tenant_id",
+    });
   });
 
-  test("payload that re-sends matching mappings → 200", async () => {
+  test("payload that re-sends matching mappings → 200, no change recorded in diff", async () => {
     const yaml =
       "tenant_scope:\n" +
       "  enabled: true\n" +
       "  mappings:\n" +
-      "    users: org_id\n" + // identical to boot
+      "    users: org_id\n" +
+      "    posts: tenant_id\n" + // identical to current state
       "table_access:\n" +
       "  default: deny\n" +
       "  tables:\n" +
@@ -420,5 +530,38 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap rejected", () =>
       body: yaml,
     });
     expect(res.status).toBe(200);
+    // The diff for tenant_scope should be empty (no added/removed/changed).
+    const reloads = handle.registry.audit
+      .readSince("0", 1000)
+      .filter((r) => r.event_type === "POLICY_RELOADED");
+    const last = reloads[reloads.length - 1]!;
+    const payload = last.payload as {
+      sections_changed: string[];
+      diff: { tenant_scope: object | null };
+    };
+    expect(payload.sections_changed).not.toContain("tenant_scope");
+  });
+
+  test("payload that clears mappings (mappings: {}) → 200, future queries allow", async () => {
+    const yaml =
+      "tenant_scope:\n" +
+      "  enabled: true\n" +
+      "  mappings: {}\n" + // explicit clear
+      "table_access:\n" +
+      "  default: deny\n" +
+      "  tables:\n" +
+      "    users: read\n";
+    const res = await fetch(url("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: yaml,
+    });
+    expect(res.status).toBe(200);
+    const desc = handle.registry.describe();
+    expect(desc[0]!.tenant_scope_mappings).toEqual({});
+    expect(desc[0]!.tenant_scope_enabled).toBe(false);
   });
 });

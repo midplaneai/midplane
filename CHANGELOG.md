@@ -4,6 +4,19 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
+## [0.4.0] — Unreleased
+
+### Added
+
+- **Hot-swap of `tenant_scope.mappings` on `POST /admin/policy`.** A YAML body that changes `databases[].tenant_scope.mappings` (or top-level `tenant_scope.mappings` in the legacy single-DB shape) now returns 200, the next query observes the new mapping, and a `POLICY_RELOADED` audit row records the swap. Same holder/getter pattern `table_access` already uses — the rule reads the holder once per `finalize()`, so a swap mid-traffic flips queries cleanly between old and new mappings without engine restart. Pre-0.4.0 the endpoint rejected mappings changes with `tenant_scope.mappings ... not hot-swappable in this version`, which forced a container restart on every per-DB mapping edit and blocked the cloud dashboard's per-DB mapping editor from shipping. The multi-DB *add/remove* path is still respawn-only — only mapping changes on existing DBs are in scope.
+- **Self-describing `POLICY_RELOADED` audit payload.** The audit row now carries `sections_changed` (which sections actually moved — subset of `["table_access", "tenant_scope"]`), `databases_changed` (every DB whose policy changed in this swap call), `tenant_scope.mappings` (current full state, for symmetry with the existing `table_access` field), and a coarse `diff` block that names exactly which mappings/tables were added, removed, or changed (`{ from, to }` per key). Operators reading the audit log can verify "I changed `orders.tenant_id` at 14:03" from the row alone — no dashboard cross-reference required. A no-op swap (re-sending the same body) writes a row with empty `sections_changed` and an empty `diff`, so consumers can trust `sections_changed` as a change-feed rather than "what was touched". The cloud audit dashboard indexes against this shape.
+- **`describe()` / `list_databases` returns the live `tenant_scope_mappings` dict.** Previously only a `tenant_scope_enabled` boolean was reported; the cloud dashboard now reads the full dict to verify engine state matches what its DB row says it pushed.
+
+### Changed
+
+- **`tenantScope()` accepts a holder/getter source.** The rule now resolves mappings via an optional source argument (`Record<string, string> | (() => Record<string, string> | undefined) | undefined`) — the getter form mirrors `tableAccess` and is what `mcp-server` wires into each engine. Back-compat: `tenantScope()` with no arg still falls back to reading `ctx.tenant_scope.mappings` from the per-call context (preserves existing test fixtures).
+- **`EngineEntry.holder` gained `tenantScope: Record<string, string>`.** Single source of truth for the live mappings on a registered DB. `EngineEntry.mappings` (the redundant snapshot field) and `ctxBase.tenant_scope` (the redundant per-call context field) are removed; both were stale-on-swap by construction.
+
 ## [0.3.0] — Unreleased
 
 ### Changed (Breaking)

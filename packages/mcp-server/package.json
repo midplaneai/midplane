@@ -1,6 +1,6 @@
 {
   "name": "@midplane/mcp-server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Midplane MCP server. Wraps @midplane/engine with stdio + Streamable HTTP transports.",
   "license": "MIT",
