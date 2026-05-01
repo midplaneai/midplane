@@ -211,6 +211,13 @@ export async function eventVolumeByHour(
   endHour.setUTCMinutes(0, 0, 0);
   const since = new Date(endHour.getTime() - (hours - 1) * 3_600_000);
 
+  // Boundary is sent as ISO text + cast to timestamptz on the server side.
+  // postgres-js's raw-unsafe parameter path (used by Drizzle for tx.execute
+  // on a sql template) does not auto-serialize Date — passing a Date directly
+  // throws "argument must be string or Buffer". String + ::timestamptz is
+  // the same wire format the tagged-template path produces.
+  const sinceIso = since.toISOString();
+
   const rows = await withCustomerScope(customerId, async (tx) => {
     // DISTINCT ON (query_id) keeps the row with the lowest precedence_rank
     // per query, which is the terminal event we want to bucket on.
@@ -237,7 +244,7 @@ export async function eventVolumeByHour(
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${region}
-          AND ts >= ${since}
+          AND ts >= ${sinceIso}::timestamptz
           AND (
             event_type IN ('EXECUTED', 'FAILED')
             OR (event_type = 'DECIDED' AND payload ->> 'decision' = 'deny')

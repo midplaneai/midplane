@@ -328,6 +328,18 @@ describe("eventVolumeByHour", () => {
     expect(buckets[buckets.length - 1]!.counts).toEqual({});
   });
 
+  it("sends the time boundary as ISO text, not a Date (postgres-js raw-unsafe codec rejects Date)", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:30:00Z");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", { hours: 24, now });
+    const sel = lastSelect(handle.queries);
+    const dateParam = sel.params.find((p) => p instanceof Date);
+    expect(dateParam, "no Date should reach the unsafe codec").toBeUndefined();
+    expect(sel.params).toContain("2026-04-29T13:00:00.000Z");
+    expect(sel.sql).toContain("::timestamptz");
+  });
+
   it("scopes the volume query under the RLS bind, dedupes per query_id, treats deny-only DECIDED as terminal", async () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
