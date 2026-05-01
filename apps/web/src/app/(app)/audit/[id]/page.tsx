@@ -64,6 +64,11 @@ export default async function AuditDetailPage({ params }: PageProps) {
   }
 
   const related = await getRelatedEvents(customer.id, event.queryId);
+  // SQL + fingerprint live on the ATTEMPTED row's payload, but users land
+  // on whichever event they clicked (usually DECIDED for denies). Pull
+  // them up to the page header so the answer to "what was the query?" is
+  // always visible regardless of which lifecycle stage the user is on.
+  const queryContext = extractQueryContext(related);
 
   return (
     <>
@@ -93,6 +98,27 @@ export default async function AuditDetailPage({ params }: PageProps) {
           }
         />
         <StalenessBanner read={staleness} />
+
+        {queryContext.sqlRaw && (
+          <Card className="mt-[18px]">
+            <CardHeader>
+              <CardTitle>Query</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <pre className="whitespace-pre-wrap break-all rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground">
+                {queryContext.sqlRaw}
+              </pre>
+              {queryContext.sqlFingerprint && (
+                <div className="mt-2 text-[11px] text-subtle">
+                  Fingerprint:{" "}
+                  <span className="font-mono text-foreground">
+                    {queryContext.sqlFingerprint}
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <div className="mt-[18px] grid gap-6 md:grid-cols-[360px_1fr]">
           <Card>
@@ -209,6 +235,32 @@ function intentSourceLabel(source: string): string {
     default:
       return source;
   }
+}
+
+interface QueryContext {
+  sqlRaw: string | null;
+  sqlFingerprint: string | null;
+}
+
+// Walk the related events and pull the SQL/fingerprint off the ATTEMPTED
+// row's payload. ATTEMPTED is always emitted first per query lifecycle —
+// any subsequent DECIDED/EXECUTED/FAILED rows don't repeat the SQL, so
+// we have to look it up here for the page header to show it consistently
+// regardless of which lifecycle stage the user landed on. Returns nulls
+// when no ATTEMPTED row is present (e.g., POLICY_RELOADED detail page,
+// or a query lifecycle that was retention-deleted before ATTEMPTED).
+function extractQueryContext(
+  related: { eventType: string; payload: unknown }[],
+): QueryContext {
+  const attempted = related.find((r) => r.eventType === "ATTEMPTED");
+  if (!attempted || !attempted.payload || typeof attempted.payload !== "object") {
+    return { sqlRaw: null, sqlFingerprint: null };
+  }
+  const p = attempted.payload as Record<string, unknown>;
+  const sqlRaw = typeof p.sql_raw === "string" ? p.sql_raw : null;
+  const sqlFingerprint =
+    typeof p.sql_fingerprint === "string" ? p.sql_fingerprint : null;
+  return { sqlRaw, sqlFingerprint };
 }
 
 // Pull the decision string off any audit payload shape. The OSS engine

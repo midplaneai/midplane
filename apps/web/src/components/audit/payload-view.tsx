@@ -59,26 +59,16 @@ function Structured({
 }
 
 // --- ATTEMPTED ---------------------------------------------------------------
-
-function AttemptedView({ payload }: { payload: Record<string, unknown> }) {
-  const sql = stringField(payload, "sql_raw");
-  const fingerprint = stringField(payload, "sql_fingerprint");
-  return (
-    <div className="space-y-3">
-      {sql ? (
-        <CodeBlock label="SQL">{sql}</CodeBlock>
-      ) : (
-        <Empty label="SQL was not captured on this row" />
-      )}
-      {fingerprint && (
-        <Field label="Fingerprint">
-          <span className="font-mono text-[11px] text-subtle">
-            {fingerprint}
-          </span>
-        </Field>
-      )}
-    </div>
-  );
+//
+// The detail page hoists SQL + fingerprint up to a top-of-page "Query"
+// card (it walks the related events and pulls the ATTEMPTED row's
+// payload), so they're visible on every event detail regardless of which
+// lifecycle stage the user landed on. Rendering them again here would
+// just duplicate the same code block. The raw-JSON disclosure below the
+// structured view still carries the full ATTEMPTED payload for forensic
+// readers.
+function AttemptedView(_props: { payload: Record<string, unknown> }) {
+  return null;
 }
 
 // --- DECIDED -----------------------------------------------------------------
@@ -230,25 +220,6 @@ function Callout({
   );
 }
 
-function CodeBlock({
-  label,
-  children,
-}: {
-  label: string;
-  children: string;
-}) {
-  return (
-    <div>
-      <div className="mb-1.5 text-[11px] uppercase tracking-[0.04em] text-subtle">
-        {label}
-      </div>
-      <pre className="whitespace-pre-wrap break-all rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground">
-        {children}
-      </pre>
-    </div>
-  );
-}
-
 function ChipList({ items }: { items: readonly string[] }) {
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -260,14 +231,6 @@ function ChipList({ items }: { items: readonly string[] }) {
           {t}
         </span>
       ))}
-    </div>
-  );
-}
-
-function Empty({ label }: { label: string }) {
-  return (
-    <div className="rounded-md border border-dashed border-border px-3.5 py-2.5 text-xs text-subtle">
-      {label}
     </div>
   );
 }
