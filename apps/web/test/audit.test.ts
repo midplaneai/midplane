@@ -5,13 +5,19 @@
 //   1. SET LOCAL app.customer_id = '<id>' fires inside every transaction
 //      (the RLS bind audit trail). The literal "SET LOCAL" must appear in
 //      the executed SQL so reviewers + this test can grep for it.
-//   2. The cursor pagination clause is emitted (id < cursor + LIMIT 51).
-//   3. event_type filter narrows via inArray; tenant_id via eq; search
-//      against payload->>'sql_fingerprint' and query_id (ILIKE).
-//   4. Invalid customer_id (not a ULID) refuses to bind RLS at all.
+//   2. The collapsed-by-query CTE is emitted with the new aggregations
+//      (sql_raw, agent_name, agent_intent, exec_ms) and the terminal
+//      status CASE.
+//   3. status filter narrows via IN; tenant_id via eq; search against
+//      payload->>'sql_raw' OR sql_fingerprint OR query_id (ILIKE).
+//   4. Cursor pagination uses attempted_event_id < $cursor (DESC paging).
+//   5. STUCK detection fires off the injected now() so the threshold is
+//      deterministic.
+//   6. Invalid customer_id (not a ULID) refuses to bind RLS at all.
 //
-// What this does NOT cover: real Postgres RLS behavior (gated cross-tenant
-// reads). That's the Playwright e2e in audit-isolation.e2e.ts.
+// What this does NOT cover: real Postgres aggregation correctness (the
+// terminal-status CASE picks the right state given a real lifecycle
+// sequence). That's the Playwright e2e in audit-isolation.e2e.ts.
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,26 +34,27 @@ interface FakeHandle {
   db: ReturnType<typeof drizzle>;
   queries: RecordedQuery[];
   /** Loose by design: column-decoded SELECTs use tuples; raw `tx.execute()`
-   *  paths return whatever postgres-js would (row objects). Tests pass
-   *  whichever shape matches the call site they're exercising. */
-  setNextResult(rows: readonly unknown[]): void;
+   *  paths return row objects. Tests pass whichever shape matches the call
+   *  site they're exercising. */
+  setNextResult(rows: unknown[][] | Record<string, unknown>[]): void;
 }
 
 let handle: FakeHandle;
 
 function makeFakeDb(): FakeHandle {
   const queries: RecordedQuery[] = [];
-  let nextResult: readonly unknown[] = [];
+  let nextResult: unknown = [];
 
   const makeClient = (inTransaction: boolean): FakeSql => {
     const unsafe = (sql: string, params: unknown[]) => {
       queries.push({ sql, params, inTransaction });
       const rows = nextResult;
-      // Default thenable: .values() returns raw arrays, .then resolves rows
-      // (Drizzle uses .values() for SELECTs that go through prepareQuery,
-      // and bare .then for ad-hoc client.unsafe in the session.execute path).
+      // Default thenable: .values() returns raw arrays, .then resolves rows.
+      // The new listAuditQueries path goes through tx.execute(sql) which
+      // resolves via .then directly on the client return; the legacy
+      // selectFrom path uses .values(). Both are stubbed.
       const thenable: PromiseLike<unknown> & {
-        values: () => Promise<readonly unknown[]>;
+        values: () => Promise<unknown>;
         then: PromiseLike<unknown>["then"];
       } = {
         values: () => Promise.resolve(rows),
@@ -109,8 +116,8 @@ const ANOTHER_CUSTOMER_ID = "01ARZ3NDEKTSV4RRFFQ69G5FBW";
 describe("RLS bind", () => {
   it("emits SET LOCAL app.customer_id with the bound id on every list", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, { region: "fra" });
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
     const setLocal = handle.queries.find((q) =>
       q.sql.includes("SET LOCAL app.customer_id"),
     );
@@ -121,9 +128,9 @@ describe("RLS bind", () => {
 
   it("uses a fresh bind per customer (no leakage)", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, { region: "fra" });
-    await listAuditEvents(ANOTHER_CUSTOMER_ID, { region: "fra" });
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    await listAuditQueries(ANOTHER_CUSTOMER_ID, { region: "fra" });
     const binds = handle.queries
       .map((q) => q.sql)
       .filter((s) => s.includes("SET LOCAL"));
@@ -132,9 +139,9 @@ describe("RLS bind", () => {
   });
 
   it("refuses non-ULID customer ids before any DB work", async () => {
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
     await expect(
-      listAuditEvents("'; DROP TABLE customers;--", { region: "fra" }),
+      listAuditQueries("'; DROP TABLE customers;--", { region: "fra" }),
     ).rejects.toThrow(/ULID/);
     expect(handle.queries).toHaveLength(0);
   });
@@ -153,11 +160,98 @@ describe("RLS bind", () => {
   });
 });
 
-describe("listAuditEvents query shape", () => {
+describe("listAuditQueries query shape", () => {
+  it("emits a CTE that aggregates one row per query_id", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("GROUP BY query_id");
+    // Aggregations the UI reads off the row.
+    expect(sel.sql).toContain("MIN(id) AS attempted_event_id");
+    expect(sel.sql).toContain("MAX(id) AS head_event_id");
+    expect(sel.sql).toContain("MAX(agent_name) AS agent_name");
+    expect(sel.sql).toContain("MAX(agent_intent) AS agent_intent");
+    expect(sel.sql).toContain("payload ->> 'sql_raw'");
+    expect(sel.sql).toContain("(payload ->> 'exec_ms')::numeric");
+  });
+
+  it("emits a status CASE that classifies each lifecycle into a terminal state", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("WHEN has_executed THEN 'ALLOWED'");
+    expect(sel.sql).toContain("WHEN has_failed THEN 'FAILED'");
+    expect(sel.sql).toContain("'DENIED'");
+    expect(sel.sql).toContain("'STUCK'");
+    expect(sel.sql).toContain("'PENDING'");
+  });
+
+  it("UNIONs POLICY_RELOADED rows so operators can verify hot-swaps from the audit log", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const sel = lastSelect(handle.queries);
+    // The query collapses queries into one row each AND keeps policy
+    // events visible — they have no query_id and no SQL but are operator-
+    // facing, so they can't silently disappear from the list.
+    expect(sel.sql).toContain("policy_events");
+    expect(sel.sql).toContain("'POLICY_RELOADED'");
+    expect(sel.sql).toContain("'POLICY_RELOAD'");
+    expect(sel.sql.toLowerCase()).toContain("union all");
+  });
+
+  it("excludes policy events when search is active (no SQL to match against)", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "fra",
+      search: "users",
+    });
+    const sel = lastSelect(handle.queries);
+    // policySearchClause flips to AND FALSE so a "DELETE FROM users"
+    // search doesn't surface unrelated reload rows.
+    expect(sel.sql).toContain("AND FALSE");
+  });
+
+  it("returns POLICY_RELOAD rows with null queryId and null SQL fields", async () => {
+    handle.setNextResult([
+      {
+        query_id: null,
+        attempted_event_id: "01HXPOLICYRELOAD00000000000",
+        head_event_id: "01HXPOLICYRELOAD00000000000",
+        started_at: new Date("2026-04-30T12:00:00Z"),
+        last_ts: new Date("2026-04-30T12:00:00Z"),
+        tenant_id: "__self_host__",
+        database: "main",
+        agent_name: null,
+        agent_version: null,
+        agent_intent: null,
+        intent_source: null,
+        sql_raw: null,
+        sql_fingerprint: null,
+        decision: null,
+        decision_reason: null,
+        exec_ms: null,
+        status: "POLICY_RELOAD",
+      },
+    ]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.queryId).toBeNull();
+    expect(result.rows[0]!.status).toBe("POLICY_RELOAD");
+    expect(result.rows[0]!.sqlRaw).toBeNull();
+  });
+
   it("requests one extra row past pageSize for next-cursor detection", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, { region: "fra", pageSize: 50 });
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "fra",
+      pageSize: 50,
+    });
     const sel = lastSelect(handle.queries);
     expect(sel.sql.toLowerCase()).toMatch(/limit\s+\$\d+/);
     expect(sel.params).toContain(51);
@@ -165,28 +259,29 @@ describe("listAuditEvents query shape", () => {
 
   it("filters by region in the WHERE clause", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, { region: "iad" });
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "iad" });
     const sel = lastSelect(handle.queries);
     expect(sel.params).toContain("iad");
   });
 
-  it("applies inArray for multiple event_types", async () => {
+  it("applies status IN-list when statuses are provided", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, {
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
       region: "fra",
-      eventTypes: ["DECIDED", "FAILED"],
+      statuses: ["DENIED", "FAILED"],
     });
     const sel = lastSelect(handle.queries);
-    expect(sel.params).toContain("DECIDED");
+    expect(sel.sql).toMatch(/status IN \(/);
+    expect(sel.params).toContain("DENIED");
     expect(sel.params).toContain("FAILED");
   });
 
   it("applies tenant_id filter when present", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, {
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
       region: "fra",
       tenantId: "tenant_42",
     });
@@ -196,8 +291,8 @@ describe("listAuditEvents query shape", () => {
 
   it("applies database filter when present (the per-DB connection child)", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, {
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
       region: "fra",
       database: "analytics",
     });
@@ -206,60 +301,113 @@ describe("listAuditEvents query shape", () => {
     expect(sel.params).toContain("analytics");
   });
 
-  it("emits ILIKE clauses against fingerprint and query_id for search", async () => {
+  it("emits ILIKE clauses against sql_raw, fingerprint, and query_id for search", async () => {
     handle.setNextResult([]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, {
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
       region: "fra",
       search: "users",
     });
     const sel = lastSelect(handle.queries);
     expect(sel.sql.toLowerCase()).toContain("ilike");
+    expect(sel.sql).toContain("sql_raw");
     expect(sel.sql).toContain("sql_fingerprint");
     expect(sel.params).toContain("%users%");
   });
 
-  it("uses cursor in WHERE when provided (id < cursor for DESC paging)", async () => {
+  it("uses cursor in WHERE when provided (attempted_event_id < cursor for DESC paging)", async () => {
     handle.setNextResult([]);
     const cursor = "01ARZ3NDEKTSV4RRFFQ69G5ZZZ";
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    await listAuditEvents(VALID_CUSTOMER_ID, {
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
       region: "fra",
       cursor,
     });
     const sel = lastSelect(handle.queries);
     expect(sel.params).toContain(cursor);
-    expect(sel.sql).toMatch(/<\s*\$\d+/);
+    expect(sel.sql).toContain("attempted_event_id <");
+  });
+
+  it("threads the now() cutoff into the STUCK threshold as ISO text + ::timestamptz cast", async () => {
+    handle.setNextResult([]);
+    const fixedNow = new Date("2026-04-30T12:00:30Z"); // 30s after a target last_ts
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "fra",
+      now: () => fixedNow,
+    });
+    const sel = lastSelect(handle.queries);
+    // Cutoff = now - 30s = 2026-04-30T12:00:00Z, sent as ISO text. A bare
+    // Date here would 500 at runtime — postgres-js's raw-unsafe parameter
+    // codec rejects Date with "argument must be string or Buffer". Guard
+    // the shape so the regression can't reappear silently.
+    const dateParam = sel.params.find((p) => p instanceof Date);
+    expect(dateParam, "no Date should reach the unsafe codec").toBeUndefined();
+    expect(sel.params).toContain("2026-04-30T12:00:00.000Z");
+    expect(sel.sql).toContain("::timestamptz");
   });
 
   it("computes nextCursor when pageSize+1 rows are returned", async () => {
-    const rows = Array.from({ length: 51 }, (_, i) => [
-      `row-${50 - i}`, // id (DESC)
-      new Date(), // ts
-      "DECIDED", // eventType
-      null, // agentIdentity
-      "q", // queryId
-      "t", // tenantId
-      null, // sqlFingerprint
-    ]);
+    const rows = Array.from({ length: 51 }, (_, i) => ({
+      query_id: `q-${50 - i}`,
+      attempted_event_id: `att-${50 - i}`,
+      head_event_id: `head-${50 - i}`,
+      started_at: new Date(),
+      last_ts: new Date(),
+      tenant_id: "t",
+      database: "main",
+      agent_name: null,
+      agent_version: null,
+      agent_intent: null,
+      intent_source: null,
+      sql_raw: null,
+      sql_fingerprint: null,
+      decision: null,
+      decision_reason: null,
+      exec_ms: null,
+      has_attempted: true,
+      has_decided: false,
+      has_executed: false,
+      has_failed: false,
+      status: "PENDING",
+    }));
     handle.setNextResult(rows);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    const result = await listAuditEvents(VALID_CUSTOMER_ID, {
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, {
       region: "fra",
       pageSize: 50,
     });
     expect(result.rows).toHaveLength(50);
-    expect(result.nextCursor).toBe("row-1");
+    expect(result.nextCursor).toBe("att-1");
   });
 
   it("returns nextCursor=null when fewer than pageSize+1 rows are returned", async () => {
     handle.setNextResult([
-      ["only", new Date(), "EXECUTED", null, "q", "t", null],
+      {
+        query_id: "q-only",
+        attempted_event_id: "att-only",
+        head_event_id: "head-only",
+        started_at: new Date(),
+        last_ts: new Date(),
+        tenant_id: "t",
+        database: "main",
+        agent_name: null,
+        agent_version: null,
+        agent_intent: null,
+        intent_source: null,
+        sql_raw: null,
+        sql_fingerprint: null,
+        decision: null,
+        decision_reason: null,
+        exec_ms: null,
+        status: "ALLOWED",
+      },
     ]);
-    const { listAuditEvents } = await import("../src/lib/audit.ts");
-    const result = await listAuditEvents(VALID_CUSTOMER_ID, { region: "fra" });
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
     expect(result.nextCursor).toBeNull();
     expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.status).toBe("ALLOWED");
   });
 });
 
@@ -415,6 +563,12 @@ describe("eventVolumeByHour", () => {
     expect(sel.sql).toContain("'deny'");
     expect(sel.sql).toContain("'EXECUTED'");
     expect(sel.sql).toContain("'FAILED'");
+    // OSS 0.3.0 emits "DENY" (uppercase) in the decision payload, so the
+    // filter must lower() before comparing — without this the sparkline
+    // silently drops every denied query while the chip count and table
+    // row both show it (the other two paths already lowercase). Guard
+    // here so a future "simplification" can't regress to case-sensitive.
+    expect(sel.sql.toLowerCase()).toContain("lower(payload ->> 'decision')");
   });
 });
 

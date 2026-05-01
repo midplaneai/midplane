@@ -78,6 +78,13 @@
       "when": 1777644000004,
       "tag": "0010_audit_database_field",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1777644000005,
+      "tag": "0011_audit_agent_intent",
+      "breakpoints": true
     }
   ]
 }

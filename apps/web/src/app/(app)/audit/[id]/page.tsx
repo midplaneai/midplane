@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { EventBadge } from "@/components/audit/event-badge";
+import { PayloadView } from "@/components/audit/payload-view";
 import { relativeTime } from "@/components/audit/relative-time";
 import { StalenessBanner } from "@/components/audit/staleness-banner";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -63,7 +64,11 @@ export default async function AuditDetailPage({ params }: PageProps) {
   }
 
   const related = await getRelatedEvents(customer.id, event.queryId);
-  const payloadJson = JSON.stringify(event.payload, null, 2);
+  // SQL + fingerprint live on the ATTEMPTED row's payload, but users land
+  // on whichever event they clicked (usually DECIDED for denies). Pull
+  // them up to the page header so the answer to "what was the query?" is
+  // always visible regardless of which lifecycle stage the user is on.
+  const queryContext = extractQueryContext(related);
 
   return (
     <>
@@ -78,7 +83,10 @@ export default async function AuditDetailPage({ params }: PageProps) {
         <PageHeader
           title={
             <span className="inline-flex items-center gap-2">
-              <EventBadge eventType={event.eventType} />
+              <EventBadge
+                eventType={event.eventType}
+                decision={payloadDecision(event.payload)}
+              />
               <span>Audit event</span>
             </span>
           }
@@ -91,13 +99,34 @@ export default async function AuditDetailPage({ params }: PageProps) {
         />
         <StalenessBanner read={staleness} />
 
-        <div className="mt-[18px] grid gap-6 md:grid-cols-[280px_1fr]">
+        {queryContext.sqlRaw && (
+          <Card className="mt-[18px]">
+            <CardHeader>
+              <CardTitle>Query</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <pre className="whitespace-pre-wrap break-all rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground">
+                {queryContext.sqlRaw}
+              </pre>
+              {queryContext.sqlFingerprint && (
+                <div className="mt-2 text-[11px] text-subtle">
+                  Fingerprint:{" "}
+                  <span className="font-mono text-foreground">
+                    {queryContext.sqlFingerprint}
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="mt-[18px] grid gap-6 md:grid-cols-[360px_1fr]">
           <Card>
             <CardHeader>
               <CardTitle>Metadata</CardTitle>
             </CardHeader>
             <CardContent>
-              <dl className="grid grid-cols-[110px_1fr] gap-y-1.5 gap-x-3 text-xs">
+              <dl className="grid grid-cols-[100px_1fr] gap-y-1.5 gap-x-3 text-xs">
                 <Dt>Time</Dt>
                 <Dd>{event.ts.toISOString()}</Dd>
                 <Dt>Event</Dt>
@@ -105,7 +134,15 @@ export default async function AuditDetailPage({ params }: PageProps) {
                 <Dt>Tenant</Dt>
                 <Dd>{event.tenantId}</Dd>
                 <Dt>Agent</Dt>
-                <Dd>{event.agentIdentity ?? "—"}</Dd>
+                <Dd>{formatAgent(event)}</Dd>
+                <Dt>Intent</Dt>
+                <Dd>{event.agentIntent ?? "—"}</Dd>
+                {event.intentSource && (
+                  <>
+                    <Dt>Intent via</Dt>
+                    <Dd>{intentSourceLabel(event.intentSource)}</Dd>
+                  </>
+                )}
                 <Dt>Query ID</Dt>
                 <Dd>{event.queryId}</Dd>
                 <Dt>Region</Dt>
@@ -120,12 +157,7 @@ export default async function AuditDetailPage({ params }: PageProps) {
               <CardTitle>Payload</CardTitle>
             </CardHeader>
             <CardContent>
-              <pre
-                data-testid="audit-payload"
-                className="overflow-x-auto whitespace-pre rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground"
-              >
-                {payloadJson}
-              </pre>
+              <PayloadView eventType={event.eventType} payload={event.payload} />
             </CardContent>
           </Card>
         </div>
@@ -148,7 +180,10 @@ export default async function AuditDetailPage({ params }: PageProps) {
                 <span className="whitespace-nowrap font-mono text-[11px] text-subtle">
                   {r.ts.toISOString().slice(11, 23)}
                 </span>
-                <EventBadge eventType={r.eventType} />
+                <EventBadge
+                  eventType={r.eventType}
+                  decision={payloadDecision(r.payload)}
+                />
                 <span className="block max-w-[340px] truncate font-mono text-xs text-foreground">
                   {payloadFingerprint(r.payload)}
                 </span>
@@ -176,6 +211,66 @@ function Dd({ children }: { children: React.ReactNode }) {
   return (
     <dd className="break-all font-mono text-xs text-foreground">{children}</dd>
   );
+}
+
+// Render as "name vX.Y.Z" when both parts are present so the table column
+// and the detail card show the same string.
+function formatAgent(event: {
+  agentName: string | null;
+  agentVersion: string | null;
+}): string {
+  if (!event.agentName) return "—";
+  if (event.agentVersion) return `${event.agentName} v${event.agentVersion}`;
+  return event.agentName;
+}
+
+function intentSourceLabel(source: string): string {
+  switch (source) {
+    case "mcp_meta":
+      return "MCP _meta.intent";
+    case "sql_comment":
+      return "SQL comment";
+    case "http_header":
+      return "X-Midplane-Intent header";
+    default:
+      return source;
+  }
+}
+
+interface QueryContext {
+  sqlRaw: string | null;
+  sqlFingerprint: string | null;
+}
+
+// Walk the related events and pull the SQL/fingerprint off the ATTEMPTED
+// row's payload. ATTEMPTED is always emitted first per query lifecycle —
+// any subsequent DECIDED/EXECUTED/FAILED rows don't repeat the SQL, so
+// we have to look it up here for the page header to show it consistently
+// regardless of which lifecycle stage the user landed on. Returns nulls
+// when no ATTEMPTED row is present (e.g., POLICY_RELOADED detail page,
+// or a query lifecycle that was retention-deleted before ATTEMPTED).
+function extractQueryContext(
+  related: { eventType: string; payload: unknown }[],
+): QueryContext {
+  const attempted = related.find((r) => r.eventType === "ATTEMPTED");
+  if (!attempted || !attempted.payload || typeof attempted.payload !== "object") {
+    return { sqlRaw: null, sqlFingerprint: null };
+  }
+  const p = attempted.payload as Record<string, unknown>;
+  const sqlRaw = typeof p.sql_raw === "string" ? p.sql_raw : null;
+  const sqlFingerprint =
+    typeof p.sql_fingerprint === "string" ? p.sql_fingerprint : null;
+  return { sqlRaw, sqlFingerprint };
+}
+
+// Pull the decision string off any audit payload shape. The OSS engine
+// writes "allow" / "deny" on DECIDED rows; other event types don't carry
+// it. Returns null when absent so EventBadge falls back to its default
+// per-event-type color.
+function payloadDecision(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const d = (payload as Record<string, unknown>).decision;
+  return typeof d === "string" ? d : null;
 }
 
 function payloadFingerprint(payload: unknown): string {

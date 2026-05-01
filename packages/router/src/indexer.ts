@@ -73,7 +73,19 @@ export interface ContainerAuditRow {
   id: string;
   query_id: string;
   tenant_id: string;
-  agent_identity: string | null;
+  /** From MCP `clientInfo.name` on the initialize handshake. The OSS
+   *  caches this on the session object and stamps it on every emitted
+   *  row. Null for non-MCP callers and for sessions where clientInfo was
+   *  empty/missing. */
+  agent_name?: string | null;
+  /** From MCP `clientInfo.version`. Independent nullability from name —
+   *  some MCP clients send name without version. */
+  agent_version?: string | null;
+  /** Free-text task description, ≤ 500 chars (OSS truncates before send). */
+  agent_intent?: string | null;
+  /** Channel that surfaced the intent. Order of preference at resolution
+   *  time: mcp_meta → sql_comment → http_header. */
+  intent_source?: "mcp_meta" | "sql_comment" | "http_header" | null;
   /** OSS-side DB name (`main`, `analytics`, …). Sent by OSS 0.2.0 when
    *  the engine runs against a YAML `databases:` block; absent on legacy
    *  single-DB containers. The cloud defaults to "main" when missing so
@@ -86,6 +98,12 @@ export interface ContainerAuditRow {
 }
 
 const DEFAULT_DB_NAME_FALLBACK = "main";
+const VALID_INTENT_SOURCES = new Set([
+  "mcp_meta",
+  "sql_comment",
+  "http_header",
+]);
+const MAX_AGENT_INTENT_LEN = 500;
 
 interface AuditSinceResponse {
   rows: ContainerAuditRow[];
@@ -306,7 +324,10 @@ export class Indexer {
               tenantId: row.tenant_id,
               region,
               queryId: row.query_id,
-              agentIdentity: row.agent_identity,
+              agentName: row.agent_name ?? null,
+              agentVersion: row.agent_version ?? null,
+              agentIntent: row.agent_intent ?? null,
+              intentSource: row.intent_source ?? null,
               // 0.2.0 OSS sends `database` per row; fall back to "main"
               // for legacy containers (or rows where the field is empty
               // string from a misconfigured engine — coerced via ||).
@@ -454,10 +475,24 @@ function isValidAuditRow(row: unknown): row is ContainerAuditRow {
   if (!r.payload || typeof r.payload !== "object" || Array.isArray(r.payload)) {
     return false;
   }
+  if (!isOptionalString(r.agent_name)) return false;
+  if (!isOptionalString(r.agent_version)) return false;
+  if (!isOptionalString(r.agent_intent)) return false;
+  // Reject over-length intent at the validation boundary so a misbehaving
+  // container can't bypass the OSS-side truncation. Matches the CHECK
+  // constraint installed by migration 0011 — rejecting here keeps the
+  // cursor unblocked (the row is dropped, not retried forever).
   if (
-    r.agent_identity !== null &&
-    r.agent_identity !== undefined &&
-    typeof r.agent_identity !== "string"
+    typeof r.agent_intent === "string" &&
+    r.agent_intent.length > MAX_AGENT_INTENT_LEN
+  ) {
+    return false;
+  }
+  if (
+    r.intent_source !== null &&
+    r.intent_source !== undefined &&
+    (typeof r.intent_source !== "string" ||
+      !VALID_INTENT_SOURCES.has(r.intent_source))
   ) {
     return false;
   }
@@ -471,5 +506,9 @@ function isValidAuditRow(row: unknown): row is ContainerAuditRow {
     return false;
   }
   return true;
+}
+
+function isOptionalString(v: unknown): boolean {
+  return v === null || v === undefined || typeof v === "string";
 }
 

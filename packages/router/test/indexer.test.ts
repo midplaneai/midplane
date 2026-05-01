@@ -277,11 +277,10 @@ function row(
     id,
     query_id: "q-1",
     tenant_id: "__self_host__",
-    agent_identity: null,
     ts: 1_700_000_000_000 + parseInt(id.slice(-3), 36),
     event_type: "ATTEMPTED",
     payload: { sql_fingerprint: "abc123" },
-    schema_version: 1,
+    schema_version: 2,
     ...overrides,
   };
 }
@@ -568,6 +567,89 @@ describe("Indexer", () => {
     expect(state.cursorByToken.get("tok-A")?.lastId).toBe(
       "01HX0000000000000000000003",
     );
+    expect(errors).toHaveLength(1);
+  });
+
+  it("persists agent_name/version/intent/intent_source from new-shape rows", async () => {
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [
+          {
+            ...row("01HX0000000000000000000001"),
+            agent_name: "claude-code",
+            agent_version: "0.42.1",
+            agent_intent: "count active connections",
+            intent_source: "mcp_meta",
+          },
+        ],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+    await ix.tick();
+
+    const persisted = state.auditRows[0]!;
+    expect(persisted.agentName).toBe("claude-code");
+    expect(persisted.agentVersion).toBe("0.42.1");
+    expect(persisted.agentIntent).toBe("count active connections");
+    expect(persisted.intentSource).toBe("mcp_meta");
+  });
+
+  it("rejects rows with invalid intent_source", async () => {
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [
+          {
+            ...row("01HX0000000000000000000001"),
+            intent_source: "smuggled_channel",
+          },
+          row("01HX0000000000000000000002"),
+        ],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const errors: unknown[] = [];
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onError: (err) => errors.push(err),
+    });
+    await ix.tick();
+
+    expect(state.auditRows.map((r) => r.id)).toEqual([
+      "01HX0000000000000000000002",
+    ]);
+    expect(errors).toHaveLength(1);
+  });
+
+  it("rejects rows with agent_intent over the 500-char cap", async () => {
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [
+          {
+            ...row("01HX0000000000000000000001"),
+            agent_intent: "a".repeat(501),
+          },
+        ],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const errors: unknown[] = [];
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onError: (err) => errors.push(err),
+    });
+    await ix.tick();
+
+    expect(state.auditRows).toHaveLength(0);
     expect(errors).toHaveLength(1);
   });
 

@@ -22,8 +22,14 @@
 // true)` accepts parameters but produces a SQL log line that does not
 // contain "SET LOCAL", which makes the RLS-bind audit harder for
 // reviewers and tests.
+//
+// List shape note: the OSS engine emits ATTEMPTED → DECIDED →
+// (EXECUTED | FAILED) as separate rows tied by query_id. The dashboard
+// list collapses this lifecycle into one logical row per query, with a
+// computed terminal status. The lifecycle stages are still individually
+// queryable (getRelatedEvents) for the detail page.
 
-import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 
 import {
   auditEventsIndex,
@@ -35,6 +41,9 @@ import {
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
+// Lifecycle event types — still emitted per-row by the OSS engine and
+// rendered individually on the audit detail page. The list page no longer
+// filters by these (it filters by terminal QueryStatus instead).
 export const EVENT_TYPES = [
   "ATTEMPTED",
   "DECIDED",
@@ -43,89 +52,292 @@ export const EVENT_TYPES = [
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
-export interface AuditListRow {
-  id: string;
-  ts: Date;
-  eventType: string;
-  agentIdentity: string | null;
-  queryId: string;
+// Terminal-state classification of a query's lifecycle. Computed from the
+// set of stage rows in the DB, not stored. Order here is the order chips
+// appear in the filter strip.
+//
+// POLICY_RELOAD is a non-query event (the OSS engine emits POLICY_RELOADED
+// rows on a successful /admin/policy hot-swap). It rides in the same list
+// because operators need a single place to verify when a policy change
+// took effect. It always carries a NULL query_id and shows alongside the
+// query rows; the status pill marks it visually distinct.
+export const QUERY_STATUSES = [
+  "ALLOWED",
+  "DENIED",
+  "FAILED",
+  "STUCK",
+  "PENDING",
+  "POLICY_RELOAD",
+] as const;
+export type QueryStatus = (typeof QUERY_STATUSES)[number];
+
+// A query is STUCK when it reached ATTEMPTED (or DECIDED) but no terminal
+// stage (EXECUTED/FAILED/DENIED) arrived after this many milliseconds of
+// wall-clock from the last seen event. Tuned around the indexer tick
+// (5s) plus a couple of cycles of headroom — anything longer than this
+// almost certainly means the engine crashed or a downstream Postgres
+// hung, both worth surfacing.
+const STUCK_THRESHOLD_MS = 30_000;
+
+export interface AuditQueryListRow {
+  /** Null for POLICY_RELOAD rows (those aren't queries — they're operator
+   *  events the OSS engine emits on hot-swap). */
+  queryId: string | null;
+  /** ULID of the ATTEMPTED event — stable cursor token (it never moves
+   *  once written). Used for pagination ordering. POLICY_RELOAD rows
+   *  carry the policy event's own id here. */
+  attemptedEventId: string;
+  /** Most recent event id for this query. The list row links here so the
+   *  detail page lands on whichever stage rendered the terminal state. */
+  headEventId: string;
+  startedAt: Date;
+  lastTs: Date;
   tenantId: string;
+  database: string;
+  agentName: string | null;
+  agentVersion: string | null;
+  agentIntent: string | null;
+  intentSource: "mcp_meta" | "sql_comment" | "http_header" | null;
+  sqlRaw: string | null;
   sqlFingerprint: string | null;
+  /** "allow" | "deny" | other free-text — whatever the OSS engine wrote
+   *  on the DECIDED payload. Lowercased by convention. Null when no
+   *  DECIDED row exists yet. */
+  decision: string | null;
+  decisionReason: string | null;
+  execMs: number | null;
+  status: QueryStatus;
 }
 
 export interface ListAuditOpts {
   region: Region;
-  /** Empty = all event types (no filter applied). */
-  eventTypes?: readonly EventType[];
-  /** Empty/undefined = all tenants. Single value per V1 mockup. */
+  /** Empty/undefined = all statuses. */
+  statuses?: readonly QueryStatus[];
+  /** Empty/undefined = all tenants. */
   tenantId?: string;
   /** Empty/undefined = all databases. The name is the OSS-side `database:`
    *  on a connection (the per-DB row in `connection_databases`), not a
    *  per-client connection. Hits audit_customer_region_database_ts_idx. */
   database?: string;
-  /** Substring match against payload->>'sql_fingerprint' OR query_id. */
+  /** Substring match against payload->>'sql_raw',
+   *  payload->>'sql_fingerprint', and query_id. Matches if ANY event for
+   *  the query matches — so a search hit on the ATTEMPTED row's SQL
+   *  surfaces the whole query lifecycle. */
   search?: string;
-  /** Last id from the previous page (id DESC ordering). Cursor is exclusive. */
+  /** ATTEMPTED-event-id of the last row from the previous page. The next
+   *  page returns queries whose attempted_event_id < cursor (DESC paging). */
   cursor?: string;
-  /** Page size; default 50. The query asks for limit+1 so callers can detect
-   *  whether a next page exists without a second COUNT round-trip. */
+  /** Page size; default 50. The query asks for limit+1 so callers can
+   *  detect whether a next page exists without a second COUNT round-trip. */
   pageSize?: number;
+  /** Injected for tests so STUCK detection is deterministic. */
+  now?: () => Date;
 }
 
 export interface ListAuditResult {
-  rows: AuditListRow[];
+  rows: AuditQueryListRow[];
   nextCursor: string | null;
 }
 
-/** List audit rows for the current customer, RLS-scoped + region-pinned. */
-export async function listAuditEvents(
+/** List queries (collapsed lifecycle) for the current customer, RLS-scoped
+ *  + region-pinned. */
+export async function listAuditQueries(
   customerId: string,
   opts: ListAuditOpts,
 ): Promise<ListAuditResult> {
   const limit = opts.pageSize ?? 50;
+  const nowMs = (opts.now?.() ?? new Date()).getTime();
+  // ISO text + ::timestamptz cast: postgres-js's raw-unsafe parameter
+  // codec (the path Drizzle uses for tx.execute on a sql template) does
+  // not auto-serialize Date, so binding a Date here throws
+  // "argument must be string or Buffer". Same pattern as eventVolumeByHour.
+  const stuckCutoffIso = new Date(nowMs - STUCK_THRESHOLD_MS).toISOString();
+
   return withCustomerScope(customerId, async (tx) => {
-    const filters = [
-      eq(auditEventsIndex.customerId, customerId),
-      eq(auditEventsIndex.region, opts.region),
-    ];
-    if (opts.cursor) filters.push(lt(auditEventsIndex.id, opts.cursor));
-    if (opts.eventTypes && opts.eventTypes.length > 0) {
-      filters.push(inArray(auditEventsIndex.eventType, [...opts.eventTypes]));
-    }
-    if (opts.tenantId) {
-      filters.push(eq(auditEventsIndex.tenantId, opts.tenantId));
-    }
-    if (opts.database) {
-      filters.push(eq(auditEventsIndex.database, opts.database));
-    }
-    if (opts.search && opts.search.trim().length > 0) {
-      const needle = `%${opts.search.trim()}%`;
-      filters.push(
-        or(
-          sql`${auditEventsIndex.payload} ->> 'sql_fingerprint' ILIKE ${needle}`,
-          sql`${auditEventsIndex.queryId} ILIKE ${needle}`,
-        )!,
-      );
-    }
+    // Inner WHERE narrows the rows that participate in aggregation. Search
+    // is applied via a query_id IN (...) subquery so a search hit on the
+    // ATTEMPTED row surfaces the entire lifecycle (the inner WHERE alone
+    // would filter out the DECIDED/EXECUTED rows for that query). Tenant,
+    // region, and database filter directly because they're identical
+    // across all rows of a query_id.
+    const tenantClause = opts.tenantId
+      ? sql`AND tenant_id = ${opts.tenantId}`
+      : sql``;
+    const databaseClause = opts.database
+      ? sql`AND database = ${opts.database}`
+      : sql``;
+    const cursorClause = opts.cursor
+      ? sql`AND attempted_event_id < ${opts.cursor}`
+      : sql``;
 
-    const rows = await tx
-      .select({
-        id: auditEventsIndex.id,
-        ts: auditEventsIndex.ts,
-        eventType: auditEventsIndex.eventType,
-        agentIdentity: auditEventsIndex.agentIdentity,
-        queryId: auditEventsIndex.queryId,
-        tenantId: auditEventsIndex.tenantId,
-        sqlFingerprint: sql<
-          string | null
-        >`${auditEventsIndex.payload} ->> 'sql_fingerprint'`,
-      })
-      .from(auditEventsIndex)
-      .where(and(...filters))
-      .orderBy(desc(auditEventsIndex.id))
-      .limit(limit + 1);
+    const hasSearch =
+      opts.search !== undefined && opts.search.trim().length > 0;
+    const searchClause = (() => {
+      const needle = opts.search?.trim();
+      if (!needle) return sql``;
+      const pattern = `%${needle}%`;
+      return sql`
+        AND query_id IN (
+          SELECT query_id FROM audit_events_index
+          WHERE customer_id = ${customerId}
+            AND region = ${opts.region}
+            AND (
+              payload ->> 'sql_raw' ILIKE ${pattern}
+              OR payload ->> 'sql_fingerprint' ILIKE ${pattern}
+              OR query_id ILIKE ${pattern}
+            )
+        )
+      `;
+    })();
+    // Policy events have no SQL or query_id to match — exclude them
+    // entirely when the user is searching, otherwise an unrelated reload
+    // event would pop up in a "DELETE FROM users" search and confuse.
+    const policySearchClause = hasSearch ? sql`AND FALSE` : sql``;
 
-    const next = rows.length > limit ? (rows[limit - 1]?.id ?? null) : null;
+    const statusClause = (() => {
+      if (!opts.statuses || opts.statuses.length === 0) return sql``;
+      // Status is a CASE expression; can't reference an alias in HAVING
+      // across all PG versions, so wrap the whole thing in a subselect.
+      const list = opts.statuses.map((s) => sql`${s}`);
+      return sql`AND status IN (${sql.join(list, sql`, `)})`;
+    })();
+
+    // The CASE order matters: terminal SUCCESS / FAILURE / DENY come
+    // before STUCK / PENDING. has_executed implies an upstream allow
+    // decision (the OSS engine never emits EXECUTED without DECIDED+allow);
+    // we trust that invariant rather than re-checking.
+    //
+    // policy_events is unioned in alongside the query aggregation so
+    // POLICY_RELOADED rows (singletons, no lifecycle) keep showing up in
+    // the audit log — operators rely on this list to verify a hot-swap
+    // landed. Both CTEs project the same column shape with explicit
+    // NULL casts; UNION ALL needs matching types on each branch.
+    const stmt = sql`
+      WITH agg AS (
+        SELECT
+          query_id,
+          MIN(id) AS attempted_event_id,
+          MAX(id) AS head_event_id,
+          MIN(ts) AS started_at,
+          MAX(ts) AS last_ts,
+          MAX(tenant_id) AS tenant_id,
+          MAX(database) AS database,
+          MAX(agent_name) AS agent_name,
+          MAX(agent_version) AS agent_version,
+          MAX(agent_intent) AS agent_intent,
+          MAX(intent_source) AS intent_source,
+          BOOL_OR(event_type = 'ATTEMPTED') AS has_attempted,
+          BOOL_OR(event_type = 'DECIDED') AS has_decided,
+          BOOL_OR(event_type = 'EXECUTED') AS has_executed,
+          BOOL_OR(event_type = 'FAILED') AS has_failed,
+          MAX(payload ->> 'sql_raw') FILTER (WHERE event_type = 'ATTEMPTED') AS sql_raw,
+          MAX(payload ->> 'sql_fingerprint') FILTER (WHERE event_type = 'ATTEMPTED') AS sql_fingerprint,
+          MAX(payload ->> 'decision') FILTER (WHERE event_type = 'DECIDED') AS decision,
+          MAX(payload ->> 'reason') FILTER (WHERE event_type = 'DECIDED') AS decision_reason,
+          MAX((payload ->> 'exec_ms')::numeric) FILTER (WHERE event_type = 'EXECUTED') AS exec_ms
+        FROM audit_events_index
+        WHERE customer_id = ${customerId}
+          AND region = ${opts.region}
+          AND event_type IN ('ATTEMPTED', 'DECIDED', 'EXECUTED', 'FAILED')
+          ${tenantClause}
+          ${databaseClause}
+          ${searchClause}
+        GROUP BY query_id
+      ),
+      classified AS (
+        SELECT
+          query_id,
+          attempted_event_id,
+          head_event_id,
+          started_at,
+          last_ts,
+          tenant_id,
+          database,
+          agent_name,
+          agent_version,
+          agent_intent,
+          intent_source,
+          sql_raw,
+          sql_fingerprint,
+          decision,
+          decision_reason,
+          exec_ms,
+          CASE
+            WHEN has_executed THEN 'ALLOWED'
+            WHEN has_failed THEN 'FAILED'
+            WHEN has_decided AND lower(decision) = 'deny' THEN 'DENIED'
+            WHEN last_ts < ${stuckCutoffIso}::timestamptz THEN 'STUCK'
+            ELSE 'PENDING'
+          END AS status
+        FROM agg
+      ),
+      policy_events AS (
+        SELECT
+          NULL::text AS query_id,
+          id AS attempted_event_id,
+          id AS head_event_id,
+          ts AS started_at,
+          ts AS last_ts,
+          tenant_id,
+          database,
+          NULL::text AS agent_name,
+          NULL::text AS agent_version,
+          NULL::text AS agent_intent,
+          NULL::text AS intent_source,
+          NULL::text AS sql_raw,
+          NULL::text AS sql_fingerprint,
+          NULL::text AS decision,
+          NULL::text AS decision_reason,
+          NULL::numeric AS exec_ms,
+          'POLICY_RELOAD' AS status
+        FROM audit_events_index
+        WHERE customer_id = ${customerId}
+          AND region = ${opts.region}
+          AND event_type = 'POLICY_RELOADED'
+          ${tenantClause}
+          ${databaseClause}
+          ${policySearchClause}
+      )
+      SELECT * FROM (
+        SELECT * FROM classified
+        UNION ALL
+        SELECT * FROM policy_events
+      ) merged
+      WHERE 1=1
+        ${cursorClause}
+        ${statusClause}
+      ORDER BY attempted_event_id DESC
+      LIMIT ${limit + 1}
+    `;
+
+    const result = await tx.execute(stmt);
+    const rawRows = (result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[]);
+    const rows: AuditQueryListRow[] = (rawRows as Record<string, unknown>[]).map(
+      (r) => ({
+        queryId: r.query_id == null ? null : String(r.query_id),
+        attemptedEventId: String(r.attempted_event_id),
+        headEventId: String(r.head_event_id),
+        startedAt: new Date(r.started_at as string | Date),
+        lastTs: new Date(r.last_ts as string | Date),
+        tenantId: String(r.tenant_id),
+        database: String(r.database),
+        agentName: (r.agent_name as string | null) ?? null,
+        agentVersion: (r.agent_version as string | null) ?? null,
+        agentIntent: (r.agent_intent as string | null) ?? null,
+        intentSource: (r.intent_source as AuditQueryListRow["intentSource"]) ?? null,
+        sqlRaw: (r.sql_raw as string | null) ?? null,
+        sqlFingerprint: (r.sql_fingerprint as string | null) ?? null,
+        decision: (r.decision as string | null) ?? null,
+        decisionReason: (r.decision_reason as string | null) ?? null,
+        execMs: r.exec_ms == null ? null : Number(r.exec_ms),
+        status: r.status as QueryStatus,
+      }),
+    );
+
+    const next =
+      rows.length > limit
+        ? (rows[limit - 1]?.attemptedEventId ?? null)
+        : null;
     return { rows: rows.slice(0, limit), nextCursor: next };
   });
 }
@@ -206,13 +418,14 @@ export interface VolumeBucket {
  *  Hits audit_customer_region_ts_idx for the range scan, then audit_query_id_idx
  *  via DISTINCT ON. Within a 24h window over one customer this is small. */
 export interface VolumeFilters {
-  /** Empty/undefined = all tenants. Same shape as listAuditEvents. */
+  /** Empty/undefined = all tenants. */
   tenantId?: string;
   /** Empty/undefined = all databases. */
   database?: string;
-  /** Substring against query_id OR payload->>'sql_fingerprint'. Restricts
-   *  which queries contribute via a query_id IN (...) subquery so the chart
-   *  matches what the table below it shows. */
+  /** Substring against query_id, payload->>'sql_raw', or
+   *  payload->>'sql_fingerprint'. Restricts which queries contribute via a
+   *  query_id IN (...) subquery so the chart matches what the table below
+   *  it shows. */
   search?: string;
 }
 
@@ -249,11 +462,9 @@ export async function eventVolumeByHour(
     opts.search && opts.search.trim().length > 0
       ? (() => {
           const needle = `%${opts.search.trim()}%`;
-          // Search lives across all lifecycle rows in the listing
-          // (sql_fingerprint is on ATTEMPTED, query_id is everywhere), so
-          // the volume chart inherits the same shape via a query_id IN
-          // (matching) subquery rather than restricting only the inner
-          // EXECUTED/FAILED/DECIDED-deny set.
+          // Mirror listAuditQueries' search shape (sql_raw + sql_fingerprint
+          // + query_id) so the chart and the table can never disagree on
+          // which queries are in scope.
           return sql`AND query_id IN (
             SELECT DISTINCT query_id FROM audit_events_index
             WHERE customer_id = ${customerId}
@@ -261,6 +472,7 @@ export async function eventVolumeByHour(
               AND ts >= ${sinceIso}::timestamptz
               AND (
                 query_id ILIKE ${needle}
+                OR payload ->> 'sql_raw' ILIKE ${needle}
                 OR payload ->> 'sql_fingerprint' ILIKE ${needle}
               )
           )`;
@@ -296,7 +508,7 @@ export async function eventVolumeByHour(
           AND ts >= ${sinceIso}::timestamptz
           AND (
             event_type IN ('EXECUTED', 'FAILED')
-            OR (event_type = 'DECIDED' AND payload ->> 'decision' = 'deny')
+            OR (event_type = 'DECIDED' AND lower(payload ->> 'decision') = 'deny')
           )
           ${tenantClause}
           ${databaseClause}
@@ -338,36 +550,73 @@ export async function eventVolumeByHour(
   return buckets;
 }
 
-/** Counts per event_type, used to render the badges next to each filter
- *  chip. RLS-scoped + region-pinned; cheap because the compound index
- *  (customer_id, region, event_type, ts DESC) is index-only-scan friendly. */
-export async function countByEventType(
+/** Counts per terminal status, used to render the badges next to each
+ *  filter chip. Computed by re-running the same aggregation as
+ *  listAuditQueries, but grouped by status. RLS-scoped + region-pinned. */
+export async function countByStatus(
   customerId: string,
   region: Region,
-): Promise<Record<EventType, number>> {
-  const result: Record<EventType, number> = {
-    ATTEMPTED: 0,
-    DECIDED: 0,
-    EXECUTED: 0,
+  now: () => Date = () => new Date(),
+): Promise<Record<QueryStatus, number>> {
+  const result: Record<QueryStatus, number> = {
+    ALLOWED: 0,
+    DENIED: 0,
     FAILED: 0,
+    STUCK: 0,
+    PENDING: 0,
+    POLICY_RELOAD: 0,
   };
+  // ISO text + ::timestamptz cast: see listAuditQueries above for the
+  // postgres-js raw-unsafe Date-codec rationale. Same fix applies here.
+  const stuckCutoffIso = new Date(
+    now().getTime() - STUCK_THRESHOLD_MS,
+  ).toISOString();
   return withCustomerScope(customerId, async (tx) => {
-    const rows = await tx
-      .select({
-        eventType: auditEventsIndex.eventType,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(auditEventsIndex)
-      .where(
-        and(
-          eq(auditEventsIndex.customerId, customerId),
-          eq(auditEventsIndex.region, region),
-        ),
+    // Single statement: query lifecycles classified by status, plus a
+    // POLICY_RELOAD bucket so operators can see at a glance how many
+    // hot-swaps landed in the visible window.
+    const stmt = sql`
+      WITH agg AS (
+        SELECT
+          query_id,
+          MAX(ts) AS last_ts,
+          BOOL_OR(event_type = 'EXECUTED') AS has_executed,
+          BOOL_OR(event_type = 'FAILED') AS has_failed,
+          BOOL_OR(event_type = 'DECIDED') AS has_decided,
+          MAX(payload ->> 'decision') FILTER (WHERE event_type = 'DECIDED') AS decision
+        FROM audit_events_index
+        WHERE customer_id = ${customerId}
+          AND region = ${region}
+          AND event_type IN ('ATTEMPTED', 'DECIDED', 'EXECUTED', 'FAILED')
+        GROUP BY query_id
       )
-      .groupBy(auditEventsIndex.eventType);
+      SELECT
+        CASE
+          WHEN has_executed THEN 'ALLOWED'
+          WHEN has_failed THEN 'FAILED'
+          WHEN has_decided AND lower(decision) = 'deny' THEN 'DENIED'
+          WHEN last_ts < ${stuckCutoffIso}::timestamptz THEN 'STUCK'
+          ELSE 'PENDING'
+        END AS status,
+        count(*)::int AS count
+      FROM agg
+      GROUP BY 1
+      UNION ALL
+      SELECT
+        'POLICY_RELOAD' AS status,
+        count(*)::int AS count
+      FROM audit_events_index
+      WHERE customer_id = ${customerId}
+        AND region = ${region}
+        AND event_type = 'POLICY_RELOADED'
+    `;
+    const raw = await tx.execute(stmt);
+    const rows = ((raw as unknown as { rows?: unknown[] }).rows ??
+      (raw as unknown as unknown[])) as Record<string, unknown>[];
     for (const r of rows) {
-      if ((EVENT_TYPES as readonly string[]).includes(r.eventType)) {
-        result[r.eventType as EventType] = Number(r.count);
+      const status = String(r.status) as QueryStatus;
+      if ((QUERY_STATUSES as readonly string[]).includes(status)) {
+        result[status] = Number(r.count);
       }
     }
     return result;

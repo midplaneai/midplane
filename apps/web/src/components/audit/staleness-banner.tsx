@@ -45,7 +45,7 @@ export function StalenessSubtitle({
 }) {
   if (read.staleMs === null) {
     return (
-      <div className="mb-5 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
         <span className="font-mono">{totalCount.toLocaleString()}</span>{" "}
         queries · awaiting first audit data
       </div>
@@ -55,7 +55,7 @@ export function StalenessSubtitle({
   const live = read.staleMs < STALE_WARN_MS;
 
   return (
-    <div className="mb-5 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
       {live && (
         <span
           aria-hidden

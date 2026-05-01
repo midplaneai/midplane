@@ -13,13 +13,22 @@ import {
 } from "../src/schema.ts";
 
 describe("schema parity with OSS audit_events", () => {
-  it("audit_events_index has all OSS columns plus customer_id, tenant_id, region, database", () => {
+  it("audit_events_index has all OSS v2 columns plus customer_id, tenant_id, region, database", () => {
     const cols = Object.keys(auditEventsIndex);
-    // OSS columns (from packages/engine/src/audit/schema.sql)
+    // OSS v2 columns (audit_events.schema_version 2 — OSS 0.3.0 split
+    // agent_identity into agent_name + agent_version and added
+    // agent_intent + intent_source). agentIdentity is also still on the
+    // schema as a deprecated column kept for one rollout window so an
+    // in-flight pre-bump indexer can still write to it without a 42703;
+    // a follow-up migration drops both the column and the field.
     for (const col of [
       "id",
       "queryId",
       "agentIdentity",
+      "agentName",
+      "agentVersion",
+      "agentIntent",
+      "intentSource",
       "ts",
       "eventType",
       "payload",
