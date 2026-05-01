@@ -263,6 +263,18 @@ export function AddDatabaseForm({
           <Button type="submit" size="sm" disabled={pending}>
             {pending ? "Adding…" : "Add database"}
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={pending}
+            onClick={() => {
+              setOpen(false);
+              reset();
+            }}
+          >
+            Cancel
+          </Button>
           <TestStatus state={test} />
           {error ? (
             <span className="text-xs text-destructive">{error}</span>
