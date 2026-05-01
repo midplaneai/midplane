@@ -508,7 +508,7 @@ export async function eventVolumeByHour(
           AND ts >= ${sinceIso}::timestamptz
           AND (
             event_type IN ('EXECUTED', 'FAILED')
-            OR (event_type = 'DECIDED' AND payload ->> 'decision' = 'deny')
+            OR (event_type = 'DECIDED' AND lower(payload ->> 'decision') = 'deny')
           )
           ${tenantClause}
           ${databaseClause}

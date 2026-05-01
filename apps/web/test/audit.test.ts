@@ -563,6 +563,12 @@ describe("eventVolumeByHour", () => {
     expect(sel.sql).toContain("'deny'");
     expect(sel.sql).toContain("'EXECUTED'");
     expect(sel.sql).toContain("'FAILED'");
+    // OSS 0.3.0 emits "DENY" (uppercase) in the decision payload, so the
+    // filter must lower() before comparing — without this the sparkline
+    // silently drops every denied query while the chip count and table
+    // row both show it (the other two paths already lowercase). Guard
+    // here so a future "simplification" can't regress to case-sensitive.
+    expect(sel.sql.toLowerCase()).toContain("lower(payload ->> 'decision')");
   });
 });
 
