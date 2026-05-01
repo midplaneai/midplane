@@ -9,6 +9,13 @@
 // on its responses. We pass that header through unchanged. Off-Fly the
 // header is inert; on Fly the edge uses it to pin subsequent requests in
 // the same session to the same machine.
+//
+// Multi-DB rollout (0008): one OSS container fronts N DBs. The proxy
+// resolves the parent connection + its children, decrypts each DSN
+// independently (one DecryptCache entry per credential), then hands the
+// full set to the spawner — which writes the multi-DB YAML and injects
+// per-DB env vars. PR-A leaves the user surface single-DB; the cloud
+// always emits the multi-DB shape regardless of N.
 
 import { resolveByToken } from "@midplane-cloud/router";
 import { getDb, parsePolicyOrThrow } from "@midplane-cloud/db";
@@ -32,35 +39,76 @@ export async function proxyMcp(
   req: Request,
   token: string,
 ): Promise<Response> {
-  const conn = await resolveByToken(getDb(), token);
-  if (!conn) {
+  const resolved = await resolveByToken(getDb(), token);
+  if (!resolved) {
+    return Response.json({ ok: false, error: "not_found" }, { status: 404 });
+  }
+  const { connection, databases } = resolved;
+  if (databases.length === 0) {
+    // Connection without children is a torn migration / data corruption —
+    // can't spawn a container with no DSN. Treat as not_found to avoid
+    // leaking the row's existence; the underlying issue surfaces in logs.
+    console.error(
+      `proxyMcp: connection ${connection.id} has no databases (token ${token.slice(0, 8)}…)`,
+    );
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }
 
   const ctx = getMcpProxyContext();
-  const decrypt = await ctx.resolver.resolve(conn);
-  if (!decrypt.ok) {
-    return Response.json(
-      {
-        jsonrpc: "2.0",
-        error: { code: -32001, message: "credential_unavailable" },
-        id: null,
-      },
-      { status: 503 },
-    );
+
+  // Decrypt each child's DSN independently. Per-credential cache means
+  // KMS unavailability for one DB doesn't block siblings; one expired
+  // credential refuses the whole spawn (the OSS container needs every
+  // configured DB to boot cleanly).
+  const spawnDatabases = [];
+  for (const cdb of databases) {
+    const decrypt = await ctx.resolver.resolve({
+      connectionDatabase: cdb,
+      region: connection.region,
+      customerId: connection.customerId,
+    });
+    if (!decrypt.ok) {
+      return Response.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "credential_unavailable" },
+          id: null,
+        },
+        { status: 503 },
+      );
+    }
+    let tableAccess;
+    try {
+      // Validate at the boundary — Postgres should never hold malformed
+      // policy (validatePolicy gates every write), but if it somehow does,
+      // fail closed instead of starting a container with a degraded YAML.
+      tableAccess = parsePolicyOrThrow(cdb.tableAccess);
+    } catch (err) {
+      console.error("invalid policy at spawn", err);
+      return Response.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32002, message: "upstream_unavailable" },
+          id: null,
+        },
+        { status: 502 },
+      );
+    }
+    spawnDatabases.push({
+      name: cdb.name,
+      connectionDatabaseId: cdb.id,
+      dsn: decrypt.plaintext,
+      tableAccess,
+      tenantScopeMappings: cdb.tenantScopeMappings,
+    });
   }
 
   let upstream;
   try {
-    // Validate at the boundary — Postgres should never hold malformed
-    // policy (validatePolicy gates every write), but if it somehow does,
-    // fail closed instead of starting a container with a degraded YAML.
-    const tableAccess = parsePolicyOrThrow(conn.tableAccess);
     upstream = await ctx.registry.acquire({
-      token: conn.mcpToken,
-      region: conn.region,
-      dsn: decrypt.plaintext,
-      tableAccess,
+      token: connection.mcpToken,
+      region: connection.region,
+      databases: spawnDatabases,
     });
   } catch (err) {
     console.error("spawn failed", err);
@@ -95,7 +143,7 @@ export async function proxyMcp(
   } catch (err) {
     // Container may have been killed externally. Drop registry entry so the
     // next request respawns.
-    await ctx.registry.invalidate(conn.mcpToken).catch(() => undefined);
+    await ctx.registry.invalidate(connection.mcpToken).catch(() => undefined);
     console.error("proxy fetch failed", err);
     return Response.json(
       {

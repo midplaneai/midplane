@@ -310,8 +310,15 @@ async function buildHarness(
   await registry.acquire({
     token: "tok-A",
     region: "fra",
-    dsn: "postgres://x",
-    tableAccess: { default: "deny", tables: {} },
+    databases: [
+      {
+        name: "main",
+        connectionDatabaseId: "01HXYZMAIN0000000000000000",
+        dsn: "postgres://x",
+        tableAccess: { default: "deny", tables: {} },
+        tenantScopeMappings: {},
+      },
+    ],
   });
 
   return { db, state, registry, spawner };

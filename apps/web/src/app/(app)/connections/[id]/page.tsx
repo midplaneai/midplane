@@ -1,9 +1,8 @@
-import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-import { connections, getDb, parsePolicyOrThrow } from "@midplane-cloud/db";
+import { parsePolicyOrThrow } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -17,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   deleteConnection,
+  getConnectionWithMainDatabase,
   isValidDsn,
   renameConnection,
   rotateConnection,
@@ -35,10 +35,13 @@ export default async function ConnectionDetail({
   if (!customer) redirect("/signup/region");
 
   const { id } = await params;
-  const db = getDb();
-  const rows = await db.select().from(connections).where(eq(connections.id, id));
-  const conn = rows[0];
-  if (!conn || conn.customerId !== customer.id) notFound();
+  // Multi-DB rollout (0008): credentials/policy moved to connection_databases.
+  // PR-A keeps this page single-DB-shaped; it reads parent + the "main"
+  // child and surfaces the child's table_access + rotated_at as before.
+  // PR-B/C extend this page with a per-DB tab strip.
+  const result = await getConnectionWithMainDatabase(customer, id);
+  if (!result) notFound();
+  const { connection: conn, mainDatabase: mainDb } = result;
 
   const mcpUrl = mintMcpUrl(conn.region, conn.mcpToken, process.env);
 
@@ -200,7 +203,7 @@ export default async function ConnectionDetail({
             <div className="pt-2">
               <PermissionGrid
                 connectionId={conn.id}
-                initialPolicy={parsePolicyOrThrow(conn.tableAccess)}
+                initialPolicy={parsePolicyOrThrow(mainDb.tableAccess)}
                 action={policyAction}
               />
             </div>
@@ -214,8 +217,8 @@ export default async function ConnectionDetail({
               Paste a new Postgres URL to replace the encrypted ciphertext. The
               MCP endpoint URL stays the same; running sessions are torn down so
               the new credentials take effect on the next request.
-              {conn.rotatedAt ? (
-                <> Last rotated {formatRelative(conn.rotatedAt)}.</>
+              {mainDb.rotatedAt ? (
+                <> Last rotated {formatRelative(mainDb.rotatedAt)}.</>
               ) : null}
             </p>
             <RotateConnectionForm id={conn.id} action={rotateAction} />

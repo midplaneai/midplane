@@ -16,7 +16,13 @@ describe("FlyMachineSpawner", () => {
         const body = JSON.parse(init.body as string) as Record<string, unknown>;
         const config = body.config as Record<string, unknown>;
         const env = config.env as Record<string, string>;
-        expect(env.DATABASE_URL).toBe("postgres://example");
+        // Multi-DB: DSN is injected as MIDPLANE_DSN_<connectionDatabaseId>,
+        // not DATABASE_URL. The YAML's `url:` references the env var via
+        // ${...} interpolation per OSS 0.2.0 ENV_INTERP_RE.
+        expect(env.MIDPLANE_DSN_01HXYZMAIN0000000000000000).toBe(
+          "postgres://example",
+        );
+        expect(env.DATABASE_URL).toBeUndefined();
         expect(env.PORT).toBe("8080");
         expect(env.MIDPLANE_POLICY_FILE).toBe("/etc/midplane/policy.yaml");
         expect(body.region).toBe("fra");
@@ -34,7 +40,16 @@ describe("FlyMachineSpawner", () => {
           "utf8",
         );
         expect(decoded).toBe(
-          "table_access:\n  default: read\n  tables:\n    orders: read_write\n",
+          [
+            "databases:",
+            "  - name: main",
+            "    url: ${MIDPLANE_DSN_01HXYZMAIN0000000000000000}",
+            "    table_access:",
+            "      default: read",
+            "      tables:",
+            "        orders: read_write",
+            "",
+          ].join("\n"),
         );
 
         return new Response(
@@ -67,8 +82,15 @@ describe("FlyMachineSpawner", () => {
     const c = await spawner.spawn({
       token: "tok",
       region: "fra",
-      dsn: "postgres://example",
-      tableAccess: { default: "read", tables: { orders: "read_write" } },
+      databases: [
+        {
+          name: "main",
+          connectionDatabaseId: "01HXYZMAIN0000000000000000",
+          dsn: "postgres://example",
+          tableAccess: { default: "read", tables: { orders: "read_write" } },
+          tenantScopeMappings: {},
+        },
+      ],
     });
 
     expect(c.host).toBe("[fdaa:0:1234::5]");
@@ -108,8 +130,15 @@ describe("FlyMachineSpawner", () => {
       spawner.spawn({
         token: "t",
         region: "fra",
-        dsn: "x",
-        tableAccess: { default: "deny", tables: {} },
+        databases: [
+          {
+            name: "main",
+            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            dsn: "postgres://x",
+            tableAccess: { default: "deny", tables: {} },
+            tenantScopeMappings: {},
+          },
+        ],
       }),
     ).rejects.toThrow(/did not start/);
 

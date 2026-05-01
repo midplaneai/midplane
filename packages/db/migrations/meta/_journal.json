@@ -57,6 +57,20 @@
       "when": 1777644000001,
       "tag": "0007_fix_journal_ordering",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777644000002,
+      "tag": "0008_connection_databases",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777644000003,
+      "tag": "0009_audit_database_field",
+      "breakpoints": true
     }
   ]
 }

@@ -63,6 +63,11 @@ export const customers = pgTable(
 );
 
 // --- connections ------------------------------------------------------------
+//
+// Parent row for an MCP connection: identity, ownership, region, and the
+// agent-facing token. Per-DB credential and policy state lives in the
+// child table `connection_databases` (one row per Postgres a single
+// connection can reach). Schema split landed in migration 0008.
 
 export const connections = pgTable(
   "connections",
@@ -74,28 +79,10 @@ export const connections = pgTable(
     // them apart in the dashboard. Nullable for rows created before this
     // column existed; the UI falls back to the MCP URL when null.
     name: text("name"),
-    encryptedDsn: bytea("encrypted_dsn").notNull(),
-    kmsKeyId: text("kms_key_id").notNull(),
     mcpToken: text("mcp_token").notNull().unique(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    rotatedAt: timestamp("rotated_at", { withTimezone: true }),
-    // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse
-    // new sessions after 70 minutes of KMS unreachability — see design doc
-    // "KMS degradation"). Updated by the router on each successful decrypt.
-    lastKmsSuccessAt: timestamp("last_kms_success_at", { withTimezone: true }),
-    // Per-token table_access policy. The connection-create form sets
-    // `default` (read/deny/read_write); the permission grid on the detail
-    // page edits `tables`. Materialized to YAML at spawn time, mounted
-    // inside the OSS container at the path read via MIDPLANE_POLICY_FILE.
-    // Default (`deny` everywhere) preserves existing behavior for rows
-    // created before this column existed — identical to the engine's
-    // no-YAML default.
-    tableAccess: jsonb("table_access")
-      .$type<TableAccessPolicy>()
-      .notNull()
-      .default(sql`'{"default":"deny","tables":{}}'::jsonb`),
   },
   (t) => ({
     customerRegionFk: foreignKey({
@@ -104,6 +91,68 @@ export const connections = pgTable(
       foreignColumns: [customers.id, customers.region],
     }),
     customerIdx: index("connections_customer_id_idx").on(t.customerId),
+  }),
+);
+
+// --- connection_databases ---------------------------------------------------
+//
+// One row per Postgres a connection can reach. The OSS 0.2.0 engine reads
+// these from a YAML `databases:` block (one entry per row), each with an
+// independent `table_access` policy and `tenant_scope.mappings`. The DSN
+// stays encrypted at rest; KMS grace-window state (`rotated_at`,
+// `last_kms_success_at`) is per-credential, not per-connection — so DSN
+// rotation on one DB cannot perturb the cache fence for siblings.
+//
+// `name` is the agent-facing alias (`main`, `analytics`, …) — what shows
+// up as `database:` on the OSS tool calls. Unique within a connection.
+
+export const connectionDatabases = pgTable(
+  "connection_databases",
+  {
+    id: text("id").primaryKey(), // ULID for new rows; hex for rows backfilled by 0008
+    connectionId: text("connection_id").notNull(),
+    // Agent-facing alias. ^[a-z][a-z0-9_-]{0,31}$ — matches OSS DB_NAME_RE
+    // exactly so a name validated here also passes OSS-side parsing.
+    name: text("name").notNull(),
+    encryptedDsn: bytea("encrypted_dsn").notNull(),
+    kmsKeyId: text("kms_key_id").notNull(),
+    // Per-DB table_access policy. Materialized into the YAML `databases[]`
+    // entry at spawn time. Default (`deny` everywhere) preserves existing
+    // behavior for rows created without an explicit policy — identical to
+    // the engine's no-YAML default.
+    tableAccess: jsonb("table_access")
+      .$type<TableAccessPolicy>()
+      .notNull()
+      .default(sql`'{"default":"deny","tables":{}}'::jsonb`),
+    // Per-DB tenant_scope mappings: column name → tenant_id column. Empty
+    // map = tenant_scope disabled for this DB. Editing forces a container
+    // restart per OSS spec (mappings hot-swap is rejected).
+    tenantScopeMappings: jsonb("tenant_scope_mappings")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    rotatedAt: timestamp("rotated_at", { withTimezone: true }),
+    // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse
+    // new sessions after 70 minutes of KMS unreachability — see design doc
+    // "KMS degradation"). Updated by the router on each successful decrypt.
+    lastKmsSuccessAt: timestamp("last_kms_success_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    connectionFk: foreignKey({
+      name: "connection_databases_connection_fk",
+      columns: [t.connectionId],
+      foreignColumns: [connections.id],
+    }).onDelete("cascade"),
+    nameUq: unique("connection_databases_connection_name_uq").on(
+      t.connectionId,
+      t.name,
+    ),
+    connectionIdx: index("connection_databases_connection_id_idx").on(
+      t.connectionId,
+    ),
   }),
 );
 
@@ -122,6 +171,10 @@ export const auditEventsIndex = pgTable(
     region: text("region", { enum: REGIONS }).notNull(),
     queryId: text("query_id").notNull(),
     agentIdentity: text("agent_identity"),
+    // OSS-side database name (`main`, `analytics`, …). Multi-DB rollout in
+    // 0009; defaults to 'main' for legacy single-DB containers and any
+    // pre-0.2.0 row that omits the field on the audit pull payload.
+    database: text("database").notNull().default("main"),
     ts: timestamp("ts", { withTimezone: true }).notNull(),
     eventType: text("event_type").notNull(),
     payload: jsonb("payload").notNull(),
@@ -137,6 +190,12 @@ export const auditEventsIndex = pgTable(
       t.customerId,
       t.region,
       t.eventType,
+      t.ts.desc(),
+    ),
+    customerDatabaseTsIdx: index("audit_customer_region_database_ts_idx").on(
+      t.customerId,
+      t.region,
+      t.database,
       t.ts.desc(),
     ),
     queryIdIdx: index("audit_query_id_idx").on(t.queryId),
@@ -184,6 +243,8 @@ export type Customer = typeof customers.$inferSelect;
 export type NewCustomer = typeof customers.$inferInsert;
 export type Connection = typeof connections.$inferSelect;
 export type NewConnection = typeof connections.$inferInsert;
+export type ConnectionDatabase = typeof connectionDatabases.$inferSelect;
+export type NewConnectionDatabase = typeof connectionDatabases.$inferInsert;
 export type AuditEvent = typeof auditEventsIndex.$inferSelect;
 export type NewAuditEvent = typeof auditEventsIndex.$inferInsert;
 export type IndexerCursor = typeof indexerCursors.$inferSelect;

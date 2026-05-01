@@ -23,17 +23,30 @@ export interface SpawnedContainer {
   stop(): Promise<void>;
 }
 
+/** One DB the OSS container will be configured to reach. The spawner
+ *  injects each DSN as an env var (MIDPLANE_DSN_<connectionDatabaseId>)
+ *  and writes a YAML `databases:` block referencing those env vars via
+ *  ${...} interpolation — DSNs never touch disk. */
+export interface SpawnDatabase {
+  /** Agent-facing alias (`main`, `analytics`, …). */
+  name: string;
+  /** Stable id used to derive the DSN env var name. ULID-shaped so it
+   *  matches OSS env-interpolation regex `[A-Z_][A-Z0-9_]*`. */
+  connectionDatabaseId: string;
+  dsn: string;
+  tableAccess: TableAccessPolicy;
+  /** Empty map = tenant_scope disabled. */
+  tenantScopeMappings: Record<string, string>;
+}
+
 export interface SpawnOptions {
   token: string;
   region: Region;
-  dsn: string;
-  /** Per-token table_access policy. Materialized to YAML at spawn time
-   *  and mounted inside the OSS container at the path read via
-   *  MIDPLANE_POLICY_FILE. The proxy loads it from connections.table_access
-   *  alongside the DSN; passing it here keeps the spawner backends'
-   *  contract symmetric with the policy save → invalidate → respawn
-   *  flow. */
-  tableAccess: TableAccessPolicy;
+  /** One container per token, N>=1 DBs per container. The cloud always
+   *  emits the multi-DB YAML shape, even for N=1; OSS 0.2.0 treats a
+   *  one-entry `databases:` array identically to the legacy single-DB
+   *  shape, so the spawn path stays single-branched. */
+  databases: readonly SpawnDatabase[];
 }
 
 export interface Spawner {

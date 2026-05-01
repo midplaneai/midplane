@@ -14,7 +14,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { serializePolicyToYaml } from "@midplane-cloud/db";
+import {
+  dsnEnvVarFor,
+  serializeMultiDbPolicyToYaml,
+} from "@midplane-cloud/db";
 
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 
@@ -49,7 +52,7 @@ export class DockerSpawner implements Spawner {
   private readonly fetchFn: typeof fetch;
 
   constructor(opts: DockerSpawnerOptions = {}) {
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.1.0";
+    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.2.0";
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 30_000;
     this.indexerToken = opts.indexerToken;
     this.exec = opts.exec ?? execProcess;
@@ -57,23 +60,36 @@ export class DockerSpawner implements Spawner {
   }
 
   async spawn(opts: SpawnOptions): Promise<SpawnedContainer> {
+    if (opts.databases.length === 0) {
+      throw new Error("DockerSpawner.spawn: at least one database required");
+    }
     const name = `midplane-${opts.token.slice(0, 16)}`;
-    // Materialize the policy YAML to a host tempfile, bind-mount it ro
-    // into the container at MIDPLANE_POLICY_FILE. The dir is per-spawn so
-    // a concurrent spawn for a different token can't observe or clobber.
-    // Cleaned up in stop(); a leak survives until OS tmp eviction, which
-    // is fine — the file is non-secret (no DSN, no keys).
+    // Materialize the multi-DB policy YAML to a host tempfile, bind-mount
+    // it ro into the container at MIDPLANE_POLICY_FILE. The dir is per-
+    // spawn so a concurrent spawn for a different token can't observe or
+    // clobber. Cleaned up in stop(); a leak survives until OS tmp eviction.
+    // The YAML is non-secret — DSNs are NOT inlined; each `url:` references
+    // an env var the spawner injects below.
     const policyDir = await mkdtemp(join(tmpdir(), "midplane-policy-"));
     const policyHostPath = join(policyDir, "policy.yaml");
     await writeFile(
       policyHostPath,
-      serializePolicyToYaml(opts.tableAccess),
+      serializeMultiDbPolicyToYaml(
+        opts.databases.map((db) => ({
+          name: db.name,
+          connectionDatabaseId: db.connectionDatabaseId,
+          tableAccess: db.tableAccess,
+          tenantScopeMappings: db.tenantScopeMappings,
+        })),
+      ),
       { mode: 0o644 },
     );
 
     // -p 0:8080 asks Docker for a random host port; -d --rm so the container
-    // self-removes on stop. DATABASE_URL is the only place the decrypted DSN
-    // surfaces; it lives in the container's env, not on disk.
+    // self-removes on stop. DSNs are injected as MIDPLANE_DSN_<id> env vars
+    // (one per DB) — they live in the container's env, never on disk. The
+    // YAML's `databases[].url` references each via ${...} interpolation
+    // (OSS 0.2.0 ENV_INTERP_RE).
     const args = [
       "run",
       "-d",
@@ -81,14 +97,15 @@ export class DockerSpawner implements Spawner {
       "--name",
       name,
       "-e",
-      `DATABASE_URL=${opts.dsn}`,
-      "-e",
       "PORT=8080",
       "-e",
       `MIDPLANE_POLICY_FILE=${POLICY_FILE_GUEST_PATH}`,
       "-v",
       `${policyHostPath}:${POLICY_FILE_GUEST_PATH}:ro`,
     ];
+    for (const db of opts.databases) {
+      args.push("-e", `${dsnEnvVarFor(db.connectionDatabaseId)}=${db.dsn}`);
+    }
     if (this.indexerToken) {
       args.push("-e", `INDEXER_TOKEN=${this.indexerToken}`);
     }

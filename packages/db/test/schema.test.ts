@@ -7,12 +7,13 @@ import { describe, expect, it } from "vitest";
 import {
   REGIONS,
   auditEventsIndex,
+  connectionDatabases,
   connections,
   customers,
 } from "../src/schema.ts";
 
 describe("schema parity with OSS audit_events", () => {
-  it("audit_events_index has all OSS columns plus customer_id, tenant_id, region", () => {
+  it("audit_events_index has all OSS columns plus customer_id, tenant_id, region, database", () => {
     const cols = Object.keys(auditEventsIndex);
     // OSS columns (from packages/engine/src/audit/schema.sql)
     for (const col of [
@@ -30,6 +31,8 @@ describe("schema parity with OSS audit_events", () => {
     expect(cols).toContain("customerId");
     expect(cols).toContain("tenantId");
     expect(cols).toContain("region");
+    // 0009: per-DB attribution from OSS 0.2.0 audit pull payload.
+    expect(cols).toContain("database");
   });
 });
 
@@ -39,17 +42,49 @@ describe("regions", () => {
   });
 });
 
-describe("connections", () => {
-  it("carries the columns the router needs to mint MCP URLs", () => {
+describe("connections (0008-slimmed parent)", () => {
+  it("holds identity + token only — credential columns moved to connection_databases", () => {
     const cols = Object.keys(connections);
     for (const col of [
       "id",
       "customerId",
       "region",
+      "name",
+      "mcpToken",
+      "createdAt",
+    ]) {
+      expect(cols).toContain(col);
+    }
+    // Moved to connection_databases in migration 0008. Asserting absence
+    // here protects against accidentally re-adding the column to the
+    // parent (which would silently regress the per-credential cache fence
+    // and KMS grace-window tracking).
+    for (const col of [
       "encryptedDsn",
       "kmsKeyId",
-      "mcpToken",
+      "tableAccess",
+      "rotatedAt",
       "lastKmsSuccessAt",
+    ]) {
+      expect(cols).not.toContain(col);
+    }
+  });
+});
+
+describe("connection_databases (0008 child)", () => {
+  it("carries per-credential state and per-DB policy", () => {
+    const cols = Object.keys(connectionDatabases);
+    for (const col of [
+      "id",
+      "connectionId",
+      "name",
+      "encryptedDsn",
+      "kmsKeyId",
+      "tableAccess",
+      "tenantScopeMappings",
+      "rotatedAt",
+      "lastKmsSuccessAt",
+      "createdAt",
     ]) {
       expect(cols).toContain(col);
     }

@@ -16,9 +16,9 @@ export async function GET(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
-  const conn = await resolveByToken(getDb(), token);
-  if (!conn) {
+  const resolved = await resolveByToken(getDb(), token);
+  if (!resolved) {
     return Response.json({ ok: false }, { status: 404 });
   }
-  return Response.json({ ok: true, region: conn.region });
+  return Response.json({ ok: true, region: resolved.connection.region });
 }

@@ -7,10 +7,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACCESS_LEVELS,
+  DB_NAME_RE,
   DEFAULT_POLICY,
+  dsnEnvVarFor,
+  isValidDbName,
   parsePolicyOrThrow,
-  serializePolicyToYaml,
+  serializeMultiDbPolicyToYaml,
   validatePolicy,
+  type DatabaseEntry,
   type TableAccessPolicy,
 } from "../src/policy.ts";
 
@@ -101,40 +105,139 @@ describe("parsePolicyOrThrow", () => {
   });
 });
 
-describe("serializePolicyToYaml", () => {
-  it("wraps under table_access: with sorted table keys", () => {
-    const policy: TableAccessPolicy = {
-      default: "read",
-      tables: { users: "read_write", "public.orders": "deny", audit: "read" },
+describe("isValidDbName", () => {
+  it("accepts names matching the OSS regex", () => {
+    for (const name of ["main", "analytics", "prod-eu", "db_2", "a", "x".repeat(32)]) {
+      expect(isValidDbName(name), name).toBe(true);
+    }
+  });
+
+  it("rejects uppercase, leading digit, leading punct, or too long", () => {
+    for (const name of ["Main", "1main", "-main", "_main", "main!", "x".repeat(33)]) {
+      expect(isValidDbName(name), name).toBe(false);
+    }
+  });
+
+  it("rejects the reserved __default__ name", () => {
+    expect(isValidDbName("__default__")).toBe(false);
+  });
+
+  it("only matches the documented regex", () => {
+    expect(DB_NAME_RE.source).toBe("^[a-z][a-z0-9_-]{0,31}$");
+  });
+});
+
+describe("dsnEnvVarFor", () => {
+  it("produces a name matching the OSS env-interpolation regex", () => {
+    // ULID = uppercase Crockford base32, 26 chars. Combined prefix is
+    // uppercase ASCII so the result matches OSS ENV_INTERP_RE [A-Z_][A-Z0-9_]*.
+    const id = "01HXYZ123ABC456DEF789GHI01"; // ULID-shaped fixture
+    expect(dsnEnvVarFor(id)).toBe(`MIDPLANE_DSN_${id}`);
+    expect(/^[A-Z_][A-Z0-9_]*$/.test(dsnEnvVarFor(id))).toBe(true);
+  });
+});
+
+describe("serializeMultiDbPolicyToYaml", () => {
+  function entry(overrides: Partial<DatabaseEntry> = {}): DatabaseEntry {
+    return {
+      name: "main",
+      connectionDatabaseId: "01HXYZ123ABC456DEF789GHI01",
+      tableAccess: { default: "read", tables: {} },
+      tenantScopeMappings: {},
+      ...overrides,
     };
-    const yaml = serializePolicyToYaml(policy);
+  }
+
+  it("emits a single-DB entry with table_access, no tenant_scope when mappings empty", () => {
+    const yaml = serializeMultiDbPolicyToYaml([entry()]);
     expect(yaml).toBe(
       [
-        "table_access:",
-        "  default: read",
-        "  tables:",
-        "    audit: read",
-        "    public.orders: deny",
-        "    users: read_write",
+        "databases:",
+        "  - name: main",
+        "    url: ${MIDPLANE_DSN_01HXYZ123ABC456DEF789GHI01}",
+        "    table_access:",
+        "      default: read",
+        "      tables: {}",
         "",
       ].join("\n"),
     );
   });
 
-  it("emits empty tables map when no overrides exist", () => {
-    expect(serializePolicyToYaml({ default: "deny", tables: {} })).toBe(
-      "table_access:\n  default: deny\n  tables: {}\n",
+  it("sorts table_access entries and per-DB tenant_scope mappings", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        tableAccess: {
+          default: "deny",
+          tables: { users: "read_write", "public.orders": "deny", audit: "read" },
+        },
+        tenantScopeMappings: { orders: "tenant_id", users: "customer_id" },
+      }),
+    ]);
+    const expected = [
+      "databases:",
+      "  - name: main",
+      "    url: ${MIDPLANE_DSN_01HXYZ123ABC456DEF789GHI01}",
+      "    table_access:",
+      "      default: deny",
+      "      tables:",
+      "        audit: read",
+      "        public.orders: deny",
+      "        users: read_write",
+      "    tenant_scope:",
+      "      enabled: true",
+      "      mappings:",
+      "        orders: tenant_id",
+      "        users: customer_id",
+      "",
+    ].join("\n");
+    expect(yaml).toBe(expected);
+  });
+
+  it("emits multiple DBs, each with its own block", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({ name: "prod", connectionDatabaseId: "01HXYZA000000000000000000A" }),
+      entry({ name: "analytics", connectionDatabaseId: "01HXYZB000000000000000000B" }),
+    ]);
+    expect(yaml).toContain("  - name: prod\n    url: ${MIDPLANE_DSN_01HXYZA000000000000000000A}");
+    expect(yaml).toContain("  - name: analytics\n    url: ${MIDPLANE_DSN_01HXYZB000000000000000000B}");
+  });
+
+  it("rejects an empty databases array", () => {
+    expect(() => serializeMultiDbPolicyToYaml([])).toThrow(/at least one database/);
+  });
+
+  it("rejects invalid DB names", () => {
+    expect(() => serializeMultiDbPolicyToYaml([entry({ name: "Bad" })])).toThrow(
+      /invalid database name/,
     );
+    expect(() =>
+      serializeMultiDbPolicyToYaml([entry({ name: "__default__" })]),
+    ).toThrow(/invalid database name/);
+  });
+
+  it("rejects duplicate names", () => {
+    expect(() =>
+      serializeMultiDbPolicyToYaml([
+        entry({ name: "main" }),
+        entry({ name: "main", connectionDatabaseId: "01HXYZB000000000000000000B" }),
+      ]),
+    ).toThrow(/duplicate database name/);
+  });
+
+  it("rejects tenant_scope mapping keys/values that need quoting", () => {
+    expect(() =>
+      serializeMultiDbPolicyToYaml([
+        entry({ tenantScopeMappings: { "bad name": "tenant_id" } }),
+      ]),
+    ).toThrow(/quoting/);
   });
 
   it("never quotes — only validated identifiers reach this function", () => {
-    // Sanity: the serializer is only safe because the validator's regex
-    // forbids characters that would need YAML quoting. If the regex ever
-    // widens, this test should fail and force a quoting step here.
-    const yaml = serializePolicyToYaml({
-      default: "read",
-      tables: { "schema_1.table$2": "read" },
-    });
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        tableAccess: { default: "read", tables: { "schema_1.table$2": "read" } },
+      }),
+    ]);
     expect(yaml).not.toContain('"');
     expect(yaml).not.toContain("'");
   });

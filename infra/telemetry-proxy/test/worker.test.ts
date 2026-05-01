@@ -4,8 +4,13 @@ import worker, { type Env } from "../src/index.ts";
 const VALID_INSTALL_ID = "01H8K2J9XQVWZ7PCQ3F0R2N5T8";
 const VALID_TS = 1_730_000_000;
 
+// Schema v2 (OSS 0.2.0): adds list_databases to ToolName, renames the
+// PolicyRuleName head from "writes_require_approval" → "table_access",
+// and introduces optional tools_by_database on heartbeat. Single-DB
+// installs send byte-identical v2 payloads (no tools_by_database field);
+// multi-DB installs additively populate it.
 const validStartup = {
-  schema_version: 1,
+  schema_version: 2,
   event: "startup",
   install_id: VALID_INSTALL_ID,
   ts: VALID_TS,
@@ -19,7 +24,7 @@ const validStartup = {
 } as const;
 
 const validHeartbeat = {
-  schema_version: 1,
+  schema_version: 2,
   event: "heartbeat",
   install_id: VALID_INSTALL_ID,
   ts: VALID_TS,
@@ -29,7 +34,7 @@ const validHeartbeat = {
   tools: {
     query: { calls: 10, allow: 9, deny: 1 },
   },
-  denials_by_rule: { writes_require_approval: 1 },
+  denials_by_rule: { table_access: 1 },
   // Locked enum values like "SELECT" are legitimate here — the sanitizer
   // exempts them from the forbidden-substring scan.
   statement_types: { SELECT: 9, INSERT: 0, UPDATE: 0, DELETE: 0, DDL: 0, OTHER: 0 },

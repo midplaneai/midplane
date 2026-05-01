@@ -74,11 +74,18 @@ export interface ContainerAuditRow {
   query_id: string;
   tenant_id: string;
   agent_identity: string | null;
+  /** OSS-side DB name (`main`, `analytics`, …). Sent by OSS 0.2.0 when
+   *  the engine runs against a YAML `databases:` block; absent on legacy
+   *  single-DB containers. The cloud defaults to "main" when missing so
+   *  audit rows from a 0.1.x → 0.2.x rollout window stay attributable. */
+  database?: string;
   ts: number;
   event_type: "ATTEMPTED" | "DECIDED" | "EXECUTED" | "FAILED";
   payload: Record<string, unknown>;
   schema_version: number;
 }
+
+const DEFAULT_DB_NAME_FALLBACK = "main";
 
 interface AuditSinceResponse {
   rows: ContainerAuditRow[];
@@ -295,6 +302,10 @@ export class Indexer {
               region,
               queryId: row.query_id,
               agentIdentity: row.agent_identity,
+              // 0.2.0 OSS sends `database` per row; fall back to "main"
+              // for legacy containers (or rows where the field is empty
+              // string from a misconfigured engine — coerced via ||).
+              database: row.database || DEFAULT_DB_NAME_FALLBACK,
               ts: new Date(row.ts),
               eventType: row.event_type,
               payload: row.payload,
@@ -442,6 +453,15 @@ function isValidAuditRow(row: unknown): row is ContainerAuditRow {
     r.agent_identity !== null &&
     r.agent_identity !== undefined &&
     typeof r.agent_identity !== "string"
+  ) {
+    return false;
+  }
+  // database is optional (legacy single-DB containers omit it); when
+  // present it must be a non-empty string. The cloud-side fallback to
+  // "main" happens at insert time, not here.
+  if (
+    r.database !== undefined &&
+    (typeof r.database !== "string" || r.database.length === 0)
   ) {
     return false;
   }

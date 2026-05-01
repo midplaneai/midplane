@@ -30,8 +30,15 @@ class StubSpawner implements Spawner {
 const opts = (token = "tok-a"): SpawnOptions => ({
   token,
   region: "fra",
-  dsn: "postgres://x",
-  tableAccess: { default: "deny", tables: {} },
+  databases: [
+    {
+      name: "main",
+      connectionDatabaseId: "01HXYZMAIN0000000000000000",
+      dsn: "postgres://x",
+      tableAccess: { default: "deny", tables: {} },
+      tenantScopeMappings: {},
+    },
+  ],
 });
 
 describe("ContainerRegistry", () => {
