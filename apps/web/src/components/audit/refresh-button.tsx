@@ -1,5 +1,6 @@
 "use client";
 
+import { RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 
@@ -23,21 +24,19 @@ export function RefreshButton({ className }: { className?: string }) {
       disabled={pending}
       aria-label="Refresh audit log"
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5 font-mono text-[11px] text-subtle transition-colors",
+        "inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2.5 py-1 font-mono text-[11px] text-subtle transition-colors",
         "hover:border-border-strong hover:text-foreground",
         "disabled:pointer-events-none disabled:opacity-60",
         className,
       )}
     >
-      <span
+      <RefreshCw
         aria-hidden
         className={cn(
-          "inline-block leading-none",
+          "h-3.5 w-3.5",
           pending && "motion-safe:animate-spin",
         )}
-      >
-        ↻
-      </span>
+      />
       {pending ? "Refreshing…" : "Refresh"}
     </button>
   );
