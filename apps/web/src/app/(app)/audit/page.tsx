@@ -8,6 +8,7 @@ import {
   StalenessBanner,
   StalenessSubtitle,
 } from "@/components/audit/staleness-banner";
+import { VolumeSparkline } from "@/components/audit/volume-sparkline";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -15,7 +16,9 @@ import { cn } from "@/lib/utils";
 import {
   countByEventType,
   EVENT_TYPES,
+  eventVolumeByHour,
   listAuditEvents,
+  listDatabases,
   listTenantIds,
   readStaleness,
   type EventType,
@@ -28,6 +31,7 @@ interface PageProps {
   searchParams: Promise<{
     event_type?: string;
     tenant_id?: string;
+    database?: string;
     q?: string;
     cursor?: string;
   }>;
@@ -40,30 +44,39 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const selectedTypes = parseEventTypes(params.event_type);
   const selectedTenant = params.tenant_id?.trim() || null;
+  const selectedDatabase = params.database?.trim() || null;
   const search = params.q?.trim() ?? "";
   const cursor = params.cursor?.trim() || undefined;
 
-  const [list, tenants, counts, staleness] = await Promise.all([
-    listAuditEvents(customer.id, {
-      region: customer.region,
-      eventTypes: selectedTypes,
-      tenantId: selectedTenant ?? undefined,
-      search,
-      cursor,
-      pageSize: PAGE_SIZE,
-    }),
-    listTenantIds(customer.id, customer.region),
-    countByEventType(customer.id, customer.region),
-    readStaleness(customer.id, customer.region),
-  ]);
+  const [list, tenants, databases, counts, volume, staleness] =
+    await Promise.all([
+      listAuditEvents(customer.id, {
+        region: customer.region,
+        eventTypes: selectedTypes,
+        tenantId: selectedTenant ?? undefined,
+        database: selectedDatabase ?? undefined,
+        search,
+        cursor,
+        pageSize: PAGE_SIZE,
+      }),
+      listTenantIds(customer.id, customer.region),
+      listDatabases(customer.id, customer.region),
+      countByEventType(customer.id, customer.region),
+      eventVolumeByHour(customer.id, customer.region),
+      readStaleness(customer.id, customer.region),
+    ]);
 
   const totalCount = Object.values(counts).reduce((sum, n) => sum + n, 0);
   const hasFilters =
-    selectedTypes.length > 0 || selectedTenant !== null || search.length > 0;
+    selectedTypes.length > 0 ||
+    selectedTenant !== null ||
+    selectedDatabase !== null ||
+    search.length > 0;
 
   const buildUrl = makeUrlBuilder({
     selectedTypes,
     selectedTenant,
+    selectedDatabase,
     search,
     cursor,
   });
@@ -79,10 +92,14 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         <StalenessSubtitle read={staleness} totalCount={totalCount} />
         <StalenessBanner read={staleness} />
 
+        <VolumeSparkline buckets={volume} />
+
         <FilterChips
           selectedTypes={selectedTypes}
           selectedTenant={selectedTenant}
+          selectedDatabase={selectedDatabase}
           tenants={tenants}
+          databases={databases}
           counts={counts}
           search={search}
           buildUrl={buildUrl}
@@ -287,12 +304,14 @@ function parseEventTypes(raw: string | undefined): readonly EventType[] {
 function makeUrlBuilder(state: {
   selectedTypes: readonly EventType[];
   selectedTenant: string | null;
+  selectedDatabase: string | null;
   search: string;
   cursor: string | undefined;
 }) {
   return (overrides: {
     eventType?: readonly EventType[];
     tenantId?: string | null;
+    database?: string | null;
     cursor?: string | null;
   }): string => {
     const types =
@@ -303,11 +322,16 @@ function makeUrlBuilder(state: {
       overrides.tenantId !== undefined
         ? overrides.tenantId
         : state.selectedTenant;
+    const database =
+      overrides.database !== undefined
+        ? overrides.database
+        : state.selectedDatabase;
     const cursor =
       overrides.cursor !== undefined ? overrides.cursor : state.cursor;
     const usp = new URLSearchParams();
     if (types.length > 0) usp.set("event_type", types.join(","));
     if (tenant) usp.set("tenant_id", tenant);
+    if (database) usp.set("database", database);
     if (state.search) usp.set("q", state.search);
     if (cursor) usp.set("cursor", cursor);
     const q = usp.toString();

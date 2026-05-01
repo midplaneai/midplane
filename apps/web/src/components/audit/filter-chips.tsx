@@ -6,12 +6,15 @@ import { EVENT_TYPES, type EventType } from "@/lib/audit";
 interface FilterChipsProps {
   selectedTypes: readonly EventType[];
   selectedTenant: string | null;
+  selectedDatabase: string | null;
   tenants: readonly string[];
+  databases: readonly string[];
   counts: Record<EventType, number>;
   search: string;
   buildUrl: (overrides: {
     eventType?: readonly EventType[];
     tenantId?: string | null;
+    database?: string | null;
     cursor?: string | null;
   }) => string;
 }
@@ -28,7 +31,9 @@ const CHIP_LABEL =
 export function FilterChips({
   selectedTypes,
   selectedTenant,
+  selectedDatabase,
   tenants,
+  databases,
   counts,
   search,
   buildUrl,
@@ -88,6 +93,31 @@ export function FilterChips({
         </>
       )}
 
+      {databases.length > 0 && (
+        <>
+          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Database</span>
+          <Chip
+            href={buildUrl({ database: null, cursor: null })}
+            active={selectedDatabase === null}
+          >
+            <b className="font-medium">All</b>
+            <Count active={selectedDatabase === null}>{databases.length}</Count>
+          </Chip>
+          {databases.map((d) => (
+            <Chip
+              key={d}
+              href={buildUrl({
+                database: selectedDatabase === d ? null : d,
+                cursor: null,
+              })}
+              active={selectedDatabase === d}
+            >
+              <b className="font-mono font-medium">{truncate(d, 18)}</b>
+            </Chip>
+          ))}
+        </>
+      )}
+
       <form action="/audit" method="get" className="ml-auto">
         {selectedTypes.length > 0 && (
           <input
@@ -98,6 +128,9 @@ export function FilterChips({
         )}
         {selectedTenant && (
           <input type="hidden" name="tenant_id" value={selectedTenant} />
+        )}
+        {selectedDatabase && (
+          <input type="hidden" name="database" value={selectedDatabase} />
         )}
         <input
           name="q"

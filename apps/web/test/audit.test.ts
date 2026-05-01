@@ -191,6 +191,18 @@ describe("listAuditEvents query shape", () => {
     expect(sel.params).toContain("tenant_42");
   });
 
+  it("applies database filter when present (the per-DB connection child)", async () => {
+    handle.setNextResult([]);
+    const { listAuditEvents } = await import("../src/lib/audit.ts");
+    await listAuditEvents(VALID_CUSTOMER_ID, {
+      region: "fra",
+      database: "analytics",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("database");
+    expect(sel.params).toContain("analytics");
+  });
+
   it("emits ILIKE clauses against fingerprint and query_id for search", async () => {
     handle.setNextResult([]);
     const { listAuditEvents } = await import("../src/lib/audit.ts");
@@ -245,6 +257,69 @@ describe("listAuditEvents query shape", () => {
     const result = await listAuditEvents(VALID_CUSTOMER_ID, { region: "fra" });
     expect(result.nextCursor).toBeNull();
     expect(result.rows).toHaveLength(1);
+  });
+});
+
+describe("listDatabases", () => {
+  it("selects distinct database under RLS bind, sorted ascending", async () => {
+    handle.setNextResult([["analytics"], ["main"]]);
+    const { listDatabases } = await import("../src/lib/audit.ts");
+    const result = await listDatabases(VALID_CUSTOMER_ID, "fra");
+    expect(result).toEqual(["analytics", "main"]);
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql.toLowerCase()).toContain("distinct");
+    expect(sel.sql).toContain("database");
+    expect(sel.params).toContain(VALID_CUSTOMER_ID);
+    expect(sel.params).toContain("fra");
+    expect(sel.inTransaction).toBe(true);
+  });
+});
+
+describe("eventVolumeByHour", () => {
+  it("returns exactly `hours` zero-filled buckets aligned to the hour", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:34:56Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+      hours: 24,
+      now,
+    });
+    expect(buckets).toHaveLength(24);
+    expect(buckets[buckets.length - 1]!.ts.toISOString()).toBe(
+      "2026-04-30T12:00:00.000Z",
+    );
+    expect(buckets[0]!.ts.toISOString()).toBe("2026-04-29T13:00:00.000Z");
+    for (const b of buckets) {
+      expect(b.counts).toEqual({});
+    }
+  });
+
+  it("merges grouped rows into the matching bucket by ts key", async () => {
+    handle.setNextResult([
+      [new Date("2026-04-30T11:00:00Z"), "DECIDED", 3],
+      [new Date("2026-04-30T11:00:00Z"), "FAILED", 1],
+      [new Date("2026-04-30T12:00:00Z"), "EXECUTED", 7],
+    ]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:30:00Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+      hours: 24,
+      now,
+    });
+    const last = buckets[buckets.length - 1]!;
+    const prior = buckets[buckets.length - 2]!;
+    expect(last.counts).toEqual({ EXECUTED: 7 });
+    expect(prior.counts).toEqual({ DECIDED: 3, FAILED: 1 });
+  });
+
+  it("scopes the volume query under the RLS bind", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra");
+    const sel = lastSelect(handle.queries);
+    expect(sel.inTransaction).toBe(true);
+    expect(sel.sql.toLowerCase()).toContain("date_trunc");
+    expect(sel.sql.toLowerCase()).toContain("group by");
   });
 });
 

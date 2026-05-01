@@ -23,7 +23,7 @@
 // contain "SET LOCAL", which makes the RLS-bind audit harder for
 // reviewers and tests.
 
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 
 import {
   auditEventsIndex,
@@ -59,6 +59,10 @@ export interface ListAuditOpts {
   eventTypes?: readonly EventType[];
   /** Empty/undefined = all tenants. Single value per V1 mockup. */
   tenantId?: string;
+  /** Empty/undefined = all databases. The name is the OSS-side `database:`
+   *  on a connection (the per-DB row in `connection_databases`), not a
+   *  per-client connection. Hits audit_customer_region_database_ts_idx. */
+  database?: string;
   /** Substring match against payload->>'sql_fingerprint' OR query_id. */
   search?: string;
   /** Last id from the previous page (id DESC ordering). Cursor is exclusive. */
@@ -90,6 +94,9 @@ export async function listAuditEvents(
     }
     if (opts.tenantId) {
       filters.push(eq(auditEventsIndex.tenantId, opts.tenantId));
+    }
+    if (opts.database) {
+      filters.push(eq(auditEventsIndex.database, opts.database));
     }
     if (opts.search && opts.search.trim().length > 0) {
       const needle = `%${opts.search.trim()}%`;
@@ -143,6 +150,88 @@ export async function listTenantIds(
       .limit(50);
     return rows.map((r) => r.tenantId).sort();
   });
+}
+
+/** Distinct database names for the customer in this region. The values are
+ *  the OSS-side `database:` field stamped on each audit row (one row per DB
+ *  attached to a connection). Capped at 50 for the same reason as tenants. */
+export async function listDatabases(
+  customerId: string,
+  region: Region,
+): Promise<string[]> {
+  return withCustomerScope(customerId, async (tx) => {
+    const rows = await tx
+      .selectDistinct({ database: auditEventsIndex.database })
+      .from(auditEventsIndex)
+      .where(
+        and(
+          eq(auditEventsIndex.customerId, customerId),
+          eq(auditEventsIndex.region, region),
+        ),
+      )
+      .limit(50);
+    return rows.map((r) => r.database).sort();
+  });
+}
+
+export interface VolumeBucket {
+  /** Bucket start, hour-aligned UTC. */
+  ts: Date;
+  /** Per-event-type counts; missing keys are treated as 0 by the renderer. */
+  counts: Partial<Record<EventType, number>>;
+}
+
+/** Hourly event volume for the trailing `hours` window, stacked by
+ *  event_type. Returns exactly `hours` buckets (zero-filled), oldest first,
+ *  so the sparkline renders a stable width regardless of traffic shape.
+ *  Hits audit_customer_region_ts_idx (range scan on ts). */
+export async function eventVolumeByHour(
+  customerId: string,
+  region: Region,
+  opts: { hours?: number; now?: () => Date } = {},
+): Promise<VolumeBucket[]> {
+  const hours = opts.hours ?? 24;
+  const now = (opts.now ?? (() => new Date()))();
+  // Align to the top of the current hour so buckets land on clean boundaries.
+  const endHour = new Date(now);
+  endHour.setUTCMinutes(0, 0, 0);
+  const since = new Date(endHour.getTime() - (hours - 1) * 3_600_000);
+
+  const rows = await withCustomerScope(customerId, async (tx) => {
+    return tx
+      .select({
+        bucket: sql<Date>`date_trunc('hour', ${auditEventsIndex.ts})`,
+        eventType: auditEventsIndex.eventType,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(auditEventsIndex)
+      .where(
+        and(
+          eq(auditEventsIndex.customerId, customerId),
+          eq(auditEventsIndex.region, region),
+          gte(auditEventsIndex.ts, since),
+        ),
+      )
+      .groupBy(sql`1`, auditEventsIndex.eventType);
+  });
+
+  const buckets: VolumeBucket[] = [];
+  const byKey = new Map<number, VolumeBucket>();
+  for (let i = 0; i < hours; i++) {
+    const ts = new Date(since.getTime() + i * 3_600_000);
+    const b: VolumeBucket = { ts, counts: {} };
+    buckets.push(b);
+    byKey.set(ts.getTime(), b);
+  }
+  for (const r of rows) {
+    const key = new Date(r.bucket).getTime();
+    const b = byKey.get(key);
+    if (!b) continue;
+    if ((EVENT_TYPES as readonly string[]).includes(r.eventType)) {
+      b.counts[r.eventType as EventType] = Number(r.count);
+    }
+  }
+  return buckets;
 }
 
 /** Counts per event_type, used to render the badges next to each filter
