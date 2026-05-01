@@ -1,0 +1,50 @@
+// Freshness signal for the dashboard's per-connection dot. Two states
+// for now, matching the design vocabulary in DESIGN.md:
+//   - "live" → --allow: indexer has not reported a fresh error.
+//              Includes "awaiting first query" — the connection is ready,
+//              the agent just hasn't called yet. The meta line on the row
+//              tells the difference.
+//   - "down" → --deny:  indexer reports an error newer than its last
+//                       successful drain (or has never drained at all).
+//
+// A "stale" state will come back when we have a real signal for it in
+// production; the previous "no traffic in >1h → amber" rule fired as a
+// scary warning right after creation, which is the wrong UX.
+//
+// Inputs are the per-connection slice of indexer_cursors. The dashboard is
+// server-rendered for PR-B; 60s client polling lands in PR-C and will reuse
+// this same function.
+
+export type Freshness = "live" | "down";
+
+export interface FreshnessInput {
+  /** Last successful indexer drain. Null = the indexer has never run for
+   *  this token; usually because no agent has ever connected yet. */
+  lastIndexedAt: Date | null;
+  /** Last error seen by the indexer. Null = no error has ever occurred or
+   *  it has since been cleared. */
+  lastErrorAt: Date | null;
+}
+
+export function computeFreshness({
+  lastIndexedAt,
+  lastErrorAt,
+}: FreshnessInput): Freshness {
+  // Error newer than the last good drain → indexer is stuck on this token.
+  if (lastErrorAt && (!lastIndexedAt || lastErrorAt > lastIndexedAt)) {
+    return "down";
+  }
+  return "live";
+}
+
+export const FRESHNESS_LABELS: Record<Freshness, string> = {
+  live: "live",
+  down: "down",
+};
+
+/** Tailwind text-color class for the freshness dot, mapped to the semantic
+ *  tokens (--allow / --deny). */
+export const FRESHNESS_COLORS: Record<Freshness, string> = {
+  live: "text-[hsl(var(--allow))]",
+  down: "text-[hsl(var(--deny))]",
+};

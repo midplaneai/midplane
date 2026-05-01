@@ -96,6 +96,7 @@ Renders inline next to the wordmark "midplane" (lowercase, Geist 600, `letter-sp
 - **Tables:** 11px uppercase header text in `--text-2`, 12px body in `--text-1`, hover row in `--bg-1`. Row borders in `--bg-1` (subtle), table header border in `--border` (visible).
 - **Badges:** 10px uppercase mono with a 4×4px dot when semantic. Allow/deny/warn pulled from semantic tokens.
 - **Empty states:** Dashed border in `--border`, padding 40px+, title in `--text-0`, body in `--text-2`.
+- **Sheet:** Right-side slide-in dialog (`components/ui/sheet.tsx`) for non-blocking secondary surfaces — agent setup, side detail. 480px wide on desktop (`md:w-[480px]`); full-screen below the `md` breakpoint (768px). Backdrop is `bg-background` at 60% opacity. Header / Body / Footer slots; body is the only scrolling region. Slide animation honors `prefers-reduced-motion` via the `motion-safe:` Tailwind variant. Use Sheet — not AlertDialog or a modal — when the user can keep the underlying page in mind. Reach for AlertDialog only for destructive confirmations.
 
 ## Anti-patterns (do not do)
 - Purple/violet gradients

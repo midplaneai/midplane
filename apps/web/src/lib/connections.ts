@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
@@ -409,4 +409,50 @@ export async function getConnectionWithMainDatabase(
   const mainDatabase = dbRows[0];
   if (!mainDatabase) return null;
   return { connection: conn, mainDatabase };
+}
+
+/** Server-side fetch for the hierarchical dashboard. Returns one row per
+ *  connection paired with its single "main" database and the indexer cursor
+ *  that drives the freshness dot. Single-DB only for PR-B; the multi-DB
+ *  fan-out lands in PR-C. */
+export interface DashboardConnectionRow {
+  connection: typeof connections.$inferSelect;
+  mainDatabase: typeof connectionDatabases.$inferSelect;
+  cursor: {
+    lastIndexedAt: Date | null;
+    lastErrorAt: Date | null;
+  };
+}
+
+export async function listDashboardConnections(
+  customer: Customer,
+): Promise<DashboardConnectionRow[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      connection: connections,
+      mainDatabase: connectionDatabases,
+      lastIndexedAt: indexerCursors.lastIndexedAt,
+      lastErrorAt: indexerCursors.lastErrorAt,
+    })
+    .from(connections)
+    .innerJoin(
+      connectionDatabases,
+      and(
+        eq(connectionDatabases.connectionId, connections.id),
+        eq(connectionDatabases.name, DEFAULT_DATABASE_NAME),
+      ),
+    )
+    .leftJoin(indexerCursors, eq(indexerCursors.mcpToken, connections.mcpToken))
+    .where(eq(connections.customerId, customer.id))
+    .orderBy(desc(connections.createdAt));
+
+  return rows.map((r) => ({
+    connection: r.connection,
+    mainDatabase: r.mainDatabase,
+    cursor: {
+      lastIndexedAt: r.lastIndexedAt,
+      lastErrorAt: r.lastErrorAt,
+    },
+  }));
 }
