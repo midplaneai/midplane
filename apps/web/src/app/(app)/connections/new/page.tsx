@@ -159,5 +159,8 @@ async function createAction(formData: FormData) {
       : "read";
 
   const { id } = await createConnection(customer, dsn, name, defaultAccess);
-  redirect(`/connections/${id}`);
+  // Land on the dashboard with the agent-setup sheet auto-opened for this
+  // new connection. The sheet strips the ?setup= param after first open so
+  // a reload doesn't re-trigger.
+  redirect(`/dashboard?setup=${id}`);
 }
