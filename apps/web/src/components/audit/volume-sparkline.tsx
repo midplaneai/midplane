@@ -127,8 +127,8 @@ export function VolumeSparkline({
         </svg>
       </TooltipProvider>
       <div className="mt-1 flex justify-between font-mono text-[10px] text-subtle">
-        <span>{first ? hourLabel(first) : ""}</span>
-        <span>{last ? hourLabel(last) : ""}</span>
+        <span>{first ? `${hourLabel(first)} UTC` : ""}</span>
+        <span>{last ? `${hourLabel(last)} UTC` : ""}</span>
       </div>
     </div>
   );

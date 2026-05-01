@@ -62,7 +62,11 @@ export default async function AuditListPage({ searchParams }: PageProps) {
       listTenantIds(customer.id, customer.region),
       listDatabases(customer.id, customer.region),
       countByEventType(customer.id, customer.region),
-      eventVolumeByHour(customer.id, customer.region),
+      eventVolumeByHour(customer.id, customer.region, {
+        tenantId: selectedTenant ?? undefined,
+        database: selectedDatabase ?? undefined,
+        search,
+      }),
       readStaleness(customer.id, customer.region),
     ]);
 
