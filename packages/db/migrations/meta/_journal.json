@@ -85,13 +85,6 @@
       "when": 1777644000005,
       "tag": "0011_audit_agent_intent",
       "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "7",
-      "when": 1777644000006,
-      "tag": "0012_drop_agent_identity",
-      "breakpoints": true
     }
   ]
 }

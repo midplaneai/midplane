@@ -37,6 +37,7 @@ const CHIP_LABELS: Record<QueryStatus, string> = {
   FAILED: "Failed",
   STUCK: "Stuck",
   PENDING: "Pending",
+  POLICY_RELOAD: "Policy reload",
 };
 
 export function FilterChips({

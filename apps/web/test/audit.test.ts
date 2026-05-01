@@ -188,6 +188,63 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql).toContain("'PENDING'");
   });
 
+  it("UNIONs POLICY_RELOADED rows so operators can verify hot-swaps from the audit log", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const sel = lastSelect(handle.queries);
+    // The query collapses queries into one row each AND keeps policy
+    // events visible — they have no query_id and no SQL but are operator-
+    // facing, so they can't silently disappear from the list.
+    expect(sel.sql).toContain("policy_events");
+    expect(sel.sql).toContain("'POLICY_RELOADED'");
+    expect(sel.sql).toContain("'POLICY_RELOAD'");
+    expect(sel.sql.toLowerCase()).toContain("union all");
+  });
+
+  it("excludes policy events when search is active (no SQL to match against)", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "fra",
+      search: "users",
+    });
+    const sel = lastSelect(handle.queries);
+    // policySearchClause flips to AND FALSE so a "DELETE FROM users"
+    // search doesn't surface unrelated reload rows.
+    expect(sel.sql).toContain("AND FALSE");
+  });
+
+  it("returns POLICY_RELOAD rows with null queryId and null SQL fields", async () => {
+    handle.setNextResult([
+      {
+        query_id: null,
+        attempted_event_id: "01HXPOLICYRELOAD00000000000",
+        head_event_id: "01HXPOLICYRELOAD00000000000",
+        started_at: new Date("2026-04-30T12:00:00Z"),
+        last_ts: new Date("2026-04-30T12:00:00Z"),
+        tenant_id: "__self_host__",
+        database: "main",
+        agent_name: null,
+        agent_version: null,
+        agent_intent: null,
+        intent_source: null,
+        sql_raw: null,
+        sql_fingerprint: null,
+        decision: null,
+        decision_reason: null,
+        exec_ms: null,
+        status: "POLICY_RELOAD",
+      },
+    ]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.queryId).toBeNull();
+    expect(result.rows[0]!.status).toBe("POLICY_RELOAD");
+    expect(result.rows[0]!.sqlRaw).toBeNull();
+  });
+
   it("requests one extra row past pageSize for next-cursor detection", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");

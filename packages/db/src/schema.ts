@@ -170,6 +170,14 @@ export const auditEventsIndex = pgTable(
     tenantId: text("tenant_id").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
     queryId: text("query_id").notNull(),
+    // DEPRECATED — column kept on the table for one rollout window so that
+    // an in-flight pre-bump indexer (still issuing INSERTs that name
+    // agent_identity) doesn't hit "column does not exist" mid-deploy.
+    // OSS 0.3.0 stopped emitting it; the new indexer doesn't write it.
+    // Drop column + this field together in a follow-up migration once the
+    // app rollout is fully cut over and no old process can target the
+    // column. Reads should always prefer agentName.
+    agentIdentity: text("agent_identity"),
     // From MCP `clientInfo` on the initialize handshake, stamped per
     // session by the OSS engine and copied to every audit row from that
     // session. Split from version so the dashboard can group across

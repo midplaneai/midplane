@@ -55,12 +55,19 @@ export type EventType = (typeof EVENT_TYPES)[number];
 // Terminal-state classification of a query's lifecycle. Computed from the
 // set of stage rows in the DB, not stored. Order here is the order chips
 // appear in the filter strip.
+//
+// POLICY_RELOAD is a non-query event (the OSS engine emits POLICY_RELOADED
+// rows on a successful /admin/policy hot-swap). It rides in the same list
+// because operators need a single place to verify when a policy change
+// took effect. It always carries a NULL query_id and shows alongside the
+// query rows; the status pill marks it visually distinct.
 export const QUERY_STATUSES = [
   "ALLOWED",
   "DENIED",
   "FAILED",
   "STUCK",
   "PENDING",
+  "POLICY_RELOAD",
 ] as const;
 export type QueryStatus = (typeof QUERY_STATUSES)[number];
 
@@ -73,9 +80,12 @@ export type QueryStatus = (typeof QUERY_STATUSES)[number];
 const STUCK_THRESHOLD_MS = 30_000;
 
 export interface AuditQueryListRow {
-  queryId: string;
+  /** Null for POLICY_RELOAD rows (those aren't queries — they're operator
+   *  events the OSS engine emits on hot-swap). */
+  queryId: string | null;
   /** ULID of the ATTEMPTED event — stable cursor token (it never moves
-   *  once written). Used for pagination ordering. */
+   *  once written). Used for pagination ordering. POLICY_RELOAD rows
+   *  carry the policy event's own id here. */
   attemptedEventId: string;
   /** Most recent event id for this query. The list row links here so the
    *  detail page lands on whichever stage rendered the terminal state. */
@@ -156,6 +166,8 @@ export async function listAuditQueries(
       ? sql`AND attempted_event_id < ${opts.cursor}`
       : sql``;
 
+    const hasSearch =
+      opts.search !== undefined && opts.search.trim().length > 0;
     const searchClause = (() => {
       const needle = opts.search?.trim();
       if (!needle) return sql``;
@@ -173,6 +185,10 @@ export async function listAuditQueries(
         )
       `;
     })();
+    // Policy events have no SQL or query_id to match — exclude them
+    // entirely when the user is searching, otherwise an unrelated reload
+    // event would pop up in a "DELETE FROM users" search and confuse.
+    const policySearchClause = hasSearch ? sql`AND FALSE` : sql``;
 
     const statusClause = (() => {
       if (!opts.statuses || opts.statuses.length === 0) return sql``;
@@ -186,6 +202,12 @@ export async function listAuditQueries(
     // before STUCK / PENDING. has_executed implies an upstream allow
     // decision (the OSS engine never emits EXECUTED without DECIDED+allow);
     // we trust that invariant rather than re-checking.
+    //
+    // policy_events is unioned in alongside the query aggregation so
+    // POLICY_RELOADED rows (singletons, no lifecycle) keep showing up in
+    // the audit log — operators rely on this list to verify a hot-swap
+    // landed. Both CTEs project the same column shape with explicit
+    // NULL casts; UNION ALL needs matching types on each branch.
     const stmt = sql`
       WITH agg AS (
         SELECT
@@ -219,7 +241,23 @@ export async function listAuditQueries(
         GROUP BY query_id
       ),
       classified AS (
-        SELECT *,
+        SELECT
+          query_id,
+          attempted_event_id,
+          head_event_id,
+          started_at,
+          last_ts,
+          tenant_id,
+          database,
+          agent_name,
+          agent_version,
+          agent_intent,
+          intent_source,
+          sql_raw,
+          sql_fingerprint,
+          decision,
+          decision_reason,
+          exec_ms,
           CASE
             WHEN has_executed THEN 'ALLOWED'
             WHEN has_failed THEN 'FAILED'
@@ -228,9 +266,39 @@ export async function listAuditQueries(
             ELSE 'PENDING'
           END AS status
         FROM agg
+      ),
+      policy_events AS (
+        SELECT
+          NULL::text AS query_id,
+          id AS attempted_event_id,
+          id AS head_event_id,
+          ts AS started_at,
+          ts AS last_ts,
+          tenant_id,
+          database,
+          NULL::text AS agent_name,
+          NULL::text AS agent_version,
+          NULL::text AS agent_intent,
+          NULL::text AS intent_source,
+          NULL::text AS sql_raw,
+          NULL::text AS sql_fingerprint,
+          NULL::text AS decision,
+          NULL::text AS decision_reason,
+          NULL::numeric AS exec_ms,
+          'POLICY_RELOAD' AS status
+        FROM audit_events_index
+        WHERE customer_id = ${customerId}
+          AND region = ${opts.region}
+          AND event_type = 'POLICY_RELOADED'
+          ${tenantClause}
+          ${databaseClause}
+          ${policySearchClause}
       )
-      SELECT *
-      FROM classified
+      SELECT * FROM (
+        SELECT * FROM classified
+        UNION ALL
+        SELECT * FROM policy_events
+      ) merged
       WHERE 1=1
         ${cursorClause}
         ${statusClause}
@@ -242,7 +310,7 @@ export async function listAuditQueries(
     const rawRows = (result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[]);
     const rows: AuditQueryListRow[] = (rawRows as Record<string, unknown>[]).map(
       (r) => ({
-        queryId: String(r.query_id),
+        queryId: r.query_id == null ? null : String(r.query_id),
         attemptedEventId: String(r.attempted_event_id),
         headEventId: String(r.head_event_id),
         startedAt: new Date(r.started_at as string | Date),
@@ -492,9 +560,13 @@ export async function countByStatus(
     FAILED: 0,
     STUCK: 0,
     PENDING: 0,
+    POLICY_RELOAD: 0,
   };
   const stuckCutoff = new Date(now().getTime() - STUCK_THRESHOLD_MS);
   return withCustomerScope(customerId, async (tx) => {
+    // Single statement: query lifecycles classified by status, plus a
+    // POLICY_RELOAD bucket so operators can see at a glance how many
+    // hot-swaps landed in the visible window.
     const stmt = sql`
       WITH agg AS (
         SELECT
@@ -521,6 +593,14 @@ export async function countByStatus(
         count(*)::int AS count
       FROM agg
       GROUP BY 1
+      UNION ALL
+      SELECT
+        'POLICY_RELOAD' AS status,
+        count(*)::int AS count
+      FROM audit_events_index
+      WHERE customer_id = ${customerId}
+        AND region = ${region}
+        AND event_type = 'POLICY_RELOADED'
     `;
     const raw = await tx.execute(stmt);
     const rows = ((raw as unknown as { rows?: unknown[] }).rows ??

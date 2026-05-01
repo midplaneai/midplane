@@ -17,10 +17,14 @@ describe("schema parity with OSS audit_events", () => {
     const cols = Object.keys(auditEventsIndex);
     // OSS v2 columns (audit_events.schema_version 2 — OSS 0.3.0 split
     // agent_identity into agent_name + agent_version and added
-    // agent_intent + intent_source).
+    // agent_intent + intent_source). agentIdentity is also still on the
+    // schema as a deprecated column kept for one rollout window so an
+    // in-flight pre-bump indexer can still write to it without a 42703;
+    // a follow-up migration drops both the column and the field.
     for (const col of [
       "id",
       "queryId",
+      "agentIdentity",
       "agentName",
       "agentVersion",
       "agentIntent",
@@ -32,8 +36,6 @@ describe("schema parity with OSS audit_events", () => {
     ]) {
       expect(cols).toContain(col);
     }
-    // Legacy v1 column dropped in migration 0012.
-    expect(cols).not.toContain("agentIdentity");
     // Cloud-side additions
     expect(cols).toContain("customerId");
     expect(cols).toContain("tenantId");
