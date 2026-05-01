@@ -29,22 +29,36 @@ export function EventBadge({
 }: {
   eventType: string;
   /** OSS-side decision string from the DECIDED payload ("allow" | "deny").
-   *  When passed, overrides the default DECIDED color so the badge agrees
-   *  with the list table's StatusBadge. Ignored on non-DECIDED events. */
+   *  When passed on a DECIDED event, the badge swaps both color AND label
+   *  to the decision (DENY / ALLOW) so the lifecycle reads in the same
+   *  vocabulary the list table established. Without this, clicking a row
+   *  labeled DENY drops the user onto a page where the same event is
+   *  called DECIDED — needless cognitive translation.
+   *
+   *  Forensic operators who want the raw OSS event_type can still see
+   *  it on the JSON payload card; the timeline shape is unchanged. */
   decision?: string | null;
 }) {
+  const decided = eventType === "DECIDED" ? decision?.toLowerCase() : null;
   const variant = (() => {
-    if (eventType === "DECIDED" && decision) {
-      const d = decision.toLowerCase();
-      if (d === "deny") return "deny";
-      if (d === "allow") return "allow";
-    }
+    if (decided === "deny") return "deny";
+    if (decided === "allow") return "allow";
     return VARIANT_MAP[eventType] ?? "default";
   })();
-  const aria = ARIA_MAP[eventType] ?? eventType;
+  const label =
+    decided === "deny"
+      ? "DENY"
+      : decided === "allow"
+        ? "ALLOW"
+        : eventType;
+  const aria = (() => {
+    if (decided === "deny") return "Denied by policy";
+    if (decided === "allow") return "Allowed by policy";
+    return ARIA_MAP[eventType] ?? eventType;
+  })();
   return (
     <Badge variant={variant} aria-label={aria}>
-      {eventType}
+      {label}
     </Badge>
   );
 }
