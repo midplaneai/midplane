@@ -8,13 +8,16 @@ import {
   StalenessSubtitle,
 } from "@/components/audit/staleness-banner";
 import { StatusBadge } from "@/components/audit/status-badge";
+import { VolumeSparkline } from "@/components/audit/volume-sparkline";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import {
   countByStatus,
+  eventVolumeByHour,
   listAuditQueries,
+  listDatabases,
   listTenantIds,
   QUERY_STATUSES,
   readStaleness,
@@ -28,6 +31,7 @@ interface PageProps {
   searchParams: Promise<{
     status?: string;
     tenant_id?: string;
+    database?: string;
     q?: string;
     cursor?: string;
   }>;
@@ -40,30 +44,43 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const selectedStatuses = parseStatuses(params.status);
   const selectedTenant = params.tenant_id?.trim() || null;
+  const selectedDatabase = params.database?.trim() || null;
   const search = params.q?.trim() ?? "";
   const cursor = params.cursor?.trim() || undefined;
 
-  const [list, tenants, counts, staleness] = await Promise.all([
-    listAuditQueries(customer.id, {
-      region: customer.region,
-      statuses: selectedStatuses,
-      tenantId: selectedTenant ?? undefined,
-      search,
-      cursor,
-      pageSize: PAGE_SIZE,
-    }),
-    listTenantIds(customer.id, customer.region),
-    countByStatus(customer.id, customer.region),
-    readStaleness(customer.id, customer.region),
-  ]);
+  const [list, tenants, databases, counts, volume, staleness] =
+    await Promise.all([
+      listAuditQueries(customer.id, {
+        region: customer.region,
+        statuses: selectedStatuses,
+        tenantId: selectedTenant ?? undefined,
+        database: selectedDatabase ?? undefined,
+        search,
+        cursor,
+        pageSize: PAGE_SIZE,
+      }),
+      listTenantIds(customer.id, customer.region),
+      listDatabases(customer.id, customer.region),
+      countByStatus(customer.id, customer.region),
+      eventVolumeByHour(customer.id, customer.region, {
+        tenantId: selectedTenant ?? undefined,
+        database: selectedDatabase ?? undefined,
+        search,
+      }),
+      readStaleness(customer.id, customer.region),
+    ]);
 
   const totalCount = Object.values(counts).reduce((sum, n) => sum + n, 0);
   const hasFilters =
-    selectedStatuses.length > 0 || selectedTenant !== null || search.length > 0;
+    selectedStatuses.length > 0 ||
+    selectedTenant !== null ||
+    selectedDatabase !== null ||
+    search.length > 0;
 
   const buildUrl = makeUrlBuilder({
     selectedStatuses,
     selectedTenant,
+    selectedDatabase,
     search,
     cursor,
   });
@@ -79,10 +96,14 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         <StalenessSubtitle read={staleness} totalCount={totalCount} />
         <StalenessBanner read={staleness} />
 
+        <VolumeSparkline buckets={volume} />
+
         <FilterChips
           selectedStatuses={selectedStatuses}
           selectedTenant={selectedTenant}
+          selectedDatabase={selectedDatabase}
           tenants={tenants}
+          databases={databases}
           counts={counts}
           search={search}
           buildUrl={buildUrl}
@@ -115,6 +136,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
                   data-query-id={r.queryId}
                   data-status={r.status}
                   data-tenant-id={r.tenantId}
+                  data-database={r.database}
                   className="border-b border-card transition-colors hover:bg-card"
                 >
                   <Td className="whitespace-nowrap font-mono text-[11px] text-subtle">
@@ -334,12 +356,14 @@ function parseStatuses(raw: string | undefined): readonly QueryStatus[] {
 function makeUrlBuilder(state: {
   selectedStatuses: readonly QueryStatus[];
   selectedTenant: string | null;
+  selectedDatabase: string | null;
   search: string;
   cursor: string | undefined;
 }) {
   return (overrides: {
     status?: readonly QueryStatus[];
     tenantId?: string | null;
+    database?: string | null;
     cursor?: string | null;
   }): string => {
     const statuses =
@@ -350,11 +374,16 @@ function makeUrlBuilder(state: {
       overrides.tenantId !== undefined
         ? overrides.tenantId
         : state.selectedTenant;
+    const database =
+      overrides.database !== undefined
+        ? overrides.database
+        : state.selectedDatabase;
     const cursor =
       overrides.cursor !== undefined ? overrides.cursor : state.cursor;
     const usp = new URLSearchParams();
     if (statuses.length > 0) usp.set("status", statuses.join(","));
     if (tenant) usp.set("tenant_id", tenant);
+    if (database) usp.set("database", database);
     if (state.search) usp.set("q", state.search);
     if (cursor) usp.set("cursor", cursor);
     const q = usp.toString();

@@ -6,12 +6,15 @@ import { QUERY_STATUSES, type QueryStatus } from "@/lib/audit";
 interface FilterChipsProps {
   selectedStatuses: readonly QueryStatus[];
   selectedTenant: string | null;
+  selectedDatabase: string | null;
   tenants: readonly string[];
+  databases: readonly string[];
   counts: Record<QueryStatus, number>;
   search: string;
   buildUrl: (overrides: {
     status?: readonly QueryStatus[];
     tenantId?: string | null;
+    database?: string | null;
     cursor?: string | null;
   }) => string;
 }
@@ -39,7 +42,9 @@ const CHIP_LABELS: Record<QueryStatus, string> = {
 export function FilterChips({
   selectedStatuses,
   selectedTenant,
+  selectedDatabase,
   tenants,
+  databases,
   counts,
   search,
   buildUrl,
@@ -97,6 +102,31 @@ export function FilterChips({
         </>
       )}
 
+      {databases.length > 0 && (
+        <>
+          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Database</span>
+          <Chip
+            href={buildUrl({ database: null, cursor: null })}
+            active={selectedDatabase === null}
+          >
+            <b className="font-medium">All</b>
+            <Count active={selectedDatabase === null}>{databases.length}</Count>
+          </Chip>
+          {databases.map((d) => (
+            <Chip
+              key={d}
+              href={buildUrl({
+                database: selectedDatabase === d ? null : d,
+                cursor: null,
+              })}
+              active={selectedDatabase === d}
+            >
+              <b className="font-mono font-medium">{truncate(d, 18)}</b>
+            </Chip>
+          ))}
+        </>
+      )}
+
       <form action="/audit" method="get" className="ml-auto">
         {selectedStatuses.length > 0 && (
           <input
@@ -107,6 +137,9 @@ export function FilterChips({
         )}
         {selectedTenant && (
           <input type="hidden" name="tenant_id" value={selectedTenant} />
+        )}
+        {selectedDatabase && (
+          <input type="hidden" name="database" value={selectedDatabase} />
         )}
         <input
           name="q"

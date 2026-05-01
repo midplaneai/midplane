@@ -3,12 +3,12 @@ import { redirect } from "next/navigation";
 
 import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
 
+import { AccessRadio } from "@/components/access-radio";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
-import { cn } from "@/lib/utils";
 import { currentCustomer } from "@/lib/customer";
 import {
   createConnection,
@@ -100,39 +100,6 @@ export default async function NewConnection() {
         </div>
       </PageContainer>
     </>
-  );
-}
-
-function AccessRadio({
-  value,
-  label,
-  description,
-  defaultChecked,
-}: {
-  value: AccessLevel;
-  label: string;
-  description: string;
-  defaultChecked?: boolean;
-}) {
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-start gap-3 rounded-md border border-border bg-card p-3 transition-colors",
-        "hover:border-border-strong has-[:checked]:border-[hsl(var(--brand))] has-[:checked]:ring-1 has-[:checked]:ring-[hsl(var(--brand)/0.4)]",
-      )}
-    >
-      <input
-        type="radio"
-        name="default_access"
-        value={value}
-        defaultChecked={defaultChecked}
-        className="mt-1 accent-[hsl(var(--brand))]"
-      />
-      <div className="space-y-0.5">
-        <div className="text-sm font-medium text-foreground">{label}</div>
-        <div className="text-xs text-muted-foreground">{description}</div>
-      </div>
-    </label>
   );
 }
 
