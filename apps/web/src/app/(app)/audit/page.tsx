@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { FilterChips } from "@/components/audit/filter-chips";
+import { RefreshButton } from "@/components/audit/refresh-button";
 import { relativeTime } from "@/components/audit/relative-time";
 import {
   StalenessBanner,
@@ -93,7 +94,10 @@ export default async function AuditListPage({ searchParams }: PageProps) {
       </Topbar>
       <PageContainer>
         <PageHeader title="Audit log" />
-        <StalenessSubtitle read={staleness} totalCount={totalCount} />
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <StalenessSubtitle read={staleness} totalCount={totalCount} />
+          <RefreshButton />
+        </div>
         <StalenessBanner read={staleness} />
 
         <VolumeSparkline buckets={volume} />
