@@ -1,16 +1,16 @@
 import Link from "next/link";
 
 import { cn } from "@/lib/utils";
-import { EVENT_TYPES, type EventType } from "@/lib/audit";
+import { QUERY_STATUSES, type QueryStatus } from "@/lib/audit";
 
 interface FilterChipsProps {
-  selectedTypes: readonly EventType[];
+  selectedStatuses: readonly QueryStatus[];
   selectedTenant: string | null;
   tenants: readonly string[];
-  counts: Record<EventType, number>;
+  counts: Record<QueryStatus, number>;
   search: string;
   buildUrl: (overrides: {
-    eventType?: readonly EventType[];
+    status?: readonly QueryStatus[];
     tenantId?: string | null;
     cursor?: string | null;
   }) => string;
@@ -25,40 +25,49 @@ const CHIP_ACTIVE =
 const CHIP_LABEL =
   "text-[11px] font-medium uppercase tracking-[0.04em] text-subtle";
 
+// Short labels for the chips. Differ from StatusBadge labels because the
+// chip strip is laid out horizontally and benefits from compact text;
+// the badge is in-table where the longer label has room.
+const CHIP_LABELS: Record<QueryStatus, string> = {
+  ALLOWED: "Allowed",
+  DENIED: "Denied",
+  FAILED: "Failed",
+  STUCK: "Stuck",
+  PENDING: "Pending",
+};
+
 export function FilterChips({
-  selectedTypes,
+  selectedStatuses,
   selectedTenant,
   tenants,
   counts,
   search,
   buildUrl,
 }: FilterChipsProps) {
-  const allTypesActive = selectedTypes.length === 0;
+  const allStatusesActive = selectedStatuses.length === 0;
 
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-3">
-      <span className={cn(CHIP_LABEL, "mr-1")}>Event</span>
+      <span className={cn(CHIP_LABEL, "mr-1")}>Status</span>
       <Chip
-        href={buildUrl({ eventType: [], cursor: null })}
-        active={allTypesActive}
+        href={buildUrl({ status: [], cursor: null })}
+        active={allStatusesActive}
       >
         <b className="font-medium">All</b>
       </Chip>
-      {EVENT_TYPES.map((t) => {
-        const active = selectedTypes.includes(t);
+      {QUERY_STATUSES.map((s) => {
+        const active = selectedStatuses.includes(s);
         const next = active
-          ? selectedTypes.filter((x) => x !== t)
-          : [...selectedTypes, t];
+          ? selectedStatuses.filter((x) => x !== s)
+          : [...selectedStatuses, s];
         return (
           <Chip
-            key={t}
-            href={buildUrl({ eventType: next, cursor: null })}
+            key={s}
+            href={buildUrl({ status: next, cursor: null })}
             active={active}
           >
-            <b className="font-medium">
-              {t.charAt(0) + t.slice(1).toLowerCase()}
-            </b>
-            <Count active={active}>{counts[t]}</Count>
+            <b className="font-medium">{CHIP_LABELS[s]}</b>
+            <Count active={active}>{counts[s]}</Count>
           </Chip>
         );
       })}
@@ -89,11 +98,11 @@ export function FilterChips({
       )}
 
       <form action="/audit" method="get" className="ml-auto">
-        {selectedTypes.length > 0 && (
+        {selectedStatuses.length > 0 && (
           <input
             type="hidden"
-            name="event_type"
-            value={selectedTypes.join(",")}
+            name="status"
+            value={selectedStatuses.join(",")}
           />
         )}
         {selectedTenant && (
@@ -102,7 +111,7 @@ export function FilterChips({
         <input
           name="q"
           defaultValue={search}
-          placeholder="Search query_id or sql_fingerprint…"
+          placeholder="Search SQL, fingerprint or query_id…"
           aria-label="Search audit rows"
           className={cn(
             "w-[280px] rounded-md border border-border bg-secondary px-2.5 py-1 text-xs text-foreground placeholder:text-muted-foreground",

@@ -13,13 +13,18 @@ import {
 } from "../src/schema.ts";
 
 describe("schema parity with OSS audit_events", () => {
-  it("audit_events_index has all OSS columns plus customer_id, tenant_id, region, database", () => {
+  it("audit_events_index has all OSS v2 columns plus customer_id, tenant_id, region, database", () => {
     const cols = Object.keys(auditEventsIndex);
-    // OSS columns (from packages/engine/src/audit/schema.sql)
+    // OSS v2 columns (audit_events.schema_version 2 — OSS 0.3.0 split
+    // agent_identity into agent_name + agent_version and added
+    // agent_intent + intent_source).
     for (const col of [
       "id",
       "queryId",
-      "agentIdentity",
+      "agentName",
+      "agentVersion",
+      "agentIntent",
+      "intentSource",
       "ts",
       "eventType",
       "payload",
@@ -27,6 +32,8 @@ describe("schema parity with OSS audit_events", () => {
     ]) {
       expect(cols).toContain(col);
     }
+    // Legacy v1 column dropped in migration 0012.
+    expect(cols).not.toContain("agentIdentity");
     // Cloud-side additions
     expect(cols).toContain("customerId");
     expect(cols).toContain("tenantId");

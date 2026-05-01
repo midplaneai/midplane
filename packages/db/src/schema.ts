@@ -170,7 +170,23 @@ export const auditEventsIndex = pgTable(
     tenantId: text("tenant_id").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
     queryId: text("query_id").notNull(),
-    agentIdentity: text("agent_identity"),
+    // From MCP `clientInfo` on the initialize handshake, stamped per
+    // session by the OSS engine and copied to every audit row from that
+    // session. Split from version so the dashboard can group across
+    // versions ("everything claude-code did") and filter by version.
+    agentName: text("agent_name"),
+    agentVersion: text("agent_version"),
+    // Free-text task description the agent declared for this query.
+    // Resolved by the OSS in priority order: MCP `_meta.intent` →
+    // SQL comment hint (`/* midplane:intent="..." */`) → HTTP header
+    // (`X-Midplane-Intent`). Truncated to 500 chars at emission.
+    agentIntent: text("agent_intent"),
+    // Which channel surfaced the intent. Lets the UI distinguish
+    // first-class _meta.intent from best-effort fallbacks and surface
+    // signal richness over time. NULL when no intent was provided.
+    intentSource: text("intent_source", {
+      enum: ["mcp_meta", "sql_comment", "http_header"] as const,
+    }),
     // OSS-side database name (`main`, `analytics`, …). Multi-DB rollout in
     // 0009; defaults to 'main' for legacy single-DB containers and any
     // pre-0.2.0 row that omits the field on the audit pull payload.
@@ -196,6 +212,16 @@ export const auditEventsIndex = pgTable(
       t.customerId,
       t.region,
       t.database,
+      t.ts.desc(),
+    ),
+    // Partial index keyed on agent_name; declared here so the schema view
+    // matches what 0011 created. The `WHERE agent_name IS NOT NULL`
+    // predicate can't be expressed in Drizzle's index DSL — the migration
+    // owns that detail and this declaration is the read-side mirror.
+    customerAgentTsIdx: index("audit_customer_region_agent_ts_idx").on(
+      t.customerId,
+      t.region,
+      t.agentName,
       t.ts.desc(),
     ),
     queryIdIdx: index("audit_query_id_idx").on(t.queryId),

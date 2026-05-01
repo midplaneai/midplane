@@ -105,7 +105,15 @@ export default async function AuditDetailPage({ params }: PageProps) {
                 <Dt>Tenant</Dt>
                 <Dd>{event.tenantId}</Dd>
                 <Dt>Agent</Dt>
-                <Dd>{event.agentIdentity ?? "—"}</Dd>
+                <Dd>{formatAgent(event)}</Dd>
+                <Dt>Intent</Dt>
+                <Dd>{event.agentIntent ?? "—"}</Dd>
+                {event.intentSource && (
+                  <>
+                    <Dt>Intent via</Dt>
+                    <Dd>{intentSourceLabel(event.intentSource)}</Dd>
+                  </>
+                )}
                 <Dt>Query ID</Dt>
                 <Dd>{event.queryId}</Dd>
                 <Dt>Region</Dt>
@@ -176,6 +184,30 @@ function Dd({ children }: { children: React.ReactNode }) {
   return (
     <dd className="break-all font-mono text-xs text-foreground">{children}</dd>
   );
+}
+
+// Render as "name vX.Y.Z" when both parts are present so the table column
+// and the detail card show the same string.
+function formatAgent(event: {
+  agentName: string | null;
+  agentVersion: string | null;
+}): string {
+  if (!event.agentName) return "—";
+  if (event.agentVersion) return `${event.agentName} v${event.agentVersion}`;
+  return event.agentName;
+}
+
+function intentSourceLabel(source: string): string {
+  switch (source) {
+    case "mcp_meta":
+      return "MCP _meta.intent";
+    case "sql_comment":
+      return "SQL comment";
+    case "http_header":
+      return "X-Midplane-Intent header";
+    default:
+      return source;
+  }
 }
 
 function payloadFingerprint(payload: unknown): string {
