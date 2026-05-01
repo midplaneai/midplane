@@ -9,7 +9,7 @@ import { PermissionGrid } from "@/components/permission-grid";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
 import { PageHeader } from "@/components/ui/page-header";
 import {
-  getConnectionWithMainDatabase,
+  getConnectionWithDatabase,
   isValidDsn,
   rotateConnection,
   setTableAccess,
@@ -17,44 +17,44 @@ import {
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 
-// PR-B: this page now hosts only the DB-level surface. MCP URL + agent
-// config moved into the side sheet; rename + delete + region moved into
-// the settings page. PR-C will rename this route to
-// /connections/[id]/databases/[name] and add the per-DB list.
+// Per-DB detail page. The hierarchical dashboard owns the connection-level
+// surface (rename, delete, agent setup, MCP URL); this route is scoped to
+// one DB on that connection — its policy grid + DSN rotation. Keep the
+// page lean: anything that's connection-scoped lives on the dashboard or
+// /connections/[id]/settings, never here.
+//
+// Server actions close over `id` and `name` from the URL params instead of
+// re-reading them from formData — the URL is the authoritative resource
+// reference, and a tampered hidden field shouldn't redirect a write to
+// a different DB.
 
-export default async function ConnectionDetail({
+export default async function DatabaseDetail({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: Promise<{ id: string; name: string }>;
 }) {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
 
-  const { id } = await params;
-  const result = await getConnectionWithMainDatabase(customer, id);
+  const { id, name } = await params;
+  const result = await getConnectionWithDatabase(customer, id, name);
   if (!result) notFound();
-  const { connection: conn, mainDatabase: mainDb } = result;
+  const { connection: conn, database: db } = result;
 
   async function rotateAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
 
-    const formId = formData.get("id");
     const dsn = formData.get("dsn");
-    if (typeof formId !== "string" || formId.length === 0) {
-      throw new Error("missing id");
-    }
     if (!isValidDsn(dsn)) {
       throw new Error("DSN must be a postgres:// or postgresql:// URL");
     }
 
     const ctx = getMcpProxyContext();
-    const rotated = await rotateConnection(customer, formId, dsn, ctx);
-    if (!rotated) {
-      notFound();
-    }
-    revalidatePath(`/connections/${formId}`);
+    const rotated = await rotateConnection(customer, id, dsn, ctx, name);
+    if (!rotated) notFound();
+    revalidatePath(`/connections/${id}/databases/${name}`);
   }
 
   async function policyAction(formData: FormData) {
@@ -62,10 +62,6 @@ export default async function ConnectionDetail({
     const customer = await currentCustomer();
     if (!customer) redirect("/");
 
-    const formId = formData.get("id");
-    if (typeof formId !== "string" || formId.length === 0) {
-      throw new Error("missing id");
-    }
     const raw = formData.get("policy");
     if (typeof raw !== "string") {
       throw new Error("missing policy");
@@ -79,9 +75,9 @@ export default async function ConnectionDetail({
     const policy = parsePolicyOrThrow(parsed);
 
     const ctx = getMcpProxyContext();
-    const result = await setTableAccess(customer, formId, policy, ctx);
+    const result = await setTableAccess(customer, id, policy, ctx, name);
     if (!result) notFound();
-    revalidatePath(`/connections/${formId}`);
+    revalidatePath(`/connections/${id}/databases/${name}`);
   }
 
   const connectionLabel = conn.name ?? conn.id.slice(0, 12);
@@ -95,14 +91,14 @@ export default async function ConnectionDetail({
         <span className="mx-2 text-subtle">/</span>
         <span className="font-mono">{connectionLabel}</span>
         <span className="mx-2 text-subtle">/</span>
-        <span className="font-mono">{mainDb.name}</span>
+        <span className="font-mono">{db.name}</span>
       </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[760px]">
           <PageHeader
             title={
               <span className="flex items-baseline gap-2">
-                <span className="font-mono text-foreground">{mainDb.name}</span>
+                <span className="font-mono text-foreground">{db.name}</span>
                 <span className="text-sm font-normal text-muted-foreground">
                   on {connectionLabel}
                 </span>
@@ -123,7 +119,7 @@ export default async function ConnectionDetail({
             <div className="pt-2">
               <PermissionGrid
                 connectionId={conn.id}
-                initialPolicy={parsePolicyOrThrow(mainDb.tableAccess)}
+                initialPolicy={parsePolicyOrThrow(db.tableAccess)}
                 action={policyAction}
               />
             </div>
@@ -137,8 +133,8 @@ export default async function ConnectionDetail({
               Paste a new Postgres URL to replace the encrypted ciphertext. The
               MCP endpoint URL stays the same; running sessions are torn down
               so the new credentials take effect on the next request.
-              {mainDb.rotatedAt ? (
-                <> Last rotated {formatRelative(mainDb.rotatedAt)}.</>
+              {db.rotatedAt ? (
+                <> Last rotated {formatRelative(db.rotatedAt)}.</>
               ) : null}
             </p>
             <RotateConnectionForm id={conn.id} action={rotateAction} />

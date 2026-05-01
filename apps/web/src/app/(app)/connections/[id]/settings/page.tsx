@@ -63,11 +63,9 @@ export default async function ConnectionSettings({
           <b className="font-medium text-foreground">Connections</b>
         </Link>
         <span className="mx-2 text-subtle">/</span>
-        <Link href={`/connections/${conn.id}`}>
-          <span className="font-mono">
-            {conn.name ?? conn.id.slice(0, 12)}
-          </span>
-        </Link>
+        <span className="font-mono">
+          {conn.name ?? conn.id.slice(0, 12)}
+        </span>
         <span className="mx-2 text-subtle">/</span>Settings
       </Topbar>
       <PageContainer>
