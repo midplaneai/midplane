@@ -3,12 +3,18 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-import { type TableAccessPolicy } from "@midplane-cloud/db";
+import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
+import {
+  type ConnectionDatabase,
+  type TableAccessPolicy,
+} from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { CopyButton } from "@/components/copy-button";
+import { AddDatabaseForm } from "@/components/dashboard/add-database-form";
 import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
+import { DatabaseRowMenu } from "@/components/dashboard/database-row-menu";
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
 import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
 import { SetupAgentControl } from "@/components/dashboard/setup-agent-control";
@@ -21,7 +27,11 @@ import {
   type Freshness,
 } from "@/lib/freshness";
 import {
+  addDatabase,
+  DatabaseNameTaken,
   deleteConnection,
+  isValidDatabaseName,
+  isValidDsn,
   listDashboardConnections,
   renameConnection,
 } from "@/lib/connections";
@@ -73,14 +83,12 @@ export default async function Dashboard({
         ) : (
           <ul className="divide-y divide-border border-y border-border">
             {rows.map((row) => {
-              const { connection: c, mainDatabase: db, cursor } = row;
+              const { connection: c, databases, cursor } = row;
               const freshness = computeFreshness({
                 lastIndexedAt: cursor.lastIndexedAt,
                 lastErrorAt: cursor.lastErrorAt,
               });
               const mcpUrl = mintMcpUrl(c.region, c.mcpToken, process.env);
-              const policy = db.tableAccess as TableAccessPolicy;
-              const tableCount = Object.keys(policy.tables ?? {}).length;
               return (
                 <li key={c.id} className="bg-background">
                   <ConnectionHeader
@@ -94,9 +102,7 @@ export default async function Dashboard({
                   />
                   <DatabaseList
                     connectionId={c.id}
-                    dbName={db.name}
-                    defaultAccess={policy.default}
-                    tableCount={tableCount}
+                    databases={databases}
                     lastQueryAt={cursor.lastIndexedAt}
                     freshness={freshness}
                   />
@@ -165,51 +171,61 @@ function ConnectionHeader({
 
 function DatabaseList({
   connectionId,
-  dbName,
-  defaultAccess,
-  tableCount,
+  databases,
   lastQueryAt,
   freshness,
 }: {
   connectionId: string;
-  dbName: string;
-  defaultAccess: string;
-  tableCount: number;
+  databases: ConnectionDatabase[];
   lastQueryAt: Date | null;
   freshness: Freshness;
 }) {
+  const disableRemove = databases.length <= 1;
   return (
     <div className="ml-4 mb-4 mt-1 overflow-hidden rounded-md border border-border bg-card">
-      <Link
-        href={`/connections/${connectionId}/databases/${dbName}`}
-        className="flex min-h-[44px] items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
-      >
-        <FreshnessDot state={freshness} />
-        <Database
-          className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-          strokeWidth={1.5}
-          aria-hidden
-        />
-        <span className="font-mono text-sm text-foreground">{dbName}</span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {accessLabel(defaultAccess)} · {tableCount}{" "}
-          {tableCount === 1 ? "table" : "tables"} · {lastQueryLabel(lastQueryAt)}
-        </span>
-      </Link>
-      <div className="border-t border-border px-3 py-2">
-        <button
-          type="button"
-          disabled
-          title="Multi-database support is coming in the next release"
-          className="inline-flex items-center gap-1.5 text-xs text-subtle disabled:cursor-not-allowed"
-        >
-          <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
-          Add database to this connection
-          <span className="ml-1 rounded-sm border border-border px-1 text-[10px] uppercase tracking-[0.04em]">
-            soon
-          </span>
-        </button>
-      </div>
+      <ul className="divide-y divide-border">
+        {databases.map((db) => {
+          const policy = db.tableAccess as TableAccessPolicy;
+          const tableCount = Object.keys(policy.tables ?? {}).length;
+          return (
+            <li
+              key={db.id}
+              className="group relative flex min-h-[44px] items-center"
+            >
+              <Link
+                href={`/connections/${connectionId}/databases/${db.name}`}
+                className="flex flex-1 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
+              >
+                <FreshnessDot state={freshness} />
+                <Database
+                  className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
+                  strokeWidth={1.5}
+                  aria-hidden
+                />
+                <span className="font-mono text-sm text-foreground">
+                  {db.name}
+                </span>
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {accessLabel(policy.default)} · {tableCount}{" "}
+                  {tableCount === 1 ? "table" : "tables"} ·{" "}
+                  {lastQueryLabel(lastQueryAt)}
+                </span>
+              </Link>
+              <div className="pr-2">
+                <DatabaseRowMenu
+                  connectionId={connectionId}
+                  dbName={db.name}
+                  disableRemove={disableRemove}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <AddDatabaseForm
+        connectionId={connectionId}
+        action={addDatabaseAction}
+      />
     </div>
   );
 }
@@ -275,6 +291,57 @@ async function deleteAction(formData: FormData) {
     await ctx.registry.invalidate(deleted.mcpToken).catch((err) => {
       console.error("[dashboard.deleteAction] registry.invalidate failed", err);
     });
+  }
+  revalidatePath("/dashboard");
+}
+
+async function addDatabaseAction(formData: FormData) {
+  "use server";
+  const customer = await currentCustomer();
+  if (!customer) redirect("/");
+
+  const connectionId = formData.get("connectionId");
+  if (typeof connectionId !== "string" || connectionId.length === 0) {
+    throw new Error("missing connectionId");
+  }
+  const nameRaw = formData.get("name");
+  if (typeof nameRaw !== "string" || !isValidDatabaseName(nameRaw.trim())) {
+    throw new Error(
+      "Name must be 1–32 lowercase letters / digits / _ - , starting with a letter.",
+    );
+  }
+  const dbName = nameRaw.trim();
+  const dsn = formData.get("dsn");
+  if (!isValidDsn(dsn)) {
+    throw new Error("DSN must be a postgres:// or postgresql:// URL");
+  }
+  // The form posts a string; validate against the canonical enum so a
+  // tampered request can't smuggle in something the spawner would
+  // refuse. Missing field falls back to "read" — same posture as
+  // createConnection.
+  const accessRaw = formData.get("default_access");
+  const defaultAccess: AccessLevel =
+    typeof accessRaw === "string" &&
+    (ACCESS_LEVELS as readonly string[]).includes(accessRaw)
+      ? (accessRaw as AccessLevel)
+      : "read";
+
+  const ctx = getMcpProxyContext();
+  try {
+    const result = await addDatabase(
+      customer,
+      connectionId,
+      dbName,
+      dsn,
+      defaultAccess,
+      ctx,
+    );
+    if (!result) notFound();
+  } catch (err) {
+    if (err instanceof DatabaseNameTaken) {
+      throw new Error(`A database named "${err.takenName}" already exists.`);
+    }
+    throw err;
   }
   revalidatePath("/dashboard");
 }

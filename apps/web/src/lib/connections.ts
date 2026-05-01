@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
@@ -767,12 +767,12 @@ export async function renameDatabase(
 }
 
 /** Server-side fetch for the hierarchical dashboard. Returns one row per
- *  connection paired with its single "main" database and the indexer cursor
- *  that drives the freshness dot. Single-DB only for PR-B; the multi-DB
- *  fan-out lands in PR-C. */
+ *  connection paired with EVERY child DB on it, plus the indexer cursor
+ *  that drives the connection-level freshness dot. Per-DB last-query
+ *  state lands on top of this in PR-C step 5. */
 export interface DashboardConnectionRow {
   connection: typeof connections.$inferSelect;
-  mainDatabase: typeof connectionDatabases.$inferSelect;
+  databases: Array<typeof connectionDatabases.$inferSelect>;
   cursor: {
     lastIndexedAt: Date | null;
     lastErrorAt: Date | null;
@@ -783,31 +783,47 @@ export async function listDashboardConnections(
   customer: Customer,
 ): Promise<DashboardConnectionRow[]> {
   const db = getDb();
-  const rows = await db
+  // Two-step fetch — first the parents (one row per connection, with the
+  // joined cursor), then every child DB scoped to those parent ids in a
+  // single IN-list query. A single inner-join would multiply rows by the
+  // child count and force a server-side group; the indirection keeps
+  // each query result-row shape stable and trivially paginates if we
+  // ever need to.
+  const parents = await db
     .select({
       connection: connections,
-      mainDatabase: connectionDatabases,
       lastIndexedAt: indexerCursors.lastIndexedAt,
       lastErrorAt: indexerCursors.lastErrorAt,
     })
     .from(connections)
-    .innerJoin(
-      connectionDatabases,
-      and(
-        eq(connectionDatabases.connectionId, connections.id),
-        eq(connectionDatabases.name, DEFAULT_DATABASE_NAME),
-      ),
-    )
     .leftJoin(indexerCursors, eq(indexerCursors.mcpToken, connections.mcpToken))
     .where(eq(connections.customerId, customer.id))
     .orderBy(desc(connections.createdAt));
+  if (parents.length === 0) return [];
 
-  return rows.map((r) => ({
-    connection: r.connection,
-    mainDatabase: r.mainDatabase,
+  const parentIds = parents.map((p) => p.connection.id);
+  const children = await db
+    .select()
+    .from(connectionDatabases)
+    .where(inArray(connectionDatabases.connectionId, parentIds))
+    .orderBy(asc(connectionDatabases.name));
+
+  const childrenByConn = new Map<
+    string,
+    Array<typeof connectionDatabases.$inferSelect>
+  >();
+  for (const child of children) {
+    const list = childrenByConn.get(child.connectionId) ?? [];
+    list.push(child);
+    childrenByConn.set(child.connectionId, list);
+  }
+
+  return parents.map((p) => ({
+    connection: p.connection,
+    databases: childrenByConn.get(p.connection.id) ?? [],
     cursor: {
-      lastIndexedAt: r.lastIndexedAt,
-      lastErrorAt: r.lastErrorAt,
+      lastIndexedAt: p.lastIndexedAt,
+      lastErrorAt: p.lastErrorAt,
     },
   }));
 }
