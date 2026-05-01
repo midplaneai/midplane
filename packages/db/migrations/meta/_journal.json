@@ -64,6 +64,20 @@
       "when": 1777644000002,
       "tag": "0008_policy_reloaded_event",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777644000003,
+      "tag": "0009_connection_databases",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777644000004,
+      "tag": "0010_audit_database_field",
+      "breakpoints": true
     }
   ]
 }

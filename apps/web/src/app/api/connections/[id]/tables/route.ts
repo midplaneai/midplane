@@ -20,11 +20,8 @@
 // "couldn't reach DB — type names manually" hint and still let the user
 // save a policy. Hard 4xx is reserved for auth / not-found.
 
-import { eq } from "drizzle-orm";
-
-import { connections, getDb } from "@midplane-cloud/db";
-
 import { currentCustomer } from "@/lib/customer";
+import { getConnectionWithMainDatabase } from "@/lib/connections";
 import { listTables } from "@/lib/list-tables";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 
@@ -53,15 +50,21 @@ export async function GET(
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").slice(0, MAX_QUERY_LENGTH);
 
-  const db = getDb();
-  const rows = await db.select().from(connections).where(eq(connections.id, id));
-  const conn = rows[0];
-  if (!conn || conn.customerId !== customer.id) {
+  // Multi-DB rollout (0009): credentials moved to connection_databases.
+  // Single-DB scope for PR-A — read parent + main child via the helper;
+  // the introspection runs against the main child's DSN.
+  const result = await getConnectionWithMainDatabase(customer, id);
+  if (!result) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
+  const { connection: conn, mainDatabase: mainDb } = result;
 
   const ctx = getMcpProxyContext();
-  const decrypt = await ctx.resolver.resolve(conn);
+  const decrypt = await ctx.resolver.resolve({
+    connectionDatabase: mainDb,
+    region: conn.region,
+    customerId: conn.customerId,
+  });
   if (!decrypt.ok) {
     const body: SoftErrorBody = {
       tables: [],

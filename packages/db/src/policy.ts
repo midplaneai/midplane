@@ -123,23 +123,155 @@ export function parsePolicyOrThrow(input: unknown): TableAccessPolicy {
   throw new Error(`invalid table_access policy: ${summary}`);
 }
 
-// Serialize to the YAML shape the OSS engine reads. We hand-roll because
-// the schema is small and predictable; pulling in js-yaml would add ~30KB
-// for one nested object.
+// --- DB name validation -----------------------------------------------------
 //
-//   table_access:
-//     default: read
-//     tables:
-//       public.users: read
-//       orders: deny
+// Mirrors OSS-side DB_NAME_RE so a name validated cloud-side also passes
+// the engine's parsePolicyYaml. Reserved name `__default__` is the OSS
+// internal sentinel for the legacy single-DB shape; operators may not use
+// it for a real DB.
+
+export const DB_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+export const RESERVED_DB_NAMES = ["__default__"] as const;
+
+export function isValidDbName(name: unknown): name is string {
+  return (
+    typeof name === "string" &&
+    DB_NAME_RE.test(name) &&
+    !(RESERVED_DB_NAMES as readonly string[]).includes(name)
+  );
+}
+
+// --- YAML serialization -----------------------------------------------------
 //
-// The `table_access:` wrapper is required — the OSS mcp-server's
-// PolicyFileSchema reads `table_access.default` and `table_access.tables`.
-// A flat top-level shape is silently ignored (zod non-strict), which means
-// the engine boots with no table_access config and denies nothing.
+// The cloud always emits the multi-DB `databases:` shape, even for N=1.
+// OSS 0.2.0 treats a one-entry `databases:` array identically to legacy
+// DATABASE_URL, but emitting uniform YAML keeps the spawn path single-
+// branched and makes inspection of /etc/midplane/policy.yaml predictable.
 //
-// Table names are validated to TABLE_NAME_RE so they never need YAML
-// quoting; access levels are a fixed enum, also unquoted-safe.
+// DSNs are NEVER inlined into the YAML — they're injected as env vars
+// (`MIDPLANE_DSN_<connectionDatabaseId>`) and referenced from `url:` via
+// the OSS env-interpolation regex `${VAR}`. This preserves the trust
+// posture from packages/router/src/spawner.ts:13: "DSN is NEVER logged or
+// persisted; it lives in the container's env, not on disk."
+//
+// Hand-rolled serializer (vs. js-yaml) keeps the dep footprint tiny. All
+// dynamic values are validated upstream (DB names match DB_NAME_RE, table
+// names match TABLE_NAME_RE, access levels are a closed enum, env-var
+// names are derived from ULID-shaped ids) so none need YAML quoting.
+
+export interface DatabaseEntry {
+  name: string;
+  /** Connection-database id used to derive the DSN env var name. ULIDs
+   *  match OSS-side `[A-Z_][A-Z0-9_]*` so dsnEnvVarFor never produces an
+   *  invalid var name. */
+  connectionDatabaseId: string;
+  tableAccess: TableAccessPolicy;
+  /** Empty map = tenant_scope disabled for this DB; the YAML omits the
+   *  block entirely (OSS treats absent block as disabled). */
+  tenantScopeMappings: Record<string, string>;
+}
+
+// Mirrors OSS ENV_INTERP_RE so the cloud refuses to derive an env var name
+// that the engine's `${VAR}` substitution wouldn't match. A raw UUID
+// (lowercase letters + hyphens) would slip past the spawner's run command
+// just to fail at engine boot — fail loud here instead.
+const OSS_ENV_INTERP_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+/** Env var name the spawner injects this DB's plaintext DSN under, and
+ *  that the YAML `url:` field references via ${...} interpolation. The
+ *  full name (prefix + id) must match OSS ENV_INTERP_RE
+ *  `[A-Z_][A-Z0-9_]*` — ULIDs (uppercase Crockford base32) and uppercase
+ *  hex IDs both qualify; raw UUIDs (lowercase + hyphens) do NOT. Throws
+ *  rather than silently mis-substituting, since OSS would treat an
+ *  unmatched `${...}` as a literal url and refuse the connection. */
+export function dsnEnvVarFor(connectionDatabaseId: string): string {
+  const name = `MIDPLANE_DSN_${connectionDatabaseId}`;
+  if (!OSS_ENV_INTERP_NAME_RE.test(name)) {
+    throw new Error(
+      `dsnEnvVarFor: connection_database id "${connectionDatabaseId}" produces env var name "${name}" that does not match OSS env-interpolation regex [A-Z_][A-Z0-9_]* (lowercase letters, hyphens, or other punctuation are not allowed)`,
+    );
+  }
+  return name;
+}
+
+export function serializeMultiDbPolicyToYaml(
+  databases: readonly DatabaseEntry[],
+): string {
+  if (databases.length === 0) {
+    throw new Error("serializeMultiDbPolicyToYaml: at least one database required");
+  }
+  const seen = new Set<string>();
+  for (const db of databases) {
+    if (!isValidDbName(db.name)) {
+      throw new Error(
+        `serializeMultiDbPolicyToYaml: invalid database name "${db.name}" (must match ${DB_NAME_RE} and not be reserved)`,
+      );
+    }
+    if (seen.has(db.name)) {
+      throw new Error(
+        `serializeMultiDbPolicyToYaml: duplicate database name "${db.name}"`,
+      );
+    }
+    seen.add(db.name);
+  }
+
+  const lines: string[] = ["databases:"];
+  for (const db of databases) {
+    lines.push(`  - name: ${db.name}`);
+    lines.push(`    url: \${${dsnEnvVarFor(db.connectionDatabaseId)}}`);
+    lines.push(`    table_access:`);
+    lines.push(`      default: ${db.tableAccess.default}`);
+    const tables = Object.entries(db.tableAccess.tables).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    if (tables.length === 0) {
+      lines.push(`      tables: {}`);
+    } else {
+      lines.push(`      tables:`);
+      for (const [name, level] of tables) {
+        lines.push(`        ${name}: ${level}`);
+      }
+    }
+    const mappings = Object.entries(db.tenantScopeMappings).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    if (mappings.length > 0) {
+      // Validate keys/values are simple identifiers (no quoting needed).
+      // Mappings come from the policy form which is gated; this is a
+      // defense-in-depth check before YAML emission.
+      for (const [k, v] of mappings) {
+        if (!IDENT_RE.test(k) || !IDENT_RE.test(v)) {
+          throw new Error(
+            `serializeMultiDbPolicyToYaml: tenant_scope mapping ${k} -> ${v} contains characters that need YAML quoting`,
+          );
+        }
+      }
+      lines.push(`    tenant_scope:`);
+      lines.push(`      enabled: true`);
+      lines.push(`      mappings:`);
+      for (const [k, v] of mappings) {
+        lines.push(`        ${k}: ${v}`);
+      }
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+// Tenant-scope key/value identifier shape. Postgres column-name pattern;
+// no quoting required for unquoted YAML emission.
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// --- Legacy single-DB serializer (admin hot-reload) -------------------------
+//
+// Used only by the admin /admin/policy hot-reload path (packages/router/
+// src/admin.ts), which sends a single-DB policy body to a running engine.
+// Spawn-time YAML emission goes through serializeMultiDbPolicyToYaml above;
+// once the multi-DB hot-reload story lands (PR-B / PR-C), this can collapse
+// into a single emitter that wraps either shape.
+//
+// The `table_access:` wrapper is required — OSS PolicyFileSchema reads
+// `table_access.default` and `table_access.tables` as the legacy shape.
+// Table names pass TABLE_NAME_RE so they never need YAML quoting.
 export function serializePolicyToYaml(policy: TableAccessPolicy): string {
   const lines: string[] = ["table_access:"];
   lines.push(`  default: ${policy.default}`);

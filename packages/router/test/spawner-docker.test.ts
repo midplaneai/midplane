@@ -31,7 +31,7 @@ describe("DockerSpawner", () => {
     ) as unknown as typeof fetch;
 
     const spawner = new DockerSpawner({
-      image: "midplane/midplane:0.1.0",
+      image: "midplane/midplane:0.2.0",
       exec,
       fetch: fetchFn,
       bootTimeoutMs: 1000,
@@ -40,8 +40,15 @@ describe("DockerSpawner", () => {
     const c = await spawner.spawn({
       token: "tok-abc",
       region: "fra",
-      dsn: "postgres://example",
-      tableAccess: { default: "read", tables: { users: "deny" } },
+      databases: [
+        {
+          name: "main",
+          connectionDatabaseId: "01HXYZMAIN0000000000000000",
+          dsn: "postgres://example",
+          tableAccess: { default: "read", tables: { users: "deny" } },
+          tenantScopeMappings: {},
+        },
+      ],
     });
 
     expect(c.host).toBe("127.0.0.1");
@@ -49,8 +56,14 @@ describe("DockerSpawner", () => {
     expect(exec).toHaveBeenCalled();
 
     const runArgs = exec.mock.calls[0]?.[1] ?? [];
-    expect(runArgs).toContain("midplane/midplane:0.1.0");
-    expect(runArgs).toContain("DATABASE_URL=postgres://example");
+    expect(runArgs).toContain("midplane/midplane:0.2.0");
+    // Multi-DB: DSN is injected as a per-DB env var (MIDPLANE_DSN_<id>),
+    // never as a top-level DATABASE_URL — the YAML's `url:` references
+    // the env via ${...} interpolation.
+    expect(runArgs).toContain(
+      "MIDPLANE_DSN_01HXYZMAIN0000000000000000=postgres://example",
+    );
+    expect(runArgs).not.toContain("DATABASE_URL=postgres://example");
     expect(runArgs).toContain("MIDPLANE_POLICY_FILE=/etc/midplane/policy.yaml");
 
     // The bind mount is `<host_path>:/etc/midplane/policy.yaml:ro`. Pull
@@ -64,7 +77,16 @@ describe("DockerSpawner", () => {
     const hostPath = mountArg!.split(":")[0]!;
     const yaml = await readFile(hostPath, "utf8");
     expect(yaml).toBe(
-      "table_access:\n  default: read\n  tables:\n    users: deny\n",
+      [
+        "databases:",
+        "  - name: main",
+        "    url: ${MIDPLANE_DSN_01HXYZMAIN0000000000000000}",
+        "    table_access:",
+        "      default: read",
+        "      tables:",
+        "        users: deny",
+        "",
+      ].join("\n"),
     );
 
     await c.stop();
@@ -92,12 +114,26 @@ describe("DockerSpawner", () => {
       spawner.spawn({
         token: "t",
         region: "fra",
-        dsn: "postgres://x",
-        tableAccess: { default: "deny", tables: {} },
+        databases: [
+          {
+            name: "main",
+            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            dsn: "postgres://x",
+            tableAccess: { default: "deny", tables: {} },
+            tenantScopeMappings: {},
+          },
+        ],
       }),
     ).rejects.toThrow(/did not become healthy/);
 
     const rmCall = exec.mock.calls.find((c) => c[1]?.[0] === "rm");
     expect(rmCall).toBeDefined();
+  });
+
+  it("rejects an empty databases array", async () => {
+    const spawner = new DockerSpawner({});
+    await expect(
+      spawner.spawn({ token: "t", region: "fra", databases: [] }),
+    ).rejects.toThrow(/at least one database/);
   });
 });

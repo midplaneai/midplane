@@ -6,18 +6,26 @@
 //   miss    (no cache entry)                      → call KMS, persist, serve
 //   expired (> 70min, KMS still bad)              → refuse, credential_unavailable
 //
-// Async grace-refresh is deduplicated per connection: a burst of requests
+// Async grace-refresh is deduplicated per credential: a burst of requests
 // in the grace window triggers exactly one KMS call regardless of arrival
 // count. The dedupe Map drops the entry once the refresh resolves so the
 // next grace window starts fresh.
 //
-// Persistence: every successful KMS decrypt updates connections.last_kms_success_at
-// in Postgres. The cache and the row stay in sync; the row is the durable
-// witness across process restarts.
+// Persistence: every successful KMS decrypt updates
+// connection_databases.last_kms_success_at in Postgres. The cache and the
+// row stay in sync; the row is the durable witness across process restarts.
+//
+// 0008 schema split: this resolver now operates on connection_databases
+// rows (per-credential) rather than connections (parent). Region is held
+// on the parent row but threaded through here so the cache fence and KMS
+// region routing match the OSS-side per-region key.
 
 import { eq } from "drizzle-orm";
 
-import { connections, type Connection } from "@midplane-cloud/db";
+import {
+  connectionDatabases,
+  type ConnectionDatabase,
+} from "@midplane-cloud/db";
 import {
   decryptDsn,
   type KmsContext,
@@ -39,11 +47,23 @@ export interface ResolveDsnDeps {
   decrypt?: typeof decryptDsn;
   now?: () => number;
   /** Optional logger; defaults to no-op so library stays quiet. */
-  onRefreshError?: (err: unknown, conn: Connection) => void;
+  onRefreshError?: (
+    err: unknown,
+    ctx: { connectionDatabaseId: string; region: Region; customerId: string },
+  ) => void;
 }
 
 interface ResolverState {
   inflight: Map<string, Promise<void>>;
+}
+
+export interface ResolveInput {
+  connectionDatabase: ConnectionDatabase;
+  /** Region of the parent connection — KMS keys are per-region, so the
+   *  resolver needs it explicitly. */
+  region: Region;
+  /** Customer who owns the parent connection — used as KMS context. */
+  customerId: string;
 }
 
 export class DsnResolver {
@@ -51,17 +71,17 @@ export class DsnResolver {
 
   constructor(private readonly deps: ResolveDsnDeps) {}
 
-  async resolve(conn: Connection): Promise<ResolveDsnResult> {
+  async resolve(input: ResolveInput): Promise<ResolveDsnResult> {
     const cache = this.deps.cache;
-    const region = conn.region as Region;
-    const cached = cache.get(conn.id, region);
+    const { connectionDatabase: cdb, region, customerId } = input;
+    const cached = cache.get(cdb.id, region);
 
     if (cached.kind === "fresh") {
       return { ok: true, plaintext: cached.plaintext, source: "fresh" };
     }
 
     if (cached.kind === "grace") {
-      this.scheduleRefresh(conn);
+      this.scheduleRefresh(input);
       return { ok: true, plaintext: cached.plaintext, source: "grace" };
     }
 
@@ -69,9 +89,9 @@ export class DsnResolver {
       return { ok: false, reason: "credential_unavailable" };
     }
 
-    // miss → must hit KMS now. If KMS fails and the row says we're past the
-    // 70-minute window, refuse. If we have no row history at all, refuse —
-    // a freshly-rotated row with no prior success counts as expired here.
+    // miss → must hit KMS now. If KMS fails we refuse — even if a row
+    // historically had a successful decrypt, the cache is what gates
+    // freshness; without an entry the credential is treated as expired.
     //
     // decryptStartedAt is captured BEFORE the KMS round-trip so the cache
     // can fence-out a write that races a concurrent rotation: if the row
@@ -81,53 +101,57 @@ export class DsnResolver {
     // and drops the stale write.
     const decryptStartedAt = this.deps.now ? this.deps.now() : Date.now();
     try {
-      const plaintext = await this.callKms(conn);
-      cache.set(conn.id, region, plaintext, decryptStartedAt);
-      await this.persistSuccess(conn);
+      const plaintext = await this.callKms(cdb, region, customerId);
+      cache.set(cdb.id, region, plaintext, decryptStartedAt);
+      await this.persistSuccess(cdb.id);
       return { ok: true, plaintext, source: "miss" };
     } catch {
       return { ok: false, reason: "credential_unavailable" };
     }
   }
 
-  private scheduleRefresh(conn: Connection): void {
-    if (this.state.inflight.has(conn.id)) return;
+  private scheduleRefresh(input: ResolveInput): void {
+    const { connectionDatabase: cdb, region, customerId } = input;
+    if (this.state.inflight.has(cdb.id)) return;
     const decryptStartedAt = this.deps.now ? this.deps.now() : Date.now();
     const promise = (async () => {
       try {
-        const plaintext = await this.callKms(conn);
-        this.deps.cache.set(
-          conn.id,
-          conn.region as Region,
-          plaintext,
-          decryptStartedAt,
-        );
-        await this.persistSuccess(conn);
+        const plaintext = await this.callKms(cdb, region, customerId);
+        this.deps.cache.set(cdb.id, region, plaintext, decryptStartedAt);
+        await this.persistSuccess(cdb.id);
       } catch (err) {
-        this.deps.onRefreshError?.(err, conn);
+        this.deps.onRefreshError?.(err, {
+          connectionDatabaseId: cdb.id,
+          region,
+          customerId,
+        });
       } finally {
-        this.state.inflight.delete(conn.id);
+        this.state.inflight.delete(cdb.id);
       }
     })();
-    this.state.inflight.set(conn.id, promise);
+    this.state.inflight.set(cdb.id, promise);
   }
 
-  private async callKms(conn: Connection): Promise<string> {
+  private async callKms(
+    cdb: ConnectionDatabase,
+    region: Region,
+    customerId: string,
+  ): Promise<string> {
     const decrypt = this.deps.decrypt ?? decryptDsn;
     return decrypt(
       this.deps.kms,
-      conn.encryptedDsn,
-      conn.customerId,
-      conn.region as Region,
-      conn.kmsKeyId,
+      cdb.encryptedDsn,
+      customerId,
+      region,
+      cdb.kmsKeyId,
     );
   }
 
-  private async persistSuccess(conn: Connection): Promise<void> {
+  private async persistSuccess(connectionDatabaseId: string): Promise<void> {
     const now = new Date(this.deps.now ? this.deps.now() : Date.now());
     await this.deps.db
-      .update(connections)
+      .update(connectionDatabases)
       .set({ lastKmsSuccessAt: now })
-      .where(eq(connections.id, conn.id));
+      .where(eq(connectionDatabases.id, connectionDatabaseId));
   }
 }

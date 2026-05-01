@@ -11,7 +11,10 @@
 // the proxy fan-outs change. Across the Internet edge, we don't rely on
 // fly-replay; we hold a per-token registry pointing at the specific 6PN IP.
 
-import { serializePolicyToYaml } from "@midplane-cloud/db";
+import {
+  dsnEnvVarFor,
+  serializeMultiDbPolicyToYaml,
+} from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
 import type { RegionConfig } from "./region.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
@@ -63,13 +66,16 @@ export class FlyMachineSpawner implements Spawner {
     this.token = opts.apiToken;
     this.indexerToken = opts.indexerToken;
     this.apiBase = opts.apiBase ?? "https://api.machines.dev";
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.1.0";
+    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.2.0";
     this.regions = opts.regions;
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 60_000;
     this.fetchFn = opts.fetch ?? fetch;
   }
 
   async spawn(opts: SpawnOptions): Promise<SpawnedContainer> {
+    if (opts.databases.length === 0) {
+      throw new Error("FlyMachineSpawner.spawn: at least one database required");
+    }
     const regionCfg = this.regions[opts.region];
     if (!regionCfg) throw new Error(`unknown region: ${opts.region}`);
     const app = regionCfg.flyApp;
@@ -101,6 +107,21 @@ export class FlyMachineSpawner implements Spawner {
     app: string,
     opts: SpawnOptions,
   ): Promise<MachineCreateResponse> {
+    // Per-DB DSN env vars. Names match OSS env-interpolation regex; the
+    // YAML's `databases[].url` references each via ${...}. DSNs surface
+    // here only — never in the YAML file content.
+    const dsnEnv: Record<string, string> = {};
+    for (const db of opts.databases) {
+      dsnEnv[dsnEnvVarFor(db.connectionDatabaseId)] = db.dsn;
+    }
+    const policyYaml = serializeMultiDbPolicyToYaml(
+      opts.databases.map((db) => ({
+        name: db.name,
+        connectionDatabaseId: db.connectionDatabaseId,
+        tableAccess: db.tableAccess,
+        tenantScopeMappings: db.tenantScopeMappings,
+      })),
+    );
     const res = await this.fetchFn(`${this.apiBase}/v1/apps/${app}/machines`, {
       method: "POST",
       headers: {
@@ -113,7 +134,7 @@ export class FlyMachineSpawner implements Spawner {
         config: {
           image: this.image,
           env: {
-            DATABASE_URL: opts.dsn,
+            ...dsnEnv,
             PORT: "8080",
             DB_PATH: "/data/audit.db",
             MIDPLANE_POLICY_FILE: POLICY_FILE_GUEST_PATH,
@@ -129,7 +150,7 @@ export class FlyMachineSpawner implements Spawner {
           files: [
             {
               guest_path: POLICY_FILE_GUEST_PATH,
-              raw_value: btoa(serializePolicyToYaml(opts.tableAccess)),
+              raw_value: btoa(policyYaml),
             },
           ],
           services: [

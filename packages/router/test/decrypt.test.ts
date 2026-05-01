@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Connection } from "@midplane-cloud/db";
+import type { ConnectionDatabase } from "@midplane-cloud/db";
 import type { KmsContext } from "@midplane-cloud/kms";
 
 import { DecryptCache } from "../src/decrypt-cache.ts";
@@ -30,31 +30,36 @@ function fakeDb(): { db: Db; capture: UpdateCapture } {
   return { db, capture };
 }
 
-const conn: Connection = {
-  id: "conn-1",
-  customerId: "cust-1",
-  region: "fra",
-  name: null,
+// Schema 0008 split: the resolver now keys on connection_databases (per-
+// credential), not on connections (parent). Region + customer_id are
+// passed alongside since they live on the parent.
+const cdb: ConnectionDatabase = {
+  id: "cdb-1",
+  connectionId: "conn-1",
+  name: "main",
   encryptedDsn: Buffer.from("ciphertext"),
   kmsKeyId: "env:fra",
-  mcpToken: "tok",
-  createdAt: new Date(),
+  tableAccess: { default: "deny", tables: {} },
+  tenantScopeMappings: {},
   rotatedAt: null,
   lastKmsSuccessAt: null,
-  tableAccess: { default: "deny", tables: {} },
+  createdAt: new Date(),
 };
+const region = "fra" as const;
+const customerId = "cust-1";
+const input = { connectionDatabase: cdb, region, customerId };
 
 const kms: KmsContext = { mode: "env", envKeys: { fra: "x".repeat(64) } };
 
 describe("DsnResolver", () => {
   it("returns fresh from cache without calling KMS", async () => {
     const cache = new DecryptCache();
-    cache.set("conn-1", "fra", "postgres://cached");
+    cache.set("cdb-1", "fra", "postgres://cached");
     const decrypt = vi.fn();
     const { db } = fakeDb();
     const resolver = new DsnResolver({ db, cache, kms, decrypt });
 
-    const r = await resolver.resolve(conn);
+    const r = await resolver.resolve(input);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.source).toBe("fresh");
@@ -69,14 +74,14 @@ describe("DsnResolver", () => {
     const { db, capture } = fakeDb();
     const resolver = new DsnResolver({ db, cache, kms, decrypt });
 
-    const r = await resolver.resolve(conn);
+    const r = await resolver.resolve(input);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.plaintext).toBe("postgres://decrypted");
     expect(decrypt).toHaveBeenCalledOnce();
     expect(capture.values).toMatchObject({
       lastKmsSuccessAt: expect.any(Date),
     });
-    expect(cache.get("conn-1", "fra").kind).toBe("fresh");
+    expect(cache.get("cdb-1", "fra").kind).toBe("fresh");
   });
 
   it("on miss, refuses with credential_unavailable when KMS throws", async () => {
@@ -85,7 +90,7 @@ describe("DsnResolver", () => {
     const { db } = fakeDb();
     const resolver = new DsnResolver({ db, cache, kms, decrypt });
 
-    const r = await resolver.resolve(conn);
+    const r = await resolver.resolve(input);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("credential_unavailable");
   });
@@ -94,13 +99,13 @@ describe("DsnResolver", () => {
     const start = 1_000_000;
     const clock = { t: start, now: () => start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("conn-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "fra", "postgres://stale");
     clock.t += 71 * 60_000;
     const { db } = fakeDb();
     const decrypt = vi.fn();
     const resolver = new DsnResolver({ db, cache, kms, decrypt });
 
-    const r = await resolver.resolve(conn);
+    const r = await resolver.resolve(input);
     expect(r.ok).toBe(false);
     expect(decrypt).not.toHaveBeenCalled();
   });
@@ -109,7 +114,7 @@ describe("DsnResolver", () => {
     const start = 1_000_000;
     const clock = { t: start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("conn-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "fra", "postgres://stale");
     clock.t += 11 * 60_000; // past TTL, inside grace
 
     let resolveRefresh!: (v: string) => void;
@@ -119,7 +124,7 @@ describe("DsnResolver", () => {
     const { db, capture } = fakeDb();
     const resolver = new DsnResolver({ db, cache, kms, decrypt });
 
-    const r = await resolver.resolve(conn);
+    const r = await resolver.resolve(input);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.source).toBe("grace");
@@ -139,7 +144,7 @@ describe("DsnResolver", () => {
     const start = 1_000_000;
     const clock = { t: start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("conn-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "fra", "postgres://stale");
     clock.t += 11 * 60_000;
 
     let resolveRefresh!: (v: string) => void;
@@ -150,9 +155,9 @@ describe("DsnResolver", () => {
     const resolver = new DsnResolver({ db, cache, kms, decrypt });
 
     await Promise.all([
-      resolver.resolve(conn),
-      resolver.resolve(conn),
-      resolver.resolve(conn),
+      resolver.resolve(input),
+      resolver.resolve(input),
+      resolver.resolve(input),
     ]);
     expect(decrypt).toHaveBeenCalledOnce();
     resolveRefresh("postgres://x");
@@ -163,12 +168,15 @@ describe("DsnResolver", () => {
     // Reproduces the security-critical race the rotation flow guards against.
     // 1. cache is in grace; resolve() schedules a KMS refresh
     // 2. while KMS is in flight, rotation invalidates the cache
-    // 3. KMS resolves with the OLD plaintext (its conn snapshot was the
+    // 3. KMS resolves with the OLD plaintext (its row snapshot was the
     //    pre-rotation row); without the fence, cache.set would happily
     //    accept the write and the next request would see "fresh" old plaintext.
+    //
+    // 0008: keying is per-credential (connectionDatabaseId) so rotation
+    // on one DB only invalidates its own cache slot — siblings unaffected.
     const clock = { t: 1_000_000 };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("conn-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "fra", "postgres://stale");
     clock.t += 11 * 60_000; // past TTL → grace
 
     let resolveRefresh!: (v: string) => void;
@@ -185,11 +193,11 @@ describe("DsnResolver", () => {
     });
 
     // Phase 1: grace path schedules the refresh; KMS is now in flight.
-    await resolver.resolve(conn);
+    await resolver.resolve(input);
 
     // Phase 2: rotation invalidates while KMS is still pending.
     clock.t += 10;
-    cache.invalidate("conn-1", "fra");
+    cache.invalidate("cdb-1", "fra");
 
     // Phase 3: KMS finally resolves with the pre-rotation plaintext. The
     // refresh's cache.set must be dropped by the fence.
@@ -197,14 +205,14 @@ describe("DsnResolver", () => {
     resolveRefresh("postgres://stale");
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(cache.get("conn-1", "fra").kind).toBe("miss");
+    expect(cache.get("cdb-1", "fra").kind).toBe("miss");
   });
 
   it("calls onRefreshError when grace refresh fails", async () => {
     const start = 1_000_000;
     const clock = { t: start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("conn-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "fra", "postgres://stale");
     clock.t += 11 * 60_000;
 
     const decrypt = vi.fn().mockRejectedValue(new Error("kms still down"));
@@ -218,7 +226,7 @@ describe("DsnResolver", () => {
       onRefreshError,
     });
 
-    await resolver.resolve(conn);
+    await resolver.resolve(input);
     await new Promise((r) => setTimeout(r, 0));
     expect(onRefreshError).toHaveBeenCalledOnce();
   });
