@@ -53,6 +53,13 @@ interface FakeDbHandle {
    *  Distinct from connections DELETE so the two helpers don't share
    *  fixture state. */
   setChildDeleteResult(rows: Array<{ id: string }>): void;
+  /** Make the next insert reject with the given error. Used to simulate
+   *  the race-loser path on add/rename where the FOR UPDATE lock has
+   *  somehow been bypassed and the unique constraint trips. */
+  failNextInsert(err: unknown): void;
+  /** Make the next update reject with the given error. Same role as
+   *  failNextInsert but for the rename path (UPDATE SET name=?). */
+  failNextUpdate(err: unknown): void;
 }
 
 let handle: FakeDbHandle;
@@ -69,6 +76,8 @@ function makeFakeDb(): FakeDbHandle {
   let deletedConnections: Array<{ id: string; mcpToken: string }> = [];
   const selectQueue: Array<unknown[]> = [];
   const calls: DbCall[] = [];
+  const insertErrorQueue: unknown[] = [];
+  const updateErrorQueue: unknown[] = [];
 
   const makeRoot = () => {
     const startMutation = (op: "delete" | "update", table: unknown) => {
@@ -91,6 +100,9 @@ function makeFakeDb(): FakeDbHandle {
             where: whereValue,
             returning: fields,
           });
+          if (op === "update" && updateErrorQueue.length > 0) {
+            return Promise.reject(updateErrorQueue.shift());
+          }
           if (op === "delete") {
             // Distinguish deletes on `connections` (deleteConnection,
             // returning {id, mcpToken}) from deletes on
@@ -156,6 +168,14 @@ function makeFakeDb(): FakeDbHandle {
         groupBy() {
           return chain;
         },
+        for() {
+          // SELECT ... FOR UPDATE — the fake doesn't model row locks,
+          // but the chain method has to exist so the helpers can call
+          // it. Concurrency behavior is verified at the integration
+          // layer (against a real Postgres); this no-op is enough for
+          // shape testing.
+          return chain;
+        },
         limit() {
           calls.push({ op: "select", table, where: whereValue });
           return Promise.resolve(resolveRows());
@@ -175,6 +195,9 @@ function makeFakeDb(): FakeDbHandle {
       const chain = {
         values(row: unknown) {
           calls.push({ op: "insert", table, set: row });
+          if (insertErrorQueue.length > 0) {
+            return Promise.reject(insertErrorQueue.shift());
+          }
           // Insert is fire-and-forget (the lib generates ULIDs outside
           // the txn and doesn't .returning() — addDatabase tracks the
           // child id from outside). Resolve void to mirror Drizzle.
@@ -220,6 +243,12 @@ function makeFakeDb(): FakeDbHandle {
     setChildDeleteResult(rows) {
       childDelete = rows;
       childDeleteSet = true;
+    },
+    failNextInsert(err) {
+      insertErrorQueue.push(err);
+    },
+    failNextUpdate(err) {
+      updateErrorQueue.push(err);
     },
     queueSelect(rows) {
       selectQueue.push(rows);
@@ -812,6 +841,59 @@ describe("addDatabase", () => {
     expect(handle.calls).toHaveLength(0);
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
+
+  it("translates a Postgres unique-violation at insert into DatabaseNameTaken", async () => {
+    // Belt-and-suspenders: the FOR UPDATE lock plus the in-txn
+    // pre-check should make this unreachable, but the outer catch
+    // must still translate a raw 23505 into the typed error so the
+    // dashboard action keeps working under any future race.
+    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([]); // pre-check: no collision visible yet
+    handle.failNextInsert({
+      code: "23505",
+      constraint_name: "connection_databases_connection_name_uq",
+      message: "duplicate key value violates unique constraint",
+    });
+    const { addDatabase, DatabaseNameTaken } = await import(
+      "../src/lib/connections.ts"
+    );
+    const deps = makeMutationDeps();
+
+    await expect(
+      addDatabase(
+        customer,
+        "conn-1",
+        "analytics",
+        "postgres://u:p@host:5432/db",
+        "read",
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(DatabaseNameTaken);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rethrows non-unique driver errors as-is", async () => {
+    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([]);
+    const realFailure = new Error("connection terminated unexpectedly");
+    handle.failNextInsert(realFailure);
+    const { addDatabase } = await import("../src/lib/connections.ts");
+    const deps = makeMutationDeps();
+
+    await expect(
+      addDatabase(
+        customer,
+        "conn-1",
+        "analytics",
+        "postgres://u:p@host:5432/db",
+        "read",
+        deps,
+      ),
+    ).rejects.toBe(realFailure);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
 });
 
 describe("removeDatabase", () => {
@@ -999,6 +1081,26 @@ describe("renameDatabase", () => {
     );
 
     expect(result).toBeNull();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("translates a Postgres unique-violation at update into DatabaseNameTaken", async () => {
+    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([]); // pre-check passes
+    handle.failNextUpdate({
+      code: "23505",
+      constraint_name: "connection_databases_connection_name_uq",
+      message: "duplicate key value violates unique constraint",
+    });
+    const { renameDatabase, DatabaseNameTaken } = await import(
+      "../src/lib/connections.ts"
+    );
+    const deps = makeMutationDeps();
+
+    await expect(
+      renameDatabase(customer, "conn-1", "analytics", "warehouse", deps),
+    ).rejects.toBeInstanceOf(DatabaseNameTaken);
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
 });

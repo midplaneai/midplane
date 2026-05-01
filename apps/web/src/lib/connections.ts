@@ -509,6 +509,24 @@ export class LastDatabaseProtected extends Error {
   }
 }
 
+// Postgres error code for unique_violation, plus the constraint name on
+// the (connection_id, name) index in connection_databases. Used as a
+// belt-and-suspenders catch around add/rename — the FOR UPDATE lock on
+// the parent connection row should make this unreachable, but if any
+// future caller bypasses the helper (or the lock posture changes), the
+// outer catch still translates the raw driver error into the typed
+// DatabaseNameTaken the dashboard action knows how to render.
+const PG_UNIQUE_VIOLATION = "23505";
+const NAME_UQ_CONSTRAINT = "connection_databases_connection_name_uq";
+
+function isUniqueDbNameViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; constraint_name?: unknown };
+  return (
+    e.code === PG_UNIQUE_VIOLATION && e.constraint_name === NAME_UQ_CONSTRAINT
+  );
+}
+
 // Add a new DB to an existing connection. Encrypts the DSN with the
 // customer's region key, inserts the child row, and invalidates the
 // running container so the next spawn includes the new entry in the
@@ -548,50 +566,70 @@ export async function addDatabase(
 
   const childId = ulid();
   const db = getDb();
-  const result = await db.transaction(async (tx) => {
-    // Ownership-gated parent read first — gives us the mcp_token for
-    // the registry invalidation, and the indirection means we never
-    // write through to a foreign customer's connection.
-    const parent = await tx
-      .select({ mcpToken: connections.mcpToken })
-      .from(connections)
-      .where(
-        and(
-          eq(connections.id, connectionId),
-          eq(connections.customerId, customer.id),
-        ),
-      )
-      .limit(1);
-    if (parent.length === 0) return null;
+  let result;
+  try {
+    result = await db.transaction(async (tx) => {
+      // Ownership-gated parent read first AND lock — gives us the
+      // mcp_token for the registry invalidation, ensures we never
+      // write through to a foreign customer's connection, and
+      // serializes concurrent add/remove/rename on this same
+      // connection. Without the lock, two parallel adds for the same
+      // alias can each pass the collision pre-check below and the
+      // loser would hit the unique constraint at insert time, which
+      // would escape as a raw Postgres error instead of
+      // DatabaseNameTaken.
+      const parent = await tx
+        .select({ mcpToken: connections.mcpToken })
+        .from(connections)
+        .where(
+          and(
+            eq(connections.id, connectionId),
+            eq(connections.customerId, customer.id),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (parent.length === 0) return null;
 
-    // Pre-check sibling collision inside the txn. The unique constraint
-    // (connection_databases_connection_name_uq) is the durable enforcer;
-    // pre-checking lets us surface a typed error to the caller instead
-    // of a raw Postgres unique-violation.
-    const collide = await tx
-      .select({ id: connectionDatabases.id })
-      .from(connectionDatabases)
-      .where(
-        and(
-          eq(connectionDatabases.connectionId, connectionId),
-          eq(connectionDatabases.name, dbName),
-        ),
-      )
-      .limit(1);
-    if (collide.length > 0) {
-      return { error: "name_taken" as const };
-    }
+      // Pre-check sibling collision (cheap; the lock guarantees the
+      // result holds until commit). The unique constraint
+      // connection_databases_connection_name_uq is still the durable
+      // enforcer if anything bypasses this helper.
+      const collide = await tx
+        .select({ id: connectionDatabases.id })
+        .from(connectionDatabases)
+        .where(
+          and(
+            eq(connectionDatabases.connectionId, connectionId),
+            eq(connectionDatabases.name, dbName),
+          ),
+        )
+        .limit(1);
+      if (collide.length > 0) {
+        return { error: "name_taken" as const };
+      }
 
-    await tx.insert(connectionDatabases).values({
-      id: childId,
-      connectionId,
-      name: dbName,
-      encryptedDsn: ciphertext,
-      kmsKeyId,
-      tableAccess,
+      await tx.insert(connectionDatabases).values({
+        id: childId,
+        connectionId,
+        name: dbName,
+        encryptedDsn: ciphertext,
+        kmsKeyId,
+        tableAccess,
+      });
+      return { mcpToken: parent[0]!.mcpToken };
     });
-    return { mcpToken: parent[0]!.mcpToken };
-  });
+  } catch (err) {
+    // Belt-and-suspenders: the FOR UPDATE lock plus the pre-check
+    // should make this unreachable, but if a unique violation slips
+    // through (driver retries, savepoint quirks, future refactor that
+    // drops the lock), translate it into the typed error the
+    // dashboard action knows how to surface.
+    if (isUniqueDbNameViolation(err)) {
+      throw new DatabaseNameTaken(dbName);
+    }
+    throw err;
+  }
 
   if (!result) return null;
   if ("error" in result) throw new DatabaseNameTaken(dbName);
@@ -623,6 +661,13 @@ export async function removeDatabase(
 ): Promise<{ mcpToken: string } | null> {
   const db = getDb();
   const result = await db.transaction(async (tx) => {
+    // Lock the parent connection row at the top of the txn so any
+    // concurrent add/remove/rename on the same connection serializes
+    // through here. Without this, two parallel removeDatabase calls
+    // on a 2-DB connection can each see siblings.length === 2 in
+    // their own snapshot, each delete one row, and leave the
+    // connection child-less — violating LastDatabaseProtected and
+    // breaking the next engine spawn.
     const parent = await tx
       .select({ mcpToken: connections.mcpToken })
       .from(connections)
@@ -632,11 +677,13 @@ export async function removeDatabase(
           eq(connections.customerId, customer.id),
         ),
       )
+      .for("update")
       .limit(1);
     if (parent.length === 0) return null;
 
     // Count siblings BEFORE the delete so we can block the last-DB
-    // case atomically. The N here is small (single digits in
+    // case. The parent lock above guarantees no other txn can change
+    // this count until we commit. N is small (single digits in
     // practice); reading rows and checking length is cheaper to
     // reason about than a raw count() expression.
     const siblings = await tx
@@ -712,48 +759,64 @@ export async function renameDatabase(
   }
 
   const db = getDb();
-  const result = await db.transaction(async (tx) => {
-    const parent = await tx
-      .select({ mcpToken: connections.mcpToken })
-      .from(connections)
-      .where(
-        and(
-          eq(connections.id, connectionId),
-          eq(connections.customerId, customer.id),
-        ),
-      )
-      .limit(1);
-    if (parent.length === 0) return null;
+  let result;
+  try {
+    result = await db.transaction(async (tx) => {
+      // Same FOR UPDATE posture as add/remove — serialize concurrent
+      // mutations on this connection. Without the lock, another
+      // request could insert or rename a sibling to newName between
+      // our pre-check and our update; the update would then trip the
+      // unique constraint and bubble up as a raw 500 instead of the
+      // typed DatabaseNameTaken the dashboard knows how to handle.
+      const parent = await tx
+        .select({ mcpToken: connections.mcpToken })
+        .from(connections)
+        .where(
+          and(
+            eq(connections.id, connectionId),
+            eq(connections.customerId, customer.id),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (parent.length === 0) return null;
 
-    // Sibling-collision pre-check (same posture as addDatabase). The
-    // unique constraint is still the durable enforcer.
-    const collide = await tx
-      .select({ id: connectionDatabases.id })
-      .from(connectionDatabases)
-      .where(
-        and(
-          eq(connectionDatabases.connectionId, connectionId),
-          eq(connectionDatabases.name, newName),
-        ),
-      )
-      .limit(1);
-    if (collide.length > 0) {
-      return { error: "name_taken" as const };
+      // Sibling-collision pre-check. With the parent lock held, the
+      // result holds until commit; the unique constraint is still
+      // there as the durable enforcer.
+      const collide = await tx
+        .select({ id: connectionDatabases.id })
+        .from(connectionDatabases)
+        .where(
+          and(
+            eq(connectionDatabases.connectionId, connectionId),
+            eq(connectionDatabases.name, newName),
+          ),
+        )
+        .limit(1);
+      if (collide.length > 0) {
+        return { error: "name_taken" as const };
+      }
+
+      const updated = await tx
+        .update(connectionDatabases)
+        .set({ name: newName })
+        .where(
+          and(
+            eq(connectionDatabases.connectionId, connectionId),
+            eq(connectionDatabases.name, oldName),
+          ),
+        )
+        .returning({ id: connectionDatabases.id });
+      if (updated.length === 0) return null;
+      return { mcpToken: parent[0]!.mcpToken };
+    });
+  } catch (err) {
+    if (isUniqueDbNameViolation(err)) {
+      throw new DatabaseNameTaken(newName);
     }
-
-    const updated = await tx
-      .update(connectionDatabases)
-      .set({ name: newName })
-      .where(
-        and(
-          eq(connectionDatabases.connectionId, connectionId),
-          eq(connectionDatabases.name, oldName),
-        ),
-      )
-      .returning({ id: connectionDatabases.id });
-    if (updated.length === 0) return null;
-    return { mcpToken: parent[0]!.mcpToken };
-  });
+    throw err;
+  }
 
   if (!result) return null;
   if ("error" in result) throw new DatabaseNameTaken(newName);
