@@ -78,7 +78,10 @@ export default async function AuditDetailPage({ params }: PageProps) {
         <PageHeader
           title={
             <span className="inline-flex items-center gap-2">
-              <EventBadge eventType={event.eventType} />
+              <EventBadge
+                eventType={event.eventType}
+                decision={payloadDecision(event.payload)}
+              />
               <span>Audit event</span>
             </span>
           }
@@ -91,13 +94,13 @@ export default async function AuditDetailPage({ params }: PageProps) {
         />
         <StalenessBanner read={staleness} />
 
-        <div className="mt-[18px] grid gap-6 md:grid-cols-[280px_1fr]">
+        <div className="mt-[18px] grid gap-6 md:grid-cols-[360px_1fr]">
           <Card>
             <CardHeader>
               <CardTitle>Metadata</CardTitle>
             </CardHeader>
             <CardContent>
-              <dl className="grid grid-cols-[110px_1fr] gap-y-1.5 gap-x-3 text-xs">
+              <dl className="grid grid-cols-[100px_1fr] gap-y-1.5 gap-x-3 text-xs">
                 <Dt>Time</Dt>
                 <Dd>{event.ts.toISOString()}</Dd>
                 <Dt>Event</Dt>
@@ -130,7 +133,7 @@ export default async function AuditDetailPage({ params }: PageProps) {
             <CardContent>
               <pre
                 data-testid="audit-payload"
-                className="overflow-x-auto whitespace-pre rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground"
+                className="whitespace-pre-wrap break-all rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground"
               >
                 {payloadJson}
               </pre>
@@ -156,7 +159,10 @@ export default async function AuditDetailPage({ params }: PageProps) {
                 <span className="whitespace-nowrap font-mono text-[11px] text-subtle">
                   {r.ts.toISOString().slice(11, 23)}
                 </span>
-                <EventBadge eventType={r.eventType} />
+                <EventBadge
+                  eventType={r.eventType}
+                  decision={payloadDecision(r.payload)}
+                />
                 <span className="block max-w-[340px] truncate font-mono text-xs text-foreground">
                   {payloadFingerprint(r.payload)}
                 </span>
@@ -208,6 +214,16 @@ function intentSourceLabel(source: string): string {
     default:
       return source;
   }
+}
+
+// Pull the decision string off any audit payload shape. The OSS engine
+// writes "allow" / "deny" on DECIDED rows; other event types don't carry
+// it. Returns null when absent so EventBadge falls back to its default
+// per-event-type color.
+function payloadDecision(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const d = (payload as Record<string, unknown>).decision;
+  return typeof d === "string" ? d : null;
 }
 
 function payloadFingerprint(payload: unknown): string {
