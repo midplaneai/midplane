@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
-import { type ConnectionDatabase } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -12,17 +11,17 @@ import { CopyButton } from "@/components/copy-button";
 import { AddDatabaseForm } from "@/components/dashboard/add-database-form";
 import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
 import { DatabaseRow } from "@/components/dashboard/database-row";
-import { FreshnessDot } from "@/components/dashboard/freshness-dot";
+import {
+  DashboardFreshnessProvider,
+  type FreshnessInitial,
+} from "@/components/dashboard/freshness-provider";
+import { LiveConnectionFreshness } from "@/components/dashboard/live-connection-freshness";
 import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
 import { SetupAgentControl } from "@/components/dashboard/setup-agent-control";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
-import {
-  computeFreshness,
-  FRESHNESS_LABELS,
-  type Freshness,
-} from "@/lib/freshness";
+import { type DashboardDatabase } from "@/lib/connections";
 import {
   addDatabase,
   DatabaseNameTaken,
@@ -81,46 +80,65 @@ export default async function Dashboard({
             }
           />
         ) : (
-          <ul className="divide-y divide-border border-y border-border">
-            {rows.map((row) => {
-              const { connection: c, databases, cursor } = row;
-              const freshness = computeFreshness({
-                lastIndexedAt: cursor.lastIndexedAt,
-                lastErrorAt: cursor.lastErrorAt,
-              });
-              const mcpUrl = mintMcpUrl(c.region, c.mcpToken, process.env);
-              return (
-                <li key={c.id} className="bg-background">
-                  <ConnectionHeader
-                    id={c.id}
-                    name={c.name}
-                    region={c.region}
-                    freshness={freshness}
-                    mcpUrl={mcpUrl}
-                    mcpToken={c.mcpToken}
-                    autoOpen={autoOpenId === c.id}
-                  />
-                  <DatabaseList
-                    connectionId={c.id}
-                    databases={databases}
-                    lastQueryAt={cursor.lastIndexedAt}
-                    freshness={freshness}
-                  />
-                </li>
-              );
-            })}
-          </ul>
+          <DashboardFreshnessProvider initial={initialFreshness(rows)}>
+            <ul className="divide-y divide-border border-y border-border">
+              {rows.map((row) => {
+                const { connection: c, databases, cursor } = row;
+                const mcpUrl = mintMcpUrl(c.region, c.mcpToken, process.env);
+                return (
+                  <li key={c.id} className="bg-background">
+                    <ConnectionHeader
+                      id={c.id}
+                      name={c.name}
+                      region={c.region}
+                      initialLastIndexedAt={cursor.lastIndexedAt}
+                      initialLastErrorAt={cursor.lastErrorAt}
+                      mcpUrl={mcpUrl}
+                      mcpToken={c.mcpToken}
+                      autoOpen={autoOpenId === c.id}
+                    />
+                    <DatabaseList
+                      connectionId={c.id}
+                      databases={databases}
+                      initialLastIndexedAt={cursor.lastIndexedAt}
+                      initialLastErrorAt={cursor.lastErrorAt}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </DashboardFreshnessProvider>
         )}
       </PageContainer>
     </>
   );
 }
 
+function initialFreshness(
+  rows: Array<{
+    connection: { id: string };
+    databases: DashboardDatabase[];
+    cursor: { lastIndexedAt: Date | null; lastErrorAt: Date | null };
+  }>,
+): FreshnessInitial {
+  return {
+    connections: rows.map((row) => ({
+      id: row.connection.id,
+      cursor: row.cursor,
+      databases: row.databases.map((d) => ({
+        name: d.name,
+        lastQueryAt: d.lastQueryAt,
+      })),
+    })),
+  };
+}
+
 function ConnectionHeader({
   id,
   name,
   region,
-  freshness,
+  initialLastIndexedAt,
+  initialLastErrorAt,
   mcpUrl,
   mcpToken,
   autoOpen,
@@ -128,7 +146,8 @@ function ConnectionHeader({
   id: string;
   name: string | null;
   region: string;
-  freshness: Freshness;
+  initialLastIndexedAt: Date | null;
+  initialLastErrorAt: Date | null;
   mcpUrl: string;
   mcpToken: string;
   autoOpen: boolean;
@@ -147,10 +166,11 @@ function ConnectionHeader({
         <span className="font-mono text-[11px] uppercase tracking-[0.04em] text-subtle">
           {region}
         </span>
-        <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.04em] text-subtle">
-          <FreshnessDot state={freshness} />
-          {FRESHNESS_LABELS[freshness]}
-        </span>
+        <LiveConnectionFreshness
+          connectionId={id}
+          initialLastIndexedAt={initialLastIndexedAt}
+          initialLastErrorAt={initialLastErrorAt}
+        />
         <ConnectionRowMenu id={id} name={name} deleteAction={deleteAction} />
         <SetupAgentControl
           connectionName={name}
@@ -172,16 +192,15 @@ function ConnectionHeader({
 function DatabaseList({
   connectionId,
   databases,
-  lastQueryAt,
-  freshness,
+  initialLastIndexedAt,
+  initialLastErrorAt,
 }: {
   connectionId: string;
-  databases: ConnectionDatabase[];
-  lastQueryAt: Date | null;
-  freshness: Freshness;
+  databases: DashboardDatabase[];
+  initialLastIndexedAt: Date | null;
+  initialLastErrorAt: Date | null;
 }) {
   const disableRemove = databases.length <= 1;
-  const lastQuery = lastQueryLabel(lastQueryAt);
   return (
     <div className="ml-4 mb-4 mt-1 overflow-hidden rounded-md border border-border bg-card">
       <ul className="divide-y divide-border">
@@ -190,8 +209,9 @@ function DatabaseList({
             key={db.id}
             connectionId={connectionId}
             database={db}
-            freshness={freshness}
-            lastQueryLabel={lastQuery}
+            initialLastQueryAt={db.lastQueryAt}
+            initialLastIndexedAt={initialLastIndexedAt}
+            initialLastErrorAt={initialLastErrorAt}
             disableRemove={disableRemove}
             removeAction={removeDatabaseAction}
             renameAction={renameDatabaseAction}
@@ -206,21 +226,9 @@ function DatabaseList({
   );
 }
 
-function lastQueryLabel(lastIndexedAt: Date | null): string {
-  if (!lastIndexedAt) return "awaiting first query";
-  return `last query ${formatRelative(lastIndexedAt)}`;
-}
-
-function formatRelative(d: Date): string {
-  const ms = Date.now() - d.getTime();
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return `${day}d ago`;
-}
+// formatRelative + lastQueryLabel were moved into DatabaseRow — the
+// per-DB last-query label now updates client-side from the polling
+// snapshot, so the formatting belongs alongside that consumer.
 
 async function renameAction(formData: FormData) {
   "use server";

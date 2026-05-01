@@ -21,8 +21,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DatabaseRowMenu } from "@/components/dashboard/database-row-menu";
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
+import {
+  useConnectionFreshness,
+  useDatabaseLastQuery,
+} from "@/components/dashboard/freshness-provider";
 import { RenameDatabaseInline } from "@/components/dashboard/rename-database-inline";
-import { type Freshness } from "@/lib/freshness";
+import { computeFreshness } from "@/lib/freshness";
 import { cn } from "@/lib/utils";
 
 // Container for one DB row inside the dashboard's per-connection list.
@@ -40,16 +44,22 @@ import { cn } from "@/lib/utils";
 export function DatabaseRow({
   connectionId,
   database,
-  freshness,
-  lastQueryLabel,
+  initialLastQueryAt,
+  initialLastIndexedAt,
+  initialLastErrorAt,
   disableRemove,
   removeAction,
   renameAction,
 }: {
   connectionId: string;
   database: ConnectionDatabase;
-  freshness: Freshness;
-  lastQueryLabel: string;
+  /** Server-rendered fallback for the per-DB last-query timestamp.
+   *  Used until the freshness provider has data for this connection. */
+  initialLastQueryAt: Date | null;
+  /** Server-rendered fallback for the connection-level cursor — drives
+   *  the row's freshness dot (same dot as the connection header). */
+  initialLastIndexedAt: Date | null;
+  initialLastErrorAt: Date | null;
   disableRemove: boolean;
   removeAction: (formData: FormData) => Promise<void>;
   renameAction: (formData: FormData) => Promise<void>;
@@ -62,6 +72,19 @@ export function DatabaseRow({
 
   const policy = database.tableAccess as TableAccessPolicy;
   const tableCount = Object.keys(policy.tables ?? {}).length;
+
+  // Live freshness — falls back to server-rendered values until the
+  // first poll returns. The cursor drives the dot's color; the per-DB
+  // lastQueryAt drives the meta line.
+  const liveConn = useConnectionFreshness(connectionId);
+  const cursor = liveConn?.cursor ?? {
+    lastIndexedAt: initialLastIndexedAt,
+    lastErrorAt: initialLastErrorAt,
+  };
+  const freshness = computeFreshness(cursor);
+  const liveLastQuery = useDatabaseLastQuery(connectionId, database.name);
+  const lastQueryAt = liveConn ? liveLastQuery : initialLastQueryAt;
+  const lastQueryText = lastQueryLabel(lastQueryAt);
 
   function handleConfirmRemove() {
     const fd = new FormData();
@@ -115,7 +138,7 @@ export function DatabaseRow({
           </span>
           <span className="ml-auto text-xs text-muted-foreground">
             {accessLabel(policy.default)} · {tableCount}{" "}
-            {tableCount === 1 ? "table" : "tables"} · {lastQueryLabel}
+            {tableCount === 1 ? "table" : "tables"} · {lastQueryText}
           </span>
         </Link>
       )}
@@ -164,4 +187,20 @@ function accessLabel(level: string): string {
   if (level === "deny") return "deny";
   if (level === "read_write") return "read · write";
   return level;
+}
+
+function lastQueryLabel(lastQueryAt: Date | null): string {
+  if (!lastQueryAt) return "awaiting first query";
+  return `last query ${formatRelative(lastQueryAt)}`;
+}
+
+function formatRelative(d: Date): string {
+  const ms = Date.now() - d.getTime();
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
 }

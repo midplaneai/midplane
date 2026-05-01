@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
+  auditEventsIndex,
   connectionDatabases,
   connections,
   getDb,
@@ -767,38 +768,92 @@ export async function renameDatabase(
 }
 
 /** Server-side fetch for the hierarchical dashboard. Returns one row per
- *  connection paired with EVERY child DB on it, plus the indexer cursor
- *  that drives the connection-level freshness dot. Per-DB last-query
- *  state lands on top of this in PR-C step 5. */
+ *  connection paired with EVERY child DB on it (each annotated with its
+ *  own lastQueryAt from audit_events_index), plus the indexer cursor
+ *  that drives the connection-level freshness dot. */
+export type DashboardDatabase = typeof connectionDatabases.$inferSelect & {
+  /** Most recent ts on `audit_events_index` for this DB name within the
+   *  customer's region. NULL when the agent has never queried this DB —
+   *  the dashboard renders this as "awaiting first query".
+   *
+   *  KNOWN LIMITATION: audit_events_index has no `mcp_token` /
+   *  `connection_id` column today, so the max-ts aggregate fan-ins
+   *  across same-named DBs in different connections of the same
+   *  customer-region. If a customer has two connections each with a
+   *  "main" DB, both rows show the same lastQueryAt. PR-C accepts this
+   *  for v1; a future schema migration adds the disambiguator. */
+  lastQueryAt: Date | null;
+};
+
 export interface DashboardConnectionRow {
   connection: typeof connections.$inferSelect;
-  databases: Array<typeof connectionDatabases.$inferSelect>;
+  databases: DashboardDatabase[];
   cursor: {
     lastIndexedAt: Date | null;
     lastErrorAt: Date | null;
   };
 }
 
+// Internal helper: compute MAX(ts) per database name within (customer,
+// region). The compound index audit_customer_region_database_ts_idx
+// makes this a single index scan with no per-database round trips.
+async function lastQueryByDatabase(
+  customer: Customer,
+): Promise<Map<string, Date>> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      database: auditEventsIndex.database,
+      lastQueryAt: sql<Date | string>`MAX(${auditEventsIndex.ts})`,
+    })
+    .from(auditEventsIndex)
+    .where(
+      and(
+        eq(auditEventsIndex.customerId, customer.id),
+        eq(auditEventsIndex.region, customer.region),
+      ),
+    )
+    .groupBy(auditEventsIndex.database);
+
+  // Some drivers return the aggregate as a string (Postgres TIMESTAMPTZ
+  // text representation) instead of a Date; coerce defensively so
+  // downstream consumers always see a real Date.
+  const map = new Map<string, Date>();
+  for (const row of rows) {
+    if (!row.lastQueryAt) continue;
+    const d =
+      row.lastQueryAt instanceof Date
+        ? row.lastQueryAt
+        : new Date(row.lastQueryAt);
+    map.set(row.database, d);
+  }
+  return map;
+}
+
 export async function listDashboardConnections(
   customer: Customer,
 ): Promise<DashboardConnectionRow[]> {
   const db = getDb();
-  // Two-step fetch — first the parents (one row per connection, with the
-  // joined cursor), then every child DB scoped to those parent ids in a
-  // single IN-list query. A single inner-join would multiply rows by the
-  // child count and force a server-side group; the indirection keeps
-  // each query result-row shape stable and trivially paginates if we
-  // ever need to.
-  const parents = await db
-    .select({
-      connection: connections,
-      lastIndexedAt: indexerCursors.lastIndexedAt,
-      lastErrorAt: indexerCursors.lastErrorAt,
-    })
-    .from(connections)
-    .leftJoin(indexerCursors, eq(indexerCursors.mcpToken, connections.mcpToken))
-    .where(eq(connections.customerId, customer.id))
-    .orderBy(desc(connections.createdAt));
+  // Three-query fetch — parents (with joined cursor), children
+  // (IN-list), and per-DB last-query (one GROUP BY per customer). A
+  // single inner-join across all three would multiply rows; this keeps
+  // each result shape stable.
+  const [parents, lastQueryMap] = await Promise.all([
+    db
+      .select({
+        connection: connections,
+        lastIndexedAt: indexerCursors.lastIndexedAt,
+        lastErrorAt: indexerCursors.lastErrorAt,
+      })
+      .from(connections)
+      .leftJoin(
+        indexerCursors,
+        eq(indexerCursors.mcpToken, connections.mcpToken),
+      )
+      .where(eq(connections.customerId, customer.id))
+      .orderBy(desc(connections.createdAt)),
+    lastQueryByDatabase(customer),
+  ]);
   if (parents.length === 0) return [];
 
   const parentIds = parents.map((p) => p.connection.id);
@@ -808,13 +863,13 @@ export async function listDashboardConnections(
     .where(inArray(connectionDatabases.connectionId, parentIds))
     .orderBy(asc(connectionDatabases.name));
 
-  const childrenByConn = new Map<
-    string,
-    Array<typeof connectionDatabases.$inferSelect>
-  >();
+  const childrenByConn = new Map<string, DashboardDatabase[]>();
   for (const child of children) {
     const list = childrenByConn.get(child.connectionId) ?? [];
-    list.push(child);
+    list.push({
+      ...child,
+      lastQueryAt: lastQueryMap.get(child.name) ?? null,
+    });
     childrenByConn.set(child.connectionId, list);
   }
 
@@ -826,4 +881,80 @@ export async function listDashboardConnections(
       lastErrorAt: p.lastErrorAt,
     },
   }));
+}
+
+/** Slim payload for the 60s polling endpoint. Identifiers + freshness
+ *  signals only — no policy / table_access / ciphertext. The client
+ *  hook merges this into local state and updates only the freshness
+ *  dots and meta lines; rename / menu / sheet state stay put. */
+export interface DashboardFreshnessSnapshot {
+  connections: Array<{
+    id: string;
+    cursor: {
+      lastIndexedAt: Date | null;
+      lastErrorAt: Date | null;
+    };
+    databases: Array<{
+      name: string;
+      lastQueryAt: Date | null;
+    }>;
+  }>;
+}
+
+export async function getDashboardFreshness(
+  customer: Customer,
+): Promise<DashboardFreshnessSnapshot> {
+  const db = getDb();
+  const [parents, lastQueryMap] = await Promise.all([
+    db
+      .select({
+        id: connections.id,
+        mcpToken: connections.mcpToken,
+        lastIndexedAt: indexerCursors.lastIndexedAt,
+        lastErrorAt: indexerCursors.lastErrorAt,
+      })
+      .from(connections)
+      .leftJoin(
+        indexerCursors,
+        eq(indexerCursors.mcpToken, connections.mcpToken),
+      )
+      .where(eq(connections.customerId, customer.id))
+      .orderBy(desc(connections.createdAt)),
+    lastQueryByDatabase(customer),
+  ]);
+  if (parents.length === 0) return { connections: [] };
+
+  const parentIds = parents.map((p) => p.id);
+  const children = await db
+    .select({
+      connectionId: connectionDatabases.connectionId,
+      name: connectionDatabases.name,
+    })
+    .from(connectionDatabases)
+    .where(inArray(connectionDatabases.connectionId, parentIds))
+    .orderBy(asc(connectionDatabases.name));
+
+  const childrenByConn = new Map<
+    string,
+    Array<{ name: string; lastQueryAt: Date | null }>
+  >();
+  for (const child of children) {
+    const list = childrenByConn.get(child.connectionId) ?? [];
+    list.push({
+      name: child.name,
+      lastQueryAt: lastQueryMap.get(child.name) ?? null,
+    });
+    childrenByConn.set(child.connectionId, list);
+  }
+
+  return {
+    connections: parents.map((p) => ({
+      id: p.id,
+      cursor: {
+        lastIndexedAt: p.lastIndexedAt,
+        lastErrorAt: p.lastErrorAt,
+      },
+      databases: childrenByConn.get(p.id) ?? [],
+    })),
+  };
 }

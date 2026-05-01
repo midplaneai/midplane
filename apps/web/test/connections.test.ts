@@ -147,6 +147,15 @@ function makeFakeDb(): FakeDbHandle {
           whereValue = c;
           return chain;
         },
+        leftJoin() {
+          return chain;
+        },
+        innerJoin() {
+          return chain;
+        },
+        groupBy() {
+          return chain;
+        },
         limit() {
           calls.push({ op: "select", table, where: whereValue });
           return Promise.resolve(resolveRows());
@@ -1038,5 +1047,176 @@ describe("getConnectionWithDatabase", () => {
 
     const result = await getConnectionWithDatabase(customer, "conn-1", "ghost");
     expect(result).toBeNull();
+  });
+});
+
+// listDashboardConnections + getDashboardFreshness exercise three
+// reads (parents + cursor join, audit max-ts aggregate, children
+// IN-list). Promise.all([parentsChain, lastQueryByDatabase()]) doesn't
+// drain queries in source order because the inner `await` inside
+// lastQueryByDatabase schedules its microtask BEFORE Promise.all
+// schedules its iteration microtasks. The actual drain order against
+// the fake's selectQueue is:
+//   1. audit aggregate (inner await fires first)
+//   2. parents (Promise.all microtask fires next)
+//   3. children (sequential after Promise.all resolves)
+// Tests queue rows in that order.
+
+describe("listDashboardConnections", () => {
+  it("plumbs per-DB lastQueryAt from audit_events_index into each row", async () => {
+    const indexedAt = new Date("2026-04-30T10:00:00Z");
+    const mainQueryAt = new Date("2026-04-30T11:30:00Z");
+    const analyticsQueryAt = new Date("2026-04-30T11:45:00Z");
+    // 1) audit aggregate (inner await fires first)
+    handle.queueSelect([
+      { database: "main", lastQueryAt: mainQueryAt },
+      { database: "analytics", lastQueryAt: analyticsQueryAt },
+    ]);
+    // 2) parents query (Promise.all microtask)
+    handle.queueSelect([
+      {
+        connection: {
+          id: "conn-1",
+          customerId: customer.id,
+          region: "fra",
+          name: "prod",
+          mcpToken: "tok-1",
+          createdAt: new Date(),
+        },
+        lastIndexedAt: indexedAt,
+        lastErrorAt: null,
+      },
+    ]);
+    // 3) children query (sequential after Promise.all)
+    handle.queueSelect([
+      {
+        id: "cdb-main",
+        connectionId: "conn-1",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+      },
+      {
+        id: "cdb-analytics",
+        connectionId: "conn-1",
+        name: "analytics",
+        tableAccess: { default: "deny", tables: {} },
+      },
+    ]);
+    const { listDashboardConnections } = await import(
+      "../src/lib/connections.ts"
+    );
+
+    const rows = await listDashboardConnections(customer);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.cursor.lastIndexedAt).toEqual(indexedAt);
+    expect(rows[0]!.databases).toHaveLength(2);
+    const byName = new Map(rows[0]!.databases.map((d) => [d.name, d]));
+    expect(byName.get("main")?.lastQueryAt).toEqual(mainQueryAt);
+    expect(byName.get("analytics")?.lastQueryAt).toEqual(analyticsQueryAt);
+  });
+
+  it("returns lastQueryAt: null when audit aggregate has no row for that DB", async () => {
+    handle.queueSelect([]); // audit: no rows yet (inner await first)
+    handle.queueSelect([
+      {
+        connection: {
+          id: "conn-1",
+          customerId: customer.id,
+          region: "fra",
+          name: null,
+          mcpToken: "tok-1",
+          createdAt: new Date(),
+        },
+        lastIndexedAt: null,
+        lastErrorAt: null,
+      },
+    ]);
+    handle.queueSelect([
+      {
+        id: "cdb-main",
+        connectionId: "conn-1",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+      },
+    ]);
+    const { listDashboardConnections } = await import(
+      "../src/lib/connections.ts"
+    );
+
+    const rows = await listDashboardConnections(customer);
+    expect(rows[0]!.databases[0]!.lastQueryAt).toBeNull();
+  });
+
+  it("coerces driver-returned ISO strings on the audit aggregate to real Dates", async () => {
+    const isoString = "2026-04-30T11:30:00.000Z";
+    handle.queueSelect([{ database: "main", lastQueryAt: isoString }]);
+    handle.queueSelect([
+      {
+        connection: {
+          id: "conn-1",
+          customerId: customer.id,
+          region: "fra",
+          name: null,
+          mcpToken: "tok-1",
+          createdAt: new Date(),
+        },
+        lastIndexedAt: null,
+        lastErrorAt: null,
+      },
+    ]);
+    handle.queueSelect([
+      {
+        id: "cdb-main",
+        connectionId: "conn-1",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+      },
+    ]);
+    const { listDashboardConnections } = await import(
+      "../src/lib/connections.ts"
+    );
+
+    const rows = await listDashboardConnections(customer);
+    expect(rows[0]!.databases[0]!.lastQueryAt).toBeInstanceOf(Date);
+    expect((rows[0]!.databases[0]!.lastQueryAt as Date).toISOString()).toBe(
+      isoString,
+    );
+  });
+});
+
+describe("getDashboardFreshness", () => {
+  it("returns the slim freshness shape without policy / ciphertext", async () => {
+    const indexedAt = new Date("2026-04-30T10:00:00Z");
+    const mainQueryAt = new Date("2026-04-30T11:30:00Z");
+    // Same drain order as listDashboardConnections — audit first, then
+    // parents, then children.
+    handle.queueSelect([{ database: "main", lastQueryAt: mainQueryAt }]);
+    handle.queueSelect([
+      {
+        id: "conn-1",
+        mcpToken: "tok-1",
+        lastIndexedAt: indexedAt,
+        lastErrorAt: null,
+      },
+    ]);
+    handle.queueSelect([{ connectionId: "conn-1", name: "main" }]);
+    const { getDashboardFreshness } = await import(
+      "../src/lib/connections.ts"
+    );
+
+    const snapshot = await getDashboardFreshness(customer);
+
+    expect(snapshot.connections).toHaveLength(1);
+    const c = snapshot.connections[0]!;
+    expect(c.id).toBe("conn-1");
+    expect(c.cursor.lastIndexedAt).toEqual(indexedAt);
+    expect(c.databases).toEqual([
+      { name: "main", lastQueryAt: mainQueryAt },
+    ]);
+    // Ensure we didn't accidentally leak the parent's mcpToken in the
+    // payload — the polling endpoint is tighter than the dashboard
+    // page render and shouldn't include identifiers we don't need.
+    expect((c as Record<string, unknown>).mcpToken).toBeUndefined();
   });
 });
