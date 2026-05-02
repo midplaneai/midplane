@@ -8,7 +8,7 @@
 // real engine.handle() call so it gets its own audit row.
 
 import { z } from "zod";
-import type { AgentIntent, Engine, EngineContext } from "@midplane/engine";
+import type { Engine, EngineContext } from "@midplane/engine";
 import type { ToolResult } from "./query.ts";
 import type { EngineRegistry } from "../engine-factory.ts";
 
@@ -40,7 +40,6 @@ export async function handleListTables(input: {
   engine: Engine;
   ctx: EngineContext;
   args: ListTablesArgs;
-  intent?: AgentIntent | null;
 }): Promise<ToolResult> {
   const schema = input.args.schema ?? "public";
   if (!IDENT.test(schema)) {
@@ -53,7 +52,7 @@ export async function handleListTables(input: {
   const decision = await input.engine.handle({
     sql,
     ctx: input.ctx,
-    intent: input.intent ?? null,
+    intent: null,
   });
 
   if (!decision.allowed) {
@@ -94,7 +93,6 @@ export async function handleListTablesAcrossAll(input: {
   registry: EngineRegistry;
   ctxFor: (db: string) => EngineContext;
   args: { schema?: string };
-  intent?: AgentIntent | null;
   recordToolCall?: (db: string, allowed: boolean) => void;
 }): Promise<ToolResult> {
   const schema = input.args.schema ?? "public";
@@ -112,7 +110,6 @@ export async function handleListTablesAcrossAll(input: {
           engine: entry.engine,
           ctx: input.ctxFor(db),
           args: { schema },
-          intent: input.intent ?? null,
         });
         const data = JSON.parse(result.content[0]!.text) as
           | { allowed: true; tables: Array<{ schema: string; name: string }>; auditId: string }

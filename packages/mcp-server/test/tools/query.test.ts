@@ -10,7 +10,7 @@ describe("query tool — ALLOW path", () => {
     const { engine, executor } = makeTestEngine();
     executor.result = { rows: [{ id: 1, email: "a@b" }, { id: 2, email: "c@d" }], rowCount: 2 };
 
-    const out = await handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT id, email FROM users" } });
+    const out = await handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT id, email FROM users", intent: "list users" } });
 
     expect(out.isError).toBeFalsy();
     expect(out.content[0]?.type).toBe("text");
@@ -25,7 +25,7 @@ describe("query tool — ALLOW path", () => {
 describe("query tool — DENY path", () => {
   test("write denial returns isError=true with policy_rule + reason", async () => {
     const { engine, executor } = makeTestEngine();
-    const out = await handleQuery({ engine, ctx: baseCtx, args: { sql: "DELETE FROM users" } });
+    const out = await handleQuery({ engine, ctx: baseCtx, args: { sql: "DELETE FROM users", intent: "delete users" } });
 
     expect(out.isError).toBe(true);
     const payload = JSON.parse((out.content[0] as { text: string }).text);
@@ -41,7 +41,7 @@ describe("query tool — DENY path", () => {
     const out = await handleQuery({
       engine,
       ctx: baseCtx,
-      args: { sql: "SELECT 1; DROP TABLE users;" },
+      args: { sql: "SELECT 1; DROP TABLE users;", intent: "test" },
     });
     expect(out.isError).toBe(true);
     const payload = JSON.parse((out.content[0] as { text: string }).text);
@@ -53,7 +53,7 @@ describe("query tool — DENY path", () => {
     const out = await handleQuery({
       engine,
       ctx: baseCtx,
-      args: { sql: "this is not sql" },
+      args: { sql: "this is not sql", intent: "garbage" },
     });
     expect(out.isError).toBe(true);
     const payload = JSON.parse((out.content[0] as { text: string }).text);
@@ -68,7 +68,7 @@ describe("query tool — infrastructure failure", () => {
     const { engine } = makeTestEngine({ audit });
 
     await expect(
-      handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT 1" } }),
+      handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT 1", intent: "ping" } }),
     ).rejects.toMatchObject({
       // We re-throw via a structured object the transport layer maps; the
       // engine's AuditUnavailableError is preserved (instanceof check).
@@ -80,7 +80,7 @@ describe("query tool — infrastructure failure", () => {
     const { engine, executor, audit } = makeTestEngine();
     executor.shouldThrow = { sqlstate: "42P01", message: "relation x does not exist" };
     await expect(
-      handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT * FROM x" } }),
+      handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT * FROM x", intent: "investigate missing table" } }),
     ).rejects.toThrow(/relation x does not exist/);
     expect(audit.events.map((e) => e.event_type)).toEqual([
       "ATTEMPTED",
@@ -98,7 +98,7 @@ describe("query tool — rejects non-AuditUnavailableError as transport error", 
 
     let caught: unknown = null;
     try {
-      await handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT 1" } });
+      await handleQuery({ engine, ctx: baseCtx, args: { sql: "SELECT 1", intent: "ping" } });
     } catch (err) {
       caught = err;
     }

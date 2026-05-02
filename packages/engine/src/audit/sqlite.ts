@@ -21,15 +21,15 @@ const SCHEMA_PATH = join(__dirname, "schema.sql");
 const INSERT_SQL = `
   INSERT INTO audit_events (
     id, query_id, tenant_id, database,
-    agent_name, agent_version, agent_intent, intent_source,
+    agent_name, agent_version, agent_intent,
     ts, event_type, payload, schema_version
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const READ_SINCE_SQL = `
   SELECT id, query_id, tenant_id, database,
-         agent_name, agent_version, agent_intent, intent_source,
+         agent_name, agent_version, agent_intent,
          ts, event_type, payload, schema_version
   FROM audit_events
   WHERE id > ?
@@ -51,7 +51,6 @@ export interface AuditEventRow {
   agent_name: string | null;
   agent_version: string | null;
   agent_intent: string | null;
-  intent_source: string | null;
   ts: number;
   event_type: string;
   payload: unknown;
@@ -66,7 +65,6 @@ interface RawAuditRow {
   agent_name: string | null;
   agent_version: string | null;
   agent_intent: string | null;
-  intent_source: string | null;
   ts: number;
   event_type: string;
   payload: string;
@@ -117,8 +115,8 @@ export class SqliteAuditWriter implements AuditWriter {
         );
       }
       // 0.2 → 0.3: replace single `agent_identity` column with split
-      // `agent_name`/`agent_version`, and add `agent_intent`/`intent_source`.
-      // We add the new columns first; the legacy column is dropped last so a
+      // `agent_name`/`agent_version`, and add `agent_intent`. We add the
+      // new columns first; the legacy column is dropped last so a
       // partially-migrated DB can be re-run idempotently. SQLite's ALTER
       // TABLE DROP COLUMN landed in 3.35 (March 2021) — Bun ships well past
       // that, so DROP is the cleanest path. Old rows lose their
@@ -133,11 +131,28 @@ export class SqliteAuditWriter implements AuditWriter {
       if (!this.hasColumn("audit_events", "agent_intent")) {
         this.db.run("ALTER TABLE audit_events ADD COLUMN agent_intent TEXT");
       }
-      if (!this.hasColumn("audit_events", "intent_source")) {
-        this.db.run("ALTER TABLE audit_events ADD COLUMN intent_source TEXT");
-      }
       if (this.hasColumn("audit_events", "agent_identity")) {
         this.db.run("ALTER TABLE audit_events DROP COLUMN agent_identity");
+      }
+      // 0.3 → 0.4: collapse the three resolution channels into a single
+      // structured `intent` tool arg, dropping the `intent_source` column
+      // (always one source now). Old rows lose their intent_source value,
+      // which was always one of mcp_meta/sql_comment/http_header — readers
+      // that grouped on it just see `agent_intent` IS NOT NULL going
+      // forward.
+      //
+      // After dropping the column, backfill `schema_version = 3` on every
+      // row that still claims v2: the row no longer matches the v2 wire
+      // contract (which required intent_source), so leaving it stamped v2
+      // would make a v2-pinned parser read garbage. Setting v3 forces the
+      // parser into its forward-compat branch instead. v1 rows (pre-0.3,
+      // no agent_* fields at all) are left as-is — they predate this
+      // column entirely and are still self-consistent.
+      if (this.hasColumn("audit_events", "intent_source")) {
+        this.db.run("ALTER TABLE audit_events DROP COLUMN intent_source");
+        this.db.run(
+          "UPDATE audit_events SET schema_version = 3 WHERE schema_version = 2",
+        );
       }
     }
 
@@ -178,7 +193,6 @@ export class SqliteAuditWriter implements AuditWriter {
         event.agent_name,
         event.agent_version,
         event.agent_intent,
-        event.intent_source,
         event.ts,
         event.event_type,
         JSON.stringify(event.payload),
@@ -205,7 +219,6 @@ export class SqliteAuditWriter implements AuditWriter {
       agent_name: r.agent_name,
       agent_version: r.agent_version,
       agent_intent: r.agent_intent,
-      intent_source: r.intent_source,
       ts: r.ts,
       event_type: r.event_type,
       payload: JSON.parse(r.payload),

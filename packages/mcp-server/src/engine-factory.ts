@@ -607,9 +607,8 @@ async function finalizeReload(
       agent_name: null,
       agent_version: null,
       agent_intent: null,
-      intent_source: null,
       ts: Date.now(),
-      schema_version: 2,
+      schema_version: 3,
       event_type: "POLICY_RELOADED",
       payload: {
         source,

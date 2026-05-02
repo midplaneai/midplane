@@ -18,7 +18,7 @@ import type { Executor, ExecutionResult } from "./executor.ts";
 import type { Rule } from "./policy/rules/index.ts";
 import { evaluate } from "./policy/index.ts";
 import { parse } from "./parser/parse.ts";
-import { AuditEvent, type IntentSource } from "./audit/types.ts";
+import { AuditEvent } from "./audit/types.ts";
 import { AuditUnavailableError } from "./errors.ts";
 
 export type EngineContext = {
@@ -32,14 +32,10 @@ export type EngineContext = {
   tenant_scope?: { mappings: Record<string, string> };
 };
 
-// Per-call free-text task description plus the channel it was resolved
-// from. Resolution lives in the transport layer (mcp-server) because the
-// channels — MCP `_meta.intent`, SQL comment hint, HTTP header — are
-// transport-specific. The engine only sees the post-resolution result.
-export type AgentIntent = {
-  value: string;
-  source: IntentSource;
-};
+// Per-call free-text task description. Sourced from a required `intent`
+// field on the `query` tool's structured input (validated + capped at the
+// tool boundary). Tools that don't accept an intent arg pass null.
+export type AgentIntent = string;
 
 export type Decision =
   | { allowed: true; result: ExecutionResult; auditId: string }
@@ -114,10 +110,9 @@ export class Engine {
       database: this.databaseName,
       agent_name: input.ctx.agent_name,
       agent_version: input.ctx.agent_version,
-      agent_intent: intent?.value ?? null,
-      intent_source: intent?.source ?? null,
+      agent_intent: intent,
       ts: this.now(),
-      schema_version: 2,
+      schema_version: 3,
       event_type: "ATTEMPTED",
       payload: {
         sql_raw: input.sql.length === 0 ? " " : input.sql.slice(0, 1_048_576),
@@ -160,10 +155,9 @@ export class Engine {
             database: this.databaseName,
             agent_name: input.ctx.agent_name,
             agent_version: input.ctx.agent_version,
-            agent_intent: intent?.value ?? null,
-            intent_source: intent?.source ?? null,
+            agent_intent: intent,
             ts: this.now(),
-            schema_version: 2,
+            schema_version: 3,
             event_type: "DECIDED",
             payload: {
               decision: "ALLOW",
@@ -178,10 +172,9 @@ export class Engine {
             database: this.databaseName,
             agent_name: input.ctx.agent_name,
             agent_version: input.ctx.agent_version,
-            agent_intent: intent?.value ?? null,
-            intent_source: intent?.source ?? null,
+            agent_intent: intent,
             ts: this.now(),
-            schema_version: 2,
+            schema_version: 3,
             event_type: "DECIDED",
             payload: {
               decision: "DENY",
@@ -222,10 +215,9 @@ export class Engine {
         database: this.databaseName,
         agent_name: input.ctx.agent_name,
         agent_version: input.ctx.agent_version,
-        agent_intent: intent?.value ?? null,
-        intent_source: intent?.source ?? null,
+        agent_intent: intent,
         ts: this.now(),
-        schema_version: 2,
+        schema_version: 3,
         event_type: "FAILED",
         payload: {
           exec_ms: Math.max(0, this.now() - execStart),
@@ -250,10 +242,9 @@ export class Engine {
       database: this.databaseName,
       agent_name: input.ctx.agent_name,
       agent_version: input.ctx.agent_version,
-      agent_intent: intent?.value ?? null,
-      intent_source: intent?.source ?? null,
+      agent_intent: intent,
       ts: this.now(),
-      schema_version: 2,
+      schema_version: 3,
       event_type: "EXECUTED",
       payload: {
         exec_ms: Math.max(0, this.now() - execStart),

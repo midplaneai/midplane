@@ -100,7 +100,10 @@ describe("POST /admin/policy", () => {
     await client.connect(transport);
     try {
       executor.result = { rows: [{ id: 1 }], rowCount: 1 };
-      const res = await client.callTool({ name: "query", arguments: { sql } });
+      const res = await client.callTool({
+        name: "query",
+        arguments: { sql, intent: "admin-policy test query" },
+      });
       const content = res.content as Array<{ text: string }>;
       return { isError: !!res.isError, data: JSON.parse(content[0]!.text) };
     } finally {

@@ -206,7 +206,10 @@ export async function verifyHandshake(url: string): Promise<HandshakeReport> {
         jsonrpc: "2.0",
         id: id++,
         method: "tools/call",
-        params: { name: "query", arguments: { sql: trial.sql } },
+        params: {
+          name: "query",
+          arguments: { sql: trial.sql, intent: `handshake check: ${trial.label}` },
+        },
       },
       sessionId,
     );

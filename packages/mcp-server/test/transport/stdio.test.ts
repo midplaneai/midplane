@@ -34,7 +34,7 @@ describe("stdio transport (in-process pair)", () => {
 
     const res = await client.callTool({
       name: "query",
-      arguments: { sql: "SELECT 1" },
+      arguments: { sql: "SELECT 1", intent: "ping" },
     });
     expect(res.isError).toBeFalsy();
 

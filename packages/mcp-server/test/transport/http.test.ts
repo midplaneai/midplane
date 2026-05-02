@@ -51,7 +51,7 @@ describe("http transport", () => {
 
     // query
     executor.result = { rows: [{ ok: 1 }], rowCount: 1 };
-    const q = await client.callTool({ name: "query", arguments: { sql: "SELECT 1" } });
+    const q = await client.callTool({ name: "query", arguments: { sql: "SELECT 1", intent: "ping" } });
     expect(q.isError).toBeFalsy();
 
     // list_tables
@@ -131,7 +131,7 @@ describe("http transport", () => {
 
     const res = await client.callTool({
       name: "query",
-      arguments: { sql: "DELETE FROM users" },
+      arguments: { sql: "DELETE FROM users", intent: "delete users" },
     });
     expect(res.isError).toBe(true);
     const content = res.content as Array<{ text: string }>;
@@ -164,9 +164,8 @@ describe("http transport — audit indexer pull endpoints", () => {
       agent_name: null,
       agent_version: null,
       agent_intent: null,
-      intent_source: null,
       ts: 1_700_000_000_000 + n,
-      schema_version: 2,
+      schema_version: 3,
       event_type: "ATTEMPTED",
       payload: {
         sql_raw: "SELECT 1",

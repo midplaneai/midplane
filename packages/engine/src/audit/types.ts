@@ -39,16 +39,6 @@ export const PolicyRule = {
 } as const;
 export type PolicyRule = (typeof PolicyRule)[keyof typeof PolicyRule];
 
-// Channels a per-call agent intent string can come from. Stamped on every
-// audit row alongside `agent_intent` so consumers can show where the signal
-// came from and nudge customers toward the standards-aligned channel.
-export const IntentSource = {
-  MCP_META: "mcp_meta",
-  SQL_COMMENT: "sql_comment",
-  HTTP_HEADER: "http_header",
-} as const;
-export type IntentSource = (typeof IntentSource)[keyof typeof IntentSource];
-
 // ─── Payload schemas (one per event type) ───────────────────────────────────
 
 // ATTEMPTED — agent intent. Recorded before policy evaluation. Cannot be redacted later.
@@ -124,14 +114,12 @@ const DatabaseName = z.string().min(1).max(32);
 const AgentName = z.string().min(1).max(128).nullable();
 const AgentVersion = z.string().min(1).max(64).nullable();
 
-// `agent_intent` is the per-call free-text task description. Resolved from
-// MCP `_meta.intent`, an SQL comment hint, or an HTTP header (in that
-// priority order). Capped at 500 chars at the resolver — zod is the
-// belt-and-suspenders defense.
+// `agent_intent` is the per-call free-text task description, supplied as a
+// required `intent` field on the `query` tool's structured input. Capped at
+// 500 chars at the tool boundary — zod is the belt-and-suspenders defense.
+// Null on rows from tools that don't take an intent arg (list_tables,
+// describe_table) and on POLICY_RELOADED.
 const AgentIntent = z.string().min(1).max(500).nullable();
-const IntentSourceEnum = z
-  .enum([IntentSource.MCP_META, IntentSource.SQL_COMMENT, IntentSource.HTTP_HEADER])
-  .nullable();
 
 export const AuditEvent = z.discriminatedUnion("event_type", [
   z.object({
@@ -142,9 +130,8 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
-    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(2),
+    schema_version: z.literal(3),
     event_type: z.literal("ATTEMPTED"),
     payload: AttemptedPayload,
   }),
@@ -156,9 +143,8 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
-    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(2),
+    schema_version: z.literal(3),
     event_type: z.literal("DECIDED"),
     payload: DecidedPayload,
   }),
@@ -170,9 +156,8 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
-    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(2),
+    schema_version: z.literal(3),
     event_type: z.literal("EXECUTED"),
     payload: ExecutedPayload,
   }),
@@ -184,9 +169,8 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
-    intent_source: IntentSourceEnum,
     ts: z.number().int(),
-    schema_version: z.literal(2),
+    schema_version: z.literal(3),
     event_type: z.literal("FAILED"),
     payload: FailedPayload,
   }),
@@ -202,9 +186,8 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: z.null(),
     agent_version: z.null(),
     agent_intent: z.null(),
-    intent_source: z.null(),
     ts: z.number().int(),
-    schema_version: z.literal(2),
+    schema_version: z.literal(3),
     event_type: z.literal("POLICY_RELOADED"),
     payload: PolicyReloadedPayload,
   }),

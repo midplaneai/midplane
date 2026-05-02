@@ -44,9 +44,8 @@ function attempted(opts: {
     agent_name: "claude-code",
     agent_version: "0.42.1",
     agent_intent: null,
-    intent_source: null,
     ts: opts.ts ?? 1_700_000_000_000,
-    schema_version: 2,
+    schema_version: 3,
     event_type: "ATTEMPTED",
     payload: {
       sql_raw: opts.sql_raw,
@@ -72,9 +71,8 @@ function decidedDeny(opts: {
     agent_name: "claude-code",
     agent_version: "0.42.1",
     agent_intent: null,
-    intent_source: null,
     ts: opts.ts ?? 1_700_000_000_000,
-    schema_version: 2,
+    schema_version: 3,
     event_type: "DECIDED",
     payload: {
       decision: "DENY",
@@ -99,9 +97,8 @@ function decidedAllow(opts: {
     agent_name: "claude-code",
     agent_version: "0.42.1",
     agent_intent: null,
-    intent_source: null,
     ts: 1_700_000_000_000,
-    schema_version: 2,
+    schema_version: 3,
     event_type: "DECIDED",
     payload: {
       decision: "ALLOW",
@@ -230,7 +227,7 @@ describe("DenyWebhookAuditWriter", () => {
     expect(poster.posts).toHaveLength(1);
     const p = poster.posts[0];
     expect(p.event).toBe("denial");
-    expect(p.schema_version).toBe(2);
+    expect(p.schema_version).toBe(3);
     expect(p.query_id).toBe("q1");
     expect(p.tenant_id).toBe("tenant-1");
     expect(p.agent_name).toBe("claude-code");
@@ -412,7 +409,7 @@ describe("DenyWebhookAuditWriter", () => {
 describe("createHttpPoster", () => {
   const samplePayload: DenyWebhookPayload = {
     event: "denial",
-    schema_version: 2,
+    schema_version: 3,
     ts: 1_700_000_000_000,
     query_id: "q1",
     audit_id: "a1",
@@ -420,7 +417,6 @@ describe("createHttpPoster", () => {
     agent_name: null,
     agent_version: null,
     agent_intent: null,
-    intent_source: null,
     policy_rule: "table_access",
     reason: "denied",
     statement_type: null,

@@ -50,9 +50,8 @@ async function writeEvent(
     agent_name: "test-agent",
     agent_version: "0.0.1",
     agent_intent: null,
-    intent_source: null,
     ts,
-    schema_version: 2 as const,
+    schema_version: 3 as const,
   };
   switch (partial.event_type) {
     case "ATTEMPTED":
@@ -399,7 +398,9 @@ describe("midplane audit on a pre-migration audit DB", () => {
     expect(parsed.agent_name).toBeNull();
     expect(parsed.agent_version).toBeNull();
     expect(parsed.agent_intent).toBeNull();
-    expect(parsed.intent_source).toBeNull();
+    // intent_source column was dropped in 0.4.0; the CLI's row JSON no
+    // longer includes the key at all.
+    expect(parsed).not.toHaveProperty("intent_source");
   });
 });
 

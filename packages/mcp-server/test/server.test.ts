@@ -38,7 +38,7 @@ describe("buildServer — tool surface", () => {
 
     const res = await client.callTool({
       name: "query",
-      arguments: { sql: "SELECT id FROM users" },
+      arguments: { sql: "SELECT id FROM users", intent: "test list users" },
     });
     const content = res.content as Array<{ text: string }>;
     const data = JSON.parse(content[0]!.text);
@@ -51,7 +51,7 @@ describe("buildServer — tool surface", () => {
     const { client } = await connectClient();
     const res = await client.callTool({
       name: "query",
-      arguments: { sql: "DELETE FROM users" },
+      arguments: { sql: "DELETE FROM users", intent: "remove a user" },
     });
     expect(res.isError).toBe(true);
     const content = res.content as Array<{ text: string }>;

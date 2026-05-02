@@ -53,11 +53,11 @@ export function loadDenyWebhookConfig(
 
 export interface DenyWebhookPayload {
   event: "denial";
-  // Bumped to 2 alongside the audit-row schema bump: agent identity is
-  // now split into separate name/version fields, and agent intent +
-  // source ride on every payload. Receivers that pinned to schema 1
-  // need to widen their handler.
-  schema_version: 2;
+  // Bumped to 3 alongside the 0.4.0 audit-row schema change: per-call
+  // intent is now a single structured tool arg, so `intent_source` is
+  // gone from the wire format. Receivers pinned to schema 2 should
+  // either widen their handler or pin to <0.4.0.
+  schema_version: 3;
   ts: number;
   query_id: string;
   audit_id: string;
@@ -65,7 +65,6 @@ export interface DenyWebhookPayload {
   agent_name: string | null;
   agent_version: string | null;
   agent_intent: string | null;
-  intent_source: "mcp_meta" | "sql_comment" | "http_header" | null;
   policy_rule: string;
   reason: string;
   statement_type: string | null;
@@ -183,7 +182,7 @@ export class DenyWebhookAuditWriter implements AuditWriter {
 
     const payload: DenyWebhookPayload = {
       event: "denial",
-      schema_version: 2,
+      schema_version: 3,
       ts: event.ts,
       query_id: event.query_id,
       audit_id: event.id,
@@ -191,7 +190,6 @@ export class DenyWebhookAuditWriter implements AuditWriter {
       agent_name: event.agent_name,
       agent_version: event.agent_version,
       agent_intent: event.agent_intent,
-      intent_source: event.intent_source,
       policy_rule: event.payload.policy_rule,
       reason: event.payload.reason,
       statement_type: event.payload.statement_type ?? null,

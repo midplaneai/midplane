@@ -13,12 +13,11 @@ CREATE TABLE IF NOT EXISTS audit_events (
   database        TEXT    NOT NULL DEFAULT '__default__', -- DB name from `databases:` YAML or '__default__' for legacy single-DB
   agent_name      TEXT,                          -- MCP clientInfo.name (e.g. "claude-code"); NULL for non-MCP callers
   agent_version   TEXT,                          -- MCP clientInfo.version (e.g. "0.42.1"); NULL for non-MCP callers
-  agent_intent    TEXT,                          -- per-call free-text task description (≤ 500 chars); NULL when no channel populated
-  intent_source   TEXT,                          -- 'mcp_meta' | 'sql_comment' | 'http_header'; NULL when agent_intent is NULL
+  agent_intent    TEXT,                          -- per-call free-text task description (≤ 500 chars); required tool arg on `query`, NULL on schema-browsing tools and POLICY_RELOADED
   ts              INTEGER NOT NULL,              -- ms epoch (use unixepoch * 1000 for ts in Postgres mirror)
   event_type      TEXT    NOT NULL,              -- ATTEMPTED | DECIDED | EXECUTED | FAILED | POLICY_RELOADED
   payload         TEXT    NOT NULL,              -- JSON; shape determined by event_type (see audit-types.ts)
-  schema_version  INTEGER NOT NULL DEFAULT 2     -- bump on payload schema break; indexer reads multiple versions
+  schema_version  INTEGER NOT NULL DEFAULT 3     -- bump on row-shape break; indexer reads multiple versions. v1: pre-0.3 (no agent_*/intent fields). v2: 0.3.x (agent_name+version+intent+intent_source). v3: 0.4.x (intent_source dropped, single structured intent arg).
   -- Hash-chain extension (added in V2 for compliance buyer):
   -- prev_hash    TEXT,                           -- SHA-256 of previous row's (id || payload)
   -- signature    TEXT                            -- HMAC-SHA-256 of (id || prev_hash || payload) with per-tenant key
@@ -52,11 +51,10 @@ PRAGMA temp_store = MEMORY;
 --   agent_name      TEXT,                            -- MCP clientInfo.name
 --   agent_version   TEXT,                            -- MCP clientInfo.version
 --   agent_intent    TEXT,                            -- per-call task description (≤ 500 chars)
---   intent_source   TEXT        CHECK (intent_source IS NULL OR intent_source IN ('mcp_meta','sql_comment','http_header')),
 --   ts              TIMESTAMPTZ NOT NULL,
 --   event_type      TEXT        NOT NULL CHECK (event_type IN ('ATTEMPTED','DECIDED','EXECUTED','FAILED','POLICY_RELOADED')),
 --   payload         JSONB       NOT NULL,
---   schema_version  INTEGER     NOT NULL DEFAULT 2
+--   schema_version  INTEGER     NOT NULL DEFAULT 3
 -- );
 -- CREATE INDEX ON audit_events_index (customer_id, ts DESC);
 -- CREATE INDEX ON audit_events_index (customer_id, event_type, ts DESC);

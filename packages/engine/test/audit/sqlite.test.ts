@@ -33,9 +33,8 @@ function attempted(id: string, queryId: string, ts: number): AuditEvent {
     agent_name: "claude-code",
     agent_version: "0.42.1",
     agent_intent: null,
-    intent_source: null,
     ts,
-    schema_version: 2,
+    schema_version: 3,
     event_type: "ATTEMPTED",
     payload: {
       sql_raw: "SELECT 1",
@@ -52,11 +51,11 @@ describe("SqliteAuditWriter — schema + basic write", () => {
     await w.close();
   });
 
-  test("schema_version round-trips as integer 2", async () => {
+  test("schema_version round-trips as integer 3", async () => {
     const w = new SqliteAuditWriter(dbPath);
     await w.write(attempted("01TESTID000000000000000002", "Q1", 1_700_000_000_000));
     const rows = w._readAll() as Array<{ schema_version: number }>;
-    expect(rows[0]!.schema_version).toBe(2);
+    expect(rows[0]!.schema_version).toBe(3);
     await w.close();
   });
 
@@ -263,8 +262,8 @@ describe("SqliteAuditWriter — 0.1 → 0.2 migration", () => {
   });
 });
 
-describe("SqliteAuditWriter — 0.2 → 0.3 migration", () => {
-  test("legacy DB with agent_identity column has it dropped + new columns added", async () => {
+describe("SqliteAuditWriter — migrations", () => {
+  test("0.2.x DB with agent_identity column: column dropped, new columns added (no intent_source)", async () => {
     // Simulate a 0.2.x audit DB shape: post-`database` ALTER but pre-split.
     const probe = new Database(dbPath);
     probe.run(`
@@ -309,7 +308,10 @@ describe("SqliteAuditWriter — 0.2 → 0.3 migration", () => {
     expect(colNames).toContain("agent_name");
     expect(colNames).toContain("agent_version");
     expect(colNames).toContain("agent_intent");
-    expect(colNames).toContain("intent_source");
+    // 0.3 → 0.4 drops intent_source: the structured `intent` tool arg
+    // makes the source column always-redundant, and the migration removes
+    // it on first open by 0.4+.
+    expect(colNames).not.toContain("intent_source");
 
     // Pre-existing row survives with NULL on the new columns.
     const rows = w.readSince("0", 100);
@@ -317,7 +319,6 @@ describe("SqliteAuditWriter — 0.2 → 0.3 migration", () => {
     expect(rows[0]!.agent_name).toBeNull();
     expect(rows[0]!.agent_version).toBeNull();
     expect(rows[0]!.agent_intent).toBeNull();
-    expect(rows[0]!.intent_source).toBeNull();
 
     // New writes populate the split columns.
     await w.write(attempted("01LEGACY00000000000000023B", "Q-NEW", 1_700_000_000_001));
@@ -339,6 +340,68 @@ describe("SqliteAuditWriter — 0.2 → 0.3 migration", () => {
     expect(w2._count()).toBe(1);
     await w2.close();
   });
+
+  test("0.3.x DB with intent_source column: column dropped, agent_intent preserved", async () => {
+    // Simulate a 0.3.x audit DB shape: split agent_name/version + both
+    // intent columns. Pre-existing rows have a populated intent_source.
+    const probe = new Database(dbPath);
+    probe.run(`
+      CREATE TABLE audit_events (
+        id TEXT PRIMARY KEY,
+        query_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        database TEXT NOT NULL DEFAULT '__default__',
+        agent_name TEXT,
+        agent_version TEXT,
+        agent_intent TEXT,
+        intent_source TEXT,
+        ts INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        schema_version INTEGER NOT NULL DEFAULT 2
+      );
+    `);
+    probe.run(
+      "INSERT INTO audit_events (id, query_id, tenant_id, database, agent_name, agent_version, agent_intent, intent_source, ts, event_type, payload, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        "01LEGACY30000000000000001A",
+        "Q-LEG3",
+        "42",
+        "__default__",
+        "claude-code",
+        "0.42.1",
+        "list active sessions",
+        "mcp_meta",
+        1_700_000_000_000,
+        "ATTEMPTED",
+        '{"sql_raw":"SELECT 1","sql_fingerprint":"0123456789abcdef"}',
+        2,
+      ],
+    );
+    probe.close();
+
+    const w = new SqliteAuditWriter(dbPath);
+
+    const probe2 = new Database(dbPath);
+    const cols = probe2.query("PRAGMA table_info(audit_events)").all() as Array<{
+      name: string;
+    }>;
+    probe2.close();
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).not.toContain("intent_source");
+    expect(colNames).toContain("agent_intent");
+
+    // Pre-existing row's agent_intent is preserved across the column drop.
+    const rows = w.readSince("0", 100);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.agent_intent).toBe("list active sessions");
+    // schema_version is backfilled 2 → 3 on the same migration step. The
+    // row's wire shape no longer matches v2 (no intent_source) so leaving
+    // it stamped v2 would feed garbage to a v2-pinned parser.
+    expect(rows[0]!.schema_version).toBe(3);
+
+    await w.close();
+  });
 });
 
 describe("SqliteAuditWriter — payload validation", () => {
@@ -352,9 +415,8 @@ describe("SqliteAuditWriter — payload validation", () => {
       agent_name: null,
       agent_version: null,
       agent_intent: null,
-      intent_source: null,
       ts: 1_700_000_000_000,
-      schema_version: 2 as const,
+      schema_version: 3 as const,
       event_type: "BANANA" as never,
       payload: { sql_raw: "x", sql_fingerprint: "0123456789abcdef" },
     };
@@ -373,9 +435,8 @@ describe("SqliteAuditWriter — payload validation", () => {
       agent_name: null,
       agent_version: null,
       agent_intent: null,
-      intent_source: null,
       ts: 1_700_000_000_000,
-      schema_version: 2,
+      schema_version: 3,
       event_type: "ATTEMPTED",
       payload: { sql_raw: "x", sql_fingerprint: "not-hex" },
     };

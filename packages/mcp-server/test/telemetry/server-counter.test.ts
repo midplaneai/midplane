@@ -56,7 +56,7 @@ describe("tool counter — consistency across exit paths", () => {
     const { client, executor, calls } = await connect();
     executor.result = { rows: [{ id: 1 }], rowCount: 1 };
 
-    await client.callTool({ name: "query", arguments: { sql: "SELECT 1" } });
+    await client.callTool({ name: "query", arguments: { sql: "SELECT 1", intent: "ping" } });
 
     expect(calls).toEqual([{ name: "query", allowed: true, database: "__default__" }]);
     await client.close();
@@ -64,7 +64,7 @@ describe("tool counter — consistency across exit paths", () => {
 
   test("DENY (policy) → calls=1, allow=0 (deny)", async () => {
     const { client, calls } = await connect();
-    await client.callTool({ name: "query", arguments: { sql: "DELETE FROM users" } });
+    await client.callTool({ name: "query", arguments: { sql: "DELETE FROM users", intent: "delete a user" } });
 
     expect(calls).toEqual([{ name: "query", allowed: false, database: "__default__" }]);
     await client.close();
@@ -81,7 +81,7 @@ describe("tool counter — consistency across exit paths", () => {
 
     let threw = false;
     try {
-      await client.callTool({ name: "query", arguments: { sql: "SELECT 1" } });
+      await client.callTool({ name: "query", arguments: { sql: "SELECT 1", intent: "ping" } });
     } catch {
       threw = true;
     }

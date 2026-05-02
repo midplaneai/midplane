@@ -35,7 +35,10 @@ console.log(`[client] tools: ${tools.tools.map((t) => t.name).join(", ")}`);
 let pass = 0;
 let fail = 0;
 for (const trial of trials) {
-  const res = await client.callTool({ name: "query", arguments: { sql: trial.sql } });
+  const res = await client.callTool({
+    name: "query",
+    arguments: { sql: trial.sql, intent: `image-client check: ${trial.label}` },
+  });
   const text = (res.content?.[0] as { text?: string })?.text ?? "{}";
   const data = JSON.parse(text) as Record<string, unknown>;
 

@@ -167,9 +167,8 @@ describe("initTelemetry — debug", () => {
         agent_name: "a",
         agent_version: null,
         agent_intent: null,
-        intent_source: null,
         ts: Date.now(),
-        schema_version: 2,
+        schema_version: 3,
         event_type: "DECIDED",
         payload: { decision: "ALLOW", statement_type: "SELECT", tables_touched: [] },
       });

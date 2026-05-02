@@ -11,7 +11,7 @@ export type {
   ExecutedPayload,
   FailedPayload,
 } from "./audit/index.ts";
-export { EventType, Decision as AuditDecision, PolicyRule, IntentSource } from "./audit/types.ts";
+export { EventType, Decision as AuditDecision, PolicyRule } from "./audit/types.ts";
 export { SqliteAuditWriter } from "./audit/sqlite.ts";
 export type { AuditEventRow } from "./audit/sqlite.ts";
 export { PostgresAuditWriter } from "./audit/postgres.ts";

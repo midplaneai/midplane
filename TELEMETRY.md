@@ -193,8 +193,8 @@ serialized payloads:
   class only (`42` not `42P01`).
 - **Hostnames, IPs (beyond the unavoidable TLS-layer source IP at the
   endpoint), MAC addresses, env var values, file paths.**
-- **Agent identity** — the `agent_name`, `agent_version`, `agent_intent`,
-  and `intent_source` fields that the engine sees are never forwarded.
+- **Agent identity** — the `agent_name`, `agent_version`, and
+  `agent_intent` fields that the engine sees are never forwarded.
 - **Policy file contents** — including tenant-scope mappings.
 
 This is a hard list, not a guideline. Adding any field that touches this list

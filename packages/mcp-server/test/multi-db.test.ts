@@ -99,7 +99,9 @@ describe("multi-DB tool surface", () => {
       required: string[];
     };
     expect(querySchema.properties).toHaveProperty("database");
+    expect(querySchema.properties).toHaveProperty("intent");
     expect(querySchema.required).toContain("database");
+    expect(querySchema.required).toContain("intent");
 
     const lt = tools.find((t) => t.name === "list_tables")!;
     const ltSchema = lt.inputSchema as {
@@ -140,7 +142,7 @@ describe("multi-DB tool surface", () => {
 
     const res = await client.callTool({
       name: "query",
-      arguments: { database: "staging", sql: "SELECT 1" },
+      arguments: { database: "staging", sql: "SELECT 1", intent: "ping staging" },
     });
     // The zod enum rejects "staging" before the handler runs.
     expect(res.isError).toBe(true);
@@ -155,7 +157,7 @@ describe("multi-DB tool surface", () => {
 
     await client.callTool({
       name: "query",
-      arguments: { database: "prod", sql: "SELECT id FROM users" },
+      arguments: { database: "prod", sql: "SELECT id FROM users", intent: "list user IDs" },
     });
 
     // Audit log carries the right `database` value on every event for that
@@ -273,7 +275,7 @@ describe("multi-DB tool surface", () => {
     executor.result = { rows: [{ id: 1 }], rowCount: 1 };
     const res = await client.callTool({
       name: "query",
-      arguments: { sql: "SELECT id FROM users" },
+      arguments: { sql: "SELECT id FROM users", intent: "list user IDs" },
     });
     expect(res.isError).toBeFalsy();
 
@@ -344,7 +346,7 @@ describe("multi-DB hot reload", () => {
     executor.result = { rows: [{ id: 1 }], rowCount: 1 };
     const before = await client.callTool({
       name: "query",
-      arguments: { database: "prod", sql: "SELECT id FROM users" },
+      arguments: { database: "prod", sql: "SELECT id FROM users", intent: "list user IDs" },
     });
     expect(before.isError).toBeFalsy();
     await client.close();
@@ -365,7 +367,7 @@ describe("multi-DB hot reload", () => {
     const { client: client2 } = await connect(h);
     const after = await client2.callTool({
       name: "query",
-      arguments: { database: "prod", sql: "SELECT id FROM users" },
+      arguments: { database: "prod", sql: "SELECT id FROM users", intent: "list user IDs" },
     });
     expect(after.isError).toBe(true);
     const data = JSON.parse(
@@ -396,7 +398,7 @@ describe("multi-DB hot reload", () => {
     executor.result = { rows: [{ id: 1 }], rowCount: 1 };
     const res = await client.callTool({
       name: "query",
-      arguments: { database: "prod", sql: "SELECT id FROM users" },
+      arguments: { database: "prod", sql: "SELECT id FROM users", intent: "list user IDs" },
     });
     expect(res.isError).toBeFalsy();
     await client.close();
@@ -544,7 +546,7 @@ describe("multi-DB hot reload", () => {
     executor.result = { rows: [{ id: 1 }], rowCount: 1 };
     const stillDenied = await client.callTool({
       name: "query",
-      arguments: { database: "prod", sql: "SELECT id FROM other_table" },
+      arguments: { database: "prod", sql: "SELECT id FROM other_table", intent: "test denied access" },
     });
     expect(stillDenied.isError).toBe(true);
     expect(
@@ -599,7 +601,7 @@ describe("multi-DB hot reload", () => {
     const { client } = await connect(h);
     const res = await client.callTool({
       name: "query",
-      arguments: { database: "prod", sql: "SELECT id FROM users" },
+      arguments: { database: "prod", sql: "SELECT id FROM users", intent: "list user IDs" },
     });
     expect(res.isError).toBe(true);
     const data = JSON.parse((res.content as Array<{ text: string }>)[0]!.text);
@@ -657,7 +659,11 @@ describe("multi-DB hot reload", () => {
     const { client } = await connect(h);
     const res = await client.callTool({
       name: "query",
-      arguments: { database: "prod", sql: "SELECT id FROM users" },
+      arguments: {
+        database: "prod",
+        sql: "SELECT id FROM users",
+        intent: "verify hot-swapped tenant_scope mapping is enforced",
+      },
     });
     expect(res.isError).toBe(true);
     const data = JSON.parse((res.content as Array<{ text: string }>)[0]!.text);
@@ -698,7 +704,7 @@ describe("per-DB tenant_scope independence", () => {
 
     const aRes = await client.callTool({
       name: "query",
-      arguments: { database: "a", sql: "SELECT id FROM users" },
+      arguments: { database: "a", sql: "SELECT id FROM users", intent: "list users in a" },
     });
     expect(aRes.isError).toBe(true);
     const aData = JSON.parse((aRes.content as Array<{ text: string }>)[0]!.text);
@@ -708,7 +714,7 @@ describe("per-DB tenant_scope independence", () => {
 
     const bRes = await client.callTool({
       name: "query",
-      arguments: { database: "b", sql: "SELECT id FROM users" },
+      arguments: { database: "b", sql: "SELECT id FROM users", intent: "list users in b" },
     });
     expect(bRes.isError).toBe(true);
     const bData = JSON.parse((bRes.content as Array<{ text: string }>)[0]!.text);
