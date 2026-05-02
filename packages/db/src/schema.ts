@@ -125,8 +125,8 @@ export const connectionDatabases = pgTable(
       .notNull()
       .default(sql`'{"default":"deny","tables":{}}'::jsonb`),
     // Per-DB tenant_scope mappings: column name → tenant_id column. Empty
-    // map = tenant_scope disabled for this DB. Editing forces a container
-    // restart per OSS spec (mappings hot-swap is rejected).
+    // map = tenant_scope disabled for this DB. Hot-swappable on a running
+    // engine via /admin/policy as of OSS 0.4.0 (parity with table_access).
     tenantScopeMappings: jsonb("tenant_scope_mappings")
       .$type<Record<string, string>>()
       .notNull()

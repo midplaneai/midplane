@@ -37,10 +37,10 @@ bun run test:e2e             # Playwright smoke (E2E_LIVE=1 for live)
 
 ## OSS image dependency
 
-The router spawns `midplane/midplane:0.3.0`. The OSS workflow publishes to `midplane/midplane` on Docker Hub; that tag isn't pushed yet, so for local dev build from source:
+The router spawns `midplane/midplane:0.4.0`. The OSS workflow publishes to `midplane/midplane` on Docker Hub; that tag isn't pushed yet, so for local dev build from source:
 
 ```bash
-docker build -t midplane/midplane:0.3.0 /path/to/midplaneai/midplane
+docker build -t midplane/midplane:0.4.0 /path/to/midplaneai/midplane
 ```
 
 Or use the convenience script (auto-detects `~/dev/midplane`, override with `OSS_REPO=...`):
@@ -76,7 +76,7 @@ fly secrets set --app midplane-web \
   FLY_APP_IAD='midplane-iad' \
   MIDPLANE_PUBLIC_HOST_FRA='fra.midplane.ai' \
   MIDPLANE_PUBLIC_HOST_IAD='iad.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.3.0' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.4.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)"
 ```
 
