@@ -504,22 +504,43 @@ const goodPolicy = {
 } as const;
 
 describe("setTableAccess", () => {
+  // Shape returned by the in-txn siblings select. Mirrors the post-update
+  // state, since Postgres reads see writes within the same txn.
+  const mainSibling = {
+    id: "cdb-main-1",
+    name: "main",
+    tableAccess: goodPolicy,
+    tenantScopeMappings: {},
+  };
+  // Expected pushPolicy second arg: the multi-DB body remapped from
+  // siblings rows. PR-A bumps OSS to 0.4.0; the legacy single-section
+  // body is rejected on every cloud-managed engine, so the helper now
+  // serializes the full DatabaseEntry[] shape.
+  const mainEntry = {
+    name: "main",
+    connectionDatabaseId: "cdb-main-1",
+    tableAccess: goodPolicy,
+    tenantScopeMappings: {},
+  };
+
   it("happy path: writes Postgres, hot-reloads engine, does NOT invalidate", async () => {
-    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
     const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
-    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", goodPolicy);
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [mainEntry]);
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
 
   it("idle-agent path: delivered=false short-circuits without invalidate", async () => {
-    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: false });
 
@@ -531,8 +552,9 @@ describe("setTableAccess", () => {
   });
 
   it("rejected (400): throws EnginePolicyRejected, does NOT fall back to invalidate", async () => {
-    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
     const { setTableAccess, EnginePolicyRejected } = await import(
       "../src/lib/connections.ts"
     );
@@ -549,8 +571,9 @@ describe("setTableAccess", () => {
   });
 
   it("network failure: falls back to registry.invalidate (fail-soft, like rotateConnection)", async () => {
-    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps(() => {
       throw new Error("ECONNREFUSED");
@@ -565,8 +588,10 @@ describe("setTableAccess", () => {
   });
 
   it("dbName not found: returns null when the named child doesn't exist on the connection", async () => {
-    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
     handle.setChildUpdateResult([]); // child UPDATE matches 0 rows
+    // No siblings queue entry needed — the txn short-circuits before
+    // the siblings select runs.
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps();
 
@@ -585,8 +610,16 @@ describe("setTableAccess", () => {
   });
 
   it("explicit dbName: writes to the named child, pushes policy with same token", async () => {
-    handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
     handle.setChildUpdateResult([{ id: "cdb-analytics-1" }]);
+    handle.queueSelect([
+      {
+        id: "cdb-analytics-1",
+        name: "analytics",
+        tableAccess: goodPolicy,
+        tenantScopeMappings: {},
+      },
+    ]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const { connectionDatabases } = await import("@midplane-cloud/db");
     const deps = makePolicyDeps({ delivered: true });
@@ -600,7 +633,14 @@ describe("setTableAccess", () => {
     );
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
-    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", goodPolicy);
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
+      {
+        name: "analytics",
+        connectionDatabaseId: "cdb-analytics-1",
+        tableAccess: goodPolicy,
+        tenantScopeMappings: {},
+      },
+    ]);
     // The child UPDATE's where-clause must reference the explicit dbName,
     // not "main". We can't introspect the drizzle expression directly,
     // but we can confirm the update fired against connection_databases.
@@ -610,8 +650,40 @@ describe("setTableAccess", () => {
     expect(childUpdate).toBeDefined();
   });
 
+  it("multi-DB connection: pushPolicy body lists every sibling so OSS doesn't drop them", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    // Edited DB ("main") plus an untouched sibling ("analytics"). OSS
+    // 0.4.0 drops any DB absent from the body, so the cloud must restate
+    // every DB on the connection on every hot-reload.
+    handle.queueSelect([
+      mainSibling,
+      {
+        id: "cdb-analytics-1",
+        name: "analytics",
+        tableAccess: { default: "deny", tables: {} },
+        tenantScopeMappings: { orders: "tenant_id" },
+      },
+    ]);
+    const { setTableAccess } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
+      mainEntry,
+      {
+        name: "analytics",
+        connectionDatabaseId: "cdb-analytics-1",
+        tableAccess: { default: "deny", tables: {} },
+        tenantScopeMappings: { orders: "tenant_id" },
+      },
+    ]);
+  });
+
   it("404 path: returns null and skips push/invalidate when ownership mismatches", async () => {
-    handle.setConnectionsReturning([]);
+    handle.queueSelect([]); // parent ownership check returns no row
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps();
 

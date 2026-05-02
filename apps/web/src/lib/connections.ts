@@ -10,6 +10,7 @@ import {
   validatePolicy,
   type AccessLevel,
   type Customer,
+  type DatabaseEntry,
   type TableAccessPolicy,
 } from "@midplane-cloud/db";
 import {
@@ -167,11 +168,15 @@ export interface RotationCaches {
 // Dependencies setTableAccess needs to push the new policy to the
 // running engine (preferred path) or, if that fails non-recoverably,
 // fall back to stop-and-respawn.
+//
+// pushPolicy carries a multi-DB body — every DB on the connection must
+// be listed since OSS drops absent entries from the engine's registry.
+// The caller loads sibling DBs from PG and assembles the full set.
 export interface PolicyPushDeps {
   registry: { invalidate(token: string): Promise<void> };
   pushPolicy(
     token: string,
-    policy: TableAccessPolicy,
+    databases: readonly DatabaseEntry[],
   ): Promise<
     | { delivered: true }
     | { delivered: false }
@@ -230,11 +235,15 @@ export async function setTableAccess(
   }
 
   const db = getDb();
-  // Two-step in a txn: ownership check on the parent (so we don't leak
-  // existence by writing through to a foreign customer's DB), then update
-  // the named child's tableAccess. RETURNING on the child write so we
-  // can distinguish "child not found" from "wrote but no policy change"
-  // and keep the leakage-avoidance shape (null for both cases).
+  // Three-step in a txn: ownership check on the parent (so we don't leak
+  // existence by writing through to a foreign customer's DB), update the
+  // named child's tableAccess, then snapshot every DB on the connection
+  // (post-update) for the hot-reload body. RETURNING on the child write
+  // distinguishes "child not found" from "wrote but no policy change"
+  // and keeps the leakage-avoidance shape (null for both cases).
+  //
+  // Sibling DBs ride along because OSS hot-reload drops any DB absent
+  // from the body — we have to re-state every DB to keep them registered.
   const result = await db.transaction(async (tx) => {
     const parent = await tx
       .select({ mcpToken: connections.mcpToken })
@@ -255,13 +264,29 @@ export async function setTableAccess(
       )
       .returning({ id: connectionDatabases.id });
     if (updated.length === 0) return null;
-    return { mcpToken: parent[0]!.mcpToken };
+    const siblings = await tx
+      .select({
+        id: connectionDatabases.id,
+        name: connectionDatabases.name,
+        tableAccess: connectionDatabases.tableAccess,
+        tenantScopeMappings: connectionDatabases.tenantScopeMappings,
+      })
+      .from(connectionDatabases)
+      .where(eq(connectionDatabases.connectionId, id));
+    return { mcpToken: parent[0]!.mcpToken, siblings };
   });
 
   if (!result) return null;
 
+  const databases: DatabaseEntry[] = result.siblings.map((s) => ({
+    name: s.name,
+    connectionDatabaseId: s.id,
+    tableAccess: s.tableAccess,
+    tenantScopeMappings: s.tenantScopeMappings,
+  }));
+
   try {
-    const pushResult = await deps.pushPolicy(result.mcpToken, validation.value);
+    const pushResult = await deps.pushPolicy(result.mcpToken, databases);
     if ("rejected" in pushResult) {
       // Engine kept the previous policy. Don't fall back — respawn
       // would re-read this same (rejected) policy from PG and fail to

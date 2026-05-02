@@ -26,7 +26,7 @@ import {
   pushPolicy as pushPolicyHelper,
   type PushPolicyResult,
 } from "@midplane-cloud/router";
-import { getDb, type TableAccessPolicy } from "@midplane-cloud/db";
+import { getDb, type DatabaseEntry } from "@midplane-cloud/db";
 import { makeKmsContext } from "@midplane-cloud/kms";
 
 interface McpProxyContext {
@@ -34,13 +34,15 @@ interface McpProxyContext {
   registry: ContainerRegistry;
   resolver: DsnResolver;
   indexer: Indexer | null;
-  /** Hot-reload a connection's table_access on its running engine, if
-   *  any. Resolves to `delivered:false` when there is no active
-   *  container OR `INDEXER_TOKEN` is unset (laptop dev) — the next
-   *  spawn will read the new policy from Postgres on its own. */
+  /** Hot-reload a connection's table_access + tenant_scope.mappings on
+   *  its running engine, if any. The body must list every DB the
+   *  connection owns — DBs absent from the body are dropped from the
+   *  engine's registry. Resolves to `delivered:false` when there is no
+   *  active container OR `INDEXER_TOKEN` is unset (laptop dev); the
+   *  next spawn will read the new policy from Postgres on its own. */
   pushPolicy(
     token: string,
-    policy: TableAccessPolicy,
+    databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult>;
 }
 
@@ -103,10 +105,10 @@ export function getMcpProxyContext(): McpProxyContext {
 
   const pushPolicy = async (
     token: string,
-    policy: TableAccessPolicy,
+    databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult> => {
     if (!indexerToken) return { delivered: false };
-    return pushPolicyHelper(token, policy, { registry, indexerToken });
+    return pushPolicyHelper(token, databases, { registry, indexerToken });
   };
 
   const ctx: McpProxyContext = {
