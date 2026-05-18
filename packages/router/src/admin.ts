@@ -1,17 +1,23 @@
 // Cloud → engine admin operations.
 //
-// Today: hot-reload table_access on a running OSS container so policy
-// edits land without killing the agent's MCP session. The engine's
-// POST /admin/policy reads `tableAccess()` from a holder pointer on
-// every query, so a single config swap is atomic — no half-mix
-// in-flight, no need for the cloud to drain anything.
+// Hot-reload table_access AND tenant_scope.mappings on a running OSS
+// container so policy edits land without killing the agent's MCP
+// session. The engine's POST /admin/policy reads each section from a
+// holder pointer on every query (parity since OSS 0.4.0), so a single
+// config swap is atomic — no half-mix in-flight, no need for the
+// cloud to drain anything.
 //
-// Auth reuses INDEXER_TOKEN. Engine accepts raw YAML bodies in exactly
-// the shape `serializePolicyToYaml` produces — no JSON envelope.
+// Body shape is the multi-DB YAML emitted by serializeMultiDbPolicyToYaml.
+// The engine spawns every cloud-managed container with a `databases:`
+// block, so the legacy single-section body is rejected on hot-reload —
+// callers must list every DB they want to keep, since DBs absent from
+// the body are dropped from the engine's registry.
+//
+// Auth reuses INDEXER_TOKEN.
 
 import {
-  serializePolicyToYaml,
-  type TableAccessPolicy,
+  serializeMultiDbPolicyToYaml,
+  type DatabaseEntry,
 } from "@midplane-cloud/db";
 
 import type { ContainerRegistry } from "./spawner.ts";
@@ -41,7 +47,7 @@ export type PushPolicyResult =
 
 export async function pushPolicy(
   token: string,
-  policy: TableAccessPolicy,
+  databases: readonly DatabaseEntry[],
   deps: PushPolicyDeps,
 ): Promise<PushPolicyResult> {
   const active = deps.registry.getActive(token);
@@ -49,7 +55,7 @@ export async function pushPolicy(
 
   const fetchFn = deps.fetch ?? fetch;
   const url = `http://${active.host}:${active.port}/admin/policy`;
-  const body = serializePolicyToYaml(policy);
+  const body = serializeMultiDbPolicyToYaml(databases);
   const res = await fetchFn(url, {
     method: "POST",
     headers: {

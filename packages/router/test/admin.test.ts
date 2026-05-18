@@ -3,9 +3,13 @@
 // Each branch matches a status code the engine's POST /admin/policy can
 // emit (or a network failure). Cloud's setTableAccess relies on the
 // distinction — 400 must NOT trigger a respawn fallback, but 5xx/401
-// must.
+// must. Body shape is the multi-DB YAML; OSS 0.4.0 rejects the legacy
+// single-section body on engines booted with a `databases:` block (which
+// is every cloud-managed engine post-migration 0009).
 
 import { describe, expect, it, vi } from "vitest";
+
+import type { DatabaseEntry } from "@midplane-cloud/db";
 
 import { pushPolicy, PushPolicyError } from "../src/admin.ts";
 import {
@@ -25,10 +29,14 @@ class FakeSpawner implements Spawner {
   }
 }
 
-const policy = {
-  default: "read",
-  tables: { "public.users": "deny" },
-} as const;
+const databases: readonly DatabaseEntry[] = [
+  {
+    name: "main",
+    connectionDatabaseId: "01HXYZMAIN0000000000000000",
+    tableAccess: { default: "read", tables: { users: "deny" } },
+    tenantScopeMappings: {},
+  },
+];
 
 const opts = (token = "tok-a"): SpawnOptions => ({
   token,
@@ -54,7 +62,7 @@ describe("pushPolicy", () => {
   it("returns delivered:false when no active container (no fetch)", async () => {
     const reg = new ContainerRegistry(new FakeSpawner());
     const fetchFn = vi.fn();
-    const result = await pushPolicy("tok-missing", policy, {
+    const result = await pushPolicy("tok-missing", databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -66,7 +74,7 @@ describe("pushPolicy", () => {
   it("posts YAML with bearer + content-type, returns delivered:true on 200", async () => {
     const reg = await makeRegWithActive();
     const fetchFn = vi.fn(async () => new Response("", { status: 200 }));
-    const result = await pushPolicy("tok-a", policy, {
+    const result = await pushPolicy("tok-a", databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -83,8 +91,15 @@ describe("pushPolicy", () => {
     expect((init.headers as Record<string, string>)["content-type"]).toBe(
       "text/yaml",
     );
-    expect(init.body as string).toContain("table_access:");
-    expect(init.body as string).toContain("public.users: deny");
+    // Multi-DB YAML shape: top-level `databases:` block, with each DB
+    // carrying its own `table_access:` and (if non-empty) `tenant_scope:`.
+    // The legacy single-section body is rejected by 0.4.0+ on engines
+    // booted with a `databases:` block — which is every cloud engine.
+    const text = init.body as string;
+    expect(text).toContain("databases:");
+    expect(text).toContain("- name: main");
+    expect(text).toContain("table_access:");
+    expect(text).toContain("users: deny");
   });
 
   it("returns rejected with engine body on 400 (no throw)", async () => {
@@ -95,7 +110,7 @@ describe("pushPolicy", () => {
           status: 400,
         }),
     );
-    const result = await pushPolicy("tok-a", policy, {
+    const result = await pushPolicy("tok-a", databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -111,7 +126,7 @@ describe("pushPolicy", () => {
   it("treats 404 as delivered:false (engine route absent / dev)", async () => {
     const reg = await makeRegWithActive();
     const fetchFn = vi.fn(async () => new Response("", { status: 404 }));
-    const result = await pushPolicy("tok-a", policy, {
+    const result = await pushPolicy("tok-a", databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -125,7 +140,7 @@ describe("pushPolicy", () => {
       async () => new Response("bad bearer", { status: 401 }),
     );
     await expect(
-      pushPolicy("tok-a", policy, {
+      pushPolicy("tok-a", databases, {
         registry: reg,
         indexerToken: "wrong",
         fetch: fetchFn,
@@ -139,7 +154,7 @@ describe("pushPolicy", () => {
       async () => new Response("boom", { status: 500 }),
     );
     await expect(
-      pushPolicy("tok-a", policy, {
+      pushPolicy("tok-a", databases, {
         registry: reg,
         indexerToken: "secret",
         fetch: fetchFn,
@@ -153,7 +168,7 @@ describe("pushPolicy", () => {
       throw new Error("ECONNREFUSED");
     });
     await expect(
-      pushPolicy("tok-a", policy, {
+      pushPolicy("tok-a", databases, {
         registry: reg,
         indexerToken: "secret",
         fetch: fetchFn,
