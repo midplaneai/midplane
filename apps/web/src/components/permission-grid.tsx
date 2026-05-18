@@ -24,14 +24,7 @@
 // re-focusing the same input a no-op. Errors surface inline in the
 // dropdown panel — no parent-level chip.
 
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
+import { useCallback, useState, useTransition } from "react";
 
 import {
   ACCESS_LEVELS,
@@ -40,6 +33,7 @@ import {
 } from "@midplane-cloud/db/policy";
 
 import { Button } from "@/components/ui/button";
+import { TableNameInput } from "@/components/table-name-input";
 
 interface TableRow {
   // Stable client-side key so React doesn't reuse inputs across reorders.
@@ -49,16 +43,6 @@ interface TableRow {
 }
 
 const TABLE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*)?$/;
-const SUGGESTION_LIMIT = 8;
-const DEBOUNCE_MS = 150;
-
-type ErrorReason = "credential_unavailable" | "introspection_failed" | "network";
-
-type RowState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "loaded"; query: string; tables: string[] }
-  | { kind: "error"; reason: ErrorReason };
 
 export function PermissionGrid({
   initialPolicy,
@@ -71,17 +55,31 @@ export function PermissionGrid({
   action: (formData: FormData) => Promise<void>;
   connectionId: string;
 }) {
+  // `applied` is the policy currently committed to the server — the
+  // baseline for the dirty check. It starts as the prop and shifts to
+  // whatever we just saved on every successful submit so Save / Cancel
+  // settle to "no changes" without waiting for a server re-render.
+  const [applied, setApplied] = useState<TableAccessPolicy>(initialPolicy);
   const [defaultLevel, setDefaultLevel] = useState<AccessLevel>(
     initialPolicy.default,
   );
-  const [rows, setRows] = useState<TableRow[]>(() =>
-    Object.entries(initialPolicy.tables)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([name, level], i) => ({ key: `init-${i}`, name, level })),
-  );
+  const [rows, setRows] = useState<TableRow[]>(() => policyToRows(initialPolicy));
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // Lenient form → policy snapshot for the dirty check. Skips empty
+  // placeholder rows so a half-typed name doesn't enable Save until the
+  // user finishes (Save still re-validates the strict version).
+  const currentSnapshot: TableAccessPolicy = {
+    default: defaultLevel,
+    tables: rows.reduce<Record<string, AccessLevel>>((acc, r) => {
+      const name = r.name.trim();
+      if (name) acc[name] = r.level;
+      return acc;
+    }, {}),
+  };
+  const dirty = canonicalize(currentSnapshot) !== canonicalize(applied);
 
   function addRow() {
     setRows((rs) => [
@@ -140,11 +138,22 @@ export function PermissionGrid({
     startTransition(async () => {
       try {
         await action(fd);
+        // Promote what we just sent to the new baseline so Save +
+        // Cancel settle to "no changes" without waiting for the
+        // server-component re-render to refresh initialPolicy.
+        setApplied(policy);
         setSavedAt(Date.now());
       } catch (err) {
         setError(err instanceof Error ? err.message : "Save failed");
       }
     });
+  }
+
+  function handleCancel() {
+    setDefaultLevel(applied.default);
+    setRows(policyToRows(applied));
+    setError(null);
+    setSavedAt(null);
   }
 
   // Names already chosen in OTHER rows — passed to each row's combobox so
@@ -251,10 +260,20 @@ export function PermissionGrid({
         </p>
       ) : null}
 
-      <div>
-        <Button type="submit" disabled={pending}>
+      <div className="flex items-center gap-2">
+        <Button type="submit" disabled={pending || !dirty}>
           {pending ? "Saving…" : "Save permissions"}
         </Button>
+        {dirty && !pending && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleCancel}
+            data-testid="permission-cancel"
+          >
+            Cancel
+          </Button>
+        )}
       </div>
     </form>
   );
@@ -266,251 +285,17 @@ const LEVEL_LABEL: Record<AccessLevel, string> = {
   read_write: "Read + write",
 };
 
-function TableNameInput({
-  value,
-  onChange,
-  connectionId,
-  excludeNames,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  connectionId: string;
-  excludeNames: Set<string>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [activeIdx, setActiveIdx] = useState(0);
-  const [state, setState] = useState<RowState>({ kind: "idle" });
-  const containerRef = useRef<HTMLDivElement>(null);
-  const listboxId = useId();
-
-  // Click-outside closes the dropdown. We use mousedown (not blur) so a
-  // click on a suggestion fires AFTER the input's blur and still commits.
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
-
-  // Debounced search-as-you-type. Re-runs whenever the typed value or the
-  // open flag changes. AbortController + cleanup means a fast typer can't
-  // race two responses — the older one is cancelled in flight. The
-  // server's `cache-control: private, max-age=10` handles dedup across
-  // re-focus of the same query.
-  useEffect(() => {
-    if (!open) return;
-    const trimmed = value.trim();
-    const ctl = new AbortController();
-    const handle = window.setTimeout(async () => {
-      // Don't blow away an existing error chip on every keystroke — a
-      // transient connection error stays visible until a fetch succeeds.
-      setState((prev) => (prev.kind === "error" ? prev : { kind: "loading" }));
-      try {
-        const url = `/api/connections/${connectionId}/tables?q=${encodeURIComponent(trimmed)}`;
-        const res = await fetch(url, {
-          credentials: "same-origin",
-          signal: ctl.signal,
-        });
-        if (ctl.signal.aborted) return;
-        if (!res.ok) {
-          setState({ kind: "error", reason: "network" });
-          return;
-        }
-        const body = (await res.json()) as
-          | { tables: string[] }
-          | { tables: []; error: ErrorReason; message?: string };
-        if (ctl.signal.aborted) return;
-        if ("error" in body) {
-          setState({ kind: "error", reason: body.error });
-          return;
-        }
-        setState({ kind: "loaded", query: trimmed, tables: body.tables });
-      } catch {
-        if (ctl.signal.aborted) return;
-        setState({ kind: "error", reason: "network" });
-      }
-    }, DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(handle);
-      ctl.abort();
-    };
-  }, [value, open, connectionId]);
-
-  const filtered =
-    state.kind === "loaded"
-      ? state.tables.filter((n) => !excludeNames.has(n)).slice(0, SUGGESTION_LIMIT)
-      : [];
-  const hasSuggestions = filtered.length > 0;
-
-  // Reset highlight when the filtered list shrinks past the current index.
-  useEffect(() => {
-    if (activeIdx >= filtered.length) setActiveIdx(0);
-  }, [filtered.length, activeIdx]);
-
-  function commit(name: string) {
-    onChange(name);
-    setOpen(false);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setOpen(true);
-      if (hasSuggestions) {
-        setActiveIdx((i) => (i + 1) % filtered.length);
-      }
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setOpen(true);
-      if (hasSuggestions) {
-        setActiveIdx((i) => (i - 1 + filtered.length) % filtered.length);
-      }
-      return;
-    }
-    if (e.key === "Enter") {
-      if (open && hasSuggestions && filtered[activeIdx]) {
-        e.preventDefault();
-        commit(filtered[activeIdx]);
-      }
-      return;
-    }
-    if (e.key === "Escape") {
-      if (open) {
-        e.preventDefault();
-        setOpen(false);
-      }
-    }
-  }
-
-  return (
-    <div ref={containerRef} className="relative flex-1 min-w-[12rem]">
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-          setActiveIdx(0);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={handleKeyDown}
-        placeholder="public.users"
-        role="combobox"
-        aria-label="Table name"
-        aria-autocomplete="list"
-        aria-expanded={open}
-        aria-controls={listboxId}
-        aria-activedescendant={
-          open && hasSuggestions && filtered[activeIdx]
-            ? `${listboxId}-${activeIdx}`
-            : undefined
-        }
-        autoComplete="off"
-        spellCheck={false}
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 font-mono text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      />
-      {open ? (
-        <ul
-          id={listboxId}
-          className="absolute left-0 top-full z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-border bg-popover shadow-md"
-          role="listbox"
-        >
-          <PanelContents
-            state={state}
-            filtered={filtered}
-            activeIdx={activeIdx}
-            listboxId={listboxId}
-            onCommit={commit}
-            onHover={setActiveIdx}
-            typedQuery={value.trim()}
-          />
-        </ul>
-      ) : null}
-    </div>
-  );
+function policyToRows(policy: TableAccessPolicy): TableRow[] {
+  return Object.entries(policy.tables)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([name, level], i) => ({ key: `init-${i}-${Date.now()}`, name, level }));
 }
 
-function PanelContents({
-  state,
-  filtered,
-  activeIdx,
-  listboxId,
-  onCommit,
-  onHover,
-  typedQuery,
-}: {
-  state: RowState;
-  filtered: string[];
-  activeIdx: number;
-  listboxId: string;
-  onCommit: (name: string) => void;
-  onHover: (i: number) => void;
-  typedQuery: string;
-}) {
-  if (state.kind === "idle" || state.kind === "loading") {
-    return (
-      <li role="presentation" className="px-3 py-2 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-2">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground/60" />
-          Searching tables…
-        </span>
-      </li>
-    );
-  }
-  if (state.kind === "error") {
-    return (
-      <li role="presentation" className="px-3 py-2 text-xs text-[hsl(var(--warn))]">
-        {errorHint(state.reason)}
-      </li>
-    );
-  }
-  if (filtered.length === 0) {
-    return (
-      <li role="presentation" className="px-3 py-2 text-xs text-muted-foreground">
-        {state.tables.length === 0 && typedQuery.length === 0
-          ? "No tables visible to this connection."
-          : "No match — paste the full name to add it anyway."}
-      </li>
-    );
-  }
-  return (
-    <>
-      {filtered.map((name, i) => (
-        <li
-          key={name}
-          id={`${listboxId}-${i}`}
-          role="option"
-          aria-selected={i === activeIdx}
-          // mousedown — not click — so the input's blur doesn't race
-          // the click and close the dropdown before commit fires.
-          onMouseDown={(e) => {
-            e.preventDefault();
-            onCommit(name);
-          }}
-          onMouseEnter={() => onHover(i)}
-          className={`cursor-pointer px-3 py-1.5 font-mono text-xs ${
-            i === activeIdx ? "bg-accent text-accent-foreground" : ""
-          }`}
-        >
-          {name}
-        </li>
-      ))}
-    </>
-  );
-}
-
-function errorHint(reason: ErrorReason): string {
-  switch (reason) {
-    case "credential_unavailable":
-      return "Couldn't decrypt connection — type names manually.";
-    case "introspection_failed":
-      return "Couldn't reach DB — type names manually.";
-    default:
-      return "Suggestion lookup failed — type names manually.";
-  }
+// Canonical string for compare. Sorts table entries so insertion
+// order doesn't fool the equality check.
+function canonicalize(policy: TableAccessPolicy): string {
+  const sorted = Object.keys(policy.tables)
+    .sort()
+    .map((k) => [k, policy.tables[k]]);
+  return JSON.stringify({ default: policy.default, tables: sorted });
 }

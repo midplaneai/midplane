@@ -14,7 +14,7 @@
 // to the Spawner backend via env injection (Docker -e, Fly machine config)
 // and held in process memory only as long as the container is alive.
 
-import type { TableAccessPolicy } from "@midplane-cloud/db";
+import type { TableAccessPolicy, TenantScopeConfig } from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
 
 export interface SpawnedContainer {
@@ -35,8 +35,10 @@ export interface SpawnDatabase {
   connectionDatabaseId: string;
   dsn: string;
   tableAccess: TableAccessPolicy;
-  /** Empty map = tenant_scope disabled. */
-  tenantScopeMappings: Record<string, string>;
+  /** Strict-mode tenant_scope envelope (OSS 0.5.0). Inert configs
+   *  (`column: null` + empty `overrides`) yield no tenant_scope block
+   *  in the rendered YAML. */
+  tenantScope: TenantScopeConfig;
 }
 
 export interface SpawnOptions {

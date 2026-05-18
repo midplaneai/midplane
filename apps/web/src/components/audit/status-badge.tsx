@@ -49,3 +49,29 @@ export function StatusBadge({ status }: { status: QueryStatus }) {
 export function statusLabel(status: QueryStatus): string {
   return LABEL_MAP[status];
 }
+
+// One-line description for a POLICY_RELOADED row that captures both which
+// sections of the policy changed and which DBs received the change. OSS
+// 0.4.0 emits `sections_changed` and `databases_changed` alongside the
+// per-DB diff; older rows (pre-0.4.0) won't have those fields, so we fall
+// back to the previous generic label rather than rendering an empty hint.
+export function policyReloadSummary(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return ARIA_MAP.POLICY_RELOAD;
+  }
+  const p = payload as Record<string, unknown>;
+  const sections = stringArray(p.sections_changed);
+  const databases = stringArray(p.databases_changed);
+  if (sections.length === 0 || databases.length === 0) {
+    return ARIA_MAP.POLICY_RELOAD;
+  }
+  const sectionList = sections
+    .map((s) => (s === "tenant_scope" ? "tenant_scope" : "table_access"))
+    .join(" + ");
+  return `${sectionList} updated on ${databases.join(", ")}`;
+}
+
+function stringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string" && x.length > 0);
+}

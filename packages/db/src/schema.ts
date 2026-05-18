@@ -24,7 +24,7 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
-import { type TableAccessPolicy } from "./policy.ts";
+import { type TableAccessPolicy, type TenantScopeConfig } from "./policy.ts";
 
 // --- Region -----------------------------------------------------------------
 
@@ -124,13 +124,18 @@ export const connectionDatabases = pgTable(
       .$type<TableAccessPolicy>()
       .notNull()
       .default(sql`'{"default":"deny","tables":{}}'::jsonb`),
-    // Per-DB tenant_scope mappings: column name → tenant_id column. Empty
-    // map = tenant_scope disabled for this DB. Hot-swappable on a running
-    // engine via /admin/policy as of OSS 0.4.0 (parity with table_access).
-    tenantScopeMappings: jsonb("tenant_scope_mappings")
-      .$type<Record<string, string>>()
+    // Per-DB tenant_scope config: { column, overrides, exempt } envelope
+    // mirroring OSS 0.5.0's strict-mode parser. column=null + empty
+    // overrides = tenant_scope disabled (YAML omits the block). Hot-
+    // swappable on a running engine via /admin/policy (parity with
+    // table_access). Column kept as `tenant_scope_mappings` for
+    // continuity with 0009; the inner shape moved in 0012.
+    tenantScope: jsonb("tenant_scope_mappings")
+      .$type<TenantScopeConfig>()
       .notNull()
-      .default(sql`'{}'::jsonb`),
+      .default(
+        sql`'{"column":null,"overrides":{},"exempt":[]}'::jsonb`,
+      ),
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),
     // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse
     // new sessions after 70 minutes of KMS unreachability — see design doc

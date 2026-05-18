@@ -150,15 +150,301 @@ function FailedView({ payload }: { payload: Record<string, unknown> }) {
 }
 
 // --- POLICY_RELOADED ---------------------------------------------------------
+//
+// OSS 0.5.0 emits a structured payload with strict-mode tenant_scope:
+//   sections_changed:    which sections of the policy were swapped
+//   databases_changed:   which DBs received an update (subset of all DBs)
+//   tenant_scope:        { column, overrides, exempt } after the swap
+//                        (null when fully disabled on that DB)
+//   diffs:               per-DB before/after
+//     table_access:      default.{from,to}, tables_{added,removed,changed}
+//     tenant_scope:      column.{from,to},
+//                        overrides_{added,removed,changed},
+//                        exempt_{added,removed}
+//
+// Backwards-compat:
+//   - Pre-0.4.0 POLICY_RELOADED rows have none of these fields. When
+//     `sections_changed` is absent we fall through to the generic
+//     key/value view below.
+//   - 0.4.0 rows used `mappings_{added,removed,changed}` for the
+//     tenant_scope diff. We render those too if present so historical
+//     audit rows don't go blank after the cloud upgrades to 0.5.0
+//     consumption. New writes only carry the 0.5.0 keys.
+// The raw-JSON disclosure stays unchanged for forensic readers either way.
 
 function PolicyReloadedView({
   payload,
 }: {
   payload: Record<string, unknown>;
 }) {
-  // OSS payload shape isn't fully nailed down for hot-swap events; surface
-  // any string-valued fields as labeled rows. Anything richer falls
-  // through the raw-JSON disclosure.
+  const sectionsChanged = stringArrayField(payload, "sections_changed");
+  const databasesChanged = stringArrayField(payload, "databases_changed");
+  const diffs = isRecord(payload.diffs) ? payload.diffs : null;
+
+  if (!sectionsChanged || !databasesChanged || sectionsChanged.length === 0) {
+    return <LegacyPolicyReloadView payload={payload} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <Fields>
+        <Field label="Sections changed">
+          <ChipList items={sectionsChanged} />
+        </Field>
+        <Field label="Databases changed">
+          <ChipList items={databasesChanged} />
+        </Field>
+      </Fields>
+      {diffs && (
+        <div className="space-y-3 pt-1">
+          {databasesChanged.map((dbName) => {
+            const dbDiff = isRecord(diffs[dbName]) ? diffs[dbName] : null;
+            if (!dbDiff) return null;
+            return <DbDiffView key={dbName} dbName={dbName} diff={dbDiff} />;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DbDiffView({
+  dbName,
+  diff,
+}: {
+  dbName: string;
+  diff: Record<string, unknown>;
+}) {
+  const tableAccess = isRecord(diff.table_access) ? diff.table_access : null;
+  const tenantScope = isRecord(diff.tenant_scope) ? diff.tenant_scope : null;
+
+  return (
+    <section className="rounded-md border border-border bg-popover p-3">
+      <h3 className="mb-2 text-[11px] uppercase tracking-[0.04em] text-subtle">
+        <span className="font-mono text-foreground">{dbName}</span>
+      </h3>
+      <div className="space-y-2.5">
+        {tableAccess && <TableAccessDiff diff={tableAccess} />}
+        {tenantScope && <TenantScopeDiff diff={tenantScope} />}
+      </div>
+    </section>
+  );
+}
+
+function TableAccessDiff({ diff }: { diff: Record<string, unknown> }) {
+  const def = isRecord(diff.default) ? diff.default : null;
+  const added = mappingEntries(diff.tables_added);
+  const removed = mappingEntries(diff.tables_removed);
+  const changed = mappingEntries(diff.tables_changed);
+  const empty =
+    !def && added.length === 0 && removed.length === 0 && changed.length === 0;
+  if (empty) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <h4 className="text-[10px] font-medium uppercase tracking-[0.04em] text-subtle">
+        table_access
+      </h4>
+      {def && (
+        <DiffRow
+          tone="changed"
+          label="default"
+          value={
+            <>
+              <span className="font-mono">{String(def.from ?? "—")}</span>
+              <span className="mx-1 text-subtle">→</span>
+              <span className="font-mono">{String(def.to ?? "—")}</span>
+            </>
+          }
+        />
+      )}
+      {added.map(([name, level]) => (
+        <DiffRow
+          key={`+${name}`}
+          tone="added"
+          label={name}
+          value={<span className="font-mono">{String(level)}</span>}
+        />
+      ))}
+      {removed.map(([name, level]) => (
+        <DiffRow
+          key={`-${name}`}
+          tone="removed"
+          label={name}
+          value={<span className="font-mono">{String(level)}</span>}
+        />
+      ))}
+      {changed.map(([name, fromTo]) => (
+        <DiffRow
+          key={`~${name}`}
+          tone="changed"
+          label={name}
+          value={renderFromTo(fromTo)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TenantScopeDiff({ diff }: { diff: Record<string, unknown> }) {
+  const column = isRecord(diff.column) ? diff.column : null;
+  // Prefer the 0.5.0 keys; fall back to 0.4.0 `mappings_*` so old audit
+  // rows still render. New OSS writes only carry the 0.5.0 keys.
+  const overridesAdded =
+    mappingEntries(diff.overrides_added).length > 0
+      ? mappingEntries(diff.overrides_added)
+      : mappingEntries(diff.mappings_added);
+  const overridesRemoved =
+    mappingEntries(diff.overrides_removed).length > 0
+      ? mappingEntries(diff.overrides_removed)
+      : mappingEntries(diff.mappings_removed);
+  const overridesChanged =
+    mappingEntries(diff.overrides_changed).length > 0
+      ? mappingEntries(diff.overrides_changed)
+      : mappingEntries(diff.mappings_changed);
+  const exemptAdded = stringList(diff.exempt_added);
+  const exemptRemoved = stringList(diff.exempt_removed);
+
+  const empty =
+    !column &&
+    overridesAdded.length === 0 &&
+    overridesRemoved.length === 0 &&
+    overridesChanged.length === 0 &&
+    exemptAdded.length === 0 &&
+    exemptRemoved.length === 0;
+  if (empty) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <h4 className="text-[10px] font-medium uppercase tracking-[0.04em] text-subtle">
+        tenant_scope
+      </h4>
+      {column && (
+        <DiffRow
+          tone="changed"
+          label="default column"
+          value={
+            <>
+              <span className="font-mono">
+                {column.from == null ? "(unset)" : String(column.from)}
+              </span>
+              <span className="mx-1 text-subtle">→</span>
+              <span className="font-mono">
+                {column.to == null ? "(unset)" : String(column.to)}
+              </span>
+            </>
+          }
+        />
+      )}
+      {overridesAdded.map(([table, col]) => (
+        <DiffRow
+          key={`+${table}`}
+          tone="added"
+          label={table}
+          value={<span className="font-mono">override → {String(col)}</span>}
+        />
+      ))}
+      {overridesRemoved.map(([table, col]) => (
+        <DiffRow
+          key={`-${table}`}
+          tone="removed"
+          label={table}
+          value={<span className="font-mono">override → {String(col)}</span>}
+        />
+      ))}
+      {exemptAdded.map((table) => (
+        <DiffRow
+          key={`+e${table}`}
+          tone="added"
+          label={table}
+          value={<span className="font-mono text-subtle">exempt</span>}
+        />
+      ))}
+      {exemptRemoved.map((table) => (
+        <DiffRow
+          key={`-e${table}`}
+          tone="removed"
+          label={table}
+          value={<span className="font-mono text-subtle">exempt</span>}
+        />
+      ))}
+      {overridesChanged.map(([table, fromTo]) => (
+        <DiffRow
+          key={`~${table}`}
+          tone="changed"
+          label={table}
+          value={renderFromTo(fromTo)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function stringList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string" && x.length > 0);
+}
+
+function DiffRow({
+  tone,
+  label,
+  value,
+}: {
+  tone: "added" | "removed" | "changed";
+  label: string;
+  value: React.ReactNode;
+}) {
+  // Semantic tones: added → allow, removed → deny, changed → warn. Pulls
+  // from the shared token vocabulary; the page never reaches for raw
+  // greens/reds.
+  const toneClasses: Record<typeof tone, string> = {
+    added:
+      "border-[hsl(var(--allow))] bg-[hsl(var(--allow)/0.08)] text-foreground",
+    removed:
+      "border-[hsl(var(--deny))] bg-[hsl(var(--deny)/0.08)] text-foreground",
+    changed:
+      "border-[hsl(var(--warn))] bg-[hsl(var(--warn)/0.08)] text-foreground",
+  };
+  const sigil: Record<typeof tone, string> = {
+    added: "+",
+    removed: "−",
+    changed: "~",
+  };
+  return (
+    <div
+      className={cn(
+        "grid grid-cols-[14px_140px_1fr] items-baseline gap-2 rounded-[3px] border-l-2 px-2 py-1 text-xs",
+        toneClasses[tone],
+      )}
+    >
+      <span className="font-mono text-subtle">{sigil[tone]}</span>
+      <span className="truncate font-mono text-foreground">{label}</span>
+      <span className="text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function renderFromTo(fromTo: unknown): React.ReactNode {
+  if (!isRecord(fromTo)) {
+    return <span className="font-mono">{String(fromTo)}</span>;
+  }
+  return (
+    <>
+      <span className="font-mono">{String(fromTo.from ?? "—")}</span>
+      <span className="mx-1 text-subtle">→</span>
+      <span className="font-mono">{String(fromTo.to ?? "—")}</span>
+    </>
+  );
+}
+
+function LegacyPolicyReloadView({
+  payload,
+}: {
+  payload: Record<string, unknown>;
+}) {
+  // Pre-0.4.0 payload shape: no sections_changed / diffs. Surface any
+  // string- or number-valued top-level fields as labeled rows so the
+  // pane isn't empty for old rows.
   const entries = Object.entries(payload)
     .filter(([, v]) => typeof v === "string" || typeof v === "number")
     .slice(0, 8);
@@ -172,6 +458,15 @@ function PolicyReloadedView({
       ))}
     </Fields>
   );
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function mappingEntries(v: unknown): Array<[string, unknown]> {
+  if (!isRecord(v)) return [];
+  return Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 // --- shared ------------------------------------------------------------------

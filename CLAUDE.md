@@ -21,6 +21,42 @@ When writing a new page or component:
 - Use semantic color tokens (`allow`, `deny`, `warn`) for anything tied to
   query-lifecycle decisions. Don't reach for generic green/red/yellow.
 
+## Client-component imports from `@midplane-cloud/db`
+
+The root entrypoint (`@midplane-cloud/db`) re-exports `getDb`, which pulls
+in the `postgres` driver — a Node-only package that needs `fs`/`os`. Any
+file with `"use client"` at the top must import from the
+`@midplane-cloud/db/policy` subpath instead, which is pure TS (types +
+validators + serializers, no runtime deps).
+
+Typecheck passes either way. The failure is a build-time Turbopack
+explosion: `Module not found: Can't resolve 'fs'` traced back through the
+client component. If you see that error after touching a client file's
+imports, this is the cause.
+
+Server components, server actions, route handlers, and library code may
+import from the root entrypoint freely.
+
+## OSS image version pin sites
+
+The OSS engine image version (`midplane/midplane:X.Y.Z`) is pinned in
+seven places. Bumping requires updating all of them or the dev loop and
+prod deploys diverge from what the cloud was tested against:
+
+- `scripts/dev-image.sh` — local build tag
+- `scripts/bootstrap.sh` — one-shot setup script
+- `.env.example` — documented default
+- `packages/router/src/spawner-docker.ts` — fallback when env unset
+- `packages/router/src/spawner-fly.ts` — fallback when env unset
+- `fly-fra.toml` (and any sibling regional `fly-*.toml`) — production
+- `README.md` — docs
+
+Plus the test fixture in `packages/router/test/spawner-docker.test.ts`
+asserts on the tag, so it gets re-pinned to match.
+
+Sanity-check grep before declaring a bump done:
+`rg 'midplane/midplane:[0-9]' --hidden -g '!node_modules' -g '!bun.lock'`
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the

@@ -1,11 +1,13 @@
 // Cloud → engine admin operations.
 //
-// Hot-reload table_access AND tenant_scope.mappings on a running OSS
-// container so policy edits land without killing the agent's MCP
-// session. The engine's POST /admin/policy reads each section from a
-// holder pointer on every query (parity since OSS 0.4.0), so a single
-// config swap is atomic — no half-mix in-flight, no need for the
-// cloud to drain anything.
+// Hot-reload table_access AND tenant_scope on a running OSS container
+// so policy edits land without killing the agent's MCP session. The
+// engine's POST /admin/policy reads each section from a holder pointer
+// on every query (parity since OSS 0.4.0; OSS 0.5.0 moved tenant_scope
+// from a flat `mappings` map to a `{column, overrides, exempt}`
+// envelope but kept the same swap semantics), so a single config swap
+// is atomic — no half-mix in-flight, no need for the cloud to drain
+// anything.
 //
 // Body shape is the multi-DB YAML emitted by serializeMultiDbPolicyToYaml.
 // The engine spawns every cloud-managed container with a `databases:`
@@ -45,7 +47,41 @@ export type PushPolicyResult =
   // Surface `body` to the user so they can correct the policy.
   | { rejected: { status: number; body: string } };
 
+// Per-token serialization for the HTTP push. Closes the narrower race
+// the FOR UPDATE lock on the parent connection row doesn't cover: T1
+// commits, T2 commits (txn-serialized so T2 sees T1's state), both
+// reach the network. If T1's push is slow it can land AFTER T2's push,
+// leaving the engine on T1's pre-T2 view. Chaining each push behind
+// the previous one for the same token preserves commit order on the
+// engine side. In-memory only; distributed pushes are out of scope.
+const inflightPushes = new Map<string, Promise<unknown>>();
+
 export async function pushPolicy(
+  token: string,
+  databases: readonly DatabaseEntry[],
+  deps: PushPolicyDeps,
+): Promise<PushPolicyResult> {
+  // Acquire the per-token lock by chaining onto the previous push. Use
+  // .then(fn) on the queue tail so failures don't poison subsequent
+  // pushes — every chained run starts from a resolved Promise.
+  const previous = inflightPushes.get(token) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(() => doPush(token, databases, deps));
+  inflightPushes.set(token, run);
+  try {
+    return await run;
+  } finally {
+    // Clear only when we're still the queue head; if another push
+    // chained behind us, leave their entry in place so a third push
+    // can find it.
+    if (inflightPushes.get(token) === run) {
+      inflightPushes.delete(token);
+    }
+  }
+}
+
+async function doPush(
   token: string,
   databases: readonly DatabaseEntry[],
   deps: PushPolicyDeps,

@@ -159,6 +159,44 @@ export function isValidDbName(name: unknown): name is string {
 // names match TABLE_NAME_RE, access levels are a closed enum, env-var
 // names are derived from ULID-shaped ids) so none need YAML quoting.
 
+/** Strict-mode tenant_scope config — mirrors OSS 0.5.0's parser.
+ *  Resolution per queried table at engine time: exempt → overrides → column.
+ *
+ *  - `column` is the universal default tenant column. When set, every
+ *    queried table is scoped on it unless overridden or exempted.
+ *    `null` means only the listed `overrides` are checked; every other
+ *    queried table is unscoped. Cloud keeps writing this shape for
+ *    customers who haven't set a default column yet (e.g. configs
+ *    backfilled from a pre-0.5.0 flat map).
+ *  - `overrides` are per-table column overrides (renamed from `mappings`
+ *    in 0.4.x; OSS accepts `mappings:` as a deprecated alias on parse).
+ *  - `exempt` is the list of tables intentionally tenant-free (audit_log,
+ *    regions, …) — required to query an unscoped table under strict
+ *    mode. `information_schema` is exempt engine-side regardless.
+ *
+ *  Inert config (`column: null`, `overrides: {}`) means tenant_scope is
+ *  disabled for the DB; the YAML omits the block entirely. */
+export interface TenantScopeConfig {
+  column: string | null;
+  overrides: Record<string, string>;
+  exempt: string[];
+}
+
+/** Zero-value config — column unset, no overrides, no exempts. Cloud
+ *  uses this as the default for new connection_databases rows. */
+export const EMPTY_TENANT_SCOPE: TenantScopeConfig = {
+  column: null,
+  overrides: {},
+  exempt: [],
+};
+
+/** True iff the config will actually enforce a predicate on at least one
+ *  table. exempt-only configs are inert (per OSS 0.5.0 wire shape:
+ *  `tenant_scope_enabled = column !== null OR overrides non-empty`). */
+export function tenantScopeIsActive(config: TenantScopeConfig): boolean {
+  return config.column !== null || Object.keys(config.overrides).length > 0;
+}
+
 export interface DatabaseEntry {
   name: string;
   /** Connection-database id used to derive the DSN env var name. ULIDs
@@ -166,9 +204,10 @@ export interface DatabaseEntry {
    *  invalid var name. */
   connectionDatabaseId: string;
   tableAccess: TableAccessPolicy;
-  /** Empty map = tenant_scope disabled for this DB; the YAML omits the
-   *  block entirely (OSS treats absent block as disabled). */
-  tenantScopeMappings: Record<string, string>;
+  /** Strict-mode tenant_scope envelope. EMPTY_TENANT_SCOPE = disabled
+   *  for this DB; the YAML omits the block entirely (OSS treats absent
+   *  block as disabled). */
+  tenantScope: TenantScopeConfig;
 }
 
 // Mirrors OSS ENV_INTERP_RE so the cloud refuses to derive an env var name
@@ -232,34 +271,229 @@ export function serializeMultiDbPolicyToYaml(
         lines.push(`        ${name}: ${level}`);
       }
     }
-    const mappings = Object.entries(db.tenantScopeMappings).sort(([a], [b]) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    );
-    if (mappings.length > 0) {
-      // Validate keys/values are simple identifiers (no quoting needed).
-      // Mappings come from the policy form which is gated; this is a
-      // defense-in-depth check before YAML emission.
-      for (const [k, v] of mappings) {
-        if (!IDENT_RE.test(k) || !IDENT_RE.test(v)) {
-          throw new Error(
-            `serializeMultiDbPolicyToYaml: tenant_scope mapping ${k} -> ${v} contains characters that need YAML quoting`,
-          );
-        }
-      }
-      lines.push(`    tenant_scope:`);
-      lines.push(`      enabled: true`);
-      lines.push(`      mappings:`);
-      for (const [k, v] of mappings) {
-        lines.push(`        ${k}: ${v}`);
-      }
-    }
+    emitTenantScope(lines, db.tenantScope);
   }
   return lines.join("\n") + "\n";
 }
 
-// Tenant-scope key/value identifier shape. Postgres column-name pattern;
-// no quoting required for unquoted YAML emission.
+// Two identifier shapes drive tenant_scope validation:
+//
+//   IDENT_RE          Column name. Single Postgres unquoted identifier.
+//                     Used for `column` (default tenant column) and the
+//                     VALUES of `overrides` (per-table tenant column).
+//
+//   TABLE_IDENT_RE    Table name. Same shape as TABLE_NAME_RE used by
+//                     table_access — allows an optional `schema.` prefix
+//                     so a value picked from the introspection
+//                     autocomplete (e.g. "public.users") round-trips.
+//                     Used for `overrides` KEYS and `exempt` entries.
+//
+// Splitting these mirrors the engine's own resolution: `overrides` is a
+// table-keyed map whose values are column names, not table names.
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const TABLE_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*)?$/;
+const MAX_TENANT_SCOPE_ENTRIES = 256;
+const MAX_TENANT_SCOPE_IDENT_LENGTH = 128;
+
+export interface TenantScopeValidationError {
+  path: string;
+  message: string;
+}
+export type TenantScopeValidationResult =
+  | { ok: true; value: TenantScopeConfig }
+  | { ok: false; errors: TenantScopeValidationError[] };
+
+// Validate untrusted input into a typed TenantScopeConfig. Mirrors the
+// shape OSS 0.5.0's parser accepts: `column` is a single identifier or
+// null; `overrides` is a Record<table, column> with identifier keys and
+// values; `exempt` is a list of identifier-shaped table names. Wraps a
+// legacy 0.4.x flat map ({orders: "tenant_id"}) as `overrides` so a
+// JSONB row read from a pre-migration DB normalizes to the new shape.
+export function validateTenantScope(
+  input: unknown,
+): TenantScopeValidationResult {
+  const errors: TenantScopeValidationError[] = [];
+  if (input == null) return { ok: true, value: EMPTY_TENANT_SCOPE };
+  if (typeof input !== "object" || Array.isArray(input)) {
+    return {
+      ok: false,
+      errors: [{ path: "", message: "tenant_scope must be an object" }],
+    };
+  }
+  const obj = input as Record<string, unknown>;
+
+  // Legacy 0.4.x shape: a flat map of table → column with no envelope.
+  // Detect by absence of any of the three envelope keys and presence of
+  // at least one value-typed entry. Wrap as overrides; column stays
+  // null so engine behavior matches today.
+  const looksLegacy =
+    !("column" in obj) && !("overrides" in obj) && !("exempt" in obj);
+  const rawOverrides = looksLegacy ? obj : obj.overrides;
+  const rawColumn = looksLegacy ? null : obj.column;
+  const rawExempt = looksLegacy ? [] : obj.exempt;
+
+  let column: string | null = null;
+  if (rawColumn === null || rawColumn === undefined) {
+    column = null;
+  } else if (typeof rawColumn !== "string") {
+    errors.push({ path: "column", message: "must be a string or null" });
+  } else if (!isIdent(rawColumn)) {
+    errors.push({ path: "column", message: identMessage });
+  } else {
+    column = rawColumn;
+  }
+
+  const overrides: Record<string, string> = {};
+  if (rawOverrides === undefined || rawOverrides === null) {
+    // empty
+  } else if (typeof rawOverrides !== "object" || Array.isArray(rawOverrides)) {
+    errors.push({ path: "overrides", message: "must be an object" });
+  } else {
+    const entries = Object.entries(rawOverrides as Record<string, unknown>);
+    if (entries.length > MAX_TENANT_SCOPE_ENTRIES) {
+      errors.push({
+        path: "overrides",
+        message: `too many entries (max ${MAX_TENANT_SCOPE_ENTRIES})`,
+      });
+    }
+    for (const [k, v] of entries) {
+      if (!isTableIdent(k)) {
+        errors.push({ path: `overrides.${k}`, message: tableIdentMessage });
+        continue;
+      }
+      if (typeof v !== "string" || !isIdent(v)) {
+        errors.push({
+          path: `overrides.${k}`,
+          message: `value ${identMessage}`,
+        });
+        continue;
+      }
+      overrides[k] = v;
+    }
+  }
+
+  const exempt: string[] = [];
+  if (rawExempt === undefined || rawExempt === null) {
+    // empty
+  } else if (!Array.isArray(rawExempt)) {
+    errors.push({ path: "exempt", message: "must be an array" });
+  } else {
+    if (rawExempt.length > MAX_TENANT_SCOPE_ENTRIES) {
+      errors.push({
+        path: "exempt",
+        message: `too many entries (max ${MAX_TENANT_SCOPE_ENTRIES})`,
+      });
+    }
+    const seen = new Set<string>();
+    for (const t of rawExempt) {
+      if (typeof t !== "string" || !isTableIdent(t)) {
+        errors.push({
+          path: `exempt[${exempt.length}]`,
+          message: tableIdentMessage,
+        });
+        continue;
+      }
+      if (seen.has(t)) continue;
+      seen.add(t);
+      exempt.push(t);
+    }
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: { column, overrides, exempt } };
+}
+
+/** Strict variant for code paths that must not see invalid config. The
+ *  spawner / hot-reload paths use this — a malformed row in Postgres
+ *  should fail closed rather than start an OSS container with degraded
+ *  scoping. */
+export function parseTenantScopeOrThrow(input: unknown): TenantScopeConfig {
+  const r = validateTenantScope(input);
+  if (r.ok) return r.value;
+  const summary = r.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+  throw new Error(`invalid tenant_scope: ${summary}`);
+}
+
+function isIdent(s: unknown): s is string {
+  return (
+    typeof s === "string" &&
+    s.length > 0 &&
+    s.length <= MAX_TENANT_SCOPE_IDENT_LENGTH &&
+    IDENT_RE.test(s)
+  );
+}
+function isTableIdent(s: unknown): s is string {
+  return (
+    typeof s === "string" &&
+    s.length > 0 &&
+    s.length <= MAX_TENANT_SCOPE_IDENT_LENGTH &&
+    TABLE_IDENT_RE.test(s)
+  );
+}
+const identMessage = `must match ${IDENT_RE} (Postgres unquoted identifier)`;
+const tableIdentMessage = `must match ${TABLE_IDENT_RE} (Postgres unquoted identifier, optionally schema-qualified)`;
+
+// Emit the OSS 0.5.0 tenant_scope envelope. Inert configs (no column,
+// no overrides) skip emission entirely so the resulting YAML reads like
+// a pre-tenant-scope DB. Everything dynamic is validated cloud-side
+// before this fires; the IDENT_RE checks below are defense-in-depth for
+// any direct caller of the serializer that bypassed the form.
+//
+// information_schema is engine-side exempt regardless of what we emit
+// (per OSS 0.5.0 release notes), so list_tables / describe_table keep
+// working under strict mode without an explicit entry here.
+function emitTenantScope(
+  lines: string[],
+  config: TenantScopeConfig,
+): void {
+  // Exempt-only configs (no column, no overrides) are inert — exempting
+  // tables that aren't scoped is a no-op. Skip emission so the YAML
+  // reads identically to a true disabled config and we don't ship
+  // bytes the engine will treat as disabled anyway.
+  if (!tenantScopeIsActive(config)) {
+    return;
+  }
+  lines.push(`    tenant_scope:`);
+  lines.push(`      enabled: true`);
+  if (config.column !== null) {
+    if (!IDENT_RE.test(config.column)) {
+      throw new Error(
+        `serializeMultiDbPolicyToYaml: tenant_scope.column "${config.column}" contains characters that need YAML quoting`,
+      );
+    }
+    lines.push(`      column: ${config.column}`);
+  }
+  const overrides = Object.entries(config.overrides).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  if (overrides.length > 0) {
+    for (const [k, v] of overrides) {
+      if (!TABLE_IDENT_RE.test(k) || !IDENT_RE.test(v)) {
+        throw new Error(
+          `serializeMultiDbPolicyToYaml: tenant_scope.overrides ${k} -> ${v} contains characters that need YAML quoting`,
+        );
+      }
+    }
+    lines.push(`      overrides:`);
+    for (const [k, v] of overrides) {
+      lines.push(`        ${k}: ${v}`);
+    }
+  }
+  const exempt = [...config.exempt].sort();
+  if (exempt.length > 0) {
+    for (const t of exempt) {
+      if (!TABLE_IDENT_RE.test(t)) {
+        throw new Error(
+          `serializeMultiDbPolicyToYaml: tenant_scope.exempt "${t}" contains characters that need YAML quoting`,
+        );
+      }
+    }
+    lines.push(`      exempt:`);
+    for (const t of exempt) {
+      lines.push(`        - ${t}`);
+    }
+  }
+}
 
 // --- Legacy single-DB serializer (admin hot-reload) -------------------------
 //

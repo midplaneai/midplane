@@ -31,7 +31,7 @@ describe("DockerSpawner", () => {
     ) as unknown as typeof fetch;
 
     const spawner = new DockerSpawner({
-      image: "midplane/midplane:0.4.0",
+      image: "midplane/midplane:0.5.0",
       exec,
       fetch: fetchFn,
       bootTimeoutMs: 1000,
@@ -46,7 +46,7 @@ describe("DockerSpawner", () => {
           connectionDatabaseId: "01HXYZMAIN0000000000000000",
           dsn: "postgres://example",
           tableAccess: { default: "read", tables: { users: "deny" } },
-          tenantScopeMappings: {},
+          tenantScope: { column: null, overrides: {}, exempt: [] },
         },
       ],
     });
@@ -56,7 +56,7 @@ describe("DockerSpawner", () => {
     expect(exec).toHaveBeenCalled();
 
     const runArgs = exec.mock.calls[0]?.[1] ?? [];
-    expect(runArgs).toContain("midplane/midplane:0.4.0");
+    expect(runArgs).toContain("midplane/midplane:0.5.0");
     // Multi-DB: DSN is injected as a per-DB env var (MIDPLANE_DSN_<id>),
     // never as a top-level DATABASE_URL — the YAML's `url:` references
     // the env via ${...} interpolation.
@@ -120,7 +120,7 @@ describe("DockerSpawner", () => {
             connectionDatabaseId: "01HXYZMAIN0000000000000000",
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
-            tenantScopeMappings: {},
+            tenantScope: { column: null, overrides: {}, exempt: [] },
           },
         ],
       }),

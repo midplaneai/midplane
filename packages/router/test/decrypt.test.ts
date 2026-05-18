@@ -40,7 +40,7 @@ const cdb: ConnectionDatabase = {
   encryptedDsn: Buffer.from("ciphertext"),
   kmsKeyId: "env:fra",
   tableAccess: { default: "deny", tables: {} },
-  tenantScopeMappings: {},
+  tenantScope: { column: null, overrides: {}, exempt: [] },
   rotatedAt: null,
   lastKmsSuccessAt: null,
   createdAt: new Date(),

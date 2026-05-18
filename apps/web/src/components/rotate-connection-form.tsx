@@ -17,6 +17,11 @@ import { Label } from "@/components/ui/label";
 // path explicitly does NOT throw on cache invalidation failure (the DB write
 // is durable; caches catch up on idle), so a thrown error here means a real
 // problem worth showing.
+//
+// Controlled input. `dirty` = the user has typed at least one non-blank
+// character — Save disables on empty and Cancel clears the field. On
+// success we also wipe the DSN so it doesn't linger in the input after
+// the rotation has committed.
 
 export function RotateConnectionForm({
   id,
@@ -25,30 +30,50 @@ export function RotateConnectionForm({
   id: string;
   action: (formData: FormData) => Promise<void>;
 }) {
+  const [dsn, setDsn] = useState("");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  const dirty = dsn.trim().length > 0;
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+
+    const fd = new FormData();
+    fd.set("id", id);
+    fd.set("dsn", dsn);
+
+    startTransition(async () => {
+      try {
+        await action(fd);
+        // DSN is sensitive — clear after success so it doesn't sit in
+        // the input. Also flips Save back to disabled.
+        setDsn("");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "rotation failed");
+      }
+    });
+  }
+
+  function handleCancel() {
+    setDsn("");
+    setError(null);
+  }
+
   return (
-    <form
-      action={(formData) => {
-        setError(null);
-        startTransition(async () => {
-          try {
-            await action(formData);
-          } catch (e) {
-            setError(e instanceof Error ? e.message : "rotation failed");
-          }
-        });
-      }}
-      className="space-y-3"
-    >
-      <input type="hidden" name="id" value={id} />
+    <form onSubmit={handleSubmit} className="space-y-3">
       <div className="space-y-2">
         <Label htmlFor="rotate-dsn">New connection string</Label>
         <Input
           id="rotate-dsn"
           type="password"
           name="dsn"
+          value={dsn}
+          onChange={(e) => {
+            setDsn(e.target.value);
+            setError(null);
+          }}
           required
           autoComplete="new-password"
           data-1p-ignore
@@ -58,9 +83,20 @@ export function RotateConnectionForm({
         />
       </div>
       <div className="flex items-center gap-2">
-        <Button type="submit" size="sm" disabled={pending}>
+        <Button type="submit" size="sm" disabled={pending || !dirty}>
           {pending ? "Rotating…" : "Rotate connection string"}
         </Button>
+        {dirty && !pending && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleCancel}
+            data-testid="rotate-cancel"
+          >
+            Cancel
+          </Button>
+        )}
         {error ? (
           <span className="text-sm text-destructive">{error}</span>
         ) : null}

@@ -315,7 +315,7 @@ async function buildHarness(
         connectionDatabaseId: "01HXYZMAIN0000000000000000",
         dsn: "postgres://x",
         tableAccess: { default: "deny", tables: {} },
-        tenantScopeMappings: {},
+        tenantScope: { column: null, overrides: {}, exempt: [] },
       },
     ],
   });

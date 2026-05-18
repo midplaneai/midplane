@@ -215,7 +215,32 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql).toContain("AND FALSE");
   });
 
-  it("returns POLICY_RELOAD rows with null queryId and null SQL fields", async () => {
+  it("returns POLICY_RELOAD rows with null queryId, null SQL, and the OSS 0.5.0 structured payload", async () => {
+    // OSS 0.5.0 wire shape: tenant_scope diff carries column.{from,to},
+    // overrides_{added,removed,changed}, and exempt_{added,removed}.
+    // The 0.4.0 `mappings_*` keys are gone from new writes; the renderer
+    // still falls back to them so historical audit rows keep working.
+    const policyPayload = {
+      sections_changed: ["tenant_scope"],
+      databases_changed: ["main"],
+      tenant_scope: {
+        column: "tenant_id",
+        overrides: { orders: "org_id" },
+        exempt: ["audit_log"],
+      },
+      diffs: {
+        main: {
+          tenant_scope: {
+            column: { from: null, to: "tenant_id" },
+            overrides_added: { orders: "org_id" },
+            overrides_removed: {},
+            overrides_changed: {},
+            exempt_added: ["audit_log"],
+            exempt_removed: [],
+          },
+        },
+      },
+    };
     handle.setNextResult([
       {
         query_id: null,
@@ -234,6 +259,7 @@ describe("listAuditQueries query shape", () => {
         decision: null,
         decision_reason: null,
         exec_ms: null,
+        policy_payload: policyPayload,
         status: "POLICY_RELOAD",
       },
     ]);
@@ -243,6 +269,57 @@ describe("listAuditQueries query shape", () => {
     expect(result.rows[0]!.queryId).toBeNull();
     expect(result.rows[0]!.status).toBe("POLICY_RELOAD");
     expect(result.rows[0]!.sqlRaw).toBeNull();
+    // The 0.4.0 payload shape lands as a structured object so the list
+    // view can render "tenant_scope updated on main" without a second
+    // round trip. Backwards-compat for older rows is covered by the
+    // separate legacy fixture below.
+    expect(result.rows[0]!.policyPayload).toEqual(policyPayload);
+  });
+
+  it("renders pre-0.4.0 POLICY_RELOAD rows with a null payload (no crash, generic label fallback)", async () => {
+    // Older indexer fills audit_events_index with a flat or empty payload.
+    // The list lib normalizes anything non-object to null so the renderer
+    // falls through to the generic ARIA label.
+    handle.setNextResult([
+      {
+        query_id: null,
+        attempted_event_id: "01HXPOLICYLEGACY0000000000",
+        head_event_id: "01HXPOLICYLEGACY0000000000",
+        started_at: new Date("2026-04-29T12:00:00Z"),
+        last_ts: new Date("2026-04-29T12:00:00Z"),
+        tenant_id: "__self_host__",
+        database: "main",
+        agent_name: null,
+        agent_version: null,
+        agent_intent: null,
+        intent_source: null,
+        sql_raw: null,
+        sql_fingerprint: null,
+        decision: null,
+        decision_reason: null,
+        exec_ms: null,
+        policy_payload: null,
+        status: "POLICY_RELOAD",
+      },
+    ]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.policyPayload).toBeNull();
+  });
+
+  it("projects the policy event payload column so the list renderer can pick up sections_changed", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const sel = lastSelect(handle.queries);
+    // The CTE must project payload AS policy_payload for POLICY_RELOAD
+    // rows AND a NULL placeholder for the classified branch so UNION ALL
+    // matches column types. Without this, the renderer can't surface
+    // "tenant_scope updated on main" — it would land on the generic label
+    // for every row.
+    expect(sel.sql).toContain("policy_payload");
+    expect(sel.sql).toContain("NULL::jsonb AS policy_payload");
   });
 
   it("requests one extra row past pageSize for next-cursor detection", async () => {
@@ -400,6 +477,7 @@ describe("listAuditQueries query shape", () => {
         decision: null,
         decision_reason: null,
         exec_ms: null,
+        policy_payload: null,
         status: "ALLOWED",
       },
     ]);

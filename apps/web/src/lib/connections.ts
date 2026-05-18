@@ -5,13 +5,16 @@ import {
   auditEventsIndex,
   connectionDatabases,
   connections,
+  EMPTY_TENANT_SCOPE,
   getDb,
   indexerCursors,
   validatePolicy,
+  validateTenantScope,
   type AccessLevel,
   type Customer,
   type DatabaseEntry,
   type TableAccessPolicy,
+  type TenantScopeConfig,
 } from "@midplane-cloud/db";
 import {
   encryptDsn,
@@ -279,7 +282,7 @@ export async function setTableAccess(
         id: connectionDatabases.id,
         name: connectionDatabases.name,
         tableAccess: connectionDatabases.tableAccess,
-        tenantScopeMappings: connectionDatabases.tenantScopeMappings,
+        tenantScope: connectionDatabases.tenantScope,
       })
       .from(connectionDatabases)
       .where(eq(connectionDatabases.connectionId, id));
@@ -292,7 +295,7 @@ export async function setTableAccess(
     name: s.name,
     connectionDatabaseId: s.id,
     tableAccess: s.tableAccess,
-    tenantScopeMappings: s.tenantScopeMappings,
+    tenantScope: s.tenantScope,
   }));
 
   try {
@@ -322,6 +325,123 @@ export async function setTableAccess(
   }
 
   return result;
+}
+
+// Replace the tenant_scope config on one DB of a connection. Same shape
+// as setTableAccess: validate cloud-side, FOR UPDATE on the parent, write
+// the named child, snapshot every sibling for the full multi-DB body,
+// push to OSS hot-reload.
+//
+// OSS 0.5.0 semantics: `column` is the universal default tenant column;
+// setting it scopes every queried table unless overridden or exempted.
+// `column: null` means only the listed `overrides` are checked; every
+// other queried table is unscoped. The latter shape DOES NOT protect new
+// tables from cross-tenant exposure — cloud keeps writing it for back-
+// compat with customers who haven't set a default column yet.
+// EMPTY_TENANT_SCOPE = tenant_scope disabled for the DB; serializer
+// omits the block entirely.
+//
+// `dbName` defaults to "main" so existing single-DB callers keep working;
+// multi-DB callers pass the agent-facing alias explicitly.
+//
+// Returns null when the id is unknown OR owned by another customer OR the
+// named child does not exist (matches setTableAccess / rotateConnection
+// leakage-avoidance shape — caller can't distinguish).
+export async function setTenantScope(
+  customer: Customer,
+  id: string,
+  config: TenantScopeConfig,
+  deps: PolicyPushDeps,
+  dbName: string = DEFAULT_DATABASE_NAME,
+): Promise<{ mcpToken: string } | null> {
+  // Cloud-side validation before touching PG. The YAML emitter would also
+  // throw, but failing here gives a clean per-field error message to the
+  // dashboard action instead of bubbling a serialization throw out of
+  // pushPolicy after the DB write has already committed.
+  const validation = validateTenantScope(config);
+  if (!validation.ok) {
+    const summary = validation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`invalid tenant_scope: ${summary}`);
+  }
+
+  const db = getDb();
+  // Same three-step txn as setTableAccess: ownership check on the parent
+  // (so we don't leak existence by writing through to a foreign customer's
+  // DB), update the named child's tenantScope, then snapshot every DB on
+  // the connection (post-update) for the hot-reload body. RETURNING on
+  // the child write distinguishes "child not found" from "wrote but no
+  // config change" and keeps the leakage-avoidance shape (null for both).
+  //
+  // FOR UPDATE on the parent serializes concurrent edits on this same
+  // connection (whether the concurrent edit is another setTenantScope, a
+  // setTableAccess, or any add/remove/rename). Without it, two parallel
+  // edits each read their own snapshot of siblings and the engine ends
+  // up with the loser's stale view of the winner's DB.
+  const result = await db.transaction(async (tx) => {
+    const parent = await tx
+      .select({ mcpToken: connections.mcpToken })
+      .from(connections)
+      .where(
+        and(eq(connections.id, id), eq(connections.customerId, customer.id)),
+      )
+      .for("update")
+      .limit(1);
+    if (parent.length === 0) return null;
+    const updated = await tx
+      .update(connectionDatabases)
+      .set({ tenantScope: validation.value })
+      .where(
+        and(
+          eq(connectionDatabases.connectionId, id),
+          eq(connectionDatabases.name, dbName),
+        ),
+      )
+      .returning({ id: connectionDatabases.id });
+    if (updated.length === 0) return null;
+    const siblings = await tx
+      .select({
+        id: connectionDatabases.id,
+        name: connectionDatabases.name,
+        tableAccess: connectionDatabases.tableAccess,
+        tenantScope: connectionDatabases.tenantScope,
+      })
+      .from(connectionDatabases)
+      .where(eq(connectionDatabases.connectionId, id));
+    return { mcpToken: parent[0]!.mcpToken, siblings };
+  });
+
+  if (!result) return null;
+
+  const databases: DatabaseEntry[] = result.siblings.map((s) => ({
+    name: s.name,
+    connectionDatabaseId: s.id,
+    tableAccess: s.tableAccess,
+    tenantScope: s.tenantScope ?? EMPTY_TENANT_SCOPE,
+  }));
+
+  try {
+    const pushResult = await deps.pushPolicy(result.mcpToken, databases);
+    if ("rejected" in pushResult) {
+      // Engine kept the previous policy. Don't fall back — respawn would
+      // re-read the same (rejected) config from PG and fail to boot.
+      console.error(
+        "[setTenantScope] engine rejected policy (validator drift)",
+        pushResult.rejected,
+      );
+      throw new EnginePolicyRejected(pushResult.rejected.body);
+    }
+  } catch (err) {
+    if (err instanceof EnginePolicyRejected) throw err;
+    console.error(
+      "[setTenantScope] hot reload failed; falling back to respawn",
+      err,
+    );
+    await deps.registry.invalidate(result.mcpToken).catch(() => undefined);
+  }
+
+  return { mcpToken: result.mcpToken };
 }
 
 // Rotate one DB's DSN on a connection: re-encrypt with the customer's
