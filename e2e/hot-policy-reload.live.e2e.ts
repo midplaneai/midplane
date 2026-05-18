@@ -12,7 +12,7 @@
 //     (rebuild from local OSS clone via `bun run dev:image`)
 //   - .env.local DATABASE_URL pointing at a Neon dev branch
 //   - .env.local INDEXER_TOKEN set (the engine 404s without it)
-//   - .env.local MIDPLANE_KMS_DEV_KEY_FRA set
+//   - .env.local MIDPLANE_KMS_DEV_KEY_EU set
 
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";

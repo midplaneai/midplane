@@ -15,7 +15,7 @@
 //   - docker on PATH
 //   - midplane/midplane:0.1.0 image present (`bun run dev:image`)
 //   - .env.local DATABASE_URL pointing at a Neon dev branch
-//   - .env.local MIDPLANE_KMS_DEV_KEY_FRA set
+//   - .env.local MIDPLANE_KMS_DEV_KEY_EU set
 //
 // Test plan:
 //   1. Spin up TWO sidecar Postgres instances (A, B) with distinguishable data
