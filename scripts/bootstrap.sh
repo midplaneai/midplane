@@ -24,7 +24,7 @@ cd "$ROOT"
 
 ENV_FILE="$ROOT/.env.local"
 OSS_REPO="${OSS_REPO:-/Users/dustinlange/dev/midplane}"
-IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.3.0}"
+IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.4.0}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "creating $ENV_FILE from .env.example"

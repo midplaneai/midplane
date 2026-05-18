@@ -244,6 +244,15 @@ export async function setTableAccess(
   //
   // Sibling DBs ride along because OSS hot-reload drops any DB absent
   // from the body — we have to re-state every DB to keep them registered.
+  //
+  // FOR UPDATE on the parent serializes concurrent setTableAccess calls
+  // on the same connection: without it, two parallel edits to different
+  // DBs each read their own snapshot of siblings and the engine ends up
+  // with the loser's stale view of the winner's DB. Same posture as
+  // addDatabase/removeDatabase/renameDatabase below. NOTE: a narrower
+  // race remains between commit-of-T1 and pushPolicy-of-T1 vs T2 — the
+  // engine converges on the next edit since each push sends full state,
+  // but a per-token push mutex would close it fully.
   const result = await db.transaction(async (tx) => {
     const parent = await tx
       .select({ mcpToken: connections.mcpToken })
@@ -251,6 +260,7 @@ export async function setTableAccess(
       .where(
         and(eq(connections.id, id), eq(connections.customerId, customer.id)),
       )
+      .for("update")
       .limit(1);
     if (parent.length === 0) return null;
     const updated = await tx
