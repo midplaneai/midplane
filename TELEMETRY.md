@@ -69,7 +69,7 @@ Sent once, immediately after the MCP transport is listening. Fields:
 | `event`          | string   | `"startup"`                        | Discriminator                |
 | `install_id`     | ULID     | `"01H8K2J9XQVWZ7PCQ3F0R2N5T8"`     | Stable random ID per install |
 | `ts`             | int      | `1730000000`                       | Unix seconds, UTC            |
-| `version`        | string   | `"0.2.0"`                          | `@midplane/mcp-server` version |
+| `version`        | string   | `"0.5.0"`                          | `@midplane/mcp-server` version |
 | `bun_version`    | string   | `"1.3.0"`                          | Runtime                      |
 | `os`             | enum     | `"linux"`                          | `darwin` / `linux` / `win32` / `other` |
 | `arch`           | enum     | `"x64"`                            | `x64` / `arm64` / `other`    |
@@ -85,7 +85,7 @@ Sample:
   "event": "startup",
   "install_id": "01H8K2J9XQVWZ7PCQ3F0R2N5T8",
   "ts": 1730000000,
-  "version": "0.2.0",
+  "version": "0.5.0",
   "bun_version": "1.3.0",
   "os": "linux",
   "arch": "x64",
@@ -140,7 +140,7 @@ Sample:
   "event": "heartbeat",
   "install_id": "01H8K2J9XQVWZ7PCQ3F0R2N5T8",
   "ts": 1730086400,
-  "version": "0.2.0",
+  "version": "0.5.0",
   "uptime_s": 86400,
   "window_s": 86400,
   "tools": {

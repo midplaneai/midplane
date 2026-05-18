@@ -4,7 +4,7 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
-## [0.5.0] — Unreleased
+## [0.5.0] — 2026-05-18
 
 ### Added
 
@@ -43,7 +43,7 @@ The 0.4.x `tenant_scope.mappings` design was opt-in: any table not listed in the
 
 Strict mode flips the default. The operator declares one invariant (`column`) and any exceptions (`exempt`); every other table is denied by construction. The dangerous path is named, not silent. An alternative design ("introspect-at-boot" — the engine checks the live schema to know which tables have the column) was rejected: it pulls in DB availability at startup, cache invalidation on schema changes, and a fuzzy "if the schema has it" lookup. This design needs no introspection: a missing column produces a Postgres error that surfaces back to the operator as a cue to update the YAML.
 
-## [0.4.0] — Unreleased
+## [0.4.0] — 2026-05-02
 
 ### Changed (Breaking)
 
@@ -67,7 +67,7 @@ Research across the MCP ecosystem turned up no widely-adopted convention for cli
 - **`tenantScope()` accepts a holder/getter source.** The rule now resolves mappings via an optional source argument (`Record<string, string> | (() => Record<string, string> | undefined) | undefined`) — the getter form mirrors `tableAccess` and is what `mcp-server` wires into each engine. Back-compat: `tenantScope()` with no arg still falls back to reading `ctx.tenant_scope.mappings` from the per-call context (preserves existing test fixtures).
 - **`EngineEntry.holder` gained `tenantScope: Record<string, string>`.** Single source of truth for the live mappings on a registered DB. `EngineEntry.mappings` (the redundant snapshot field) and `ctxBase.tenant_scope` (the redundant per-call context field) are removed; both were stale-on-swap by construction.
 
-## [0.3.0] — Unreleased
+## [0.3.0] — 2026-05-01
 
 ### Changed (Breaking)
 
@@ -83,7 +83,7 @@ Research across the MCP ecosystem turned up no widely-adopted convention for cli
     3. **HTTP header `X-Midplane-Intent`** — for non-MCP HTTP callers. Lowest priority because intermediaries can strip headers.
   Sanitization trims whitespace, drops control chars, and truncates at 500 chars (truncate, never reject the query). Stamping `intent_source` on the row lets the cloud audit log UI surface "richness of signal" and nudge customers toward the standards-aligned channel.
 
-## [0.2.0] — Unreleased
+## [0.2.0] — 2026-04-30
 
 ### Added
 
@@ -97,7 +97,7 @@ Research across the MCP ecosystem turned up no widely-adopted convention for cli
 
 - **Engine version bumped to 0.2.0** across `@midplane/engine`, `@midplane/mcp-server`, and the MCP server identification. The audit schema migration warrants a minor bump even though the user-facing tool surface is additive on the legacy path.
 
-## [0.1.x] — Unreleased pre-0.2.0 changes
+## [0.1.x] — 2026-04-30
 
 ### Changed (Breaking)
 
@@ -116,7 +116,7 @@ Research across the MCP ecosystem turned up no widely-adopted convention for cli
 - **`midplane audit` CLI** (`@midplane/mcp-server`). New unified `midplane` bin with `audit tail | stats | since` subcommands so self-hosters can read the audit log without writing SQL: `docker exec midplane midplane audit tail` for a live JSON-lines stream, `audit stats` for a 24h rollup of event types / deny rules / allow statement types / top agents, `audit since 1h` for a one-shot window dump. Reads SQLite directly (no `INDEXER_TOKEN` needed). Server entry preserved at `midplane server` (default).
 - **Anonymous telemetry** (`@midplane/mcp-server`). On startup the server posts a single ULID-keyed event to `https://t.midplane.ai/v1/events`; every 24h it posts a heartbeat with per-tool call counts, denials grouped by policy rule, statement-type buckets, latency histograms (p50/p95/p99), and Postgres failure counts grouped by 2-char SQLSTATE class. No SQL, no fingerprints, no table/column names, no tenant IDs, no error messages — see [`TELEMETRY.md`](./TELEMETRY.md) for the full schema and the "what we never send" list. Disable with `MIDPLANE_TELEMETRY=0` or `DO_NOT_TRACK=1`. Inspect with `MIDPLANE_TELEMETRY=debug`.
 
-## [0.1.0] — Unreleased
+## [0.1.0] — 2026-04-29
 
 First tagged release. Four policy rules — `writes_require_approval`, `multi_statement`, `tenant_scope`, `parse_error` — sit on the `audit-before-execute` pipeline and are pinned by [an adversarial SQL corpus](./docs/adversarial-corpus.md) covering CTE-hidden writes, stacked-statement injection, cross-tenant exfiltration, parser edges, and exec-side-effects. Agent compatibility verified across Cursor, Claude Code, and Claude Desktop on 2026-04-29.
 
@@ -145,4 +145,4 @@ First tagged release. Four policy rules — `writes_require_approval`, `multi_st
 
 Documented in [`docs/adversarial-corpus.md`](./docs/adversarial-corpus.md): SELECT-wrapped admin functions (`pg_terminate_backend`, `pg_cancel_backend`, `lo_unlink`), `BEGIN` / `COMMIT`, `VACUUM`, and `PREPARE` / `DEALLOCATE` currently allow. These are deferred to a later release (function-side-effects denylist + session-scope tracking).
 
-[0.1.0]: https://github.com/midplaneai/midplane/releases/tag/v0.1.0
+[0.5.0]: https://github.com/midplaneai/midplane/releases/tag/v0.5.0

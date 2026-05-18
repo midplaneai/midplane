@@ -162,7 +162,7 @@ If your agent already has DB tooling, Midplane sits in front of it as a separate
 
 ## Status
 
-`0.2.0` — adds multi-database support (one container, N Postgres DBs through one MCP endpoint). Single-DB users upgrade with no config changes; the existing `DATABASE_URL` + top-level `table_access` shape keeps working byte-for-byte. The audit SQLite gains a `database` column with a one-time `ALTER TABLE` migration on first 0.2.0 boot. `0.1.0` shipped as the first OSS release. Expect to stay on `0.x` for a while; the hosted tier ships separately on its own cadence and is not gated on OSS releases.
+`0.5.0` is the first public OSS release. It folds in everything from the pre-public 0.1–0.4 line: per-table `table_access` policy, multi-database (one container, N Postgres DBs through one MCP endpoint), `agent_name` / `agent_version` on every audit row, a required structured `intent` arg on the `query` tool (so every audit row carries a per-call "why"), `POST /admin/policy` hot-swap of `table_access` and `tenant_scope` without restart, and `tenant_scope` **strict mode** — declare a universal `column:` and any `exempt:` tables, and every other table is denied by construction (closes the silent-leak class where a forgotten table reads cross-tenant). The audit SQLite migrates in place on first boot. See [CHANGELOG.md](./CHANGELOG.md) for the version-by-version detail. Expect to stay on `0.x` for a while; the hosted tier ships separately on its own cadence and is not gated on OSS releases.
 
 Performance against locked spike targets: 154 MB image (under 200 MB budget), cold start ~470 ms (under 500 ms target), ~3.9 ms/call smoketest throughput.
 
