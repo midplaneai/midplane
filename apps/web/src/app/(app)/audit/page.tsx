@@ -4,10 +4,7 @@ import { redirect } from "next/navigation";
 import { FilterChips } from "@/components/audit/filter-chips";
 import { RefreshButton } from "@/components/audit/refresh-button";
 import { relativeTime } from "@/components/audit/relative-time";
-import {
-  StalenessBanner,
-  StalenessSubtitle,
-} from "@/components/audit/staleness-banner";
+import { StalenessSubtitle } from "@/components/audit/staleness-banner";
 import { StatusBadge } from "@/components/audit/status-badge";
 import { VolumeSparkline } from "@/components/audit/volume-sparkline";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -98,7 +95,6 @@ export default async function AuditListPage({ searchParams }: PageProps) {
           <StalenessSubtitle read={staleness} totalCount={totalCount} />
           <RefreshButton />
         </div>
-        <StalenessBanner read={staleness} />
 
         <VolumeSparkline buckets={volume} />
 
