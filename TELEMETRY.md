@@ -195,7 +195,7 @@ serialized payloads:
   endpoint), MAC addresses, env var values, file paths.**
 - **Agent identity** — the `agent_name`, `agent_version`, and
   `agent_intent` fields that the engine sees are never forwarded.
-- **Policy file contents** — including tenant-scope mappings.
+- **Policy file contents** — including tenant-scope column, overrides, and exempt lists.
 
 This is a hard list, not a guideline. Adding any field that touches this list
 requires a schema-version bump, a doc update here, and an explicit changelog

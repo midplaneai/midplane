@@ -90,21 +90,72 @@ SELECT 1; DROP TABLE users;                                -- DENY (2 statements
 
 ## `tenant_scope` (default: OFF; opt-in per customer)
 
-Configurable per customer. Maps tables to tenant columns. Denies queries on mapped tables that lack a literal `WHERE {column} = {context.tenant_id}` predicate at the same scope.
+Denies queries on tenant-scoped tables that lack a literal `WHERE {column} = {context.tenant_id}` predicate at the same scope.
 
 Conservative semantics: subqueries, CTEs, UNION arms, JOINs, and function calls all enforced. Some legitimate queries may be denied (false positives possible; we'll keep refining the matcher).
 
-Self-host config (YAML; lives in the same `MIDPLANE_POLICY_FILE` as
-`table_access`):
+### Strict mode (0.5.0+, recommended)
+
+Set a universal `column` and every queried table is tenant-scoped unless you say otherwise. The dangerous path — a forgotten table that silently leaks — is named (`exempt`), not the default.
 
 ```yaml
 tenant_scope:
   enabled: true
-  mappings:
+  column: tenant_id        # universal tenant column
+  overrides:               # tables that use a different column
+    orders: org_id
+  exempt:                  # tables that intentionally don't filter
+    - audit_log
+    - regions
+```
+
+Lookup order per queried table:
+
+1. `exempt[table]` ⇒ table is not scoped. Most explicit signal wins.
+2. `overrides[table]` ⇒ table is scoped on the override column.
+3. `column` ⇒ table is scoped on the universal column.
+
+If none match (no `exempt`, no override, and `column` is unset), the table isn't checked — that's the legacy `mappings`-only behavior below.
+
+> The engine does **no schema introspection**. The rule's job is to check that the AST carries `WHERE <column> = <tenant_id>` at every scope where a scoped table appears. If your agent issues `WHERE tenant_id = 42` against a table without a `tenant_id` column, Postgres surfaces the column-missing error — the operator's cue to mark that table `exempt` or add an `overrides` entry.
+
+> `information_schema` is **always exempt** — the canned `list_tables` and `describe_table` tools need it under strict mode, same as the existing `table_access` carve-out. `pg_catalog` is not exempt; if your agent needs to read it, list specific tables under `exempt`.
+
+### DML semantics
+
+`tenant_scope` checks writes the same way it checks reads, plus an additional rule for `INSERT`:
+
+| Statement | What's checked |
+|---|---|
+| `SELECT` | Every scoped table in `FROM`/joins/subqueries/CTEs/UNION arms needs the predicate at its own scope. |
+| `UPDATE` / `DELETE` | The target table (and any `FROM`/`USING` join tables) need the predicate in the `WHERE` clause. `UPDATE t SET ... WHERE t.tenant_col = <ctx>` allows; bare `UPDATE t SET ...` denies. |
+| `INSERT … VALUES` | The column list must explicitly include the tenant column, and every row's literal at that position must equal `ctx.tenant_id`. `INSERT INTO t (tenant_id, ...) VALUES (42, ...)` allows; omitting the column, omitting the value, or wrong-tenant literal denies. |
+| `INSERT … SELECT` | Conservative deny on the scoped target — the inserted rows depend on the SELECT's output, which we can't statically verify column-by-column. |
+| `INSERT … ON CONFLICT DO UPDATE` | Conservative deny — the update path can rewrite rows that don't match the VALUES check. `ON CONFLICT DO NOTHING` is fine. |
+| `MERGE` | Conservative deny on the scoped target. Operators who need MERGE must list the table under `exempt`. |
+
+### Legacy mode (`mappings`, pre-0.5.0)
+
+```yaml
+tenant_scope:
+  enabled: true
+  mappings:                # alias for `overrides`; deprecated
     users:    org_id
     posts:    org_id
     invoices: customer_id
 ```
+
+Without `column` set, only tables listed in `mappings` (alias for `overrides`) are checked. **Tables you forget to list are not scoped** — this is the footgun strict mode closes. Existing 0.4.x configs continue to work; the alias is accepted and will be removed in a later release.
+
+`mappings` and `overrides` in the same document are rejected — `mappings` is the pre-0.5.0 alias for `overrides`, so picking both is a configuration bug.
+
+### Migration
+
+Adding a `column:` to an existing config will likely deny some queries that worked before — anywhere an agent touched a table that was previously unlisted. That's the point: those queries were unscoped. Expect a one-time pass to:
+
+- Add genuinely tenant-free tables to `exempt` (audit logs, region/lookup tables).
+- Add tables that use a non-default column to `overrides`.
+- Update agent SQL to include the predicate everywhere else.
 
 Per-session: set `MIDPLANE_TENANT_ID=42` in env vars. Hosted: `tenant_id` claim on the issued MCP token.
 

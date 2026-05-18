@@ -23,6 +23,7 @@ export type { Executor, ExecutionResult, ExecuteContext } from "./executor.ts";
 
 export type { Rule, RuleVerdict } from "./policy/index.ts";
 export type { TableAccessConfig, TableAccessLevel } from "./policy/index.ts";
+export type { TenantScopeConfig, TenantScopeSource } from "./policy/index.ts";
 export {
   evaluate,
   tableAccess,

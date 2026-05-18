@@ -1,7 +1,7 @@
 // list_tables tool — canned information_schema.tables query, routed through
-// engine.handle() so audit + policy still record the call (table_access
-// has an unconditional carve-out for information_schema so this works under
-// default-deny policies too; tenant_scope mappings shouldn't include it).
+// engine.handle() so audit + policy still record the call. Both `table_access`
+// and `tenant_scope` carve out `information_schema` unconditionally, so
+// discovery works under default-deny / strict-mode policies.
 //
 // Multi-DB shape: optional `database` arg. Omitted = fan out across all
 // configured DBs and group rows by DB name. Each leg of the fan-out is a

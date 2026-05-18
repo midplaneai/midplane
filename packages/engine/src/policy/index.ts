@@ -10,6 +10,7 @@ export { tableAccess } from "./rules/table-access.ts";
 export type { TableAccessConfig, TableAccessLevel } from "./rules/table-access.ts";
 export { multiStatement } from "./rules/multi-statement.ts";
 export { tenantScope } from "./rules/tenant-scope.ts";
+export type { TenantScopeConfig, TenantScopeSource } from "./rules/tenant-scope.ts";
 export { parseError } from "./rules/parse-error.ts";
 
 export interface EvaluateInput {

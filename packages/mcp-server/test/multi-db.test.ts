@@ -197,13 +197,17 @@ describe("multi-DB tool surface", () => {
       {
         name: "analytics",
         tenant_scope_enabled: false,
-        tenant_scope_mappings: {},
+        tenant_scope_column: null,
+        tenant_scope_overrides: {},
+        tenant_scope_exempt: [],
         table_access_default: "read_write",
       },
       {
         name: "prod",
         tenant_scope_enabled: true,
-        tenant_scope_mappings: { users: "org_id" },
+        tenant_scope_column: null,
+        tenant_scope_overrides: { users: "org_id" },
+        tenant_scope_exempt: [],
         table_access_default: "deny",
       },
     ]);
@@ -447,7 +451,7 @@ describe("multi-DB hot reload", () => {
       databases_changed: string[];
       diff: {
         table_access: { default?: { from: string | null; to: string }; tables_added?: Record<string, string> } | null;
-        tenant_scope: { mappings_added?: Record<string, string> } | null;
+        tenant_scope: { overrides_added?: Record<string, string> } | null;
       };
     };
     expect(payload.databases_changed).toContain("staging");
@@ -460,7 +464,7 @@ describe("multi-DB hot reload", () => {
       to: "deny",
     });
     expect(payload.diff.table_access?.tables_added).toEqual({ users: "read" });
-    expect(payload.diff.tenant_scope?.mappings_added).toEqual({
+    expect(payload.diff.tenant_scope?.overrides_added).toEqual({
       users: "org_id",
     });
   });
@@ -649,10 +653,11 @@ describe("multi-DB hot reload", () => {
 `);
     expect(result.applied_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
-    // describe() reports the live (post-swap) mappings.
+    // describe() reports the live (post-swap) overrides.
     const desc = h.registry.describe();
     const prod = desc.find((d) => d.name === "prod")!;
-    expect(prod.tenant_scope_mappings).toEqual({ users: "customer_id" });
+    expect(prod.tenant_scope_overrides).toEqual({ users: "customer_id" });
+    expect(prod.tenant_scope_column).toBeNull();
 
     // Next query observes the new mapping: a bare SELECT on prod's
     // `users` now demands `customer_id = <tenant_id>`, not `org_id`.

@@ -11,7 +11,17 @@ export interface EngineContextLike {
   agent_name: string | null;
   agent_version: string | null;
   role?: string;
-  tenant_scope?: { mappings: Record<string, string> };
+  // tenant_scope is opt-in per-call context. Two shapes accepted:
+  //   • legacy flat `mappings` (pre-0.5.0 fixtures, still works)
+  //   • rich shape with `defaultColumn` / `overrides` / `exempt` (0.5.0+)
+  // Production wires this via the `tenantScope()` source argument; the
+  // ctx fallback exists for older tests that don't construct a holder.
+  tenant_scope?: {
+    mappings?: Record<string, string>;
+    defaultColumn?: string | null;
+    overrides?: Record<string, string>;
+    exempt?: string[];
+  };
 }
 
 export interface RuleEvalContext {

@@ -265,7 +265,11 @@ describe("POST /admin/policy", () => {
       sections_changed: string[];
       databases_changed: string[];
       table_access: { default: string; tables: Record<string, string> };
-      tenant_scope: { mappings: Record<string, string> } | null;
+      tenant_scope: {
+        column: string | null;
+        overrides: Record<string, string>;
+        exempt: string[];
+      } | null;
       diff: {
         table_access: {
           default?: { from: string | null; to: string };
@@ -274,9 +278,12 @@ describe("POST /admin/policy", () => {
           tables_changed?: Record<string, { from: string; to: string }>;
         } | null;
         tenant_scope: {
-          mappings_added?: Record<string, string>;
-          mappings_removed?: Record<string, string>;
-          mappings_changed?: Record<string, { from: string; to: string }>;
+          column?: { from: string | null; to: string | null };
+          overrides_added?: Record<string, string>;
+          overrides_removed?: Record<string, string>;
+          overrides_changed?: Record<string, { from: string; to: string }>;
+          exempt_added?: string[];
+          exempt_removed?: string[];
         } | null;
       };
     };
@@ -466,7 +473,7 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap", () => {
     expect(res.status).toBe(200);
 
     const desc = handle.registry.describe();
-    expect(desc[0]!.tenant_scope_mappings).toEqual({
+    expect(desc[0]!.tenant_scope_overrides).toEqual({
       users: "org_id",
       posts: "tenant_id",
     });
@@ -480,15 +487,15 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap", () => {
     const last = reloads[reloads.length - 1]!;
     const payload = last.payload as {
       sections_changed: string[];
-      diff: { tenant_scope: { mappings_added?: Record<string, string> } | null };
+      diff: { tenant_scope: { overrides_added?: Record<string, string> } | null };
     };
     expect(payload.sections_changed).toContain("tenant_scope");
-    expect(payload.diff.tenant_scope?.mappings_added).toEqual({
+    expect(payload.diff.tenant_scope?.overrides_added).toEqual({
       posts: "tenant_id",
     });
   });
 
-  test("payload that omits tenant_scope is a no-op for mappings — current state preserved", async () => {
+  test("payload that omits tenant_scope is a no-op for overrides — current state preserved", async () => {
     const yaml =
       "table_access:\n" +
       "  default: deny\n" +
@@ -507,7 +514,7 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap", () => {
     });
     expect(res.status).toBe(200);
     const desc = handle.registry.describe();
-    expect(desc[0]!.tenant_scope_mappings).toEqual({
+    expect(desc[0]!.tenant_scope_overrides).toEqual({
       users: "org_id",
       posts: "tenant_id",
     });
@@ -564,7 +571,319 @@ describe("POST /admin/policy — tenant_scope.mappings hot-swap", () => {
     });
     expect(res.status).toBe(200);
     const desc = handle.registry.describe();
-    expect(desc[0]!.tenant_scope_mappings).toEqual({});
+    expect(desc[0]!.tenant_scope_overrides).toEqual({});
+    expect(desc[0]!.tenant_scope_column).toBeNull();
     expect(desc[0]!.tenant_scope_enabled).toBe(false);
+  });
+
+  test("payload that adds column + exempt → 200, describe() + diff reflect them", async () => {
+    // 0.5.0 strict-mode hot-swap: upgrade from `mappings`-only to a
+    // universal `column` plus an `exempt` list. The diff payload must
+    // call out the new column and exempt entries so a self-host operator
+    // can read the audit row alone and verify what they pushed.
+    const yaml =
+      "tenant_scope:\n" +
+      "  enabled: true\n" +
+      "  column: tenant_id\n" +
+      "  overrides:\n" +
+      "    orders: org_id\n" +
+      "  exempt:\n" +
+      "    - audit_log\n" +
+      "    - regions\n" +
+      "table_access:\n" +
+      "  default: deny\n" +
+      "  tables:\n" +
+      "    users: read\n";
+    const res = await fetch(url("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: yaml,
+    });
+    expect(res.status).toBe(200);
+
+    const desc = handle.registry.describe();
+    expect(desc[0]!.tenant_scope_column).toBe("tenant_id");
+    expect(desc[0]!.tenant_scope_overrides).toEqual({ orders: "org_id" });
+    expect(desc[0]!.tenant_scope_exempt.sort()).toEqual(["audit_log", "regions"]);
+    expect(desc[0]!.tenant_scope_enabled).toBe(true);
+
+    // Same race the "POLICY_RELOADED diff names which tables flipped"
+    // test guards against: ULIDs minted in the same millisecond sort
+    // non-deterministically, so reading "the last reload" is racy in
+    // full-suite runs. Locate by content — the only reload row that
+    // promotes column from null → "tenant_id" is this one.
+    const reloads = handle.registry.audit
+      .readSince("0", 1000)
+      .filter((r) => r.event_type === "POLICY_RELOADED");
+    const target = reloads.find((r) => {
+      const diff = (r.payload as { diff?: { tenant_scope?: { column?: { from: string | null; to: string | null } } } })
+        .diff?.tenant_scope?.column;
+      return diff?.from === null && diff?.to === "tenant_id";
+    });
+    expect(target).toBeDefined();
+    const payload = target!.payload as {
+      sections_changed: string[];
+      tenant_scope: { column: string | null; overrides: Record<string, string>; exempt: string[] } | null;
+      diff: {
+        tenant_scope: {
+          column?: { from: string | null; to: string | null };
+          overrides_added?: Record<string, string>;
+          exempt_added?: string[];
+        } | null;
+      };
+    };
+    expect(payload.sections_changed).toContain("tenant_scope");
+    expect(payload.tenant_scope).not.toBeNull();
+    expect(payload.tenant_scope!.column).toBe("tenant_id");
+    expect(payload.diff.tenant_scope?.column).toEqual({
+      from: null,
+      to: "tenant_id",
+    });
+    expect(payload.diff.tenant_scope?.exempt_added?.sort()).toEqual([
+      "audit_log",
+      "regions",
+    ]);
+  });
+});
+
+describe("POST /admin/policy — tenant_scope strict-mode round-trip", () => {
+  // The strict-mode flow end-to-end: start with `mappings` (legacy),
+  // hot-swap to strict (`column: tenant_id`), confirm a query on an
+  // un-listed table now denies through the live MCP transport.
+  const TOKEN = "test-admin-token-strict";
+  let dir: string;
+  let dbPath: string;
+  let executor: MockExecutor;
+  let handle: EngineHandle;
+  let server: HttpHandle;
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), "midplane-admin-policy-strict-"));
+    dbPath = join(dir, "audit.db");
+    executor = new MockExecutor();
+    handle = buildTestHandle({
+      dbPath,
+      tmpDir: dir,
+      executor,
+      initialPolicyYaml:
+        "tenant_scope:\n" +
+        "  enabled: true\n" +
+        "  mappings:\n" +
+        "    users: tenant_id\n" + // legacy mode: only `users` checked
+        "table_access:\n" +
+        "  default: read\n" +
+        "  tables: {}\n",
+    });
+    server = await startHttp(() => buildServer({ handle }), {
+      port: 0,
+      host: "127.0.0.1",
+      indexer: { audit: handle.registry.audit, token: TOKEN },
+      admin: { setPolicy: handle.registry.setPolicy },
+    });
+  });
+
+  afterAll(async () => {
+    await server.close();
+    await handle.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function urlFor(path: string): string {
+    return `http://127.0.0.1:${server.port}${path}`;
+  }
+
+  async function runQuery(sql: string): Promise<{ isError: boolean; data: any }> {
+    const transport = new StreamableHTTPClientTransport(new URL(urlFor("/mcp")));
+    const client = new Client({ name: "admin-policy-strict-test", version: "0.0.0" });
+    await client.connect(transport);
+    try {
+      executor.result = { rows: [{ id: 1 }], rowCount: 1 };
+      const res = await client.callTool({
+        name: "query",
+        arguments: { sql, intent: "strict-mode round-trip" },
+      });
+      const content = res.content as Array<{ text: string }>;
+      return { isError: !!res.isError, data: JSON.parse(content[0]!.text) };
+    } finally {
+      await client.close();
+    }
+  }
+
+  test("legacy mode: un-listed table allows (the silent-leak footgun)", async () => {
+    const r = await runQuery("SELECT * FROM invoices");
+    expect(r.isError).toBe(false);
+  });
+
+  test("hot-swap to strict (column: tenant_id) → un-listed table now denies", async () => {
+    const yaml =
+      "tenant_scope:\n" +
+      "  enabled: true\n" +
+      "  column: tenant_id\n" + // strict: every queried table requires the column
+      "table_access:\n" +
+      "  default: read\n" +
+      "  tables: {}\n";
+    const res = await fetch(urlFor("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: yaml,
+    });
+    expect(res.status).toBe(200);
+
+    const r = await runQuery("SELECT * FROM invoices");
+    expect(r.isError).toBe(true);
+    expect(r.data.policy_rule).toBe("tenant_scope_missing");
+
+    // Scoped query allows. The literal must be the engine's tenant_id
+    // context (set to `__self_host__` by buildTestHandle); use a string
+    // literal so the AST emits an `A_Const.sval` the rule recognizes.
+    const ok = await runQuery("SELECT * FROM invoices WHERE tenant_id = '__self_host__'");
+    expect(ok.isError).toBe(false);
+  });
+
+  test("exempt entry added → that table allows without predicate", async () => {
+    const yaml =
+      "tenant_scope:\n" +
+      "  enabled: true\n" +
+      "  column: tenant_id\n" +
+      "  exempt:\n" +
+      "    - regions\n" +
+      "table_access:\n" +
+      "  default: read\n" +
+      "  tables: {}\n";
+    const res = await fetch(urlFor("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: yaml,
+    });
+    expect(res.status).toBe(200);
+
+    const r = await runQuery("SELECT * FROM regions");
+    expect(r.isError).toBe(false);
+
+    // But other tables still need the predicate.
+    const r2 = await runQuery("SELECT * FROM invoices");
+    expect(r2.isError).toBe(true);
+  });
+
+  test("strict mode + table_access:read_write: UPDATE WHERE tenant_id allows", async () => {
+    // Reviewer-named regression (pre-fix): strict mode + `read_write`
+    // tables — every UPDATE/DELETE denied as `tenant_scope_missing`
+    // regardless of predicate, because the rule blanket-denied any DML
+    // on a scoped table. The fix runs the same WHERE-predicate check
+    // SELECT uses; a correctly-scoped UPDATE now allows.
+    const yaml =
+      "tenant_scope:\n" +
+      "  enabled: true\n" +
+      "  column: tenant_id\n" +
+      "table_access:\n" +
+      "  default: read\n" +
+      "  tables:\n" +
+      "    feature_flags: read_write\n";
+    const res = await fetch(urlFor("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: yaml,
+    });
+    expect(res.status).toBe(200);
+
+    // Bare UPDATE still denies — no tenant predicate.
+    const bare = await runQuery("UPDATE feature_flags SET name = 'beta'");
+    expect(bare.isError).toBe(true);
+    expect(bare.data.policy_rule).toBe("tenant_scope_missing");
+
+    // UPDATE with the scoping predicate allows.
+    const scoped = await runQuery(
+      "UPDATE feature_flags SET name = 'beta' WHERE tenant_id = '__self_host__'",
+    );
+    expect(scoped.isError).toBe(false);
+
+    // DELETE follows the same pattern.
+    const del = await runQuery(
+      "DELETE FROM feature_flags WHERE tenant_id = '__self_host__'",
+    );
+    expect(del.isError).toBe(false);
+  });
+
+  test("strict mode: list_tables works (information_schema is carved out)", async () => {
+    // Reviewer-named regression (pre-fix): the canned list_tables /
+    // describe_table queries against information_schema failed with
+    // `tenant_scope_missing` under strict mode because the rule didn't
+    // distinguish system schemas. Matches table_access's existing
+    // carve-out at table-access.ts:447.
+    const yaml =
+      "tenant_scope:\n" +
+      "  enabled: true\n" +
+      "  column: tenant_id\n" +
+      "table_access:\n" +
+      "  default: read\n" +
+      "  tables: {}\n";
+    const res = await fetch(urlFor("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: yaml,
+    });
+    expect(res.status).toBe(200);
+
+    // Drive the actual tool through MCP so we exercise the full
+    // canned-SQL path.
+    const transport = new StreamableHTTPClientTransport(new URL(urlFor("/mcp")));
+    const client = new Client({ name: "admin-policy-strict-list-tables", version: "0.0.0" });
+    await client.connect(transport);
+    try {
+      executor.result = {
+        rows: [{ table_schema: "public", table_name: "users" }],
+        rowCount: 1,
+      };
+      const out = await client.callTool({
+        name: "list_tables",
+        arguments: {},
+      });
+      expect(out.isError).toBeFalsy();
+      const data = JSON.parse((out.content as Array<{ text: string }>)[0]!.text);
+      expect(data.allowed).toBe(true);
+      expect(data.tables).toEqual([{ schema: "public", name: "users" }]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test("YAML with both `mappings` and `overrides` set → 400, holder intact", async () => {
+    const bad =
+      "tenant_scope:\n" +
+      "  enabled: true\n" +
+      "  mappings:\n" +
+      "    users: org_id\n" +
+      "  overrides:\n" +
+      "    posts: org_id\n" +
+      "table_access:\n" +
+      "  default: read\n" +
+      "  tables: {}\n";
+    const res = await fetch(urlFor("/admin/policy"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/yaml",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: bad,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/both `mappings` and `overrides`/);
   });
 });

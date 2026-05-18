@@ -29,7 +29,18 @@ export type EngineContext = {
   agent_name: string | null;
   agent_version: string | null;
   role?: string;
-  tenant_scope?: { mappings: Record<string, string> };
+  // Optional opt-in tenant-scope context. Legacy `mappings` is a flat
+  // `table → column` dict (pre-0.5.0). The 0.5.0 shape adds a universal
+  // `defaultColumn` (strict mode: every queried table needs the predicate),
+  // per-table `overrides`, and an `exempt` list. Production wires this
+  // through `tenantScope()`'s source arg, not ctx; the ctx form is for
+  // tests that don't construct a holder.
+  tenant_scope?: {
+    mappings?: Record<string, string>;
+    defaultColumn?: string | null;
+    overrides?: Record<string, string>;
+    exempt?: string[];
+  };
 };
 
 // Per-call free-text task description. Sourced from a required `intent`

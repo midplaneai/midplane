@@ -211,11 +211,17 @@ these to `multi_statement`) is caught.
 
 ## 3. tenant_scope (cross-tenant exfiltration)
 
-Opt-in. Once a customer maps `users → org_id`, every read of `users`
-needs a literal `WHERE org_id = <context.tenant_id>` reachable through
-`AND` conjunctions, at the **same SelectStmt scope** as the table
-reference. UNION arms, CTE bodies, and subqueries each get their own
-scope check.
+Opt-in. Each queried table resolves to either "scoped on column X" or
+"not scoped" per the YAML config (see [policy-rules.md](./policy-rules.md#tenant_scope-default-off-opt-in-per-customer)).
+A scoped table needs a literal `WHERE <column> = <context.tenant_id>`
+reachable through `AND` conjunctions, at the **same SelectStmt scope**
+as the table reference. UNION arms, CTE bodies, and subqueries each
+get their own scope check.
+
+In strict mode (0.5.0, `column: tenant_id` set at the top level), every
+queried table is scoped unless `exempt` lists it. In legacy mode
+(`mappings`-only), only listed tables are scoped — tables you forget
+to list are silently unscoped (the footgun strict mode closes).
 
 Real-world precedent: cross-tenant exfiltration via missing or
 wrong-literal WHERE has been the dominant Postgres-MCP-class bug

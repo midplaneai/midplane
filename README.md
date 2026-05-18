@@ -113,9 +113,9 @@ databases:
         feature_flags: read_write
     tenant_scope:
       enabled: true
-      mappings:
-        users: customer_id
-        orders: customer_id
+      column: customer_id      # strict: every queried table needs this
+      exempt:                  # ...except these
+        - audit_log
   - name: analytics
     url: ${ANALYTICS_DATABASE_URL}
     table_access:

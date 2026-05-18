@@ -87,7 +87,7 @@ describe("loadConfig", () => {
 describe("loadPolicyFile", () => {
   const dir = mkdtempSync(join(tmpdir(), "mp-cfg-"));
 
-  test("valid YAML with tenant_scope mappings parses", () => {
+  test("valid YAML with tenant_scope mappings parses (legacy alias for overrides)", () => {
     const path = join(dir, "ok.yaml");
     writeFileSync(
       path,
@@ -99,7 +99,44 @@ describe("loadPolicyFile", () => {
 `,
     );
     const policy = loadPolicyFile(path);
-    expect(policy.mappings).toEqual({ users: "org_id", posts: "org_id" });
+    expect(policy.tenantScope.defaultColumn).toBeNull();
+    expect(policy.tenantScope.overrides).toEqual({ users: "org_id", posts: "org_id" });
+    expect(policy.tenantScope.exempt).toEqual([]);
+  });
+
+  test("valid YAML with column + overrides + exempt parses (strict mode)", () => {
+    const path = join(dir, "strict.yaml");
+    writeFileSync(
+      path,
+      `tenant_scope:
+  enabled: true
+  column: tenant_id
+  overrides:
+    orders: org_id
+  exempt:
+    - audit_log
+    - regions
+`,
+    );
+    const policy = loadPolicyFile(path);
+    expect(policy.tenantScope.defaultColumn).toBe("tenant_id");
+    expect(policy.tenantScope.overrides).toEqual({ orders: "org_id" });
+    expect(policy.tenantScope.exempt).toEqual(["audit_log", "regions"]);
+  });
+
+  test("mappings + overrides in same doc → rejected", () => {
+    const path = join(dir, "both.yaml");
+    writeFileSync(
+      path,
+      `tenant_scope:
+  enabled: true
+  mappings:
+    users: org_id
+  overrides:
+    posts: org_id
+`,
+    );
+    expect(() => loadPolicyFile(path)).toThrow(/both `mappings` and `overrides`/);
   });
 
   test("YAML parse error throws", () => {
@@ -121,29 +158,36 @@ describe("loadPolicyFile", () => {
     expect(() => loadPolicyFile(path)).toThrow();
   });
 
-  test("missing tenant_scope returns empty mappings", () => {
+  test("missing tenant_scope returns empty config", () => {
     const path = join(dir, "empty.yaml");
     writeFileSync(path, "{}\n");
     const policy = loadPolicyFile(path);
-    expect(policy.mappings).toEqual({});
+    expect(policy.tenantScope.defaultColumn).toBeNull();
+    expect(policy.tenantScope.overrides).toEqual({});
+    expect(policy.tenantScope.exempt).toEqual([]);
   });
 
   test("nonexistent file throws", () => {
     expect(() => loadPolicyFile(join(dir, "does-not-exist.yaml"))).toThrow();
   });
 
-  test("enabled: false returns empty mappings even when mappings are present", () => {
+  test("enabled: false returns empty config even when mappings/column are present", () => {
     const path = join(dir, "disabled.yaml");
     writeFileSync(
       path,
       `tenant_scope:
   enabled: false
+  column: tenant_id
   mappings:
     users: org_id
+  exempt:
+    - audit_log
 `,
     );
     const policy = loadPolicyFile(path);
-    expect(policy.mappings).toEqual({});
+    expect(policy.tenantScope.defaultColumn).toBeNull();
+    expect(policy.tenantScope.overrides).toEqual({});
+    expect(policy.tenantScope.exempt).toEqual([]);
   });
 });
 
@@ -171,7 +215,8 @@ describe("parsePolicyYaml — databases[]", () => {
 
     expect(policy.databases[0]!.name).toBe("prod");
     expect(policy.databases[0]!.url).toBe("postgres://prod");
-    expect(policy.databases[0]!.mappings).toEqual({ users: "org_id" });
+    expect(policy.databases[0]!.tenantScope.overrides).toEqual({ users: "org_id" });
+    expect(policy.databases[0]!.tenantScope.defaultColumn).toBeNull();
     expect(policy.databases[0]!.tableAccess).toEqual({
       default: "read",
       tables: { feature_flags: "read_write" },

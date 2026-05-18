@@ -30,16 +30,19 @@ import {
   type EngineContext,
   type Executor,
   type TableAccessConfig,
+  type TenantScopeConfig,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
 import {
   DEFAULT_DB_NAME,
+  EMPTY_TENANT_SCOPE,
   loadPolicyFile,
   parsePolicyYaml,
   resolveDatabasesFromConfig,
   type DatabaseSpec,
   type LoadedPolicy,
   type TableAccessLevel,
+  type TenantScopeSpec,
 } from "./config.ts";
 import type { Config } from "./config.ts";
 import { logger } from "./logger.ts";
@@ -49,11 +52,11 @@ import { logger } from "./logger.ts";
 // in-flight query never sees a half-applied swap.
 export interface PolicyHolder {
   tableAccess: TableAccessConfig | undefined;
-  // Mappings dict (table→tenant_id-column). Always defined; empty `{}` is
-  // semantically "no enforcement" (matches the rule's allow-on-empty
-  // branch). Swapping to a non-empty dict starts enforcement; swapping
-  // back to `{}` stops it.
-  tenantScope: Record<string, string>;
+  // Resolved tenant_scope config (defaultColumn + overrides + exempt).
+  // The empty form `EMPTY_TENANT_SCOPE` means "no enforcement" — the rule
+  // short-circuits ALLOW when `defaultColumn === null` and `overrides`
+  // is empty. Swapping the pointer in place flips enforcement cleanly.
+  tenantScope: TenantScopeSpec;
 }
 
 // What the MCP layer holds per registered DB.
@@ -87,13 +90,15 @@ export interface EngineRegistry {
   // For the indexer pull endpoint and the audit CLI.
   audit: SqliteAuditWriter;
   // For `list_databases` — surfaces per-DB metadata without exposing the
-  // EngineEntry internals. `tenant_scope_mappings` is the live mappings
-  // dict; cloud callers use it to verify engine state matches what their
-  // DB row says they pushed.
+  // EngineEntry internals. The tenant_scope fields are the live resolved
+  // config; cloud callers use them to verify engine state matches what
+  // their DB row says they pushed.
   describe(): Array<{
     name: string;
     tenant_scope_enabled: boolean;
-    tenant_scope_mappings: Record<string, string>;
+    tenant_scope_column: string | null;
+    tenant_scope_overrides: Record<string, string>;
+    tenant_scope_exempt: string[];
     table_access_default: TableAccessLevel | null;
   }>;
   // Hot-swap entrypoint. Same body as 0.1.x's setPolicy — the registry
@@ -132,14 +137,14 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
         {
           name: DEFAULT_DB_NAME,
           url: "",
-          mappings: {},
+          tenantScope: EMPTY_TENANT_SCOPE,
           hasTenantScope: false,
           tableAccess: null,
           hasTableAccess: false,
         },
       ],
       hasDatabasesBlock: false,
-      mappings: {},
+      tenantScope: EMPTY_TENANT_SCOPE,
       tableAccess: null,
       hasTenantScope: false,
       hasTableAccess: false,
@@ -169,7 +174,11 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
         policyFile: cfg.policyFile,
         databases: specs.map((s) => ({
           name: s.name,
-          mappedTables: Object.keys(s.mappings),
+          tenantScope: {
+            column: s.tenantScope.defaultColumn,
+            overrides: Object.keys(s.tenantScope.overrides),
+            exempt: s.tenantScope.exempt,
+          },
           tableAccess: s.tableAccess
             ? { default: s.tableAccess.default, tables: Object.keys(s.tableAccess.tables) }
             : null,
@@ -219,12 +228,12 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
     };
     const tableAccessDiff = diffTableAccess(target.holder.tableAccess, newTableAccess);
     const tenantScopeDiff = next.hasTenantScope
-      ? diffTenantScopeMappings(target.holder.tenantScope, next.mappings)
+      ? diffTenantScope(target.holder.tenantScope, next.tenantScope)
       : null;
 
     target.holder.tableAccess = newTableAccess;
     if (next.hasTenantScope) {
-      target.holder.tenantScope = next.mappings;
+      target.holder.tenantScope = next.tenantScope;
     }
 
     return finalizeReload(cfg, baseAudit, "admin_endpoint", [
@@ -262,16 +271,22 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
     describe() {
       return [...entries.values()]
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map((e) => ({
-          name: e.name,
-          tenant_scope_enabled: Object.keys(e.holder.tenantScope).length > 0,
-          // Shallow-copy so callers (including JSON serializers) can't
-          // mutate the live holder.
-          tenant_scope_mappings: { ...e.holder.tenantScope },
-          table_access_default: e.holder.tableAccess
-            ? e.holder.tableAccess.default
-            : null,
-        }));
+        .map((e) => {
+          const ts = e.holder.tenantScope;
+          return {
+            name: e.name,
+            tenant_scope_enabled:
+              ts.defaultColumn !== null || Object.keys(ts.overrides).length > 0,
+            tenant_scope_column: ts.defaultColumn,
+            // Shallow-copy so callers (including JSON serializers) can't
+            // mutate the live holder.
+            tenant_scope_overrides: { ...ts.overrides },
+            tenant_scope_exempt: [...ts.exempt],
+            table_access_default: e.holder.tableAccess
+              ? e.holder.tableAccess.default
+              : null,
+          };
+        });
     },
     setPolicy,
     async close() {
@@ -310,7 +325,7 @@ function makeEngineEntry(
     tableAccess: spec.tableAccess
       ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
       : undefined,
-    tenantScope: { ...spec.mappings },
+    tenantScope: cloneTenantScope(spec.tenantScope),
   };
 
   // Tests inject one shared executor across DBs (for back-compat with
@@ -327,8 +342,8 @@ function makeEngineEntry(
         tableAccess(() => holder.tableAccess),
         // Same getter pattern as tableAccess: the rule reads holder.tenantScope
         // once per finalize() so a swap mid-traffic flips queries cleanly
-        // between old and new mappings without rebuilding the engine.
-        tenantScope(() => holder.tenantScope),
+        // between old and new config without rebuilding the engine.
+        tenantScope((): TenantScopeConfig => holder.tenantScope),
       ],
     },
     audit,
@@ -434,10 +449,9 @@ async function swapMultiDb(
         tableAccessDiff: fresh.holder.tableAccess
           ? diffTableAccess(undefined, fresh.holder.tableAccess)
           : null,
-        tenantScopeDiff:
-          Object.keys(fresh.holder.tenantScope).length > 0
-            ? diffTenantScopeMappings({}, fresh.holder.tenantScope)
-            : null,
+        tenantScopeDiff: tenantScopeIsActive(fresh.holder.tenantScope)
+          ? diffTenantScope(EMPTY_TENANT_SCOPE, fresh.holder.tenantScope)
+          : null,
         kind: "added",
       });
       continue;
@@ -473,7 +487,7 @@ async function swapMultiDb(
         tableAccessDiff: fresh.holder.tableAccess
           ? diffTableAccess(prevTableAccess, fresh.holder.tableAccess)
           : null,
-        tenantScopeDiff: diffTenantScopeMappings(
+        tenantScopeDiff: diffTenantScope(
           prevTenantScope,
           fresh.holder.tenantScope,
         ),
@@ -491,12 +505,12 @@ async function swapMultiDb(
     };
     const tableAccessDiff = diffTableAccess(existing.holder.tableAccess, newTableAccess);
     const tenantScopeDiff = spec.hasTenantScope
-      ? diffTenantScopeMappings(existing.holder.tenantScope, spec.mappings)
+      ? diffTenantScope(existing.holder.tenantScope, spec.tenantScope)
       : null;
 
     existing.holder.tableAccess = newTableAccess;
     if (spec.hasTenantScope) {
-      existing.holder.tenantScope = spec.mappings;
+      existing.holder.tenantScope = spec.tenantScope;
     }
 
     summaries.push({
@@ -532,7 +546,7 @@ async function swapMultiDb(
 interface ReloadSummary {
   name: string;
   tableAccess: TableAccessConfig | undefined;
-  tenantScope: Record<string, string>;
+  tenantScope: TenantScopeSpec;
   tableAccessDiff: TableAccessDiff | null;
   tenantScopeDiff: TenantScopeDiff | null;
   // What kind of change happened to this DB. "added" + "rebuilt" both
@@ -559,10 +573,20 @@ interface TableAccessDiff {
   tables_changed?: Record<string, { from: TableAccessLevel; to: TableAccessLevel }>;
 }
 
+// tenant_scope diff (0.5.0 shape). Same "added/removed/changed" pattern as
+// table_access. `column` reports a flip of the universal default column;
+// `overrides_*` cover per-table column edits (this is what `mappings_*`
+// covered pre-0.5.0); `exempt_*` covers the new opt-out list. Empty
+// buckets are omitted by the JSON serializer so a single-field flip
+// produces a compact payload. The cloud audit dashboard's structured
+// diff renderer indexes against this shape.
 interface TenantScopeDiff {
-  mappings_added?: Record<string, string>;
-  mappings_removed?: Record<string, string>;
-  mappings_changed?: Record<string, { from: string; to: string }>;
+  column?: { from: string | null; to: string | null };
+  overrides_added?: Record<string, string>;
+  overrides_removed?: Record<string, string>;
+  overrides_changed?: Record<string, { from: string; to: string }>;
+  exempt_added?: string[];
+  exempt_removed?: string[];
 }
 
 // Write the POLICY_RELOADED audit row. Best-effort — the swap already
@@ -625,10 +649,17 @@ async function finalizeReload(
         table_access: s.tableAccess
           ? { default: s.tableAccess.default, tables: s.tableAccess.tables }
           : null,
-        tenant_scope:
-          Object.keys(s.tenantScope).length > 0
-            ? { mappings: s.tenantScope }
-            : null,
+        // 0.5.0 shape: { column, overrides, exempt } (replaces the
+        // 0.4.x `{ mappings }` blob). `null` when scoping is fully
+        // inactive (no column + no overrides) — symmetric with the
+        // 0.4.x null-on-empty behavior.
+        tenant_scope: tenantScopeIsActive(s.tenantScope)
+          ? {
+              column: s.tenantScope.defaultColumn,
+              overrides: s.tenantScope.overrides,
+              exempt: s.tenantScope.exempt,
+            }
+          : null,
         // Coarse diff of what changed for THIS row's DB. `null` for
         // brand-new entries (no prior state to diff against) or sections
         // that weren't touched.
@@ -722,27 +753,59 @@ function diffTableAccess(
   return diff;
 }
 
-function diffTenantScopeMappings(
-  prev: Record<string, string>,
-  next: Record<string, string>,
+// Compute the field-level changes between two TenantScopeSpec snapshots.
+// Empty buckets are omitted by the JSON serializer so a single-field flip
+// stays compact. Symmetric structure with `diffTableAccess` — the cloud
+// audit dashboard renderer indexes against the same shape.
+function diffTenantScope(
+  prev: TenantScopeSpec,
+  next: TenantScopeSpec,
 ): TenantScopeDiff {
   const diff: TenantScopeDiff = {};
+  if (prev.defaultColumn !== next.defaultColumn) {
+    diff.column = { from: prev.defaultColumn, to: next.defaultColumn };
+  }
   const added: Record<string, string> = {};
   const removed: Record<string, string> = {};
   const changed: Record<string, { from: string; to: string }> = {};
-  for (const k of Object.keys(next)) {
-    const nextCol = next[k]!;
-    const prevCol = prev[k];
+  for (const k of Object.keys(next.overrides)) {
+    const nextCol = next.overrides[k]!;
+    const prevCol = prev.overrides[k];
     if (prevCol === undefined) added[k] = nextCol;
     else if (prevCol !== nextCol) changed[k] = { from: prevCol, to: nextCol };
   }
-  for (const k of Object.keys(prev)) {
-    if (!(k in next)) removed[k] = prev[k]!;
+  for (const k of Object.keys(prev.overrides)) {
+    if (!(k in next.overrides)) removed[k] = prev.overrides[k]!;
   }
-  if (Object.keys(added).length > 0) diff.mappings_added = added;
-  if (Object.keys(removed).length > 0) diff.mappings_removed = removed;
-  if (Object.keys(changed).length > 0) diff.mappings_changed = changed;
+  if (Object.keys(added).length > 0) diff.overrides_added = added;
+  if (Object.keys(removed).length > 0) diff.overrides_removed = removed;
+  if (Object.keys(changed).length > 0) diff.overrides_changed = changed;
+
+  const prevExempt = new Set(prev.exempt);
+  const nextExempt = new Set(next.exempt);
+  const exemptAdded = next.exempt.filter((t) => !prevExempt.has(t));
+  const exemptRemoved = prev.exempt.filter((t) => !nextExempt.has(t));
+  if (exemptAdded.length > 0) diff.exempt_added = exemptAdded;
+  if (exemptRemoved.length > 0) diff.exempt_removed = exemptRemoved;
+
   return diff;
+}
+
+// "Is this tenant_scope config actually enforcing anything?" Mirrors the
+// engine rule's short-circuit: no defaultColumn AND no overrides means
+// every queried table allows. Exempt-only is also inert (nothing to
+// exempt from). Used to gate the audit row's `tenant_scope` payload and
+// the "added" summary's diff base.
+function tenantScopeIsActive(ts: TenantScopeSpec): boolean {
+  return ts.defaultColumn !== null || Object.keys(ts.overrides).length > 0;
+}
+
+function cloneTenantScope(ts: TenantScopeSpec): TenantScopeSpec {
+  return {
+    defaultColumn: ts.defaultColumn,
+    overrides: { ...ts.overrides },
+    exempt: [...ts.exempt],
+  };
 }
 
 // Crude DSN masking for log lines so the password never lands in logs.

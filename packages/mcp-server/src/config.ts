@@ -38,9 +38,22 @@ export type Config = z.infer<typeof ConfigSchema>;
 
 const TableAccessLevelSchema = z.enum(["deny", "read", "read_write"]);
 
+// tenant_scope YAML shape (0.5.0).
+//
+// Strict semantics: when `column` is set, every queried table is scoped on
+// that column UNLESS it's listed in `exempt` or has a different column in
+// `overrides`. When `column` is unset, the legacy "only `overrides` listed
+// tables get checked" behavior applies (pre-0.5.0 `mappings` semantics).
+//
+// `mappings` is the pre-0.5.0 alias for `overrides`. Both reading and
+// hot-swapping accept it; setting both `mappings` and `overrides` in one
+// document is rejected (see resolveTenantScope).
 const TenantScopeSchema = z.object({
   enabled: z.boolean().default(true),
-  mappings: z.record(z.string(), z.string()).default({}),
+  column: z.string().min(1).optional(),
+  overrides: z.record(z.string(), z.string()).optional(),
+  exempt: z.array(z.string().min(1)).optional(),
+  mappings: z.record(z.string(), z.string()).optional(),
 });
 
 const TableAccessSchema = z.object({
@@ -71,13 +84,24 @@ export type PolicyFile = z.infer<typeof PolicyFileSchema>;
 
 export type TableAccessLevel = z.infer<typeof TableAccessLevelSchema>;
 
+// Resolved tenant_scope config the engine evaluates against. Always
+// well-formed; loader/resolver normalize every accepted YAML shape into
+// this single structure. An `enabled: false` document, an empty document,
+// or a doc with `defaultColumn: null` + no overrides all collapse to the
+// inert config (no enforcement).
+export interface TenantScopeSpec {
+  defaultColumn: string | null;
+  overrides: Record<string, string>;
+  exempt: string[];
+}
+
 // One resolved DB. The loader produces N>=1 of these from a YAML doc:
 // either one synthetic `__default__` (legacy shape) or one per `databases:`
 // entry. Downstream construction (engine registry) treats both uniformly.
 export interface DatabaseSpec {
   name: string;
   url: string;
-  mappings: Record<string, string>;
+  tenantScope: TenantScopeSpec;
   hasTenantScope: boolean;
   tableAccess: {
     default: TableAccessLevel;
@@ -85,6 +109,12 @@ export interface DatabaseSpec {
   } | null;
   hasTableAccess: boolean;
 }
+
+export const EMPTY_TENANT_SCOPE: TenantScopeSpec = {
+  defaultColumn: null,
+  overrides: {},
+  exempt: [],
+};
 
 // Reserved name for the synthetic single-DB entry. Operators may not use
 // this in `databases[].name`.
@@ -104,12 +134,12 @@ export interface LoadedPolicy {
 
   // ── Legacy-shape mirrors ───────────────────────────────────────────────
   // For the single-DB legacy path these mirror databases[0].* so callers
-  // that pre-date 0.2.0 keep reading `policy.mappings` etc. unchanged. For
-  // the multi-DB shape these are the empty/null defaults.
+  // that pre-date 0.2.0 keep reading `policy.tenantScope` etc. unchanged.
+  // For the multi-DB shape these are the empty/null defaults.
   //
   // hasTenantScope / hasTableAccess preserve the omit-vs-empty distinction
   // for the legacy hot-reload endpoint path.
-  mappings: Record<string, string>;
+  tenantScope: TenantScopeSpec;
   tableAccess: {
     default: TableAccessLevel;
     tables: Record<string, TableAccessLevel>;
@@ -190,14 +220,14 @@ export function parsePolicyYaml(
         {
           name: DEFAULT_DB_NAME,
           url: "",
-          mappings: {},
+          tenantScope: EMPTY_TENANT_SCOPE,
           hasTenantScope: false,
           tableAccess: null,
           hasTableAccess: false,
         },
       ],
       hasDatabasesBlock: false,
-      mappings: {},
+      tenantScope: EMPTY_TENANT_SCOPE,
       tableAccess: null,
       hasTenantScope: false,
       hasTableAccess: false,
@@ -231,7 +261,7 @@ export function parsePolicyYaml(
       // Multi-DB shape: legacy mirror fields aren't applicable. Default to
       // empty so callers reading these (legacy hot-reload path) see a
       // consistent shape.
-      mappings: {},
+      tenantScope: EMPTY_TENANT_SCOPE,
       tableAccess: null,
       hasTenantScope: false,
       hasTableAccess: false,
@@ -250,8 +280,11 @@ export function parsePolicyYaml(
     "table_access",
   );
 
-  const ts = parsed.data.tenant_scope;
-  const mappings = ts && ts.enabled !== false ? ts.mappings : {};
+  const tenantScope = resolveTenantScope(
+    parsed.data.tenant_scope,
+    source,
+    "tenant_scope",
+  );
 
   const ta = parsed.data.table_access;
   const tableAccess = ta ? { default: ta.default, tables: ta.tables } : null;
@@ -261,17 +294,43 @@ export function parsePolicyYaml(
       {
         name: DEFAULT_DB_NAME,
         url: "",
-        mappings,
+        tenantScope,
         hasTenantScope,
         tableAccess,
         hasTableAccess,
       },
     ],
     hasDatabasesBlock: false,
-    mappings,
+    tenantScope,
     tableAccess,
     hasTenantScope,
     hasTableAccess,
+  };
+}
+
+// Normalize a parsed `tenant_scope` block into a TenantScopeSpec. Applies
+// the strict-mode precedence rules and rejects `mappings` + `overrides`
+// in the same document (a clear operator bug — `mappings` is the legacy
+// alias for `overrides`).
+//
+// `path` is baked into thrown errors so multi-DB callers can disambiguate
+// which entry the bad config belongs to.
+function resolveTenantScope(
+  raw: z.infer<typeof TenantScopeSchema> | undefined,
+  source: string,
+  path: string,
+): TenantScopeSpec {
+  if (!raw || raw.enabled === false) return EMPTY_TENANT_SCOPE;
+  if (raw.mappings !== undefined && raw.overrides !== undefined) {
+    throw new Error(
+      `Policy schema error from ${source}: ${path} has both \`mappings\` and \`overrides\` set. \`mappings\` is the pre-0.5.0 alias for \`overrides\` — pick one.`,
+    );
+  }
+  const overrides = raw.overrides ?? raw.mappings ?? {};
+  return {
+    defaultColumn: raw.column ?? null,
+    overrides,
+    exempt: raw.exempt ?? [],
   };
 }
 
@@ -295,8 +354,11 @@ function resolveDatabaseEntry(
 
   const url = interpolateEnv(entry.url, env, source, `databases[${idx}].url`);
 
-  const ts = entry.tenant_scope;
-  const mappings = ts && ts.enabled !== false ? ts.mappings : {};
+  const tenantScope = resolveTenantScope(
+    entry.tenant_scope,
+    source,
+    `databases[${idx}].tenant_scope`,
+  );
 
   const ta = entry.table_access;
   const tableAccess = ta ? { default: ta.default, tables: ta.tables } : null;
@@ -312,7 +374,7 @@ function resolveDatabaseEntry(
   return {
     name: entry.name,
     url,
-    mappings,
+    tenantScope,
     hasTenantScope,
     tableAccess,
     hasTableAccess,

@@ -128,7 +128,9 @@ export function makeTestHandle(opts: {
         {
           name,
           tenant_scope_enabled: false,
-          tenant_scope_mappings: {},
+          tenant_scope_column: null,
+          tenant_scope_overrides: {},
+          tenant_scope_exempt: [],
           table_access_default: null,
         },
       ];

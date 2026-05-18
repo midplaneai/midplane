@@ -408,17 +408,29 @@ describe("adversarial/tenant-scope: literal types", () => {
 describe("adversarial/tenant-scope: standalone DML (writes rule disabled)", () => {
   // These cases verify tenant_scope is correct on its own. In production
   // writes_require_approval normally denies all writes first.
-  test("DELETE on mapped table → deny", async () => {
+  test("DELETE on mapped table without predicate → deny", async () => {
     const { engine } = tenantOnlyEngine();
     await expectDeny(
       engine,
       tenantScopedCtx,
-      "DELETE FROM users WHERE org_id = 42",
+      "DELETE FROM users",
       TENANT,
     );
   });
 
-  test("DELETE WHERE 1=1 on mapped → deny", async () => {
+  test("DELETE on mapped table WITH matching predicate → allow", async () => {
+    // 0.5.0: UPDATE/DELETE check the WHERE clause the same way SELECT
+    // does. A correctly-scoped DELETE allows; the over-conservative
+    // pre-0.5.0 blanket-deny broke read_write tables under strict mode.
+    const { engine } = tenantOnlyEngine();
+    await expectAllow(
+      engine,
+      tenantScopedCtx,
+      "DELETE FROM users WHERE org_id = 42",
+    );
+  });
+
+  test("DELETE WHERE 1=1 on mapped → deny (no tenant predicate)", async () => {
     const { engine } = tenantOnlyEngine();
     await expectDeny(
       engine,
@@ -428,20 +440,26 @@ describe("adversarial/tenant-scope: standalone DML (writes rule disabled)", () =
     );
   });
 
-  test("INSERT INTO mapped (cross-tenant literal) → deny", async () => {
-    // V1: any DML on a mapped table denies, regardless of VALUES literal.
-    // The conservative answer is deny-by-table; V1.5 may extend to
-    // VALUES-position checks for INSERT.
+  test("DELETE WHERE wrong-tenant literal → deny", async () => {
     const { engine } = tenantOnlyEngine();
     await expectDeny(
       engine,
       tenantScopedCtx,
-      "INSERT INTO users (org_id, name) VALUES (99, 'a')",
+      "DELETE FROM users WHERE org_id = 99",
       TENANT,
     );
   });
 
-  test("UPDATE mapped … FROM unmapped → deny", async () => {
+  test("UPDATE on mapped table WITH matching predicate → allow", async () => {
+    const { engine } = tenantOnlyEngine();
+    await expectAllow(
+      engine,
+      tenantScopedCtx,
+      "UPDATE users SET name='b' WHERE org_id = 42",
+    );
+  });
+
+  test("UPDATE mapped … FROM unmapped, no predicate → deny", async () => {
     const { engine } = tenantOnlyEngine();
     await expectDeny(
       engine,
@@ -451,7 +469,108 @@ describe("adversarial/tenant-scope: standalone DML (writes rule disabled)", () =
     );
   });
 
-  test("MERGE INTO mapped → deny", async () => {
+  test("UPDATE mapped … FROM unmapped WITH predicate → allow", async () => {
+    const { engine } = tenantOnlyEngine();
+    await expectAllow(
+      engine,
+      tenantScopedCtx,
+      "UPDATE users SET name='b' FROM logs WHERE users.id = logs.user_id AND users.org_id = 42",
+    );
+  });
+
+  test("INSERT INTO mapped (cross-tenant literal) → deny", async () => {
+    // 0.5.0: INSERT VALUES is verified row-by-row at the tenant-column
+    // position. Wrong literal denies.
+    const { engine } = tenantOnlyEngine();
+    await expectDeny(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users (org_id, name) VALUES (99, 'a')",
+      TENANT,
+    );
+  });
+
+  test("INSERT INTO mapped (matching tenant literal) → allow", async () => {
+    const { engine } = tenantOnlyEngine();
+    await expectAllow(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users (org_id, name) VALUES (42, 'a')",
+    );
+  });
+
+  test("INSERT INTO mapped, omits tenant column → deny", async () => {
+    // Column list doesn't include `org_id` — the row would get NULL or
+    // a default, neither of which we can verify. Conservative deny.
+    const { engine } = tenantOnlyEngine();
+    await expectDeny(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users (name) VALUES ('a')",
+      TENANT,
+    );
+  });
+
+  test("INSERT INTO mapped without column list → deny (position unknown)", async () => {
+    // No explicit column list means tenant-column position depends on
+    // schema we don't introspect. Conservative deny — operator must
+    // either supply a column list or `exempt` the table.
+    const { engine } = tenantOnlyEngine();
+    await expectDeny(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users VALUES (42, 'a')",
+      TENANT,
+    );
+  });
+
+  test("INSERT … SELECT into mapped → deny (can't verify row-by-row)", async () => {
+    // The inner SELECT is its own scope (checked separately). The
+    // INSERT target's tenant column would be whatever the SELECT
+    // yields — not statically verifiable. Conservative deny.
+    const { engine } = tenantOnlyEngine();
+    await expectDeny(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users (org_id, name) SELECT org_id, name FROM staging WHERE org_id = 42",
+      TENANT,
+    );
+  });
+
+  test("INSERT multi-row, one row wrong tenant → deny", async () => {
+    const { engine } = tenantOnlyEngine();
+    await expectDeny(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users (org_id, name) VALUES (42, 'a'), (99, 'b')",
+      TENANT,
+    );
+  });
+
+  test("INSERT with ON CONFLICT DO UPDATE on scoped table → deny", async () => {
+    // ON CONFLICT DO UPDATE silently overwrites existing rows — the
+    // VALUES check guards the would-be-inserted row, but the update
+    // path can hit any row matching the conflict target. Conservative
+    // deny; operator must `exempt` to use this pattern.
+    const { engine } = tenantOnlyEngine();
+    await expectDeny(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users (org_id, name) VALUES (42, 'a') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name",
+      TENANT,
+    );
+  });
+
+  test("INSERT with ON CONFLICT DO NOTHING on scoped table → allow", async () => {
+    const { engine } = tenantOnlyEngine();
+    await expectAllow(
+      engine,
+      tenantScopedCtx,
+      "INSERT INTO users (org_id, name) VALUES (42, 'a') ON CONFLICT (name) DO NOTHING",
+    );
+  });
+
+  test("MERGE INTO mapped → deny (always; operator must exempt)", async () => {
     const { engine } = tenantOnlyEngine();
     await expectDeny(
       engine,
@@ -475,6 +594,71 @@ describe("adversarial/tenant-scope: standalone DML (writes rule disabled)", () =
       engine,
       tenantScopedCtx,
       "WITH u AS (SELECT id FROM users) DELETE FROM logs WHERE id IN (SELECT id FROM u)",
+      TENANT,
+    );
+  });
+});
+
+describe("adversarial/tenant-scope: information_schema carve-out", () => {
+  // information_schema is unconditionally exempt from tenant-scope (matches
+  // table_access's existing carve-out). Without this, list_tables /
+  // describe_table — which query information_schema — would always fail
+  // under strict mode.
+  test("SELECT FROM information_schema.tables → allow under strict mode", async () => {
+    const { engine } = makeEngine({
+      rules: [
+        parseError(),
+        tenantScope({
+          defaultColumn: "tenant_id",
+          overrides: {},
+          exempt: [],
+        }),
+      ],
+    });
+    await expectAllow(
+      engine,
+      tenantScopedCtx,
+      "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'public'",
+    );
+  });
+
+  test("SELECT FROM information_schema.columns → allow under strict mode", async () => {
+    const { engine } = makeEngine({
+      rules: [
+        parseError(),
+        tenantScope({
+          defaultColumn: "tenant_id",
+          overrides: {},
+          exempt: [],
+        }),
+      ],
+    });
+    await expectAllow(
+      engine,
+      tenantScopedCtx,
+      "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'",
+    );
+  });
+
+  test("pg_catalog is NOT carved out — query without predicate denies", async () => {
+    // Matches table_access's choice to leave pg_catalog policied: it
+    // exposes pg_roles etc. beyond schema discovery. An operator who
+    // genuinely needs pg_catalog access must `exempt` the specific
+    // table.
+    const { engine } = makeEngine({
+      rules: [
+        parseError(),
+        tenantScope({
+          defaultColumn: "tenant_id",
+          overrides: {},
+          exempt: [],
+        }),
+      ],
+    });
+    await expectDeny(
+      engine,
+      tenantScopedCtx,
+      "SELECT * FROM pg_catalog.pg_roles",
       TENANT,
     );
   });

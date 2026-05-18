@@ -4,6 +4,45 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.0] — Unreleased
+
+### Added
+
+- **`tenant_scope` strict mode.** New `column:` top-level field declares the universal tenant column. When set, every queried table is tenant-scoped unless listed in the new `exempt:` array, or covered by `overrides:` (renamed from `mappings`). Lookup precedence per table: `exempt[table]` → `overrides[table]` → `column`. Closes the silent-leak class that 0.4.x's `mappings`-only design left open: a table that an operator forgot to list was silently unscoped; now the operator declares the invariant (`column`) and the exceptions (`exempt`), and a forgotten table denies by default. The engine does no schema introspection — the rule's job is checking whether the AST carries `WHERE <column> = <tenant_id>` at every scope where a scoped table appears; if the column doesn't exist on a queried table, Postgres surfaces the column-missing error (operator's cue to add the table to `exempt` or `overrides`). The deny *forces* classification rather than silently failing.
+
+  ```yaml
+  tenant_scope:
+    enabled: true
+    column: tenant_id        # universal default
+    overrides:               # tables that use a different column
+      orders: org_id
+    exempt:                  # tables that intentionally don't filter
+      - audit_log
+      - regions
+  ```
+
+- **POLICY_RELOADED `tenant_scope` payload + diff extended.** The audit row's `payload.tenant_scope` now carries `{ column, overrides, exempt }` (replaces the 0.4.x `{ mappings }` blob). `payload.diff.tenant_scope` gains `column.{from,to}`, `overrides_added/removed/changed` (replaces `mappings_*`), and `exempt_added/removed`. The cloud audit dashboard's structured diff renderer indexes against this shape — operators read what changed from the row alone, no dashboard cross-reference required.
+- **DML predicate checks for UPDATE / DELETE / INSERT-VALUES.** Pre-0.5.0 the rule blanket-denied any DML on a mapped table, which was over-conservative once strict mode made it possible to scope every `read_write` table. `UPDATE t SET ... WHERE tenant_col = <ctx>` and `DELETE FROM t WHERE tenant_col = <ctx>` now allow (same WHERE-predicate matcher as SELECT). `INSERT INTO t (..., tenant_col, ...) VALUES (..., <ctx>, ...)` allows when the tenant column is explicitly in the column list and every row's literal at that position equals `ctx.tenant_id`. `INSERT … SELECT`, `INSERT … ON CONFLICT DO UPDATE`, and `MERGE` remain conservatively denied on scoped targets — operators must `exempt` to use them.
+- **`information_schema` carve-out for `tenant_scope`.** Matches the existing `table_access` carve-out at table-access.ts:447. The canned `list_tables` and `describe_table` tools (which query `information_schema.tables` and `information_schema.columns`) now work under strict mode without forcing operators to enumerate every system view in `exempt`. `pg_catalog` is intentionally not carved out, mirroring `table_access`.
+- **`describe()` / `list_databases` returns the live strict-mode state.** `tenant_scope_column`, `tenant_scope_overrides`, and `tenant_scope_exempt` replace the 0.4.x `tenant_scope_mappings` field. `tenant_scope_enabled` is now true iff `column` is set OR `overrides` is non-empty (exempt-only is inert). Cloud callers use these to round-trip what they pushed.
+
+### Changed (Breaking)
+
+- **MCP wire shape: `tenant_scope_mappings` removed from `list_databases`.** Replaced with the three fields named above. Consumers reading the JSON output of `list_databases` need to update their parsers. The cloud dashboard reads through the new fields.
+- **POLICY_RELOADED `payload.tenant_scope` shape changed.** A consumer pinned to `payload.tenant_scope.mappings` reads `undefined`; the equivalent data lives under `payload.tenant_scope.overrides` (or, for strict-mode configs, `payload.tenant_scope.column`). Same change for `payload.diff.tenant_scope.mappings_*` → `overrides_*`. The 0.4.0 `sections_changed` / `databases_changed` keys are unchanged.
+- **`@midplane/engine` rule signature widened.** `tenantScope()` now accepts a rich `TenantScopeConfig` (`{ defaultColumn, overrides, exempt }`) or a getter returning one, in addition to the legacy flat-record source (still supported as a back-compat shim — a plain `Record<string, string>` is read as `{ defaultColumn: null, overrides: <record>, exempt: [] }`).
+- **Engine context shape extended.** `EngineContext.tenant_scope` accepts the rich form (`defaultColumn` / `overrides` / `exempt`) in addition to the legacy `mappings` field, for tests that wire config via ctx rather than through a holder. Production wires this through `tenantScope()`'s source argument.
+
+### Changed (Compatible)
+
+- **`mappings` is a deprecated alias for `overrides`.** YAML configs that use `mappings: { ... }` continue to load and behave identically to pre-0.5.0 — `mappings` is read as `overrides` with no top-level `column` (legacy mode, only listed tables checked). Setting both `mappings` and `overrides` in the same document is rejected at parse time with a clear error. The alias will be removed in a later release; migrate to `overrides`. Recommended upgrade path: add `column: <your_tenant_col>` and move per-table exceptions to `overrides` / `exempt`.
+
+### Why
+
+The 0.4.x `tenant_scope.mappings` design was opt-in: any table not listed in the mapping dict was silently unscoped. The shape was asymmetric with `table_access`: `table_access.default: deny` was the canonical safety knob, but `tenant_scope` had no equivalent. Cloud onboarding kept exposing the failure mode — operators introspect their schema, see 40 tables, mark 8 in `mappings`, ship, then a new table gets added that wasn't on the original list, and the agent reads it cross-tenant with no signal.
+
+Strict mode flips the default. The operator declares one invariant (`column`) and any exceptions (`exempt`); every other table is denied by construction. The dangerous path is named, not silent. An alternative design ("introspect-at-boot" — the engine checks the live schema to know which tables have the column) was rejected: it pulls in DB availability at startup, cache invalidation on schema changes, and a fuzzy "if the schema has it" lookup. This design needs no introspection: a missing column produces a Postgres error that surfaces back to the operator as a cue to update the YAML.
+
 ## [0.4.0] — Unreleased
 
 ### Changed (Breaking)
