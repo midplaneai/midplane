@@ -2,40 +2,6 @@ import type { StalenessRead } from "@/lib/audit";
 
 const STALE_WARN_MS = 30_000;
 
-// Three states per the design doc:
-//   < 30s          → muted "as-of Ns ago" subtitle, no banner.
-//   30s – 5 min    → amber banner: "Audit data is N seconds stale (indexer
-//                    paused). Hot path unaffected."
-//   > 5 min        → same wording. The dashboard intentionally still renders
-//                    rows — graceful degradation, not block.
-//
-// Null staleMs (no cursor rows yet) renders nothing here; the table's empty
-// state carries that case. We never block render on this component.
-
-export function StalenessBanner({ read }: { read: StalenessRead }) {
-  if (read.staleMs === null) return null;
-  if (read.staleMs < STALE_WARN_MS) return null;
-
-  return (
-    <div
-      role="status"
-      data-testid="staleness-banner"
-      className="mb-[18px] flex items-center gap-2.5 rounded-lg border border-[hsl(var(--warn)/0.2)] bg-[hsl(var(--warn)/0.08)] px-3.5 py-2.5 text-xs text-muted-foreground"
-    >
-      <span
-        aria-hidden
-        className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-[hsl(var(--warn))]"
-      />
-      <span>
-        <b className="font-medium text-foreground">
-          Audit data is {formatDuration(read.staleMs)} stale.
-        </b>{" "}
-        Indexer paused (recovering). Hot path unaffected.
-      </span>
-    </div>
-  );
-}
-
 export function StalenessSubtitle({
   read,
   totalCount,
