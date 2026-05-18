@@ -1,4 +1,4 @@
-export type Region = "fra" | "iad";
+export type Region = "eu" | "us";
 export type KmsMode = "env" | "kms";
 
 // Wire format (env mode):

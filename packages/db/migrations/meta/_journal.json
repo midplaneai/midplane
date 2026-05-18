@@ -92,6 +92,13 @@
       "when": 1777644000006,
       "tag": "0012_tenant_scope_strict",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1777644000007,
+      "tag": "0013_rename_region_to_jurisdiction",
+      "breakpoints": true
     }
   ]
 }

@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { FlyMachineSpawner } from "../src/spawner-fly.ts";
 
 const regions = {
-  fra: { publicHost: "fra.midplane.com", flyApp: "midplane-fra" },
-  iad: { publicHost: "iad.midplane.com", flyApp: "midplane-iad" },
+  eu: { publicHost: "eu.midplane.com", flyApp: "midplane-eu", flyRegion: "fra" },
+  us: { publicHost: "us.midplane.com", flyApp: "midplane-us", flyRegion: "iad" },
 };
 
 describe("FlyMachineSpawner", () => {
@@ -81,7 +81,7 @@ describe("FlyMachineSpawner", () => {
 
     const c = await spawner.spawn({
       token: "tok",
-      region: "fra",
+      region: "eu",
       databases: [
         {
           name: "main",
@@ -129,7 +129,7 @@ describe("FlyMachineSpawner", () => {
     await expect(
       spawner.spawn({
         token: "t",
-        region: "fra",
+        region: "eu",
         databases: [
           {
             name: "main",

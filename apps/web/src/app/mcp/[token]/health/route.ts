@@ -3,8 +3,8 @@ import { resolveByToken } from "@midplane-cloud/router";
 
 // GET /mcp/<token>/health — bootstrap health probe.
 //
-// In production this URL resolves to a regional Fly app (midplane-fra,
-// midplane-iad) which spawns the OSS image. For local dev / Playwright
+// In production this URL resolves to a regional Fly app (midplane-eu,
+// midplane-us) which spawns the OSS image. For local dev / Playwright
 // E2E we serve it directly from Next.js so the contract surface is the
 // same: token resolves → 200; token unknown → 404.
 //

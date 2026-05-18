@@ -1,7 +1,7 @@
 import type { Region } from "@midplane-cloud/kms";
 
-// EU country codes Midplane treats as fra-region by default. Anything else
-// falls through to iad. The picker is the source of truth — this is only
+// EU country codes Midplane treats as eu-region by default. Anything else
+// falls through to us. The picker is the source of truth — this is only
 // the IP-autodetected default.
 const EU_COUNTRIES = new Set([
   "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GR",
@@ -14,11 +14,11 @@ const EU_COUNTRIES = new Set([
 export function defaultRegionForCountry(
   countryCode: string | null | undefined,
 ): Region {
-  if (countryCode && EU_COUNTRIES.has(countryCode.toUpperCase())) return "fra";
-  return "iad";
+  if (countryCode && EU_COUNTRIES.has(countryCode.toUpperCase())) return "eu";
+  return "us";
 }
 
 export const REGION_LABELS: Record<Region, string> = {
-  fra: "Europe (Frankfurt)",
-  iad: "United States (Ohio)",
+  eu: "Europe (Frankfurt)",
+  us: "United States (Ohio)",
 };

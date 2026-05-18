@@ -9,7 +9,7 @@
 //
 // Bootstrap status: scaffolded but not exercised. The router falls back to
 // env-mode in the V1 critical path. Wire prod by adding per-region CMK ARNs
-// to env (MIDPLANE_KMS_KEY_FRA, MIDPLANE_KMS_KEY_IAD) and IAM permissions
+// to env (MIDPLANE_KMS_KEY_EU, MIDPLANE_KMS_KEY_US) and IAM permissions
 // for kms:GenerateDataKey + kms:Decrypt scoped per-region.
 
 import {
@@ -39,9 +39,9 @@ function clientFor(region: Region): KMSClient {
 
 function regionToAws(region: Region): string {
   switch (region) {
-    case "fra":
+    case "eu":
       return "eu-central-1";
-    case "iad":
+    case "us":
       return "us-east-2";
   }
 }

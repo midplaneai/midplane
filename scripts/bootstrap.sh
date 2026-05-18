@@ -49,8 +49,8 @@ ensure_key() {
     echo "  $var generated"
   fi
 }
-ensure_key "MIDPLANE_KMS_DEV_KEY_FRA"
-ensure_key "MIDPLANE_KMS_DEV_KEY_IAD"
+ensure_key "MIDPLANE_KMS_DEV_KEY_EU"
+ensure_key "MIDPLANE_KMS_DEV_KEY_US"
 
 # 2. Neon dev branch ----------------------------------------------------------
 if ! grep -qE "^DATABASE_URL=postgres" "$ENV_FILE"; then

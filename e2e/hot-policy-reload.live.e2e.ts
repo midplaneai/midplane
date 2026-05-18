@@ -12,7 +12,7 @@
 //     (rebuild from local OSS clone via `bun run dev:image`)
 //   - .env.local DATABASE_URL pointing at a Neon dev branch
 //   - .env.local INDEXER_TOKEN set (the engine 404s without it)
-//   - .env.local MIDPLANE_KMS_DEV_KEY_FRA set
+//   - .env.local MIDPLANE_KMS_DEV_KEY_EU set
 
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -61,7 +61,7 @@ test.beforeAll(async () => {
     kms,
     customerDsn,
     (customerId = ulid()),
-    "fra",
+    "eu",
   );
   mcpToken = randomUUID().replace(/-/g, "");
   connectionId = ulid();
@@ -70,12 +70,12 @@ test.beforeAll(async () => {
     id: customerId,
     clerkUserId: `policy-e2e-${customerId}`,
     email: `policy-e2e-${customerId}@example.test`,
-    region: "fra",
+    region: "eu",
   });
   await db.insert(connections).values({
     id: connectionId,
     customerId,
-    region: "fra",
+    region: "eu",
     encryptedDsn: ciphertext,
     kmsKeyId,
     mcpToken,
@@ -177,7 +177,7 @@ test("policy hot-reload preserves the agent's MCP session", async ({
     id: customerId,
     clerkUserId: `policy-e2e-${customerId}`,
     email: `policy-e2e-${customerId}@example.test`,
-    region: "fra" as const,
+    region: "eu" as const,
     createdAt: new Date(),
   };
   const updated = await setTableAccess(

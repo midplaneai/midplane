@@ -1,15 +1,15 @@
-# Frankfurt regional MCP runtime app.
+# EU regional MCP runtime app (currently pinned to Frankfurt).
 #
-# This Fly app receives /mcp/<token> traffic for fra-region customers. The
+# This Fly app receives /mcp/<token> traffic for eu-region customers. The
 # router's spawn-or-reuse logic (PR #2+) creates Fly machines on demand from
 # this image with DATABASE_URL set to the customer's decrypted DSN. fly-replay
 # session affinity (cache_key=<mcp-session-id>) is emitted by the OSS
 # transport — Fly handles routing.
 #
-# Adding iad in the V1 launch session is a copy of this file with primary_region
-# = "iad" and app = "midplane-iad". Same image, same env shape.
+# Adding us in the V1 launch session is a copy of this file with primary_region
+# = "iad" and app = "midplane-us". Same image, same env shape.
 
-app = "midplane-fra"
+app = "midplane-eu"
 primary_region = "fra"
 
 [build]

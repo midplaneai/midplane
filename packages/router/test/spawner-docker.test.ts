@@ -39,7 +39,7 @@ describe("DockerSpawner", () => {
 
     const c = await spawner.spawn({
       token: "tok-abc",
-      region: "fra",
+      region: "eu",
       databases: [
         {
           name: "main",
@@ -113,7 +113,7 @@ describe("DockerSpawner", () => {
     await expect(
       spawner.spawn({
         token: "t",
-        region: "fra",
+        region: "eu",
         databases: [
           {
             name: "main",
@@ -133,7 +133,7 @@ describe("DockerSpawner", () => {
   it("rejects an empty databases array", async () => {
     const spawner = new DockerSpawner({});
     await expect(
-      spawner.spawn({ token: "t", region: "fra", databases: [] }),
+      spawner.spawn({ token: "t", region: "eu", databases: [] }),
     ).rejects.toThrow(/at least one database/);
   });
 });

@@ -3,7 +3,7 @@
 # Built and deployed by Fly via fly-web.toml at the repo root. This image
 # is the public dashboard + Next.js API + /mcp/<token> proxy. It runs on
 # Fly so it shares the same 6PN private network as the regional runtime
-# apps (midplane-fra, midplane-iad) — FlyMachineSpawner returns IPv6
+# apps (midplane-eu, midplane-us) — FlyMachineSpawner returns IPv6
 # private IPs, and only same-org Fly apps can reach them.
 #
 # Build context is the repo root.

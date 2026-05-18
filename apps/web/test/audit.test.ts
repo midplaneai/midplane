@@ -117,7 +117,7 @@ describe("RLS bind", () => {
   it("emits SET LOCAL app.customer_id with the bound id on every list", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     const setLocal = handle.queries.find((q) =>
       q.sql.includes("SET LOCAL app.customer_id"),
     );
@@ -129,8 +129,8 @@ describe("RLS bind", () => {
   it("uses a fresh bind per customer (no leakage)", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
-    await listAuditQueries(ANOTHER_CUSTOMER_ID, { region: "fra" });
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    await listAuditQueries(ANOTHER_CUSTOMER_ID, { region: "eu" });
     const binds = handle.queries
       .map((q) => q.sql)
       .filter((s) => s.includes("SET LOCAL"));
@@ -141,7 +141,7 @@ describe("RLS bind", () => {
   it("refuses non-ULID customer ids before any DB work", async () => {
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await expect(
-      listAuditQueries("'; DROP TABLE customers;--", { region: "fra" }),
+      listAuditQueries("'; DROP TABLE customers;--", { region: "eu" }),
     ).rejects.toThrow(/ULID/);
     expect(handle.queries).toHaveLength(0);
   });
@@ -164,7 +164,7 @@ describe("listAuditQueries query shape", () => {
   it("emits a CTE that aggregates one row per query_id", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     const sel = lastSelect(handle.queries);
     expect(sel.sql).toContain("GROUP BY query_id");
     // Aggregations the UI reads off the row.
@@ -179,7 +179,7 @@ describe("listAuditQueries query shape", () => {
   it("emits a status CASE that classifies each lifecycle into a terminal state", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     const sel = lastSelect(handle.queries);
     expect(sel.sql).toContain("WHEN has_executed THEN 'ALLOWED'");
     expect(sel.sql).toContain("WHEN has_failed THEN 'FAILED'");
@@ -191,7 +191,7 @@ describe("listAuditQueries query shape", () => {
   it("UNIONs POLICY_RELOADED rows so operators can verify hot-swaps from the audit log", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     const sel = lastSelect(handle.queries);
     // The query collapses queries into one row each AND keeps policy
     // events visible — they have no query_id and no SQL but are operator-
@@ -206,7 +206,7 @@ describe("listAuditQueries query shape", () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       search: "users",
     });
     const sel = lastSelect(handle.queries);
@@ -264,7 +264,7 @@ describe("listAuditQueries query shape", () => {
       },
     ]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.queryId).toBeNull();
     expect(result.rows[0]!.status).toBe("POLICY_RELOAD");
@@ -303,7 +303,7 @@ describe("listAuditQueries query shape", () => {
       },
     ]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.policyPayload).toBeNull();
   });
@@ -311,7 +311,7 @@ describe("listAuditQueries query shape", () => {
   it("projects the policy event payload column so the list renderer can pick up sections_changed", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     const sel = lastSelect(handle.queries);
     // The CTE must project payload AS policy_payload for POLICY_RELOAD
     // rows AND a NULL placeholder for the classified branch so UNION ALL
@@ -326,7 +326,7 @@ describe("listAuditQueries query shape", () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       pageSize: 50,
     });
     const sel = lastSelect(handle.queries);
@@ -337,16 +337,16 @@ describe("listAuditQueries query shape", () => {
   it("filters by region in the WHERE clause", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "iad" });
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "us" });
     const sel = lastSelect(handle.queries);
-    expect(sel.params).toContain("iad");
+    expect(sel.params).toContain("us");
   });
 
   it("applies status IN-list when statuses are provided", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       statuses: ["DENIED", "FAILED"],
     });
     const sel = lastSelect(handle.queries);
@@ -359,7 +359,7 @@ describe("listAuditQueries query shape", () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       tenantId: "tenant_42",
     });
     const sel = lastSelect(handle.queries);
@@ -370,7 +370,7 @@ describe("listAuditQueries query shape", () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       database: "analytics",
     });
     const sel = lastSelect(handle.queries);
@@ -382,7 +382,7 @@ describe("listAuditQueries query shape", () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       search: "users",
     });
     const sel = lastSelect(handle.queries);
@@ -397,7 +397,7 @@ describe("listAuditQueries query shape", () => {
     const cursor = "01ARZ3NDEKTSV4RRFFQ69G5ZZZ";
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       cursor,
     });
     const sel = lastSelect(handle.queries);
@@ -410,7 +410,7 @@ describe("listAuditQueries query shape", () => {
     const fixedNow = new Date("2026-04-30T12:00:30Z"); // 30s after a target last_ts
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       now: () => fixedNow,
     });
     const sel = lastSelect(handle.queries);
@@ -451,7 +451,7 @@ describe("listAuditQueries query shape", () => {
     handle.setNextResult(rows);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     const result = await listAuditQueries(VALID_CUSTOMER_ID, {
-      region: "fra",
+      region: "eu",
       pageSize: 50,
     });
     expect(result.rows).toHaveLength(50);
@@ -482,7 +482,7 @@ describe("listAuditQueries query shape", () => {
       },
     ]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "fra" });
+    const result = await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
     expect(result.nextCursor).toBeNull();
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.status).toBe("ALLOWED");
@@ -493,20 +493,20 @@ describe("listDatabases", () => {
   it("selects distinct database under RLS bind", async () => {
     handle.setNextResult([["analytics"], ["main"]]);
     const { listDatabases } = await import("../src/lib/audit.ts");
-    const result = await listDatabases(VALID_CUSTOMER_ID, "fra");
+    const result = await listDatabases(VALID_CUSTOMER_ID, "eu");
     expect(result).toEqual(["analytics", "main"]);
     const sel = lastSelect(handle.queries);
     expect(sel.sql.toLowerCase()).toContain("distinct");
     expect(sel.sql).toContain("database");
     expect(sel.params).toContain(VALID_CUSTOMER_ID);
-    expect(sel.params).toContain("fra");
+    expect(sel.params).toContain("eu");
     expect(sel.inTransaction).toBe(true);
   });
 
   it("orders by database asc BEFORE the LIMIT (deterministic >50 rows)", async () => {
     handle.setNextResult([]);
     const { listDatabases } = await import("../src/lib/audit.ts");
-    await listDatabases(VALID_CUSTOMER_ID, "fra");
+    await listDatabases(VALID_CUSTOMER_ID, "eu");
     const sel = lastSelect(handle.queries);
     const lower = sel.sql.toLowerCase();
     const orderIdx = lower.indexOf("order by");
@@ -522,7 +522,7 @@ describe("listTenantIds", () => {
   it("orders by tenant_id asc BEFORE the LIMIT (deterministic >50 rows)", async () => {
     handle.setNextResult([]);
     const { listTenantIds } = await import("../src/lib/audit.ts");
-    await listTenantIds(VALID_CUSTOMER_ID, "fra");
+    await listTenantIds(VALID_CUSTOMER_ID, "eu");
     const sel = lastSelect(handle.queries);
     const lower = sel.sql.toLowerCase();
     const orderIdx = lower.indexOf("order by");
@@ -538,7 +538,7 @@ describe("eventVolumeByHour", () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
     const now = () => new Date("2026-04-30T12:34:56Z");
-    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
       hours: 24,
       now,
     });
@@ -560,7 +560,7 @@ describe("eventVolumeByHour", () => {
     ]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
     const now = () => new Date("2026-04-30T12:30:00Z");
-    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
       hours: 24,
       now,
     });
@@ -576,7 +576,7 @@ describe("eventVolumeByHour", () => {
     ]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
     const now = () => new Date("2026-04-30T12:30:00Z");
-    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
       hours: 24,
       now,
     });
@@ -587,7 +587,7 @@ describe("eventVolumeByHour", () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
     const now = () => new Date("2026-04-30T12:30:00Z");
-    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", { hours: 24, now });
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", { hours: 24, now });
     const sel = lastSelect(handle.queries);
     const dateParam = sel.params.find((p) => p instanceof Date);
     expect(dateParam, "no Date should reach the unsafe codec").toBeUndefined();
@@ -598,7 +598,7 @@ describe("eventVolumeByHour", () => {
   it("threads tenantId / database / search filters into the volume query (matches table filters)", async () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
-    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra", {
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
       tenantId: "tenant_42",
       database: "analytics",
       search: "users",
@@ -618,7 +618,7 @@ describe("eventVolumeByHour", () => {
   it("omits filter clauses when none are passed (no spurious AND fragments)", async () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
-    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "eu");
     const sel = lastSelect(handle.queries);
     expect(sel.sql).not.toContain("tenant_id =");
     expect(sel.sql).not.toContain("database =");
@@ -628,7 +628,7 @@ describe("eventVolumeByHour", () => {
   it("scopes the volume query under the RLS bind, dedupes per query_id, treats deny-only DECIDED as terminal", async () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
-    await eventVolumeByHour(VALID_CUSTOMER_ID, "fra");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "eu");
     const sel = lastSelect(handle.queries);
     expect(sel.inTransaction).toBe(true);
     const lower = sel.sql.toLowerCase();
@@ -654,12 +654,12 @@ describe("readStaleness", () => {
   it("scopes to the customer's region and returns null when no cursor rows exist", async () => {
     handle.setNextResult([[null]]);
     const { readStaleness } = await import("../src/lib/audit.ts");
-    const result = await readStaleness(VALID_CUSTOMER_ID, "fra");
+    const result = await readStaleness(VALID_CUSTOMER_ID, "eu");
     expect(result.lastIndexedAt).toBeNull();
     expect(result.staleMs).toBeNull();
     const sel = lastSelect(handle.queries);
     expect(sel.params).toContain(VALID_CUSTOMER_ID);
-    expect(sel.params).toContain("fra");
+    expect(sel.params).toContain("eu");
   });
 
   it("computes staleMs deterministically from injected now()", async () => {
@@ -667,14 +667,14 @@ describe("readStaleness", () => {
     const now = () => new Date("2026-04-30T12:01:30Z");
     handle.setNextResult([[lastIndexedAt]]);
     const { readStaleness } = await import("../src/lib/audit.ts");
-    const result = await readStaleness(VALID_CUSTOMER_ID, "fra", now);
+    const result = await readStaleness(VALID_CUSTOMER_ID, "eu", now);
     expect(result.staleMs).toBe(90_000);
   });
 
   it("does NOT wrap in a transaction (indexer_cursors has no RLS)", async () => {
     handle.setNextResult([[null]]);
     const { readStaleness } = await import("../src/lib/audit.ts");
-    await readStaleness(VALID_CUSTOMER_ID, "fra");
+    await readStaleness(VALID_CUSTOMER_ID, "eu");
     const txCalls = handle.queries.filter((q) => q.inTransaction);
     expect(txCalls).toHaveLength(0);
   });

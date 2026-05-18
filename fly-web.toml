@@ -1,8 +1,8 @@
 # Control-plane Fly app for midplane-cloud.
 #
 # This is the public Next.js dashboard + auth + /mcp/<token> proxy. It is
-# distinct from the regional MCP runtime apps (fly-fra.toml / a future
-# fly-iad.toml) which host customer OSS containers.
+# distinct from the regional MCP runtime apps (fly-eu.toml / a future
+# fly-us.toml) which host customer OSS containers.
 #
 # Why on Fly: FlyMachineSpawner returns IPv6 6PN private addresses that
 # only same-org Fly apps can reach. Hosting the control plane elsewhere
@@ -37,13 +37,15 @@ primary_region = "fra"
 #   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY     # also pass via --build-arg
 #   CLERK_SECRET_KEY
 #   MIDPLANE_KMS_MODE                     # "env" for V1 dev, "kms" once AWS KMS is wired
-#   MIDPLANE_KMS_DEV_KEY_FRA              # 32-byte hex (openssl rand -hex 32)
-#   MIDPLANE_KMS_DEV_KEY_IAD              # 32-byte hex
+#   MIDPLANE_KMS_DEV_KEY_EU               # 32-byte hex (openssl rand -hex 32)
+#   MIDPLANE_KMS_DEV_KEY_US               # 32-byte hex
 #   FLY_API_TOKEN                         # for FlyMachineSpawner
-#   FLY_APP_FRA                           # "midplane-fra"
-#   FLY_APP_IAD                           # "midplane-iad"
-#   MIDPLANE_PUBLIC_HOST_FRA              # e.g. "fra.midplane.ai"
-#   MIDPLANE_PUBLIC_HOST_IAD              # e.g. "iad.midplane.ai"
+#   FLY_APP_EU                            # "midplane-eu"
+#   FLY_APP_US                            # "midplane-us"
+#   FLY_REGION_EU                         # Fly DC code, e.g. "fra"
+#   FLY_REGION_US                         # Fly DC code, e.g. "iad"
+#   MIDPLANE_PUBLIC_HOST_EU               # e.g. "eu.midplane.ai"
+#   MIDPLANE_PUBLIC_HOST_US               # e.g. "us.midplane.ai"
 #   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.5.0"
 #   INDEXER_TOKEN                         # shared with regional containers
 

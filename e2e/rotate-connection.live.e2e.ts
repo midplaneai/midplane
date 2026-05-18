@@ -15,7 +15,7 @@
 //   - docker on PATH
 //   - midplane/midplane:0.1.0 image present (`bun run dev:image`)
 //   - .env.local DATABASE_URL pointing at a Neon dev branch
-//   - .env.local MIDPLANE_KMS_DEV_KEY_FRA set
+//   - .env.local MIDPLANE_KMS_DEV_KEY_EU set
 //
 // Test plan:
 //   1. Spin up TWO sidecar Postgres instances (A, B) with distinguishable data
@@ -86,7 +86,7 @@ test.beforeAll(async () => {
     kms,
     dsnA,
     (customerId = ulid()),
-    "fra",
+    "eu",
   );
   mcpToken = randomUUID().replace(/-/g, "");
   connectionId = ulid();
@@ -95,12 +95,12 @@ test.beforeAll(async () => {
     id: customerId,
     clerkUserId: `e2e-${customerId}`,
     email: `e2e-${customerId}@example.test`,
-    region: "fra",
+    region: "eu",
   });
   await db.insert(connections).values({
     id: connectionId,
     customerId,
-    region: "fra",
+    region: "eu",
     encryptedDsn: ciphertext,
     kmsKeyId,
     mcpToken,
@@ -147,7 +147,7 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
   if (!decrypted1.ok) return;
   const c1 = await registry.acquire({
     token: mcpToken,
-    region: "fra",
+    region: "eu",
     dsn: decrypted1.plaintext,
   });
   const site1 = await runSelectMarker(c1.host, c1.port);
@@ -161,7 +161,7 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
     id: customerId,
     clerkUserId: `e2e-${customerId}`,
     email: `e2e-${customerId}@example.test`,
-    region: "fra" as const,
+    region: "eu" as const,
     createdAt: new Date(),
   };
   const rotated = await rotateConnection(customer, connectionId, dsnB, {
@@ -187,7 +187,7 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
 
   const c2 = await registry.acquire({
     token: mcpToken,
-    region: "fra",
+    region: "eu",
     dsn: decrypted2.plaintext,
   });
   // The new container may bind a different host port — proves it's a fresh

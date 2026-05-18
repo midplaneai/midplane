@@ -29,7 +29,7 @@ class StubSpawner implements Spawner {
 
 const opts = (token = "tok-a"): SpawnOptions => ({
   token,
-  region: "fra",
+  region: "eu",
   databases: [
     {
       name: "main",
@@ -125,7 +125,7 @@ describe("ContainerRegistry", () => {
     expect(active).not.toBeNull();
     expect(active?.host).toBe(c.host);
     expect(active?.port).toBe(c.port);
-    expect(active?.region).toBe("fra");
+    expect(active?.region).toBe("eu");
     expect(active?.token).toBe("tok-a");
 
     expect(reg.getActive("tok-b")).toBeNull();

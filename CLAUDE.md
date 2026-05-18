@@ -48,7 +48,7 @@ prod deploys diverge from what the cloud was tested against:
 - `.env.example` — documented default
 - `packages/router/src/spawner-docker.ts` — fallback when env unset
 - `packages/router/src/spawner-fly.ts` — fallback when env unset
-- `fly-fra.toml` (and any sibling regional `fly-*.toml`) — production
+- `fly-eu.toml` (and any sibling regional `fly-*.toml`) — production
 - `README.md` — docs
 
 Plus the test fixture in `packages/router/test/spawner-docker.test.ts`

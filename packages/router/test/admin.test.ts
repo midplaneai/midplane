@@ -40,7 +40,7 @@ const databases: readonly DatabaseEntry[] = [
 
 const opts = (token = "tok-a"): SpawnOptions => ({
   token,
-  region: "fra",
+  region: "eu",
   databases: [
     {
       name: "main",

@@ -44,7 +44,7 @@ test.skip(
   "DATABASE_URL must be set for the audit isolation suite (uses RLS against a real Postgres)",
 );
 
-const REGION = "fra" as const;
+const REGION = "eu" as const;
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 let custAId: string;
