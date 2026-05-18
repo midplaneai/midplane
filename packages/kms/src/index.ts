@@ -47,12 +47,12 @@ export function makeKmsContext(env: NodeJS.ProcessEnv): KmsContext {
   return {
     mode,
     envKeys: {
-      fra: env.MIDPLANE_KMS_DEV_KEY_FRA,
-      iad: env.MIDPLANE_KMS_DEV_KEY_IAD,
+      eu: env.MIDPLANE_KMS_DEV_KEY_EU,
+      us: env.MIDPLANE_KMS_DEV_KEY_US,
     },
     kmsKeys: {
-      fra: env.MIDPLANE_KMS_KEY_FRA,
-      iad: env.MIDPLANE_KMS_KEY_IAD,
+      eu: env.MIDPLANE_KMS_KEY_EU,
+      us: env.MIDPLANE_KMS_KEY_US,
     },
   };
 }

@@ -1,7 +1,7 @@
 // FlyMachineSpawner — production backend.
 //
 // One Fly machine per active token, scheduled in the regional app
-// (midplane-fra / midplane-iad) so the customer's data never leaves the
+// (midplane-eu / midplane-us) so the customer's data never leaves the
 // region they picked at signup. Reachable via the machine's IPv6 6PN
 // address; we proxy directly to the specific machine (not the app's
 // anycast endpoint) so requests land on the same instance every time.
@@ -80,7 +80,7 @@ export class FlyMachineSpawner implements Spawner {
     if (!regionCfg) throw new Error(`unknown region: ${opts.region}`);
     const app = regionCfg.flyApp;
 
-    const created = await this.createMachine(app, opts);
+    const created = await this.createMachine(app, regionCfg.flyRegion, opts);
     try {
       await this.waitForStarted(app, created.id);
     } catch (err) {
@@ -105,6 +105,7 @@ export class FlyMachineSpawner implements Spawner {
 
   private async createMachine(
     app: string,
+    flyRegion: string,
     opts: SpawnOptions,
   ): Promise<MachineCreateResponse> {
     // Per-DB DSN env vars. Names match OSS env-interpolation regex; the
@@ -130,7 +131,7 @@ export class FlyMachineSpawner implements Spawner {
       },
       body: JSON.stringify({
         name: `mcp-${opts.token.slice(0, 16)}`,
-        region: opts.region,
+        region: flyRegion,
         config: {
           image: this.image,
           env: {

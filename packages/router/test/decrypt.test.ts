@@ -38,23 +38,23 @@ const cdb: ConnectionDatabase = {
   connectionId: "conn-1",
   name: "main",
   encryptedDsn: Buffer.from("ciphertext"),
-  kmsKeyId: "env:fra",
+  kmsKeyId: "env:eu",
   tableAccess: { default: "deny", tables: {} },
   tenantScope: { column: null, overrides: {}, exempt: [] },
   rotatedAt: null,
   lastKmsSuccessAt: null,
   createdAt: new Date(),
 };
-const region = "fra" as const;
+const region = "eu" as const;
 const customerId = "cust-1";
 const input = { connectionDatabase: cdb, region, customerId };
 
-const kms: KmsContext = { mode: "env", envKeys: { fra: "x".repeat(64) } };
+const kms: KmsContext = { mode: "env", envKeys: { eu: "x".repeat(64) } };
 
 describe("DsnResolver", () => {
   it("returns fresh from cache without calling KMS", async () => {
     const cache = new DecryptCache();
-    cache.set("cdb-1", "fra", "postgres://cached");
+    cache.set("cdb-1", "eu", "postgres://cached");
     const decrypt = vi.fn();
     const { db } = fakeDb();
     const resolver = new DsnResolver({ db, cache, kms, decrypt });
@@ -81,7 +81,7 @@ describe("DsnResolver", () => {
     expect(capture.values).toMatchObject({
       lastKmsSuccessAt: expect.any(Date),
     });
-    expect(cache.get("cdb-1", "fra").kind).toBe("fresh");
+    expect(cache.get("cdb-1", "eu").kind).toBe("fresh");
   });
 
   it("on miss, refuses with credential_unavailable when KMS throws", async () => {
@@ -99,7 +99,7 @@ describe("DsnResolver", () => {
     const start = 1_000_000;
     const clock = { t: start, now: () => start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("cdb-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "eu", "postgres://stale");
     clock.t += 71 * 60_000;
     const { db } = fakeDb();
     const decrypt = vi.fn();
@@ -114,7 +114,7 @@ describe("DsnResolver", () => {
     const start = 1_000_000;
     const clock = { t: start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("cdb-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "eu", "postgres://stale");
     clock.t += 11 * 60_000; // past TTL, inside grace
 
     let resolveRefresh!: (v: string) => void;
@@ -144,7 +144,7 @@ describe("DsnResolver", () => {
     const start = 1_000_000;
     const clock = { t: start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("cdb-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "eu", "postgres://stale");
     clock.t += 11 * 60_000;
 
     let resolveRefresh!: (v: string) => void;
@@ -176,7 +176,7 @@ describe("DsnResolver", () => {
     // on one DB only invalidates its own cache slot — siblings unaffected.
     const clock = { t: 1_000_000 };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("cdb-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "eu", "postgres://stale");
     clock.t += 11 * 60_000; // past TTL → grace
 
     let resolveRefresh!: (v: string) => void;
@@ -197,7 +197,7 @@ describe("DsnResolver", () => {
 
     // Phase 2: rotation invalidates while KMS is still pending.
     clock.t += 10;
-    cache.invalidate("cdb-1", "fra");
+    cache.invalidate("cdb-1", "eu");
 
     // Phase 3: KMS finally resolves with the pre-rotation plaintext. The
     // refresh's cache.set must be dropped by the fence.
@@ -205,14 +205,14 @@ describe("DsnResolver", () => {
     resolveRefresh("postgres://stale");
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(cache.get("cdb-1", "fra").kind).toBe("miss");
+    expect(cache.get("cdb-1", "eu").kind).toBe("miss");
   });
 
   it("calls onRefreshError when grace refresh fails", async () => {
     const start = 1_000_000;
     const clock = { t: start };
     const cache = new DecryptCache({ now: () => clock.t });
-    cache.set("cdb-1", "fra", "postgres://stale");
+    cache.set("cdb-1", "eu", "postgres://stale");
     clock.t += 11 * 60_000;
 
     const decrypt = vi.fn().mockRejectedValue(new Error("kms still down"));

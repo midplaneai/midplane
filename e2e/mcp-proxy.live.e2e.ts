@@ -73,7 +73,7 @@ test.beforeAll(async () => {
     kms,
     customerDsn,
     (customerId = ulid()),
-    "fra",
+    "eu",
   );
   mcpToken = randomUUID().replace(/-/g, "");
   connectionId = ulid();
@@ -82,12 +82,12 @@ test.beforeAll(async () => {
     id: customerId,
     clerkUserId: `e2e-${customerId}`,
     email: `e2e-${customerId}@example.test`,
-    region: "fra",
+    region: "eu",
   });
   await db.insert(connections).values({
     id: connectionId,
     customerId,
-    region: "fra",
+    region: "eu",
     encryptedDsn: ciphertext,
     kmsKeyId,
     mcpToken,

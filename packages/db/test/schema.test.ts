@@ -46,8 +46,8 @@ describe("schema parity with OSS audit_events", () => {
 });
 
 describe("regions", () => {
-  it("ships fra and iad as the V1 region set", () => {
-    expect(REGIONS).toEqual(["fra", "iad"]);
+  it("ships eu and us as the V1 region set", () => {
+    expect(REGIONS).toEqual(["eu", "us"]);
   });
 });
 

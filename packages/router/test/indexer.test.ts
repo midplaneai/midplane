@@ -23,13 +23,13 @@ import type { Db } from "../src/resolve.ts";
 // ---------------------------------------------------------------------------
 
 interface FakeDbState {
-  customerByToken: Map<string, { customerId: string; region: "fra" | "iad" }>;
+  customerByToken: Map<string, { customerId: string; region: "eu" | "us" }>;
   cursorByToken: Map<
     string,
     {
       lastId: string;
       customerId: string;
-      region: "fra" | "iad";
+      region: "eu" | "us";
       lastIndexedAt?: Date;
     }
   >;
@@ -154,7 +154,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
         for (const r of stagedRows as Array<{
           mcpToken: string;
           customerId: string;
-          region: "fra" | "iad";
+          region: "eu" | "us";
           lastId: string;
           lastIndexedAt?: Date;
         }>) {
@@ -302,13 +302,13 @@ async function buildHarness(
 }> {
   const { db, state } = makeFakeDb();
   if (opts.failNextTxn) state.failNextTxn = true;
-  state.customerByToken.set("tok-A", { customerId: TEST_CUST_A, region: "fra" });
+  state.customerByToken.set("tok-A", { customerId: TEST_CUST_A, region: "eu" });
 
   const spawner = new StubSpawner();
   const registry = new ContainerRegistry(spawner, { idleMs: 60_000 });
   await registry.acquire({
     token: "tok-A",
-    region: "fra",
+    region: "eu",
     databases: [
       {
         name: "main",

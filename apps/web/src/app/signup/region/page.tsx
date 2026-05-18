@@ -42,8 +42,8 @@ export default async function RegionPicker() {
           action={pickRegion}
           className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2"
         >
-          <RegionCard region="fra" suggested={suggested} />
-          <RegionCard region="iad" suggested={suggested} />
+          <RegionCard region="eu" suggested={suggested} />
+          <RegionCard region="us" suggested={suggested} />
           <Button type="submit" className="sm:col-span-2" size="lg">
             Continue
           </Button>
@@ -79,7 +79,7 @@ function RegionCard({
         required
       />
       <span className="text-sm text-muted-foreground">
-        {region === "fra"
+        {region === "eu"
           ? "Data residency in the EU. AWS eu-central-1."
           : "AWS us-east-2."}
       </span>
@@ -90,7 +90,7 @@ function RegionCard({
 async function pickRegion(formData: FormData) {
   "use server";
   const region = formData.get("region");
-  if (region !== "fra" && region !== "iad") {
+  if (region !== "eu" && region !== "us") {
     throw new Error("invalid region");
   }
   await upsertCustomerRegion(region);

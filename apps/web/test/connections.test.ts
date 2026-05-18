@@ -261,7 +261,7 @@ function makeFakeDb(): FakeDbHandle {
       // setTableAccess tests working without forcing each call site to
       // pick the right setter.
       deletedConnections = rows;
-      parentSelect = rows.map((r) => ({ ...r, region: "fra" }));
+      parentSelect = rows.map((r) => ({ ...r, region: "eu" }));
     },
   };
 }
@@ -291,7 +291,7 @@ vi.mock("@midplane-cloud/kms", async () => {
     // the rotation path stamps the new ciphertext + key id onto the row.
     encryptDsn: vi.fn(async (_ctx, plaintext: string) => ({
       ciphertext: Buffer.from(`ct:${plaintext}`),
-      kmsKeyId: `env:fra:${plaintext.length}`,
+      kmsKeyId: `env:eu:${plaintext.length}`,
     })),
     makeKmsContext: () => ({ mode: "env", envKeys: {}, kmsKeys: {} }),
   };
@@ -309,7 +309,7 @@ const customer = {
   id: "cust-1",
   clerkUserId: "clerk-1",
   email: "u@e.test",
-  region: "fra" as const,
+  region: "eu" as const,
   createdAt: new Date(),
 };
 
@@ -376,7 +376,7 @@ function makeCaches(overrides?: {
 describe("rotateConnection", () => {
   it("happy path: updates connection_databases ciphertext + invalidates per-credential cache + registry", async () => {
     handle.setParentSelectResult([
-      { id: "conn-1", mcpToken: "tok-1", region: "fra" },
+      { id: "conn-1", mcpToken: "tok-1", region: "eu" },
     ]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     const { connectionDatabases } = await import("@midplane-cloud/db");
@@ -393,7 +393,7 @@ describe("rotateConnection", () => {
     expect(result).toEqual({
       id: "conn-1",
       mcpToken: "tok-1",
-      region: "fra",
+      region: "eu",
     });
 
     // The ciphertext / kms_key_id / rotated_at land on the CHILD row,
@@ -412,13 +412,13 @@ describe("rotateConnection", () => {
     expect(set?.encryptedDsn).toEqual(
       Buffer.from("ct:postgres://u:p@host:5432/db"),
     );
-    expect(set?.kmsKeyId).toBe(`env:fra:${"postgres://u:p@host:5432/db".length}`);
+    expect(set?.kmsKeyId).toBe(`env:eu:${"postgres://u:p@host:5432/db".length}`);
     expect(set?.rotatedAt).toBeInstanceOf(Date);
 
     // Cache invalidation now keys per-credential (the child id), so a
     // future multi-DB rotation only invalidates the rotated credential.
     expect(caches.cache.invalidate).toHaveBeenCalledTimes(1);
-    expect(caches.cache.invalidate).toHaveBeenCalledWith("cdb-main-1", "fra");
+    expect(caches.cache.invalidate).toHaveBeenCalledWith("cdb-main-1", "eu");
     expect(caches.registry.invalidate).toHaveBeenCalledTimes(1);
     expect(caches.registry.invalidate).toHaveBeenCalledWith("tok-1");
   });
@@ -442,7 +442,7 @@ describe("rotateConnection", () => {
 
   it("failure isolation: cache.invalidate throwing does NOT prevent registry.invalidate from running", async () => {
     handle.setParentSelectResult([
-      { id: "conn-1", mcpToken: "tok-1", region: "fra" },
+      { id: "conn-1", mcpToken: "tok-1", region: "eu" },
     ]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     const { rotateConnection } = await import("../src/lib/connections.ts");
@@ -468,7 +468,7 @@ describe("rotateConnection", () => {
     expect(result).toEqual({
       id: "conn-1",
       mcpToken: "tok-1",
-      region: "fra",
+      region: "eu",
     });
     expect(caches.cache.invalidate).toHaveBeenCalledTimes(1);
     expect(caches.registry.invalidate).toHaveBeenCalledTimes(1);
@@ -528,7 +528,7 @@ describe("setTableAccess", () => {
   };
 
   it("happy path: writes Postgres, hot-reloads engine, does NOT invalidate", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
@@ -542,7 +542,7 @@ describe("setTableAccess", () => {
   });
 
   it("idle-agent path: delivered=false short-circuits without invalidate", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
@@ -556,7 +556,7 @@ describe("setTableAccess", () => {
   });
 
   it("rejected (400): throws EnginePolicyRejected, does NOT fall back to invalidate", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { setTableAccess, EnginePolicyRejected } = await import(
@@ -575,7 +575,7 @@ describe("setTableAccess", () => {
   });
 
   it("network failure: falls back to registry.invalidate (fail-soft, like rotateConnection)", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
@@ -592,7 +592,7 @@ describe("setTableAccess", () => {
   });
 
   it("dbName not found: returns null when the named child doesn't exist on the connection", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([]); // child UPDATE matches 0 rows
     // No siblings queue entry needed — the txn short-circuits before
     // the siblings select runs.
@@ -614,7 +614,7 @@ describe("setTableAccess", () => {
   });
 
   it("explicit dbName: writes to the named child, pushes policy with same token", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-analytics-1" }]);
     handle.queueSelect([
       {
@@ -655,7 +655,7 @@ describe("setTableAccess", () => {
   });
 
   it("multi-DB connection: pushPolicy body lists every sibling so OSS doesn't drop them", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     // Edited DB ("main") plus an untouched sibling ("analytics"). OSS
     // 0.4.0 drops any DB absent from the body, so the cloud must restate
@@ -746,7 +746,7 @@ describe("setTenantScope", () => {
   };
 
   it("happy path: writes Postgres, hot-reloads engine with the strict-mode body", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { setTenantScope } = await import("../src/lib/connections.ts");
@@ -767,7 +767,7 @@ describe("setTenantScope", () => {
   });
 
   it("multi-DB connection: restates every sibling so OSS doesn't drop the untouched one", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([
       mainSibling,
@@ -800,7 +800,7 @@ describe("setTenantScope", () => {
   });
 
   it("inert envelope: persists EMPTY_TENANT_SCOPE (= tenant_scope disabled on this DB)", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([
       {
@@ -835,7 +835,7 @@ describe("setTenantScope", () => {
       overrides: { orders: "tenant_id" },
       exempt: [],
     };
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([
       {
@@ -861,7 +861,7 @@ describe("setTenantScope", () => {
   });
 
   it("rejected (400): throws EnginePolicyRejected and does NOT fall back to invalidate", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { setTenantScope, EnginePolicyRejected } = await import(
@@ -880,7 +880,7 @@ describe("setTenantScope", () => {
   });
 
   it("network failure: falls back to registry.invalidate (fail-soft)", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { setTenantScope } = await import("../src/lib/connections.ts");
@@ -896,7 +896,7 @@ describe("setTenantScope", () => {
   });
 
   it("dbName not found: returns null when the named child doesn't exist on the connection", async () => {
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([]); // 0 rows matched the dbName
     const { setTenantScope } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps();
@@ -957,7 +957,7 @@ describe("setTenantScope", () => {
       overrides: { "public.users": "customer_id" },
       exempt: ["public.regions"],
     };
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([
       {
@@ -1038,7 +1038,7 @@ describe("setTenantScope", () => {
 describe("rotateConnection with explicit dbName", () => {
   it("rotates the named child, not main, when dbName is passed", async () => {
     handle.setParentSelectResult([
-      { id: "conn-1", mcpToken: "tok-1", region: "fra" },
+      { id: "conn-1", mcpToken: "tok-1", region: "eu" },
     ]);
     handle.setChildUpdateResult([{ id: "cdb-analytics-1" }]);
     const { connectionDatabases } = await import("@midplane-cloud/db");
@@ -1056,14 +1056,14 @@ describe("rotateConnection with explicit dbName", () => {
     expect(result).toEqual({
       id: "conn-1",
       mcpToken: "tok-1",
-      region: "fra",
+      region: "eu",
     });
     // Cache invalidation keys on the rotated child id, so a sibling DB's
     // DecryptCache entry stays warm. The container is invalidated by
     // mcpToken (single-token-per-connection) regardless.
     expect(caches.cache.invalidate).toHaveBeenCalledWith(
       "cdb-analytics-1",
-      "fra",
+      "eu",
     );
     expect(caches.registry.invalidate).toHaveBeenCalledWith("tok-1");
     const childUpdate = handle.calls.find(
@@ -1074,7 +1074,7 @@ describe("rotateConnection with explicit dbName", () => {
 
   it("returns null and skips invalidations when the named child does not exist", async () => {
     handle.setParentSelectResult([
-      { id: "conn-1", mcpToken: "tok-1", region: "fra" },
+      { id: "conn-1", mcpToken: "tok-1", region: "eu" },
     ]);
     handle.setChildUpdateResult([]); // 0 rows matched the dbName
     const { rotateConnection } = await import("../src/lib/connections.ts");
@@ -1128,7 +1128,7 @@ function makeMutationDeps(): MutationDepsSpy {
 describe("addDatabase", () => {
   it("happy path: encrypts DSN, inserts child row, invalidates registry", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]); // parent ownership
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]); // parent ownership
     handle.queueSelect([]); // sibling-collision check returns empty
     const { addDatabase } = await import("../src/lib/connections.ts");
     const { connectionDatabases } = await import("@midplane-cloud/db");
@@ -1164,7 +1164,7 @@ describe("addDatabase", () => {
 
   it("name collision: throws DatabaseNameTaken without inserting or invalidating", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([{ id: "cdb-existing" }]); // sibling already owns the name
     const { addDatabase, DatabaseNameTaken } = await import(
       "../src/lib/connections.ts"
@@ -1237,7 +1237,7 @@ describe("addDatabase", () => {
     // must still translate a raw 23505 into the typed error so the
     // dashboard action keeps working under any future race.
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([]); // pre-check: no collision visible yet
     handle.failNextInsert({
       code: "23505",
@@ -1264,7 +1264,7 @@ describe("addDatabase", () => {
 
   it("rethrows non-unique driver errors as-is", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([]);
     const realFailure = new Error("connection terminated unexpectedly");
     handle.failNextInsert(realFailure);
@@ -1288,7 +1288,7 @@ describe("addDatabase", () => {
 describe("removeDatabase", () => {
   it("happy path: deletes the named child, invalidates registry", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]); // ownership
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]); // ownership
     handle.queueSelect([{ id: "cdb-main" }, { id: "cdb-analytics" }]); // 2 siblings
     handle.setChildDeleteResult([{ id: "cdb-analytics" }]);
     const { removeDatabase } = await import("../src/lib/connections.ts");
@@ -1307,7 +1307,7 @@ describe("removeDatabase", () => {
 
   it("blocks the last database: throws LastDatabaseProtected without deleting", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([{ id: "cdb-main" }]); // only 1 sibling — last DB
     const { removeDatabase, LastDatabaseProtected } = await import(
       "../src/lib/connections.ts"
@@ -1339,7 +1339,7 @@ describe("removeDatabase", () => {
 
   it("dbName not on connection: returns null after attempting delete", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([{ id: "cdb-main" }, { id: "cdb-analytics" }]); // 2 siblings → not blocked
     handle.setChildDeleteResult([]); // delete matched 0 rows
     const { removeDatabase } = await import("../src/lib/connections.ts");
@@ -1355,7 +1355,7 @@ describe("removeDatabase", () => {
 describe("renameDatabase", () => {
   it("happy path: updates name, invalidates registry (forces container restart)", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([]); // no sibling collision
     handle.setChildUpdateResult([{ id: "cdb-analytics-1" }]);
     const { renameDatabase } = await import("../src/lib/connections.ts");
@@ -1382,7 +1382,7 @@ describe("renameDatabase", () => {
 
   it("name collision: throws DatabaseNameTaken without updating or invalidating", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([{ id: "cdb-other" }]); // sibling already owns "warehouse"
     const { renameDatabase, DatabaseNameTaken } = await import(
       "../src/lib/connections.ts"
@@ -1455,7 +1455,7 @@ describe("renameDatabase", () => {
 
   it("source dbName missing: returns null, no invalidate", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([]); // no sibling collision on newName
     handle.setChildUpdateResult([]); // update matched 0 rows
     const { renameDatabase } = await import("../src/lib/connections.ts");
@@ -1475,7 +1475,7 @@ describe("renameDatabase", () => {
 
   it("translates a Postgres unique-violation at update into DatabaseNameTaken", async () => {
     handle.setConnectionsReturning([{ id: "conn-1", mcpToken: "tok-1" }]);
-    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
     handle.queueSelect([]); // pre-check passes
     handle.failNextUpdate({
       code: "23505",
@@ -1497,7 +1497,7 @@ describe("renameDatabase", () => {
 describe("getConnectionWithDatabase", () => {
   it("returns parent + named child when both exist", async () => {
     handle.queueSelect([
-      { id: "conn-1", customerId: customer.id, region: "fra" },
+      { id: "conn-1", customerId: customer.id, region: "eu" },
     ]);
     handle.queueSelect([
       { id: "cdb-analytics-1", connectionId: "conn-1", name: "analytics" },
@@ -1529,7 +1529,7 @@ describe("getConnectionWithDatabase", () => {
 
   it("returns null when child missing", async () => {
     handle.queueSelect([
-      { id: "conn-1", customerId: customer.id, region: "fra" },
+      { id: "conn-1", customerId: customer.id, region: "eu" },
     ]);
     handle.queueSelect([]);
     const { getConnectionWithDatabase } = await import(
@@ -1569,7 +1569,7 @@ describe("listDashboardConnections", () => {
         connection: {
           id: "conn-1",
           customerId: customer.id,
-          region: "fra",
+          region: "eu",
           name: "prod",
           mcpToken: "tok-1",
           createdAt: new Date(),
@@ -1614,7 +1614,7 @@ describe("listDashboardConnections", () => {
         connection: {
           id: "conn-1",
           customerId: customer.id,
-          region: "fra",
+          region: "eu",
           name: null,
           mcpToken: "tok-1",
           createdAt: new Date(),
@@ -1647,7 +1647,7 @@ describe("listDashboardConnections", () => {
         connection: {
           id: "conn-1",
           customerId: customer.id,
-          region: "fra",
+          region: "eu",
           name: null,
           mcpToken: "tok-1",
           createdAt: new Date(),

@@ -28,7 +28,7 @@ import { type TableAccessPolicy, type TenantScopeConfig } from "./policy.ts";
 
 // --- Region -----------------------------------------------------------------
 
-export const REGIONS = ["fra", "iad"] as const;
+export const REGIONS = ["eu", "us"] as const;
 export type Region = (typeof REGIONS)[number];
 
 // --- bytea (encrypted DSN) --------------------------------------------------

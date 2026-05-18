@@ -13,11 +13,11 @@ packages/db           Drizzle schema (customers, connections, audit_events_index
 packages/kms          encryptDsn / decryptDsn (env-mode dev, AWS KMS prod)
 packages/router       Hosted MCP request handler — token → connection → Fly app
 fly-web.toml          Control-plane Fly app (Next.js dashboard + /mcp/<token>)
-fly-fra.toml          Frankfurt regional MCP runtime app
+fly-eu.toml           EU regional MCP runtime app (pinned to Frankfurt)
 scripts/bootstrap.sh  One-shot dev setup
 ```
 
-Multi-region is V1, not V1.5. Schema and URL format are multi-region from day one. Bootstrap deploys `fra` (eu-central-1) only; `iad` (us-east-2) is provisioned in the V1 launch session as pure deploy work — no migration.
+Multi-region is V1, not V1.5. Schema and URL format are multi-region from day one. Bootstrap deploys `eu` (Frankfurt, eu-central-1) only; `us` (Dulles, us-east-2) is provisioned in the V1 launch session as pure deploy work — no migration. Customer-facing names track the jurisdiction (`eu.midplane.com`, `us.midplane.com`); the underlying Fly DC is configurable per region so EU can move to ams later without renaming anything else.
 
 ## Quick start
 
@@ -69,13 +69,15 @@ fly secrets set --app midplane-web \
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...' \
   CLERK_SECRET_KEY='sk_live_...' \
   MIDPLANE_KMS_MODE='env' \
-  MIDPLANE_KMS_DEV_KEY_FRA="$(openssl rand -hex 32)" \
-  MIDPLANE_KMS_DEV_KEY_IAD="$(openssl rand -hex 32)" \
+  MIDPLANE_KMS_DEV_KEY_EU="$(openssl rand -hex 32)" \
+  MIDPLANE_KMS_DEV_KEY_US="$(openssl rand -hex 32)" \
   FLY_API_TOKEN='fly_...' \
-  FLY_APP_FRA='midplane-fra' \
-  FLY_APP_IAD='midplane-iad' \
-  MIDPLANE_PUBLIC_HOST_FRA='fra.midplane.ai' \
-  MIDPLANE_PUBLIC_HOST_IAD='iad.midplane.ai' \
+  FLY_APP_EU='midplane-eu' \
+  FLY_APP_US='midplane-us' \
+  FLY_REGION_EU='fra' \
+  FLY_REGION_US='iad' \
+  MIDPLANE_PUBLIC_HOST_EU='eu.midplane.ai' \
+  MIDPLANE_PUBLIC_HOST_US='us.midplane.ai' \
   MIDPLANE_OSS_IMAGE='midplane/midplane:0.5.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)"
 ```
@@ -119,4 +121,4 @@ It uses [Clerk testing tokens](https://clerk.com/docs/testing/overview) to bypas
 
 V1 critical path: signup → region pick → paste DSN → encrypted store → hosted MCP URL → Cursor connects → first query exercises the OSS image with stored creds → audit lands in container SQLite.
 
-NOT this session: indexer, dashboard read views, rotation flow, prod AWS KMS, iad region deploy, billing, public deploy.
+NOT this session: indexer, dashboard read views, rotation flow, prod AWS KMS, us region deploy, billing, public deploy.

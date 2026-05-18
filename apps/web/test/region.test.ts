@@ -3,19 +3,19 @@ import { describe, expect, it } from "vitest";
 import { defaultRegionForCountry } from "../src/lib/region";
 
 describe("defaultRegionForCountry", () => {
-  it("maps EU countries to fra", () => {
-    expect(defaultRegionForCountry("DE")).toBe("fra");
-    expect(defaultRegionForCountry("FR")).toBe("fra");
-    expect(defaultRegionForCountry("GB")).toBe("fra");
+  it("maps EU countries to eu", () => {
+    expect(defaultRegionForCountry("DE")).toBe("eu");
+    expect(defaultRegionForCountry("FR")).toBe("eu");
+    expect(defaultRegionForCountry("GB")).toBe("eu");
   });
 
-  it("maps US/other to iad", () => {
-    expect(defaultRegionForCountry("US")).toBe("iad");
-    expect(defaultRegionForCountry("BR")).toBe("iad");
-    expect(defaultRegionForCountry(null)).toBe("iad");
+  it("maps US/other to us", () => {
+    expect(defaultRegionForCountry("US")).toBe("us");
+    expect(defaultRegionForCountry("BR")).toBe("us");
+    expect(defaultRegionForCountry(null)).toBe("us");
   });
 
   it("is case-insensitive", () => {
-    expect(defaultRegionForCountry("de")).toBe("fra");
+    expect(defaultRegionForCountry("de")).toBe("eu");
   });
 });

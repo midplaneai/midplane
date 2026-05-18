@@ -3,14 +3,14 @@ import { describe, expect, it } from "vitest";
 
 import { decryptDsn, encryptDsn, makeKmsContext } from "../src/index.ts";
 
-const FRA_KEY = randomBytes(32).toString("hex");
-const IAD_KEY = randomBytes(32).toString("hex");
+const EU_KEY = randomBytes(32).toString("hex");
+const US_KEY = randomBytes(32).toString("hex");
 
 function ctx(env: Record<string, string | undefined> = {}) {
   return makeKmsContext({
     MIDPLANE_KMS_MODE: "env",
-    MIDPLANE_KMS_DEV_KEY_FRA: FRA_KEY,
-    MIDPLANE_KMS_DEV_KEY_IAD: IAD_KEY,
+    MIDPLANE_KMS_DEV_KEY_EU: EU_KEY,
+    MIDPLANE_KMS_DEV_KEY_US: US_KEY,
     ...env,
   } as NodeJS.ProcessEnv);
 }
@@ -22,12 +22,12 @@ describe("env-mode KMS round-trip", () => {
       ctx(),
       dsn,
       "cust_01HX",
-      "fra",
+      "eu",
     );
-    expect(kmsKeyId).toBe("env:fra");
+    expect(kmsKeyId).toBe("env:eu");
     expect(ciphertext.length).toBeGreaterThan(dsn.length);
 
-    const out = await decryptDsn(ctx(), ciphertext, "cust_01HX", "fra", kmsKeyId);
+    const out = await decryptDsn(ctx(), ciphertext, "cust_01HX", "eu", kmsKeyId);
     expect(out).toBe(dsn);
   });
 
@@ -36,10 +36,10 @@ describe("env-mode KMS round-trip", () => {
       ctx(),
       "postgres://x",
       "cust_A",
-      "fra",
+      "eu",
     );
     await expect(
-      decryptDsn(ctx(), ciphertext, "cust_B", "fra", kmsKeyId),
+      decryptDsn(ctx(), ciphertext, "cust_B", "eu", kmsKeyId),
     ).rejects.toThrow();
   });
 
@@ -48,33 +48,33 @@ describe("env-mode KMS round-trip", () => {
       ctx(),
       "postgres://x",
       "cust_A",
-      "fra",
+      "eu",
     );
-    // Forcing the kmsKeyId to env:iad uses the iad key + iad AAD.
+    // Forcing the kmsKeyId to env:us uses the us key + us AAD.
     await expect(
-      decryptDsn(ctx(), ciphertext, "cust_A", "iad", "env:iad"),
+      decryptDsn(ctx(), ciphertext, "cust_A", "us", "env:us"),
     ).rejects.toThrow();
   });
 
   it("ciphertext is non-deterministic (fresh nonce per encrypt)", async () => {
-    const a = await encryptDsn(ctx(), "x", "c", "fra");
-    const b = await encryptDsn(ctx(), "x", "c", "fra");
+    const a = await encryptDsn(ctx(), "x", "c", "eu");
+    const b = await encryptDsn(ctx(), "x", "c", "eu");
     expect(a.ciphertext.equals(b.ciphertext)).toBe(false);
   });
 
   it("rejects malformed wire bytes", async () => {
     await expect(
-      decryptDsn(ctx(), Buffer.from([0x99]), "c", "fra", "env:fra"),
+      decryptDsn(ctx(), Buffer.from([0x99]), "c", "eu", "env:eu"),
     ).rejects.toThrow();
   });
 
   it("requires per-region key when encrypting in that region", async () => {
-    const onlyFra = makeKmsContext({
+    const onlyEu = makeKmsContext({
       MIDPLANE_KMS_MODE: "env",
-      MIDPLANE_KMS_DEV_KEY_FRA: FRA_KEY,
+      MIDPLANE_KMS_DEV_KEY_EU: EU_KEY,
     } as NodeJS.ProcessEnv);
-    await expect(encryptDsn(onlyFra, "x", "c", "iad")).rejects.toThrow(
-      /MIDPLANE_KMS_DEV_KEY_IAD/,
+    await expect(encryptDsn(onlyEu, "x", "c", "us")).rejects.toThrow(
+      /MIDPLANE_KMS_DEV_KEY_US/,
     );
   });
 });
