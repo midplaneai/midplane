@@ -169,29 +169,36 @@ export function PermissionGrid({
           Default for unlisted tables
         </legend>
         <div className="flex flex-wrap gap-2">
-          {ACCESS_LEVELS.map((level) => (
-            <label
-              key={level}
-              className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${
-                defaultLevel === level
-                  ? "border-primary bg-primary/5"
-                  : "hover:bg-accent"
-              }`}
-            >
-              <input
-                type="radio"
-                name="default_preview"
-                value={level}
-                checked={defaultLevel === level}
-                onChange={() => {
-                  setDefaultLevel(level);
-                  setSavedAt(null);
-                }}
-                className="sr-only"
-              />
-              {LEVEL_LABEL[level]}
-            </label>
-          ))}
+          {ACCESS_LEVELS.map((level) => {
+            const selected = defaultLevel === level;
+            return (
+              <label
+                key={level}
+                className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                  selected
+                    ? LEVEL_SELECTED_CLASS[level]
+                    : "border-border hover:bg-accent"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="default_preview"
+                  value={level}
+                  checked={selected}
+                  onChange={() => {
+                    setDefaultLevel(level);
+                    setSavedAt(null);
+                  }}
+                  className="sr-only"
+                />
+                <span
+                  aria-hidden
+                  className={`h-1.5 w-1.5 rounded-full ${LEVEL_DOT_CLASS[level]}`}
+                />
+                {LEVEL_LABEL[level]}
+              </label>
+            );
+          })}
         </div>
       </fieldset>
 
@@ -283,6 +290,20 @@ const LEVEL_LABEL: Record<AccessLevel, string> = {
   deny: "Deny",
   read: "Read",
   read_write: "Read + write",
+};
+
+// Semantic-color vocabulary from DESIGN.md: deny=red, read=warn (cautious
+// middle), read_write=allow (open). The dot is always visible; the
+// tinted background + colored border only appears on the selected pill.
+const LEVEL_DOT_CLASS: Record<AccessLevel, string> = {
+  deny: "bg-deny",
+  read: "bg-warn",
+  read_write: "bg-allow",
+};
+const LEVEL_SELECTED_CLASS: Record<AccessLevel, string> = {
+  deny: "border-deny/40 bg-deny/10",
+  read: "border-warn/40 bg-warn/10",
+  read_write: "border-allow/40 bg-allow/10",
 };
 
 function policyToRows(policy: TableAccessPolicy): TableRow[] {

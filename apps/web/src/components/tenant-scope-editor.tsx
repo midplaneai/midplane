@@ -475,11 +475,13 @@ function EnabledToggle({
         <ToggleOption
           label="Off"
           active={!enabled}
+          tone="neutral"
           onClick={() => onChange(false)}
         />
         <ToggleOption
           label="On"
           active={enabled}
+          tone="allow"
           onClick={() => onChange(true)}
         />
       </div>
@@ -490,10 +492,14 @@ function EnabledToggle({
 function ToggleOption({
   label,
   active,
+  tone,
   onClick,
 }: {
   label: string;
   active: boolean;
+  /** Off is neutral; On is `allow` so an enabled scope reads as
+   *  "filtering is active and protective" at a glance. */
+  tone: "neutral" | "allow";
   onClick: () => void;
 }) {
   return (
@@ -505,7 +511,9 @@ function ToggleOption({
       className={cn(
         "rounded-[4px] px-3 py-1 text-xs font-medium transition-colors",
         active
-          ? "bg-background text-foreground"
+          ? tone === "allow"
+            ? "bg-allow/15 text-allow"
+            : "bg-background text-foreground"
           : "text-subtle hover:text-foreground",
       )}
     >
