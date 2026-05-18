@@ -90,7 +90,7 @@ describe("connection_databases (0008 child)", () => {
       "encryptedDsn",
       "kmsKeyId",
       "tableAccess",
-      "tenantScopeMappings",
+      "tenantScope",
       "rotatedAt",
       "lastKmsSuccessAt",
       "createdAt",

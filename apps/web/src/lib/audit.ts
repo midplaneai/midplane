@@ -107,6 +107,13 @@ export interface AuditQueryListRow {
   decisionReason: string | null;
   execMs: number | null;
   status: QueryStatus;
+  /** Full payload of the underlying POLICY_RELOADED event for
+   *  POLICY_RELOAD list rows. Null on every query row. OSS 0.4.0 emits
+   *  `sections_changed` / `databases_changed` / `diffs` here so the list
+   *  view can render "tenant_scope updated on main" instead of a bare
+   *  pill; older rows (pre-0.4.0) still resolve to a generic label via
+   *  policyReloadSummary's fallback. */
+  policyPayload: Record<string, unknown> | null;
 }
 
 export interface ListAuditOpts {
@@ -262,6 +269,7 @@ export async function listAuditQueries(
           decision,
           decision_reason,
           exec_ms,
+          NULL::jsonb AS policy_payload,
           CASE
             WHEN has_executed THEN 'ALLOWED'
             WHEN has_failed THEN 'FAILED'
@@ -289,6 +297,7 @@ export async function listAuditQueries(
           NULL::text AS decision,
           NULL::text AS decision_reason,
           NULL::numeric AS exec_ms,
+          payload AS policy_payload,
           'POLICY_RELOAD' AS status
         FROM audit_events_index
         WHERE customer_id = ${customerId}
@@ -331,6 +340,7 @@ export async function listAuditQueries(
         decisionReason: (r.decision_reason as string | null) ?? null,
         execMs: r.exec_ms == null ? null : Number(r.exec_ms),
         status: r.status as QueryStatus,
+        policyPayload: parsePolicyPayload(r.policy_payload),
       }),
     );
 
@@ -340,6 +350,29 @@ export async function listAuditQueries(
         : null;
     return { rows: rows.slice(0, limit), nextCursor: next };
   });
+}
+
+// Driver-side: postgres-js returns jsonb as a parsed object; some
+// migration paths or replay tools surface the same column as a JSON
+// string. Normalize so the renderer always sees Record<string, unknown>
+// or null; anything else (array, scalar) is treated as null since none
+// of the structured renderers expect those shapes.
+function parsePolicyPayload(v: unknown): Record<string, unknown> | null {
+  if (v == null) return null;
+  if (typeof v === "object" && !Array.isArray(v)) {
+    return v as Record<string, unknown>;
+  }
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return null;
 }
 
 /** Distinct tenant_ids the current customer has audit rows for, used to

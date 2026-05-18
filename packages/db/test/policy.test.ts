@@ -240,12 +240,12 @@ describe("serializeMultiDbPolicyToYaml", () => {
       name: "main",
       connectionDatabaseId: "01HXYZ123ABC456DEF789GHI01",
       tableAccess: { default: "read", tables: {} },
-      tenantScopeMappings: {},
+      tenantScope: { column: null, overrides: {}, exempt: [] },
       ...overrides,
     };
   }
 
-  it("emits a single-DB entry with table_access, no tenant_scope when mappings empty", () => {
+  it("emits a single-DB entry with table_access, no tenant_scope when config is inert", () => {
     const yaml = serializeMultiDbPolicyToYaml([entry()]);
     expect(yaml).toBe(
       [
@@ -260,14 +260,18 @@ describe("serializeMultiDbPolicyToYaml", () => {
     );
   });
 
-  it("sorts table_access entries and per-DB tenant_scope mappings", () => {
+  it("emits OSS 0.5.0 strict-mode shape: column + overrides + exempt, each sorted", () => {
     const yaml = serializeMultiDbPolicyToYaml([
       entry({
         tableAccess: {
           default: "deny",
           tables: { users: "read_write", "public.orders": "deny", audit: "read" },
         },
-        tenantScopeMappings: { orders: "tenant_id", users: "customer_id" },
+        tenantScope: {
+          column: "tenant_id",
+          overrides: { orders: "org_id", users: "customer_id" },
+          exempt: ["regions", "audit_log"],
+        },
       }),
     ]);
     const expected = [
@@ -282,12 +286,97 @@ describe("serializeMultiDbPolicyToYaml", () => {
       "        users: read_write",
       "    tenant_scope:",
       "      enabled: true",
-      "      mappings:",
-      "        orders: tenant_id",
+      "      column: tenant_id",
+      "      overrides:",
+      "        orders: org_id",
       "        users: customer_id",
+      "      exempt:",
+      "        - audit_log",
+      "        - regions",
       "",
     ].join("\n");
     expect(yaml).toBe(expected);
+  });
+
+  it("column=null + overrides-only: emits the same YAML 0.5.0 reads as the deprecated `mappings`-equivalent", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        tenantScope: {
+          column: null,
+          overrides: { orders: "tenant_id" },
+          exempt: [],
+        },
+      }),
+    ]);
+    expect(yaml).toContain("tenant_scope:");
+    expect(yaml).toContain("      enabled: true");
+    expect(yaml).not.toContain("column:");
+    expect(yaml).toContain("      overrides:");
+    expect(yaml).toContain("        orders: tenant_id");
+    expect(yaml).not.toContain("exempt:");
+  });
+
+  it("accepts schema-qualified table names in overrides + exempt (matches table_access + introspection autocomplete)", () => {
+    // The shared TableNameInput autocomplete fills `schema.table` from
+    // information_schema. table_access already accepts that shape;
+    // tenant_scope overrides + exempt must too, otherwise a value the
+    // operator selected from the dropdown would fail validation.
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        tenantScope: {
+          column: "tenant_id",
+          overrides: { "public.users": "customer_id" },
+          exempt: ["public.regions"],
+        },
+      }),
+    ]);
+    expect(yaml).toContain("        public.users: customer_id");
+    expect(yaml).toContain("        - public.regions");
+  });
+
+  it("rejects schema-qualified values in column or override values (those are columns, not tables)", () => {
+    // The split: keys are table identifiers (TABLE_IDENT_RE), values are
+    // column identifiers (IDENT_RE). A dot belongs in the key, not the
+    // value — a tenant column is always a single unqualified name.
+    expect(() =>
+      serializeMultiDbPolicyToYaml([
+        entry({
+          tenantScope: {
+            column: "public.tenant_id",
+            overrides: {},
+            exempt: [],
+          },
+        }),
+      ]),
+    ).toThrow(/quoting/);
+    expect(() =>
+      serializeMultiDbPolicyToYaml([
+        entry({
+          tenantScope: {
+            column: null,
+            overrides: { orders: "public.org_id" },
+            exempt: [],
+          },
+        }),
+      ]),
+    ).toThrow(/quoting/);
+  });
+
+  it("emits exempt-only configs without overrides (still inert per tenantScopeIsActive but worth being deterministic)", () => {
+    // Inert configs (no column AND no overrides) skip the block entirely
+    // regardless of exempt — exempting tables that aren't scoped is a
+    // no-op, so we don't waste bytes on YAML the engine will treat as
+    // disabled anyway.
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        tenantScope: {
+          column: null,
+          overrides: {},
+          exempt: ["audit_log"],
+        },
+      }),
+    ]);
+    expect(yaml).not.toContain("tenant_scope:");
   });
 
   it("emits multiple DBs, each with its own block", () => {
@@ -321,10 +410,44 @@ describe("serializeMultiDbPolicyToYaml", () => {
     ).toThrow(/duplicate database name/);
   });
 
-  it("rejects tenant_scope mapping keys/values that need quoting", () => {
+  it("rejects tenant_scope override keys/values that need quoting", () => {
     expect(() =>
       serializeMultiDbPolicyToYaml([
-        entry({ tenantScopeMappings: { "bad name": "tenant_id" } }),
+        entry({
+          tenantScope: {
+            column: null,
+            overrides: { "bad name": "tenant_id" },
+            exempt: [],
+          },
+        }),
+      ]),
+    ).toThrow(/quoting/);
+  });
+
+  it("rejects a tenant_scope.column that needs quoting", () => {
+    expect(() =>
+      serializeMultiDbPolicyToYaml([
+        entry({
+          tenantScope: {
+            column: "bad column",
+            overrides: {},
+            exempt: [],
+          },
+        }),
+      ]),
+    ).toThrow(/quoting/);
+  });
+
+  it("rejects a tenant_scope.exempt entry that needs quoting", () => {
+    expect(() =>
+      serializeMultiDbPolicyToYaml([
+        entry({
+          tenantScope: {
+            column: "tenant_id",
+            overrides: {},
+            exempt: ["bad name"],
+          },
+        }),
       ]),
     ).toThrow(/quoting/);
   });

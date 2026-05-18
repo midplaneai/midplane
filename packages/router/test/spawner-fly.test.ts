@@ -88,7 +88,7 @@ describe("FlyMachineSpawner", () => {
           connectionDatabaseId: "01HXYZMAIN0000000000000000",
           dsn: "postgres://example",
           tableAccess: { default: "read", tables: { orders: "read_write" } },
-          tenantScopeMappings: {},
+          tenantScope: { column: null, overrides: {}, exempt: [] },
         },
       ],
     });
@@ -136,7 +136,7 @@ describe("FlyMachineSpawner", () => {
             connectionDatabaseId: "01HXYZMAIN0000000000000000",
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
-            tenantScopeMappings: {},
+            tenantScope: { column: null, overrides: {}, exempt: [] },
           },
         ],
       }),

@@ -2,17 +2,22 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-import { parsePolicyOrThrow } from "@midplane-cloud/db";
+import {
+  parsePolicyOrThrow,
+  parseTenantScopeOrThrow,
+} from "@midplane-cloud/db";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
+import { TenantScopeEditor } from "@/components/tenant-scope-editor";
 import { PageHeader } from "@/components/ui/page-header";
 import {
   getConnectionWithDatabase,
   isValidDsn,
   rotateConnection,
   setTableAccess,
+  setTenantScope,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
@@ -80,6 +85,32 @@ export default async function DatabaseDetail({
     revalidatePath(`/connections/${id}/databases/${name}`);
   }
 
+  async function scopeAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+
+    const raw = formData.get("config");
+    if (typeof raw !== "string") {
+      throw new Error("missing config");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("config is not valid JSON");
+    }
+    // parseTenantScopeOrThrow gives a single throw-point for shape
+    // errors; setTenantScope re-validates the same shape before any DB
+    // work as defense-in-depth.
+    const config = parseTenantScopeOrThrow(parsed);
+
+    const ctx = getMcpProxyContext();
+    const result = await setTenantScope(customer, id, config, ctx, name);
+    if (!result) notFound();
+    revalidatePath(`/connections/${id}/databases/${name}`);
+  }
+
   const connectionLabel = conn.name ?? conn.id.slice(0, 12);
 
   return (
@@ -121,6 +152,26 @@ export default async function DatabaseDetail({
                 connectionId={conn.id}
                 initialPolicy={parsePolicyOrThrow(db.tableAccess)}
                 action={policyAction}
+              />
+            </div>
+          </section>
+
+          <section className="mt-6 space-y-3 rounded-lg border border-border-strong bg-card p-6">
+            <h2 className="text-base font-medium text-foreground">
+              Tenant scoping
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Force agent queries to only see rows belonging to one tenant.
+              Set the default tenant column once; every queried table is
+              automatically scoped on it. List exceptions for tables that
+              use a different column or that are intentionally shared
+              across tenants.
+            </p>
+            <div className="pt-2">
+              <TenantScopeEditor
+                connectionId={conn.id}
+                initialConfig={parseTenantScopeOrThrow(db.tenantScope)}
+                action={scopeAction}
               />
             </div>
           </section>

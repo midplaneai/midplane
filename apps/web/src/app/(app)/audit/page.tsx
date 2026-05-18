@@ -8,7 +8,7 @@ import {
   StalenessBanner,
   StalenessSubtitle,
 } from "@/components/audit/staleness-banner";
-import { StatusBadge } from "@/components/audit/status-badge";
+import { policyReloadSummary, StatusBadge } from "@/components/audit/status-badge";
 import { VolumeSparkline } from "@/components/audit/volume-sparkline";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -177,16 +177,25 @@ export default async function AuditListPage({ searchParams }: PageProps) {
                     </span>
                   </Td>
                   <Td>
-                    <span
-                      title={r.sqlRaw ?? r.sqlFingerprint ?? undefined}
-                      className="block max-w-[420px] truncate font-mono text-xs text-foreground"
-                    >
-                      {r.sqlRaw ?? (
-                        <span className="text-subtle">
-                          {r.sqlFingerprint ?? "—"}
-                        </span>
-                      )}
-                    </span>
+                    {r.status === "POLICY_RELOAD" ? (
+                      <span
+                        className="block max-w-[420px] truncate text-foreground"
+                        data-testid="audit-policy-summary"
+                      >
+                        {policyReloadSummary(r.policyPayload)}
+                      </span>
+                    ) : (
+                      <span
+                        title={r.sqlRaw ?? r.sqlFingerprint ?? undefined}
+                        className="block max-w-[420px] truncate font-mono text-xs text-foreground"
+                      >
+                        {r.sqlRaw ?? (
+                          <span className="text-subtle">
+                            {r.sqlFingerprint ?? "—"}
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </Td>
                   <Td className="whitespace-nowrap text-right font-mono text-[11px] text-subtle">
                     {formatDuration(r.execMs)}

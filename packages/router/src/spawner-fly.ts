@@ -66,7 +66,7 @@ export class FlyMachineSpawner implements Spawner {
     this.token = opts.apiToken;
     this.indexerToken = opts.indexerToken;
     this.apiBase = opts.apiBase ?? "https://api.machines.dev";
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.4.0";
+    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.5.0";
     this.regions = opts.regions;
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 60_000;
     this.fetchFn = opts.fetch ?? fetch;
@@ -119,7 +119,7 @@ export class FlyMachineSpawner implements Spawner {
         name: db.name,
         connectionDatabaseId: db.connectionDatabaseId,
         tableAccess: db.tableAccess,
-        tenantScopeMappings: db.tenantScopeMappings,
+        tenantScope: db.tenantScope,
       })),
     );
     const res = await this.fetchFn(`${this.apiBase}/v1/apps/${app}/machines`, {

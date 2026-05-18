@@ -18,7 +18,11 @@
 // always emits the multi-DB shape regardless of N.
 
 import { resolveByToken } from "@midplane-cloud/router";
-import { getDb, parsePolicyOrThrow } from "@midplane-cloud/db";
+import {
+  getDb,
+  parsePolicyOrThrow,
+  parseTenantScopeOrThrow,
+} from "@midplane-cloud/db";
 
 import { getMcpProxyContext } from "./mcp-proxy.ts";
 
@@ -78,11 +82,16 @@ export async function proxyMcp(
       );
     }
     let tableAccess;
+    let tenantScope;
     try {
       // Validate at the boundary — Postgres should never hold malformed
       // policy (validatePolicy gates every write), but if it somehow does,
       // fail closed instead of starting a container with a degraded YAML.
+      // parseTenantScopeOrThrow normalizes legacy 0.4.x flat-map rows that
+      // slipped past the 0012 backfill, so a pre-migration row reads as
+      // { column: null, overrides: <old map>, exempt: [] }.
       tableAccess = parsePolicyOrThrow(cdb.tableAccess);
+      tenantScope = parseTenantScopeOrThrow(cdb.tenantScope);
     } catch (err) {
       console.error("invalid policy at spawn", err);
       return Response.json(
@@ -99,7 +108,7 @@ export async function proxyMcp(
       connectionDatabaseId: cdb.id,
       dsn: decrypt.plaintext,
       tableAccess,
-      tenantScopeMappings: cdb.tenantScopeMappings,
+      tenantScope,
     });
   }
 

@@ -118,7 +118,7 @@ function makeFakeDb(): FakeDbHandle {
           // Child updates on connection_databases set the credential
           // columns (rotateConnection), the policy column
           // (setTableAccess), the alias column (renameDatabase via
-          // {name}), or the tenant_scope mappings. Parent updates on
+          // {name}), or the tenant_scope config. Parent updates on
           // connections only set {name} via renameConnection — but
           // since the test never exercises that simultaneously with a
           // child rename, prefer childUpdate when populated.
@@ -126,7 +126,7 @@ function makeFakeDb(): FakeDbHandle {
             set &&
             ("encryptedDsn" in set ||
               "tableAccess" in set ||
-              "tenantScopeMappings" in set)
+              "tenantScope" in set)
           ) {
             return Promise.resolve(childUpdate);
           }
@@ -503,6 +503,10 @@ const goodPolicy = {
   tables: { "public.users": "deny" },
 } as const;
 
+// Inert tenant_scope envelope reused across fixtures. Mirrors the
+// EMPTY_TENANT_SCOPE constant exported from @midplane-cloud/db.
+const inertScope = { column: null, overrides: {}, exempt: [] };
+
 describe("setTableAccess", () => {
   // Shape returned by the in-txn siblings select. Mirrors the post-update
   // state, since Postgres reads see writes within the same txn.
@@ -510,7 +514,7 @@ describe("setTableAccess", () => {
     id: "cdb-main-1",
     name: "main",
     tableAccess: goodPolicy,
-    tenantScopeMappings: {},
+    tenantScope: inertScope,
   };
   // Expected pushPolicy second arg: the multi-DB body remapped from
   // siblings rows. PR-A bumps OSS to 0.4.0; the legacy single-section
@@ -520,7 +524,7 @@ describe("setTableAccess", () => {
     name: "main",
     connectionDatabaseId: "cdb-main-1",
     tableAccess: goodPolicy,
-    tenantScopeMappings: {},
+    tenantScope: inertScope,
   };
 
   it("happy path: writes Postgres, hot-reloads engine, does NOT invalidate", async () => {
@@ -617,7 +621,7 @@ describe("setTableAccess", () => {
         id: "cdb-analytics-1",
         name: "analytics",
         tableAccess: goodPolicy,
-        tenantScopeMappings: {},
+        tenantScope: inertScope,
       },
     ]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
@@ -638,7 +642,7 @@ describe("setTableAccess", () => {
         name: "analytics",
         connectionDatabaseId: "cdb-analytics-1",
         tableAccess: goodPolicy,
-        tenantScopeMappings: {},
+        tenantScope: inertScope,
       },
     ]);
     // The child UPDATE's where-clause must reference the explicit dbName,
@@ -662,7 +666,11 @@ describe("setTableAccess", () => {
         id: "cdb-analytics-1",
         name: "analytics",
         tableAccess: { default: "deny", tables: {} },
-        tenantScopeMappings: { orders: "tenant_id" },
+        tenantScope: {
+          column: "tenant_id",
+          overrides: { orders: "org_id" },
+          exempt: [],
+        },
       },
     ]);
     const { setTableAccess } = await import("../src/lib/connections.ts");
@@ -677,7 +685,11 @@ describe("setTableAccess", () => {
         name: "analytics",
         connectionDatabaseId: "cdb-analytics-1",
         tableAccess: { default: "deny", tables: {} },
-        tenantScopeMappings: { orders: "tenant_id" },
+        tenantScope: {
+          column: "tenant_id",
+          overrides: { orders: "org_id" },
+          exempt: [],
+        },
       },
     ]);
   });
@@ -715,6 +727,311 @@ describe("setTableAccess", () => {
     ).rejects.toThrow(/invalid policy/);
     expect(handle.calls).toHaveLength(0);
     expect(deps.pushPolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe("setTenantScope", () => {
+  // Sibling-select returns the post-update row, so the new config shape
+  // (column + overrides + exempt) is what the engine receives.
+  const strictScope = {
+    column: "tenant_id",
+    overrides: { orders: "org_id" },
+    exempt: ["audit_log"],
+  };
+  const mainSibling = {
+    id: "cdb-main-1",
+    name: "main",
+    tableAccess: { default: "read", tables: {} },
+    tenantScope: strictScope,
+  };
+
+  it("happy path: writes Postgres, hot-reloads engine with the strict-mode body", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    const result = await setTenantScope(customer, "conn-1", strictScope, deps);
+
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
+      {
+        name: "main",
+        connectionDatabaseId: "cdb-main-1",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: strictScope,
+      },
+    ]);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("multi-DB connection: restates every sibling so OSS doesn't drop the untouched one", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([
+      mainSibling,
+      {
+        id: "cdb-analytics-1",
+        name: "analytics",
+        tableAccess: { default: "deny", tables: {} },
+        tenantScope: inertScope,
+      },
+    ]);
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setTenantScope(customer, "conn-1", strictScope, deps);
+
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
+      {
+        name: "main",
+        connectionDatabaseId: "cdb-main-1",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: strictScope,
+      },
+      {
+        name: "analytics",
+        connectionDatabaseId: "cdb-analytics-1",
+        tableAccess: { default: "deny", tables: {} },
+        tenantScope: inertScope,
+      },
+    ]);
+  });
+
+  it("inert envelope: persists EMPTY_TENANT_SCOPE (= tenant_scope disabled on this DB)", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([
+      {
+        id: "cdb-main-1",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: inertScope,
+      },
+    ]);
+    const { connectionDatabases } = await import("@midplane-cloud/db");
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setTenantScope(customer, "conn-1", inertScope, deps);
+
+    const childUpdate = handle.calls.find(
+      (c) => c.op === "update" && c.table === connectionDatabases,
+    );
+    expect(childUpdate).toBeDefined();
+    const set = childUpdate?.set as
+      | { tenantScope: typeof inertScope }
+      | undefined;
+    expect(set?.tenantScope).toEqual(inertScope);
+  });
+
+  it("column=null + overrides-only envelope round-trips through the engine", async () => {
+    // The 0012 backfill wraps pre-0.5.0 flat maps into {column:null,
+    // overrides:<old>, exempt:[]} so existing customers keep working
+    // without a forced default-column decision.
+    const overridesOnly = {
+      column: null,
+      overrides: { orders: "tenant_id" },
+      exempt: [],
+    };
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([
+      {
+        id: "cdb-main-1",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: overridesOnly,
+      },
+    ]);
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setTenantScope(customer, "conn-1", overridesOnly, deps);
+
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
+      {
+        name: "main",
+        connectionDatabaseId: "cdb-main-1",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: overridesOnly,
+      },
+    ]);
+  });
+
+  it("rejected (400): throws EnginePolicyRejected and does NOT fall back to invalidate", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setTenantScope, EnginePolicyRejected } = await import(
+      "../src/lib/connections.ts"
+    );
+    const deps = makePolicyDeps({
+      rejected: { status: 400, body: "tenant_scope.overrides.orders: …" },
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      setTenantScope(customer, "conn-1", strictScope, deps),
+    ).rejects.toBeInstanceOf(EnginePolicyRejected);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("network failure: falls back to registry.invalidate (fail-soft)", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps(() => {
+      throw new Error("ECONNREFUSED");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await setTenantScope(customer, "conn-1", strictScope, deps);
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
+    expect(deps.registry.invalidate).toHaveBeenCalledWith("tok-1");
+    errorSpy.mockRestore();
+  });
+
+  it("dbName not found: returns null when the named child doesn't exist on the connection", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([]); // 0 rows matched the dbName
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    const result = await setTenantScope(
+      customer,
+      "conn-1",
+      strictScope,
+      deps,
+      "ghost-db",
+    );
+
+    expect(result).toBeNull();
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("404 path: returns null and skips push/invalidate when ownership mismatches", async () => {
+    handle.queueSelect([]); // parent ownership check returns no row
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    const result = await setTenantScope(
+      customer,
+      "conn-other",
+      strictScope,
+      deps,
+    );
+
+    expect(result).toBeNull();
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-identifier column before touching Postgres", async () => {
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    await expect(
+      setTenantScope(
+        customer,
+        "conn-1",
+        { column: "bad name", overrides: {}, exempt: [] },
+        deps,
+      ),
+    ).rejects.toThrow(/invalid tenant_scope/);
+    expect(handle.calls).toHaveLength(0);
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+  });
+
+  it("accepts schema-qualified table names in overrides + exempt (autocomplete returns public.users)", async () => {
+    // The shared TableNameInput fills the field from
+    // information_schema as `schema.table`. tenant_scope keys must
+    // accept that shape — otherwise a save with an autocompleted value
+    // would fail before the engine even sees it.
+    const schemaScope = {
+      column: "tenant_id",
+      overrides: { "public.users": "customer_id" },
+      exempt: ["public.regions"],
+    };
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "fra" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([
+      {
+        id: "cdb-main-1",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: schemaScope,
+      },
+    ]);
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    const result = await setTenantScope(customer, "conn-1", schemaScope, deps);
+
+    expect(result).toMatchObject({ mcpToken: "tok-1" });
+    expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
+      {
+        name: "main",
+        connectionDatabaseId: "cdb-main-1",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: schemaScope,
+      },
+    ]);
+  });
+
+  it("rejects schema-qualified default column (columns are single identifiers, only tables can be schema-qualified)", async () => {
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+    await expect(
+      setTenantScope(
+        customer,
+        "conn-1",
+        { column: "public.tenant_id", overrides: {}, exempt: [] },
+        deps,
+      ),
+    ).rejects.toThrow(/invalid tenant_scope/);
+    expect(handle.calls).toHaveLength(0);
+  });
+
+  it("rejects non-identifier override keys / values", async () => {
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    await expect(
+      setTenantScope(
+        customer,
+        "conn-1",
+        { column: null, overrides: { "bad name": "tenant_id" }, exempt: [] },
+        deps,
+      ),
+    ).rejects.toThrow(/invalid tenant_scope/);
+    await expect(
+      setTenantScope(
+        customer,
+        "conn-1",
+        { column: null, overrides: { orders: "tenant id" }, exempt: [] },
+        deps,
+      ),
+    ).rejects.toThrow(/invalid tenant_scope/);
+    expect(handle.calls).toHaveLength(0);
+  });
+
+  it("rejects non-identifier exempt entries", async () => {
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    await expect(
+      setTenantScope(
+        customer,
+        "conn-1",
+        { column: "tenant_id", overrides: {}, exempt: ["bad name"] },
+        deps,
+      ),
+    ).rejects.toThrow(/invalid tenant_scope/);
   });
 });
 
