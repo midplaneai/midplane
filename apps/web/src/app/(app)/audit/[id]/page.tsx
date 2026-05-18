@@ -4,17 +4,12 @@ import { redirect } from "next/navigation";
 import { EventBadge } from "@/components/audit/event-badge";
 import { PayloadView } from "@/components/audit/payload-view";
 import { relativeTime } from "@/components/audit/relative-time";
-import { StalenessBanner } from "@/components/audit/staleness-banner";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
-import {
-  getAuditEvent,
-  getRelatedEvents,
-  readStaleness,
-} from "@/lib/audit";
+import { getAuditEvent, getRelatedEvents } from "@/lib/audit";
 import { currentCustomer } from "@/lib/customer";
 
 interface PageProps {
@@ -27,7 +22,6 @@ export default async function AuditDetailPage({ params }: PageProps) {
 
   const { id } = await params;
   const event = await getAuditEvent(customer.id, id);
-  const staleness = await readStaleness(customer.id, customer.region);
 
   if (!event) {
     return (
@@ -39,7 +33,6 @@ export default async function AuditDetailPage({ params }: PageProps) {
           <span className="mx-2 text-subtle">/</span>Not found
         </Topbar>
         <PageContainer>
-          <StalenessBanner read={staleness} />
           <EmptyState
             data-testid="audit-detail-missing"
             title="Audit row not found."
@@ -97,7 +90,6 @@ export default async function AuditDetailPage({ params }: PageProps) {
             </span>
           }
         />
-        <StalenessBanner read={staleness} />
 
         {queryContext.sqlRaw && (
           <Card className="mt-[18px]">
