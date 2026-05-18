@@ -82,6 +82,58 @@ fly secrets set --app midplane-web \
   INDEXER_TOKEN="$(openssl rand -hex 32)"
 ```
 
+### KMS mode for production credential storage
+
+Hosted-mode customer DSNs are stored encrypted. `MIDPLANE_KMS_MODE` selects
+the algorithm:
+
+- `env` (default in the snippet above): AES-256-GCM with a per-region
+  symmetric key from `MIDPLANE_KMS_DEV_KEY_{EU,US}`. Suitable only for
+  pre-launch bootstrap — no envelope encryption, no rotation, no HSM.
+- `kms`: AWS KMS `GenerateDataKey` + AES-256-GCM with the wrapped data key.
+  Per-region CMK, with `EncryptionContext = {customerId, region}` bound on
+  both `GenerateDataKey` and `Decrypt` so a US-region compromise cannot
+  decrypt EU rows (and vice versa).
+
+To switch a deployed control plane from `env` to `kms`:
+
+```bash
+# 1. Provision one CMK per region (eu-central-1 and us-east-2). Aliases
+#    work as the ARN value — e.g. alias/midplane-prod-eu. The Fly machine's
+#    AWS identity (via OIDC or a long-lived access key in secrets) needs
+#    kms:GenerateDataKey + kms:Decrypt on each key, scoped by
+#    EncryptionContext so the credential can't be used to decrypt rows
+#    belonging to other customers.
+#
+#    Sample key policy statement (attach to each region's CMK):
+#      {
+#        "Effect": "Allow",
+#        "Principal": { "AWS": "arn:aws:iam::<acct>:role/midplane-web" },
+#        "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+#        "Resource": "*",
+#        "Condition": {
+#          "StringEquals": { "kms:EncryptionContextKeys": ["customerId", "region"] },
+#          "StringEqualsIfExists": { "kms:EncryptionContext:region": "<eu|us>" }
+#        }
+#      }
+
+# 2. Point the control plane at the CMKs.
+fly secrets set --app midplane-web \
+  MIDPLANE_KMS_MODE='kms' \
+  MIDPLANE_KMS_KEY_EU='arn:aws:kms:eu-central-1:<acct>:key/<uuid>' \
+  MIDPLANE_KMS_KEY_US='arn:aws:kms:us-east-2:<acct>:key/<uuid>'
+
+# 3. Provide AWS credentials to the Fly machine. Either set
+#    AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY via fly secrets, or wire
+#    Fly's OIDC provider to assume an IAM role.
+```
+
+The `kmsKeyId` column on `connections` routes per row: existing rows with
+`env:eu` / `env:us` keep decrypting via the env-mode path; new rows written
+after the cutover store the CMK ARN and decrypt via KMS. No backfill is
+needed for the cutover itself — rotation of pre-existing env-mode rows is
+a separate operation.
+
 Per-deploy:
 
 ```bash

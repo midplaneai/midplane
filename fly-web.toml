@@ -36,9 +36,13 @@ primary_region = "fra"
 #   DATABASE_URL                          # Neon prod branch (eu-central-1)
 #   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY     # also pass via --build-arg
 #   CLERK_SECRET_KEY
-#   MIDPLANE_KMS_MODE                     # "env" for V1 dev, "kms" once AWS KMS is wired
-#   MIDPLANE_KMS_DEV_KEY_EU               # 32-byte hex (openssl rand -hex 32)
-#   MIDPLANE_KMS_DEV_KEY_US               # 32-byte hex
+#   MIDPLANE_KMS_MODE                     # "env" (AES-256-GCM with local key) or "kms" (AWS KMS envelope)
+#   MIDPLANE_KMS_DEV_KEY_EU               # env-mode only: 32-byte hex (openssl rand -hex 32)
+#   MIDPLANE_KMS_DEV_KEY_US               # env-mode only: 32-byte hex
+#   MIDPLANE_KMS_KEY_EU                   # kms-mode only: CMK ARN or alias in eu-central-1
+#                                         #   e.g. arn:aws:kms:eu-central-1:<acct>:key/<uuid>
+#                                         #   or alias/midplane-prod-eu
+#   MIDPLANE_KMS_KEY_US                   # kms-mode only: CMK ARN or alias in us-east-2
 #   FLY_API_TOKEN                         # for FlyMachineSpawner
 #   FLY_APP_EU                            # "midplane-eu"
 #   FLY_APP_US                            # "midplane-us"
