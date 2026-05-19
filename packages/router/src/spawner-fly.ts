@@ -161,7 +161,6 @@ export class FlyMachineSpawner implements Spawner {
               internal_port: 8080,
             },
           ],
-          mounts: [{ volume: "midplane_audit", path: "/data" }],
           checks: {
             health: {
               type: "http",

@@ -21,10 +21,6 @@ primary_region = "fra"
   # DATABASE_URL is injected per-machine by the router from the decrypted
   # customer DSN. NEVER bake a database URL into the image config.
 
-[[mounts]]
-  source = "midplane_audit"
-  destination = "/data"
-
 [http_service]
   internal_port = 8080
   force_https = true
