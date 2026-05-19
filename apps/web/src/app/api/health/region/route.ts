@@ -51,9 +51,17 @@ export async function GET(): Promise<Response> {
   }
 
   try {
+    // Indexer freshness = `now() - max(indexer_cursors.last_indexed_at)`
+    // across all customers in this region. Matches the lib/audit.ts
+    // readStaleness signal: when did the indexer last persist anything,
+    // anywhere in this region. (Earlier draft used audit_events_index
+    // but that table has no created_at column, and its `ts` field is
+    // the event-emission time — an idle customer would always show
+    // stale even when the indexer is healthy.) Null when the indexer
+    // has never run.
     const db = getDb(region);
     const rows = (await db.execute(
-      sql`SELECT EXTRACT(EPOCH FROM (now() - max(created_at)))::float8 AS lag FROM audit_events_index`,
+      sql`SELECT EXTRACT(EPOCH FROM (now() - max(last_indexed_at)))::float8 AS lag FROM indexer_cursors`,
     )) as unknown as { lag: number | null }[];
     indexerLagS = rows[0]?.lag ?? null;
   } catch (err) {
