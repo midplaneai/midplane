@@ -21,7 +21,7 @@ export default async function AuditDetailPage({ params }: PageProps) {
   if (!customer) redirect("/signup/region");
 
   const { id } = await params;
-  const event = await getAuditEvent(customer.id, id);
+  const event = await getAuditEvent(customer.region, customer.id, id);
 
   if (!event) {
     return (
@@ -56,7 +56,7 @@ export default async function AuditDetailPage({ params }: PageProps) {
     );
   }
 
-  const related = await getRelatedEvents(customer.id, event.queryId);
+  const related = await getRelatedEvents(customer.region, customer.id, event.queryId);
   // SQL + fingerprint live on the ATTEMPTED row's payload, but users land
   // on whichever event they clicked (usually DECIDED for denies). Pull
   // them up to the page header so the answer to "what was the query?" is

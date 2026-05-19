@@ -98,7 +98,7 @@ vi.mock("@midplane-cloud/db", async (orig) => {
   const real = (await orig()) as typeof import("@midplane-cloud/db");
   return {
     ...real,
-    getDb: () => handle.db,
+    getDb: (_region: "eu" | "us") => handle.db,
   };
 });
 
@@ -151,8 +151,8 @@ describe("RLS bind", () => {
     const { getAuditEvent, getRelatedEvents } = await import(
       "../src/lib/audit.ts"
     );
-    await getAuditEvent(VALID_CUSTOMER_ID, "01ARZ3NDEKTSV4RRFFQ69G5FCC");
-    await getRelatedEvents(VALID_CUSTOMER_ID, "q-123");
+    await getAuditEvent("eu", VALID_CUSTOMER_ID, "01ARZ3NDEKTSV4RRFFQ69G5FCC");
+    await getRelatedEvents("eu", VALID_CUSTOMER_ID, "q-123");
     const binds = handle.queries.filter((q) =>
       q.sql.includes("SET LOCAL app.customer_id"),
     );

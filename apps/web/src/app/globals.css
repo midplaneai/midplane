@@ -48,6 +48,12 @@
     --deny: 0 46% 62%;              /* #c87070 */
     --warn: 37 61% 56%;             /* #d4a04c */
 
+    /* Semantic — data residency vocabulary. Distinct hues from the
+       query-lifecycle tokens so a region badge can't be mistaken for a
+       policy outcome. EU = teal, US = amber. */
+    --region-eu: 195 50% 50%;       /* #4099bf */
+    --region-us: 25 60% 55%;        /* #db8e47 */
+
     /* Destructive (shadcn alias for --deny) */
     --destructive: 0 46% 62%;       /* #c87070 */
     --destructive-foreground: 0 0% 96%;

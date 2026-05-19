@@ -1,10 +1,9 @@
 import { UserButton } from "@clerk/nextjs";
-import { MapPin } from "lucide-react";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
-import { REGION_LABELS } from "@/lib/region";
+import { RegionBadge } from "@/components/ui/region-badge";
 import type { Region } from "@midplane-cloud/kms";
 
 interface AppShellProps {
@@ -27,13 +26,8 @@ export function AppShell({ email, region, children }: AppShellProps) {
         <div className="mt-2 px-[18px] pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">
           Region
         </div>
-        <div className="flex items-center gap-2.5 px-[18px] py-[7px] text-sm text-muted-foreground">
-          <MapPin
-            aria-hidden
-            className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-            strokeWidth={1.5}
-          />
-          {REGION_LABELS[region]}
+        <div className="px-[18px] py-[7px]">
+          <RegionBadge region={region} />
         </div>
         <div className="mt-auto flex items-center gap-2.5 border-t border-border px-[18px] py-3 text-xs text-muted-foreground">
           <span
@@ -52,7 +46,7 @@ export function AppShell({ email, region, children }: AppShellProps) {
         </div>
       </aside>
       <main className="min-w-0">
-        <MobileNav />
+        <MobileNav region={region} />
         {children}
       </main>
     </div>

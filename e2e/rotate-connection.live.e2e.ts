@@ -90,7 +90,7 @@ test.beforeAll(async () => {
   );
   mcpToken = randomUUID().replace(/-/g, "");
   connectionId = ulid();
-  const db = getDb();
+  const db = getDb("eu");
   await db.insert(customers).values({
     id: customerId,
     clerkOrgId: `org_e2e-${customerId}`,
@@ -127,7 +127,7 @@ test.afterAll(async () => {
     } catch {}
   }
   if (connectionId || customerId) {
-    const db = getDb();
+    const db = getDb("eu");
     if (connectionId) {
       await db.delete(connections).where(eq(connections.id, connectionId));
     }
@@ -234,7 +234,7 @@ async function waitForPgDb(name: string, deadlineMs = 30_000): Promise<void> {
 }
 
 async function fetchConnRow(id: string) {
-  const db = getDb();
+  const db = getDb("eu");
   const rows = await db.select().from(connections).where(eq(connections.id, id));
   const row = rows[0];
   if (!row) throw new Error(`connection ${id} vanished`);

@@ -6,9 +6,11 @@ import { usePathname } from "next/navigation";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { NAV_ITEMS } from "@/components/layout/nav-items";
+import { RegionBadge } from "@/components/ui/region-badge";
 import { cn } from "@/lib/utils";
+import type { Region } from "@midplane-cloud/kms";
 
-export function MobileNav() {
+export function MobileNav({ region }: { region: Region }) {
   const pathname = usePathname() ?? "";
   return (
     <div className="flex flex-col border-b border-border bg-card md:hidden">
@@ -16,7 +18,8 @@ export function MobileNav() {
         <Link href="/dashboard" className="flex-shrink-0">
           <BrandLockup />
         </Link>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          <RegionBadge region={region} />
           <UserButton afterSignOutUrl="/" />
         </div>
       </div>

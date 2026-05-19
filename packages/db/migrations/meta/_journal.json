@@ -113,6 +113,13 @@
       "when": 1777644000009,
       "tag": "0015_policy_changed_event",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1777644000010,
+      "tag": "0016_region_changed_event",
+      "breakpoints": true
     }
   ]
 }

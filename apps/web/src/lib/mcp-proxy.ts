@@ -29,6 +29,8 @@ import {
 import { getDb, type DatabaseEntry } from "@midplane-cloud/db";
 import { makeKmsContext } from "@midplane-cloud/kms";
 
+import { bootRegion } from "./region-context.ts";
+
 interface McpProxyContext {
   cache: DecryptCache;
   registry: ContainerRegistry;
@@ -80,7 +82,9 @@ export function getMcpProxyContext(): McpProxyContext {
     : new DockerSpawner({ indexerToken });
 
   const registry = new ContainerRegistry(spawner);
-  const db = getDb();
+  // Module-init: this runs once on first import (memoized on globalThis),
+  // before any request scope exists. Read the region from process env.
+  const db = getDb(bootRegion());
   const resolver = new DsnResolver({
     db,
     cache,

@@ -56,7 +56,7 @@ export async function POST(
   }
 
   // Ownership gate — same leakage shape as the rest of the connections API.
-  const db = getDb();
+  const db = getDb(customer.region);
   const owned = await db
     .select({ id: connections.id })
     .from(connections)

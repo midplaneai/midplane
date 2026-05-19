@@ -40,8 +40,8 @@ import {
 } from "@midplane-cloud/db";
 
 test.skip(
-  !process.env.DATABASE_URL,
-  "DATABASE_URL must be set for the audit isolation suite (uses RLS against a real Postgres)",
+  !process.env.DATABASE_URL_EU,
+  "DATABASE_URL_EU must be set for the audit isolation suite (uses RLS against a real Postgres)",
 );
 
 const REGION = "eu" as const;
@@ -52,7 +52,7 @@ let custBId: string;
 let custAQueryId: string;
 
 test.beforeAll(async () => {
-  const db = getDb();
+  const db = getDb("eu");
   custAId = ulid();
   custBId = ulid();
   custAQueryId = `qA-${ulid()}`;
@@ -114,7 +114,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  const db = getDb();
+  const db = getDb("eu");
   // Cleanup also goes through SET LOCAL — DELETE under FORCE RLS only sees
   // (and only deletes) rows visible to the bound customer_id.
   await deleteScoped(custAId);
@@ -128,7 +128,7 @@ async function insertScoped(
   rows: NewAuditEvent[],
 ): Promise<void> {
   if (rows.length === 0) return;
-  const db = getDb();
+  const db = getDb("eu");
   await db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${customerId}'`));
     await tx.insert(auditEventsIndex).values(rows);
@@ -136,7 +136,7 @@ async function insertScoped(
 }
 
 async function deleteScoped(customerId: string): Promise<void> {
-  const db = getDb();
+  const db = getDb("eu");
   await db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${customerId}'`));
     await tx
@@ -260,7 +260,7 @@ async function listForCustomer(
   opts: ListOpts,
 ): Promise<AuditRow[]> {
   if (!ULID_RE.test(customerId)) throw new Error("invalid customer_id");
-  const db = getDb();
+  const db = getDb("eu");
   return db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${customerId}'`));
 
@@ -306,7 +306,7 @@ async function getByIdForCustomer(
   customerId: string,
   id: string,
 ): Promise<{ payload: unknown } | null> {
-  const db = getDb();
+  const db = getDb("eu");
   return db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${customerId}'`));
     const rows = await tx
@@ -327,7 +327,7 @@ async function getRelatedForCustomer(
   customerId: string,
   queryId: string,
 ): Promise<{ event_type: string }[]> {
-  const db = getDb();
+  const db = getDb("eu");
   return db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${customerId}'`));
     return tx

@@ -1,6 +1,8 @@
 import { getDb } from "@midplane-cloud/db";
 import { resolveByToken } from "@midplane-cloud/router";
 
+import { bootRegion } from "@/lib/region-context";
+
 // GET /mcp/<token>/health — bootstrap health probe.
 //
 // In production this URL resolves to a regional Fly app (midplane-eu,
@@ -16,7 +18,8 @@ export async function GET(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
-  const resolved = await resolveByToken(getDb(), token);
+  // Local-dev / E2E only — production hits regional data-plane apps directly.
+  const resolved = await resolveByToken(getDb(bootRegion()), token);
   if (!resolved) {
     return Response.json({ ok: false }, { status: 404 });
   }

@@ -12,7 +12,8 @@ apps/web/Dockerfile   Multi-stage bun + Next.js standalone build (control plane)
 packages/db           Drizzle schema (customers, connections, audit_events_index)
 packages/kms          encryptDsn / decryptDsn (env-mode dev, AWS KMS prod)
 packages/router       Hosted MCP request handler — token → connection → Fly app
-fly-web.toml          Control-plane Fly app (Next.js dashboard + /mcp/<token>)
+fly-web-eu.toml       EU control-plane Fly app (also serves apex app.midplane.ai)
+fly-web-us.toml       US control-plane Fly app
 fly-eu.toml           EU regional MCP runtime app (pinned to Frankfurt)
 scripts/bootstrap.sh  One-shot dev setup
 ```
@@ -25,7 +26,9 @@ Multi-region is V1, not V1.5. Schema and URL format are multi-region from day on
 bun install
 cp .env.example .env.local   # fill in Clerk, Neon, KMS dev key
 bun db:generate              # generate drizzle migrations from schema
-bun db:migrate               # apply migrations to your Neon dev branch
+bun migrate:eu               # apply migrations to your EU Neon dev branch
+                             # (use migrate:us / migrate:all in prod; locally
+                             #  only the EU side is configured by default)
 bun dev                      # localhost:3000
 bun run test                 # vitest baseline — note `bun run test`, not
                              # `bun test`. The bare form invokes Bun's
@@ -57,29 +60,66 @@ returns IPv6 private IPs that only same-Fly-org apps can reach — hosting
 the control plane on Vercel/Render would force every customer audit
 request through an extra public-Internet hop.
 
-First-time setup (one-shot, user-driven):
+First-time setup (one-shot, user-driven). Two regional control-plane apps,
+each pinned to one Neon project + one KMS key. **Env-var locality:** each
+app only carries its region's `DATABASE_URL_<REGION>`, `MIDPLANE_KMS_KEY_<REGION>`,
+`FLY_APP_<REGION>`, etc. The opposite region's secrets stay UNSET so a stray
+cross-region call throws at the env-var read.
 
 ```bash
-# 1. Create the app in your Fly org.
-fly apps create midplane-web --org <your-org>
+# 1. Create both apps in your Fly org.
+fly apps create midplane-web    --org <your-org>   # EU control plane
+fly apps create midplane-web-us --org <your-org>   # US control plane
 
-# 2. Set runtime secrets. NEVER inline these in fly-web.toml.
+# 2. EU app secrets. NEVER set DATABASE_URL_US / MIDPLANE_KMS_KEY_US /
+#    MIDPLANE_KMS_DEV_KEY_US / FLY_APP_US / FLY_REGION_US /
+#    MIDPLANE_PUBLIC_HOST_US on this app.
 fly secrets set --app midplane-web \
-  DATABASE_URL='postgres://...neon.tech/midplane?sslmode=require' \
+  MIDPLANE_REGION='eu' \
+  DATABASE_URL_EU='postgres://...eu-central-1.aws.neon.tech/midplane?sslmode=require' \
+  MIDDLEWARE_ENFORCE='false' \
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...' \
   CLERK_SECRET_KEY='sk_live_...' \
   MIDPLANE_KMS_MODE='env' \
   MIDPLANE_KMS_DEV_KEY_EU="$(openssl rand -hex 32)" \
-  MIDPLANE_KMS_DEV_KEY_US="$(openssl rand -hex 32)" \
   FLY_API_TOKEN='fly_...' \
   FLY_APP_EU='midplane-eu' \
-  FLY_APP_US='midplane-us' \
   FLY_REGION_EU='fra' \
-  FLY_REGION_US='iad' \
   MIDPLANE_PUBLIC_HOST_EU='eu.midplane.ai' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.5.0' \
+  INDEXER_TOKEN="$(openssl rand -hex 32)" \
+  MIDPLANE_STAFF_USER_IDS='user_...'
+
+# 3. US app secrets — symmetric. NEVER set DATABASE_URL_EU /
+#    MIDPLANE_KMS_KEY_EU / etc. on this app.
+fly secrets set --app midplane-web-us \
+  MIDPLANE_REGION='us' \
+  DATABASE_URL_US='postgres://...us-east-2.aws.neon.tech/midplane?sslmode=require' \
+  MIDDLEWARE_ENFORCE='false' \
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...' \
+  CLERK_SECRET_KEY='sk_live_...' \
+  MIDPLANE_KMS_MODE='env' \
+  MIDPLANE_KMS_DEV_KEY_US="$(openssl rand -hex 32)" \
+  FLY_API_TOKEN='fly_...' \
+  FLY_APP_US='midplane-us' \
+  FLY_REGION_US='iad' \
   MIDPLANE_PUBLIC_HOST_US='us.midplane.ai' \
   MIDPLANE_OSS_IMAGE='midplane/midplane:0.5.0' \
-  INDEXER_TOKEN="$(openssl rand -hex 32)"
+  INDEXER_TOKEN="$(openssl rand -hex 32)" \
+  MIDPLANE_STAFF_USER_IDS='user_...'
+
+# 4. DNS + TLS. Fly matches certs by SNI, so the apex needs its own
+#    cert on the EU app (NOT covered by eu.app.midplane.ai's cert).
+fly certs add eu.app.midplane.ai  --app midplane-web
+fly certs add app.midplane.ai     --app midplane-web
+fly certs add us.app.midplane.ai  --app midplane-web-us
+
+# DNS records:
+#   eu.app.midplane.ai  CNAME midplane-web.fly.dev
+#   us.app.midplane.ai  CNAME midplane-web-us.fly.dev
+#   app.midplane.ai     CNAME eu.app.midplane.ai
+#                       (EU app handles apex; middleware redirects authed
+#                        users to their regional subdomain)
 ```
 
 ### KMS mode for production credential storage
@@ -139,9 +179,18 @@ Per-deploy:
 ```bash
 # NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is baked into the client bundle at
 # build time — pass it as a Docker build arg (the same value you set as
-# a runtime secret above).
-fly deploy --config fly-web.toml \
+# a runtime secret above). Run both deploys when shipping (same image,
+# different region pin).
+fly deploy --config fly-web-eu.toml \
   --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...'
+fly deploy --config fly-web-us.toml \
+  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...'
+
+# After the deploy has been stable for ~24h (no region.null_metadata or
+# region.cross_region anomalies), flip MIDDLEWARE_ENFORCE to "true" so
+# cross-region requests get 302'd instead of just logged.
+fly secrets set --app midplane-web    MIDDLEWARE_ENFORCE='true'
+fly secrets set --app midplane-web-us MIDDLEWARE_ENFORCE='true'
 ```
 
 Health check: `https://midplane-web.fly.dev/api/health` returns

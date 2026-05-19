@@ -12,7 +12,8 @@
   },
   "scripts": {
     "generate": "drizzle-kit generate",
-    "migrate": "bun --env-file=../../.env.local run src/migrate.ts",
+    "migrate:eu": "bun --env-file=../../.env.local run src/migrate.ts eu",
+    "migrate:us": "bun --env-file=../../.env.local run src/migrate.ts us",
     "studio": "drizzle-kit studio",
     "typecheck": "tsc -p ."
   },

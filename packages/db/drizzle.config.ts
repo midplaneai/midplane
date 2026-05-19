@@ -31,12 +31,18 @@ if (rootEnv) {
   }
 }
 
+// drizzle-kit only ever needs ONE DB to introspect schema for `generate`.
+// Prefer EU (the historical default); fall back to US for the rare laptop
+// where only the US branch is configured.
+const introspectionUrl =
+  process.env.DATABASE_URL_EU ?? process.env.DATABASE_URL_US ?? "";
+
 export default defineConfig({
   schema: "./src/schema.ts",
   out: "./migrations",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "",
+    url: introspectionUrl,
   },
   strict: true,
   verbose: true,
