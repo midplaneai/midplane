@@ -21,8 +21,10 @@
     "lint": "bun --filter '*' lint",
     "typecheck": "bun --filter '*' typecheck",
     "db:generate": "bun --filter '@midplane-cloud/db' generate",
-    "db:migrate": "bun --filter '@midplane-cloud/db' migrate",
-    "db:studio": "bun --filter '@midplane-cloud/db' studio"
+    "db:studio": "bun --filter '@midplane-cloud/db' studio",
+    "migrate:eu": "bun --filter '@midplane-cloud/db' migrate:eu",
+    "migrate:us": "bun --filter '@midplane-cloud/db' migrate:us",
+    "migrate:all": "bun run migrate:eu && bun run migrate:us"
   },
   "devDependencies": {
     "@clerk/backend": "^3.4.2",

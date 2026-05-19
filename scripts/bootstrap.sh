@@ -53,17 +53,19 @@ ensure_key "MIDPLANE_KMS_DEV_KEY_EU"
 ensure_key "MIDPLANE_KMS_DEV_KEY_US"
 
 # 2. Neon dev branch ----------------------------------------------------------
-if ! grep -qE "^DATABASE_URL=postgres" "$ENV_FILE"; then
-  echo "DATABASE_URL not set in .env.local. Provision a Neon project at"
+if ! grep -qE "^DATABASE_URL_EU=postgres" "$ENV_FILE"; then
+  echo "DATABASE_URL_EU not set in .env.local. Provision a Neon project at"
   echo "https://console.neon.tech (region: AWS eu-central-1) and paste its"
-  echo "connection string into .env.local before re-running this script."
+  echo "connection string into .env.local as DATABASE_URL_EU= before"
+  echo "re-running this script. Local dev only needs the EU branch; the"
+  echo "US side is exercised in production."
   exit 1
 fi
 
 # 3. Migrations ---------------------------------------------------------------
-echo "running drizzle migrations..."
+echo "running drizzle migrations against EU branch..."
 bun --filter '@midplane-cloud/db' generate || true
-bun --filter '@midplane-cloud/db' migrate
+bun --filter '@midplane-cloud/db' migrate:eu
 
 # 4. OSS image pin ------------------------------------------------------------
 if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then

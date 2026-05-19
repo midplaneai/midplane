@@ -1,13 +1,20 @@
-// Run pending Drizzle migrations against DATABASE_URL.
-// Usage: bun run src/migrate.ts
+// Run pending Drizzle migrations against one region's DATABASE_URL.
+// Usage: bun run src/migrate.ts <eu|us>
 
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 
-const url = process.env.DATABASE_URL;
+const region = process.argv[2];
+if (region !== "eu" && region !== "us") {
+  console.error("usage: migrate.ts <eu|us>");
+  process.exit(1);
+}
+
+const envVar = region === "eu" ? "DATABASE_URL_EU" : "DATABASE_URL_US";
+const url = process.env[envVar];
 if (!url) {
-  console.error("DATABASE_URL is not set");
+  console.error(`${envVar} is not set`);
   process.exit(1);
 }
 
@@ -16,5 +23,5 @@ const db = drizzle(sql);
 
 await migrate(db, { migrationsFolder: "./migrations" });
 
-console.log("migrations applied");
+console.log(`[${region}] migrations applied`);
 await sql.end();

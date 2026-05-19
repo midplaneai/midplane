@@ -39,12 +39,12 @@ export {
 // inserts working).
 const CUSTOMER_ID_ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
-async function emitConfigAuditRow(
+export async function emitConfigAuditRow(
   customer: Customer,
   row: {
     tenantId: string;
     database: string;
-    eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED";
+    eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED" | "REGION_CHANGED";
     payload: Record<string, unknown>;
     actorClerkUserId: string;
   },
@@ -52,7 +52,7 @@ async function emitConfigAuditRow(
   if (!CUSTOMER_ID_ULID_RE.test(customer.id)) {
     throw new Error("customer.id must be a ULID");
   }
-  const db = getDb();
+  const db = getDb(customer.region);
   await db.transaction(async (tx) => {
     // sql.raw is required: Postgres rejects parameterized values in
     // SET LOCAL. customer.id was matched against the ULID alphabet above,
@@ -125,7 +125,7 @@ export async function createConnection(
   };
 
   const childId = ulid();
-  const db = getDb();
+  const db = getDb(customer.region);
   await db.transaction(async (tx) => {
     await tx.insert(connections).values({
       id,
@@ -160,7 +160,7 @@ export async function renameConnection(
   id: string,
   name: string | null,
 ): Promise<{ name: string | null } | null> {
-  const db = getDb();
+  const db = getDb(customer.region);
   const updated = await db
     .update(connections)
     .set({ name: normalizeName(name) })
@@ -186,7 +186,7 @@ export async function deleteConnection(
   customer: Customer,
   id: string,
 ): Promise<{ mcpToken: string } | null> {
-  const db = getDb();
+  const db = getDb(customer.region);
   return db.transaction(async (tx) => {
     const deleted = await tx
       .delete(connections)
@@ -284,7 +284,7 @@ export async function setTableAccess(
     throw new Error(`invalid policy: ${summary}`);
   }
 
-  const db = getDb();
+  const db = getDb(customer.region);
   // Three-step in a txn: ownership check on the parent (so we don't leak
   // existence by writing through to a foreign customer's DB), update the
   // named child's tableAccess, then snapshot every DB on the connection
@@ -443,7 +443,7 @@ export async function setTenantScope(
     throw new Error(`invalid tenant_scope: ${summary}`);
   }
 
-  const db = getDb();
+  const db = getDb(customer.region);
   // Same three-step txn as setTableAccess: ownership check on the parent
   // (so we don't leak existence by writing through to a foreign customer's
   // DB), update the named child's tenantScope, then snapshot every DB on
@@ -580,7 +580,7 @@ export async function rotateConnection(
     customer.region,
   );
 
-  const db = getDb();
+  const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
     // Ownership-gated parent read first — confirms the connection belongs
     // to this customer and gives us the mcp_token + region for the cache
@@ -657,7 +657,7 @@ export async function getConnectionWithDatabase(
     }
   | null
 > {
-  const db = getDb();
+  const db = getDb(customer.region);
   const connRows = await db
     .select()
     .from(connections)
@@ -695,7 +695,7 @@ export async function listDatabasesForConnection(
     }
   | null
 > {
-  const db = getDb();
+  const db = getDb(customer.region);
   const connRows = await db
     .select()
     .from(connections)
@@ -816,7 +816,7 @@ export async function addDatabase(
   };
 
   const childId = ulid();
-  const db = getDb();
+  const db = getDb(customer.region);
   let result;
   try {
     result = await db.transaction(async (tx) => {
@@ -910,7 +910,7 @@ export async function removeDatabase(
   dbName: string,
   deps: DatabaseMutationDeps,
 ): Promise<{ mcpToken: string } | null> {
-  const db = getDb();
+  const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
     // Lock the parent connection row at the top of the txn so any
     // concurrent add/remove/rename on the same connection serializes
@@ -994,7 +994,7 @@ export async function renameDatabase(
     // No-op rename — short-circuit so callers don't have to special-case
     // it before submitting. We still verify ownership to avoid telling
     // an attacker that a connection exists by returning null vs. a no-op.
-    const db = getDb();
+    const db = getDb(customer.region);
     const parent = await db
       .select({ mcpToken: connections.mcpToken })
       .from(connections)
@@ -1009,7 +1009,7 @@ export async function renameDatabase(
     return { mcpToken: parent[0]!.mcpToken };
   }
 
-  const db = getDb();
+  const db = getDb(customer.region);
   let result;
   try {
     result = await db.transaction(async (tx) => {
@@ -1114,7 +1114,7 @@ export interface DashboardConnectionRow {
 async function lastQueryByDatabase(
   customer: Customer,
 ): Promise<Map<string, Date>> {
-  const db = getDb();
+  const db = getDb(customer.region);
   const rows = await db
     .select({
       database: auditEventsIndex.database,
@@ -1147,7 +1147,7 @@ async function lastQueryByDatabase(
 export async function listDashboardConnections(
   customer: Customer,
 ): Promise<DashboardConnectionRow[]> {
-  const db = getDb();
+  const db = getDb(customer.region);
   // Three-query fetch — parents (with joined cursor), children
   // (IN-list), and per-DB last-query (one GROUP BY per customer). A
   // single inner-join across all three would multiply rows; this keeps
@@ -1218,7 +1218,7 @@ export interface DashboardFreshnessSnapshot {
 export async function getDashboardFreshness(
   customer: Customer,
 ): Promise<DashboardFreshnessSnapshot> {
-  const db = getDb();
+  const db = getDb(customer.region);
   const [parents, lastQueryMap] = await Promise.all([
     db
       .select({

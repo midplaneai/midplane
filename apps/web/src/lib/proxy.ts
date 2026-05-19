@@ -25,6 +25,7 @@ import {
 } from "@midplane-cloud/db";
 
 import { getMcpProxyContext } from "./mcp-proxy.ts";
+import { bootRegion } from "./region-context.ts";
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -43,7 +44,11 @@ export async function proxyMcp(
   req: Request,
   token: string,
 ): Promise<Response> {
-  const resolved = await resolveByToken(getDb(), token);
+  // proxyMcp on the control-plane web app is only hit in local dev / E2E —
+  // production /mcp/<token> traffic goes to the regional data-plane apps
+  // (eu.midplane.ai / us.midplane.ai). Use the boot region so the local
+  // dev path resolves against the single configured DB.
+  const resolved = await resolveByToken(getDb(bootRegion()), token);
   if (!resolved) {
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }

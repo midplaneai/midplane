@@ -160,7 +160,7 @@ export async function listAuditQueries(
   // "argument must be string or Buffer". Same pattern as eventVolumeByHour.
   const stuckCutoffIso = new Date(nowMs - STUCK_THRESHOLD_MS).toISOString();
 
-  return withCustomerScope(customerId, async (tx) => {
+  return withCustomerScope(opts.region, customerId, async (tx) => {
     // Inner WHERE narrows the rows that participate in aggregation. Search
     // is applied via a query_id IN (...) subquery so a search hit on the
     // ATTEMPTED row surfaces the entire lifecycle (the inner WHERE alone
@@ -302,7 +302,7 @@ export async function listAuditQueries(
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
-          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED')
+          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
           ${tenantClause}
           ${databaseClause}
           ${policySearchClause}
@@ -384,7 +384,7 @@ export async function listTenantIds(
   customerId: string,
   region: Region,
 ): Promise<string[]> {
-  return withCustomerScope(customerId, async (tx) => {
+  return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ tenantId: auditEventsIndex.tenantId })
       .from(auditEventsIndex)
@@ -409,7 +409,7 @@ export async function listDatabases(
   customerId: string,
   region: Region,
 ): Promise<string[]> {
-  return withCustomerScope(customerId, async (tx) => {
+  return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ database: auditEventsIndex.database })
       .from(auditEventsIndex)
@@ -512,7 +512,7 @@ export async function eventVolumeByHour(
         })()
       : sql``;
 
-  const rows = await withCustomerScope(customerId, async (tx) => {
+  const rows = await withCustomerScope(region, customerId, async (tx) => {
     // DISTINCT ON (query_id) keeps the row with the lowest precedence_rank
     // per query, which is the terminal event we want to bucket on.
     // Allow-only DECIDED rows are filtered out in the WHERE so they don't
@@ -604,7 +604,7 @@ export async function countByStatus(
   const stuckCutoffIso = new Date(
     now().getTime() - STUCK_THRESHOLD_MS,
   ).toISOString();
-  return withCustomerScope(customerId, async (tx) => {
+  return withCustomerScope(region, customerId, async (tx) => {
     // Single statement: query lifecycles classified by status, plus a
     // POLICY_RELOAD bucket so operators can see at a glance how many
     // hot-swaps landed in the visible window.
@@ -641,7 +641,7 @@ export async function countByStatus(
       FROM audit_events_index
       WHERE customer_id = ${customerId}
         AND region = ${region}
-        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED')
+        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
     `;
     const raw = await tx.execute(stmt);
     const rows = ((raw as unknown as { rows?: unknown[] }).rows ??
@@ -660,10 +660,11 @@ export async function countByStatus(
  *  the caller renders the same "no longer exists or outside retention"
  *  empty state for either, by design — we never disclose existence. */
 export async function getAuditEvent(
+  region: Region,
   customerId: string,
   id: string,
 ): Promise<AuditEvent | null> {
-  return withCustomerScope(customerId, async (tx) => {
+  return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .select()
       .from(auditEventsIndex)
@@ -682,10 +683,11 @@ export async function getAuditEvent(
  *  ATTEMPTED → DECIDED → (EXECUTED | FAILED) per query, so this groups the
  *  full lifecycle of one agent call into the detail page. */
 export async function getRelatedEvents(
+  region: Region,
   customerId: string,
   queryId: string,
 ): Promise<AuditEvent[]> {
-  return withCustomerScope(customerId, async (tx) => {
+  return withCustomerScope(region, customerId, async (tx) => {
     return tx
       .select()
       .from(auditEventsIndex)
@@ -724,7 +726,7 @@ export async function readStaleness(
   if (!ULID_RE.test(customerId)) {
     throw new Error("customer_id must be a ULID");
   }
-  const db = getDb();
+  const db = getDb(region);
   const rows = await db
     .select({
       lastIndexedAt: sql<
@@ -752,13 +754,14 @@ type Tx = Parameters<
 >[0];
 
 async function withCustomerScope<T>(
+  region: Region,
   customerId: string,
   fn: (tx: Tx) => Promise<T>,
 ): Promise<T> {
   if (!ULID_RE.test(customerId)) {
     throw new Error("customer_id must be a ULID");
   }
-  const db = getDb();
+  const db = getDb(region);
   return db.transaction(async (tx) => {
     await tx.execute(
       sql.raw(`SET LOCAL app.customer_id = '${customerId}'`),

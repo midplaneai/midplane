@@ -4,10 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
-// Tiny .env.local loader. The test process needs DATABASE_URL +
-// MIDPLANE_KMS_DEV_KEY_EU for the live E2E's seed step (encryptDsn,
-// getDb). Next.js loads .env.local for the dev server itself, but
-// Playwright workers don't inherit that unless we forward it here.
+// Tiny .env.local loader. The test process needs DATABASE_URL_EU +
+// MIDPLANE_REGION=eu + MIDPLANE_KMS_DEV_KEY_EU for the live E2E's seed
+// step (encryptDsn, getDb). Next.js loads .env.local for the dev server
+// itself, but Playwright workers don't inherit that unless we forward
+// it here.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 loadDotenv(resolve(__dirname, ".env.local"));

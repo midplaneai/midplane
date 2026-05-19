@@ -18,6 +18,10 @@ const badgeVariants = cva(
           "border-[hsl(var(--deny)/0.2)] bg-[hsl(var(--deny)/0.08)] text-[hsl(var(--deny))]",
         warn:
           "border-[hsl(var(--warn)/0.2)] bg-[hsl(var(--warn)/0.08)] text-[hsl(var(--warn))]",
+        "region-eu":
+          "border-[hsl(var(--region-eu)/0.2)] bg-[hsl(var(--region-eu)/0.08)] text-[hsl(var(--region-eu))]",
+        "region-us":
+          "border-[hsl(var(--region-us)/0.2)] bg-[hsl(var(--region-us)/0.08)] text-[hsl(var(--region-us))]",
       },
     },
     defaultVariants: { variant: "default" },

@@ -92,7 +92,7 @@ test.afterAll(async () => {
   // Customer was created by the Server Action, addressable by clerk_org_id.
   // Delete dependent rows first to satisfy FKs.
   if (clerkOrgId) {
-    const db = getDb();
+    const db = getDb("eu");
     const customerRows = await db
       .select()
       .from(customers)
@@ -174,7 +174,7 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   // 6. Server Action created the cloud customer row, addressable by the
   // Clerk org id we minted. Snapshot it for afterAll cleanup + indexer
   // assertion.
-  const db = getDb();
+  const db = getDb("eu");
   const customerRows = await db
     .select()
     .from(customers)

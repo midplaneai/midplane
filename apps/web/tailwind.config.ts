@@ -52,6 +52,8 @@ const config: Config = {
         allow: "hsl(var(--allow))",
         deny: "hsl(var(--deny))",
         warn: "hsl(var(--warn))",
+        "region-eu": "hsl(var(--region-eu))",
+        "region-us": "hsl(var(--region-us))",
       },
       borderRadius: {
         lg: "var(--radius)",

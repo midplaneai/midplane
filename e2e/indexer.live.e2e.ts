@@ -73,7 +73,7 @@ test.beforeAll(async () => {
   );
   mcpToken = randomUUID().replace(/-/g, "");
   connectionId = ulid();
-  const db = getDb();
+  const db = getDb("eu");
   await db.insert(customers).values({
     id: customerId,
     clerkOrgId: `org_e2e-idx-${customerId}`,
@@ -100,7 +100,7 @@ test.afterAll(async () => {
       execSync(`docker rm -f ${containerName}`, { stdio: "ignore" });
     } catch {}
   }
-  const db = getDb();
+  const db = getDb("eu");
   if (connectionId) {
     await db
       .delete(indexerCursors)
@@ -159,7 +159,7 @@ test("indexer drains container audit rows into audit_events_index within 15s", a
 
   // Step 2: poll audit_events_index for up to 15s. Default tick cadence
   // is 5s, so 15s is one cold-start tick + buffer.
-  const db = getDb();
+  const db = getDb("eu");
   const indexed = await waitFor(async () => {
     const rows = await db
       .select()

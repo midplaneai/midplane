@@ -65,7 +65,7 @@ test.beforeAll(async () => {
   );
   mcpToken = randomUUID().replace(/-/g, "");
   connectionId = ulid();
-  const db = getDb();
+  const db = getDb("eu");
   await db.insert(customers).values({
     id: customerId,
     clerkOrgId: `org_policy-e2e-${customerId}`,
@@ -95,7 +95,7 @@ test.afterAll(async () => {
     } catch {}
   }
   if (connectionId || customerId) {
-    const db = getDb();
+    const db = getDb("eu");
     if (connectionId) {
       await db.delete(connections).where(eq(connections.id, connectionId));
     }

@@ -294,7 +294,7 @@ vi.mock("@midplane-cloud/db", async () => {
   );
   return {
     ...real,
-    getDb: () => handle.db,
+    getDb: (_region: "eu" | "us") => handle.db,
   };
 });
 

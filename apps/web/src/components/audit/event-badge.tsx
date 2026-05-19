@@ -15,6 +15,7 @@ const VARIANT_MAP: Record<
   POLICY_RELOADED: "accent",
   POLICY_CHANGED: "accent",
   TENANT_SCOPE_CHANGED: "accent",
+  REGION_CHANGED: "accent",
 };
 
 const ARIA_MAP: Record<string, string> = {
@@ -25,6 +26,7 @@ const ARIA_MAP: Record<string, string> = {
   POLICY_RELOADED: "Policy reload recorded",
   POLICY_CHANGED: "Policy changed by user",
   TENANT_SCOPE_CHANGED: "Tenant scope changed by user",
+  REGION_CHANGED: "Region changed by staff",
 };
 
 export function EventBadge({
