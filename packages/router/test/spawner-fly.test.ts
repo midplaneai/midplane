@@ -27,6 +27,14 @@ describe("FlyMachineSpawner", () => {
         expect(env.MIDPLANE_POLICY_FILE).toBe("/etc/midplane/policy.yaml");
         expect(body.region).toBe("fra");
 
+        // No Fly volume mount: /data lives on the machine's rootfs so each
+        // spawn gets a fresh filesystem. A volume here would either single-
+        // attach-block the next concurrent spawn or leak the previous
+        // customer's audit SQLite to the next one. Audit durability comes
+        // from the indexer draining /audit/since into Postgres, not from
+        // persisting the SQLite buffer across machine lifetimes.
+        expect(config.mounts).toBeUndefined();
+
         // The policy YAML rides in config.files as base64. Decode and
         // confirm the exact bytes the engine will read at startup —
         // sorted keys, no quoting, terminating newline.
