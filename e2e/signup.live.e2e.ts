@@ -49,6 +49,7 @@ const PG_DB = "midplane_e2e_signup";
 let pgPort = 0;
 let testEmail = "";
 let clerkUserId = "";
+let clerkOrgId = "";
 let mcpToken = "";
 let proxiedContainerName = "";
 
@@ -83,17 +84,19 @@ test.afterAll(async () => {
   }
 
   if (clerkUserId) {
+    // Deleting the user cascades to org membership; the org row itself is
+    // cleaned by Clerk when it has no remaining members on dev instances.
     await cleanupClerkUser(clerkUserId);
   }
 
-  // Customer was created by the Server Action, addressable by clerk_user_id.
+  // Customer was created by the Server Action, addressable by clerk_org_id.
   // Delete dependent rows first to satisfy FKs.
-  if (clerkUserId) {
+  if (clerkOrgId) {
     const db = getDb();
     const customerRows = await db
       .select()
       .from(customers)
-      .where(eq(customers.clerkUserId, clerkUserId));
+      .where(eq(customers.clerkOrgId, clerkOrgId));
     const customerId = customerRows[0]?.id;
     if (customerId) {
       const conns = await db
@@ -132,6 +135,7 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
     clerkUserId = id;
   });
   expect(result.clerkUserId).toBe(clerkUserId);
+  clerkOrgId = result.clerkOrgId;
 
   // 2. Region picker — real Server Action upserts the customer row.
   await page.goto("/signup/region");
@@ -168,13 +172,13 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   await runMcpQuery(request, baseURL!, mcpToken);
 
   // 6. Server Action created the cloud customer row, addressable by the
-  // Clerk user id we minted. Snapshot it for afterAll cleanup + indexer
+  // Clerk org id we minted. Snapshot it for afterAll cleanup + indexer
   // assertion.
   const db = getDb();
   const customerRows = await db
     .select()
     .from(customers)
-    .where(eq(customers.clerkUserId, clerkUserId));
+    .where(eq(customers.clerkOrgId, clerkOrgId));
   const customerId = customerRows[0]?.id;
   expect(customerId, "Server Action should have created customer row").toBeTruthy();
 

@@ -19,7 +19,7 @@ export function AppShell({ email, region, children }: AppShellProps) {
 
   return (
     <div className="grid min-h-screen md:grid-cols-[220px_1fr]">
-      <aside className="hidden flex-col border-r border-border bg-card py-4 md:flex">
+      <aside className="sticky top-0 hidden h-screen flex-col overflow-y-auto border-r border-border bg-card py-4 md:flex">
         <div className="px-[18px] pb-5">
           <BrandLockup />
         </div>

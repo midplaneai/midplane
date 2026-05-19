@@ -68,7 +68,7 @@ test.beforeAll(async () => {
   const db = getDb();
   await db.insert(customers).values({
     id: customerId,
-    clerkUserId: `policy-e2e-${customerId}`,
+    clerkOrgId: `org_policy-e2e-${customerId}`,
     email: `policy-e2e-${customerId}@example.test`,
     region: "eu",
   });
@@ -175,7 +175,7 @@ test("policy hot-reload preserves the agent's MCP session", async ({
   const ctx = getMcpProxyContext();
   const customer = {
     id: customerId,
-    clerkUserId: `policy-e2e-${customerId}`,
+    clerkOrgId: `org_policy-e2e-${customerId}`,
     email: `policy-e2e-${customerId}@example.test`,
     region: "eu" as const,
     createdAt: new Date(),
@@ -185,6 +185,7 @@ test("policy hot-reload preserves the agent's MCP session", async ({
     connectionId,
     { default: "read", tables: { t: "deny" } },
     ctx,
+    `user_e2e-policy-${customerId}`,
   );
   expect(updated).not.toBeNull();
 

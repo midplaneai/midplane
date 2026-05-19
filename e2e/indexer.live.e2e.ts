@@ -76,7 +76,7 @@ test.beforeAll(async () => {
   const db = getDb();
   await db.insert(customers).values({
     id: customerId,
-    clerkUserId: `e2e-idx-${customerId}`,
+    clerkOrgId: `org_e2e-idx-${customerId}`,
     email: `e2e-idx-${customerId}@example.test`,
     region: "eu",
   });
