@@ -29,6 +29,52 @@ export {
   normalizeName,
 } from "./connection-name.ts";
 
+// audit_events_index enforces RLS keyed on app.customer_id (see
+// 0001_constraints.sql + 0004_force_rls). Inserts must run inside a txn
+// that has SET LOCAL app.customer_id; outside that bind, RLS rejects the
+// row and the change is silently lost. Mirror audit.ts's withCustomerScope
+// pattern locally so the cloud-emitted POLICY_CHANGED / TENANT_SCOPE_CHANGED
+// rows survive RLS enforcement (today on Neon's BYPASSRLS owner role this
+// is a no-op; once the app role flips, the bind is what keeps these
+// inserts working).
+const CUSTOMER_ID_ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+async function emitConfigAuditRow(
+  customer: Customer,
+  row: {
+    tenantId: string;
+    database: string;
+    eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED";
+    payload: Record<string, unknown>;
+    actorClerkUserId: string;
+  },
+): Promise<void> {
+  if (!CUSTOMER_ID_ULID_RE.test(customer.id)) {
+    throw new Error("customer.id must be a ULID");
+  }
+  const db = getDb();
+  await db.transaction(async (tx) => {
+    // sql.raw is required: Postgres rejects parameterized values in
+    // SET LOCAL. customer.id was matched against the ULID alphabet above,
+    // so the interpolation can't escape the literal.
+    await tx.execute(
+      sql.raw(`SET LOCAL app.customer_id = '${customer.id}'`),
+    );
+    await tx.insert(auditEventsIndex).values({
+      id: ulid(),
+      customerId: customer.id,
+      tenantId: row.tenantId,
+      region: customer.region,
+      queryId: ulid(),
+      database: row.database,
+      ts: new Date(),
+      eventType: row.eventType,
+      payload: row.payload,
+      actorClerkUserId: row.actorClerkUserId,
+    });
+  });
+}
+
 // Default child name applied to the auto-created DB when a connection is
 // first created. A connection has 1+ children, all of which share the
 // connection's mcp_token; the add-second-DB flow lives in PR-C and the
@@ -333,17 +379,15 @@ export async function setTableAccess(
   // this one carries actor_clerk_user_id, so the audit log answers "who
   // changed the policy?" without needing the OSS engine to thread an
   // actor through /admin/policy. tenant_id = connection_id so a future
-  // per-connection audit view can filter on it for free. Best-effort:
-  // failure to write audit shouldn't undo the durable policy change
-  // (which is already committed in PG and pushed to engine).
+  // per-connection audit view can filter on it for free; database = dbName
+  // so the column-level filter on /audit attributes the change to the
+  // right child (default 'main' would misattribute non-main edits).
+  // Best-effort: failure to write audit shouldn't undo the durable policy
+  // change (which is already committed in PG and pushed to engine).
   try {
-    await db.insert(auditEventsIndex).values({
-      id: ulid(),
-      customerId: customer.id,
+    await emitConfigAuditRow(customer, {
       tenantId: id,
-      region: customer.region,
-      queryId: ulid(),
-      ts: new Date(),
+      database: dbName,
       eventType: "POLICY_CHANGED",
       payload: {
         connection_id: id,
@@ -478,13 +522,9 @@ export async function setTenantScope(
   // for the rationale). TENANT_SCOPE_CHANGED records "who reconfigured tenant
   // isolation on which DB?" — directly relevant to row-level security audits.
   try {
-    await db.insert(auditEventsIndex).values({
-      id: ulid(),
-      customerId: customer.id,
+    await emitConfigAuditRow(customer, {
       tenantId: id,
-      region: customer.region,
-      queryId: ulid(),
-      ts: new Date(),
+      database: dbName,
       eventType: "TENANT_SCOPE_CHANGED",
       payload: {
         connection_id: id,

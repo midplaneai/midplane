@@ -202,6 +202,19 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql.toLowerCase()).toContain("union all");
   });
 
+  it("admits cloud-emitted POLICY_CHANGED / TENANT_SCOPE_CHANGED in the policy_events CTE", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    const sel = lastSelect(handle.queries);
+    // Both new event_types must ride in policy_events alongside
+    // POLICY_RELOADED — otherwise the actor-stamped row from
+    // setTableAccess / setTenantScope is invisible in /audit and the
+    // audit log can't answer "who changed it?".
+    expect(sel.sql).toContain("'POLICY_CHANGED'");
+    expect(sel.sql).toContain("'TENANT_SCOPE_CHANGED'");
+  });
+
   it("excludes policy events when search is active (no SQL to match against)", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");

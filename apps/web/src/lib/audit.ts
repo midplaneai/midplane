@@ -302,7 +302,7 @@ export async function listAuditQueries(
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
-          AND event_type = 'POLICY_RELOADED'
+          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED')
           ${tenantClause}
           ${databaseClause}
           ${policySearchClause}
@@ -641,7 +641,7 @@ export async function countByStatus(
       FROM audit_events_index
       WHERE customer_id = ${customerId}
         AND region = ${region}
-        AND event_type = 'POLICY_RELOADED'
+        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED')
     `;
     const raw = await tx.execute(stmt);
     const rows = ((raw as unknown as { rows?: unknown[] }).rows ??
