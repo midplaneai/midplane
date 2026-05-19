@@ -73,20 +73,59 @@ export async function createTestUser(
   return { clerkUserId: user.id };
 }
 
-// Create a real Clerk user, then establish a browser session as that user.
-// Calls onUserCreated as soon as the user exists so callers can record the
-// id for cleanup before the session-establishment step (which can fail).
+// Create a Clerk organization with the given user as the creator-admin.
+// Production force-orgs config auto-creates an org on signup; the testing
+// flow doesn't trigger that path (we mint the user via Backend API), so
+// we recreate the moral equivalent here. The created org becomes the
+// active org for clerk.signIn() since it's the user's only membership.
+export async function createTestOrganization(
+  clerkUserId: string,
+  name: string,
+): Promise<{ clerkOrgId: string }> {
+  const client = backend();
+  const org = await client.organizations
+    .createOrganization({ name, createdBy: clerkUserId })
+    .catch((e: unknown) => {
+      const detail =
+        e &&
+        typeof e === "object" &&
+        "errors" in e &&
+        Array.isArray((e as { errors: unknown }).errors)
+          ? JSON.stringify((e as { errors: unknown[] }).errors)
+          : String(e);
+      throw new Error(
+        `Clerk createOrganization failed for ${clerkUserId}: ${detail}`,
+        { cause: e },
+      );
+    });
+  return { clerkOrgId: org.id };
+}
+
+// Create a real Clerk user + their org, then establish a browser session
+// as that user. Calls onUserCreated as soon as the user exists so callers
+// can record the id for cleanup before the org-creation or session-
+// establishment steps (which can fail).
 //
 // password used at creation is random+strong; Clerk requires one on dev
 // instances by default. The test never re-types it — sign-in uses a
 // short-lived sign-in token minted by the Backend API.
+//
+// The org becomes the user's only membership and Clerk activates it
+// automatically when the session loads — the Midplane dashboard reads
+// auth().orgId in (app)/layout.tsx, so the test would otherwise stall on
+// /signup/region with "no active organization".
 export async function signUp(
   page: Page,
   email: string,
   onUserCreated?: (clerkUserId: string) => void,
-): Promise<{ clerkUserId: string }> {
+): Promise<{ clerkUserId: string; clerkOrgId: string }> {
   const { clerkUserId } = await createTestUser(email);
   onUserCreated?.(clerkUserId);
+
+  const { clerkOrgId } = await createTestOrganization(
+    clerkUserId,
+    `Midplane E2E ${clerkUserId.slice(-6)}`,
+  );
 
   await setupClerkTestingToken({ page });
   // Clerk.js needs a page where ClerkProvider has loaded before signIn can
@@ -95,7 +134,7 @@ export async function signUp(
   await clerk.loaded({ page });
   await clerk.signIn({ page, emailAddress: email });
 
-  return { clerkUserId };
+  return { clerkUserId, clerkOrgId };
 }
 
 // Sign-in helper for tests that already have a user. Same session-establishment

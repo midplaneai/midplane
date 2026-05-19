@@ -48,7 +48,12 @@ export const customers = pgTable(
   "customers",
   {
     id: text("id").primaryKey(), // ULID
-    clerkUserId: text("clerk_user_id").notNull().unique(),
+    // The Clerk organization this customer maps to. One-to-one: every
+    // Midplane customer IS one Clerk org, with org members as the actors
+    // who can sign in and act on its behalf. Org auto-creation is enabled
+    // in the Clerk dashboard so every signed-in user has an active org —
+    // currentCustomer() resolves via auth().orgId.
+    clerkOrgId: text("clerk_org_id").notNull().unique(),
     email: text("email").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -208,6 +213,11 @@ export const auditEventsIndex = pgTable(
     eventType: text("event_type").notNull(),
     payload: jsonb("payload").notNull(),
     schemaVersion: integer("schema_version").notNull().default(1),
+    // The Clerk user who triggered a cloud-driven event (e.g. POLICY_RELOADED
+    // via the dashboard). Null for engine-side query events — no human is
+    // in the loop. Customer/tenant scope is the org; this column adds the
+    // actor identity inside that scope.
+    actorClerkUserId: text("actor_clerk_user_id"),
   },
   (t) => ({
     customerTsIdx: index("audit_customer_region_ts_idx").on(

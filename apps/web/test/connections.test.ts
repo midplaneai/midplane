@@ -307,7 +307,7 @@ afterEach(() => {
 
 const customer = {
   id: "cust-1",
-  clerkUserId: "clerk-1",
+  clerkOrgId: "org_clerk-1",
   email: "u@e.test",
   region: "eu" as const,
   createdAt: new Date(),
@@ -507,6 +507,8 @@ const goodPolicy = {
 // EMPTY_TENANT_SCOPE constant exported from @midplane-cloud/db.
 const inertScope = { column: null, overrides: {}, exempt: [] };
 
+const ACTOR = "user_clerk-actor";
+
 describe("setTableAccess", () => {
   // Shape returned by the in-txn siblings select. Mirrors the post-update
   // state, since Postgres reads see writes within the same txn.
@@ -534,7 +536,13 @@ describe("setTableAccess", () => {
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+    const result = await setTableAccess(
+      customer,
+      "conn-1",
+      goodPolicy,
+      deps,
+      ACTOR,
+    );
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
     expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [mainEntry]);
@@ -548,7 +556,13 @@ describe("setTableAccess", () => {
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: false });
 
-    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+    const result = await setTableAccess(
+      customer,
+      "conn-1",
+      goodPolicy,
+      deps,
+      ACTOR,
+    );
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
     expect(deps.pushPolicy).toHaveBeenCalledTimes(1);
@@ -568,7 +582,7 @@ describe("setTableAccess", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      setTableAccess(customer, "conn-1", goodPolicy, deps),
+      setTableAccess(customer, "conn-1", goodPolicy, deps, ACTOR),
     ).rejects.toBeInstanceOf(EnginePolicyRejected);
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
     errorSpy.mockRestore();
@@ -584,7 +598,13 @@ describe("setTableAccess", () => {
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+    const result = await setTableAccess(
+      customer,
+      "conn-1",
+      goodPolicy,
+      deps,
+      ACTOR,
+    );
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
     expect(deps.registry.invalidate).toHaveBeenCalledWith("tok-1");
@@ -604,6 +624,7 @@ describe("setTableAccess", () => {
       "conn-1",
       goodPolicy,
       deps,
+      ACTOR,
       "analytics",
     );
 
@@ -633,6 +654,7 @@ describe("setTableAccess", () => {
       "conn-1",
       goodPolicy,
       deps,
+      ACTOR,
       "analytics",
     );
 
@@ -676,7 +698,13 @@ describe("setTableAccess", () => {
     const { setTableAccess } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setTableAccess(customer, "conn-1", goodPolicy, deps);
+    const result = await setTableAccess(
+      customer,
+      "conn-1",
+      goodPolicy,
+      deps,
+      ACTOR,
+    );
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
     expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
@@ -704,6 +732,7 @@ describe("setTableAccess", () => {
       "conn-other",
       goodPolicy,
       deps,
+      ACTOR,
     );
 
     expect(result).toBeNull();
@@ -723,10 +752,69 @@ describe("setTableAccess", () => {
           typeof setTableAccess
         >[2],
         deps,
+        ACTOR,
       ),
     ).rejects.toThrow(/invalid policy/);
     expect(handle.calls).toHaveLength(0);
     expect(deps.pushPolicy).not.toHaveBeenCalled();
+  });
+
+  it("emits POLICY_CHANGED audit row stamped with the actor", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setTableAccess } = await import("../src/lib/connections.ts");
+    const { auditEventsIndex } = await import("@midplane-cloud/db");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setTableAccess(customer, "conn-1", goodPolicy, deps, ACTOR);
+
+    const audit = handle.calls.find(
+      (c) => c.op === "insert" && c.table === auditEventsIndex,
+    );
+    expect(audit, "POLICY_CHANGED audit row must be inserted").toBeDefined();
+    const row = audit?.set as
+      | {
+          eventType: string;
+          customerId: string;
+          tenantId: string;
+          actorClerkUserId: string;
+          payload: {
+            connection_id: string;
+            database_name: string;
+            policy: typeof goodPolicy;
+          };
+        }
+      | undefined;
+    expect(row?.eventType).toBe("POLICY_CHANGED");
+    expect(row?.customerId).toBe(customer.id);
+    expect(row?.tenantId).toBe("conn-1");
+    expect(row?.actorClerkUserId).toBe(ACTOR);
+    expect(row?.payload.connection_id).toBe("conn-1");
+    expect(row?.payload.database_name).toBe("main");
+  });
+
+  it("does NOT emit POLICY_CHANGED when engine rejects the policy", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setTableAccess, EnginePolicyRejected } = await import(
+      "../src/lib/connections.ts"
+    );
+    const { auditEventsIndex } = await import("@midplane-cloud/db");
+    const deps = makePolicyDeps({
+      rejected: { status: 400, body: "tables.foo: must be one of …" },
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      setTableAccess(customer, "conn-1", goodPolicy, deps, ACTOR),
+    ).rejects.toBeInstanceOf(EnginePolicyRejected);
+    const audit = handle.calls.find(
+      (c) => c.op === "insert" && c.table === auditEventsIndex,
+    );
+    expect(audit, "audit row must NOT be written for rejected policies").toBeUndefined();
+    errorSpy.mockRestore();
   });
 });
 
@@ -752,7 +840,7 @@ describe("setTenantScope", () => {
     const { setTenantScope } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setTenantScope(customer, "conn-1", strictScope, deps);
+    const result = await setTenantScope(customer, "conn-1", strictScope, deps, ACTOR);
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
     expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
@@ -781,7 +869,7 @@ describe("setTenantScope", () => {
     const { setTenantScope } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    await setTenantScope(customer, "conn-1", strictScope, deps);
+    await setTenantScope(customer, "conn-1", strictScope, deps, ACTOR);
 
     expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
       {
@@ -814,7 +902,7 @@ describe("setTenantScope", () => {
     const { setTenantScope } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    await setTenantScope(customer, "conn-1", inertScope, deps);
+    await setTenantScope(customer, "conn-1", inertScope, deps, ACTOR);
 
     const childUpdate = handle.calls.find(
       (c) => c.op === "update" && c.table === connectionDatabases,
@@ -848,7 +936,7 @@ describe("setTenantScope", () => {
     const { setTenantScope } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    await setTenantScope(customer, "conn-1", overridesOnly, deps);
+    await setTenantScope(customer, "conn-1", overridesOnly, deps, ACTOR);
 
     expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
       {
@@ -873,7 +961,7 @@ describe("setTenantScope", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      setTenantScope(customer, "conn-1", strictScope, deps),
+      setTenantScope(customer, "conn-1", strictScope, deps, ACTOR),
     ).rejects.toBeInstanceOf(EnginePolicyRejected);
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
     errorSpy.mockRestore();
@@ -889,7 +977,7 @@ describe("setTenantScope", () => {
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await setTenantScope(customer, "conn-1", strictScope, deps);
+    const result = await setTenantScope(customer, "conn-1", strictScope, deps, ACTOR);
     expect(result).toMatchObject({ mcpToken: "tok-1" });
     expect(deps.registry.invalidate).toHaveBeenCalledWith("tok-1");
     errorSpy.mockRestore();
@@ -906,6 +994,7 @@ describe("setTenantScope", () => {
       "conn-1",
       strictScope,
       deps,
+      ACTOR,
       "ghost-db",
     );
 
@@ -924,6 +1013,7 @@ describe("setTenantScope", () => {
       "conn-other",
       strictScope,
       deps,
+      ACTOR,
     );
 
     expect(result).toBeNull();
@@ -941,6 +1031,7 @@ describe("setTenantScope", () => {
         "conn-1",
         { column: "bad name", overrides: {}, exempt: [] },
         deps,
+        ACTOR,
       ),
     ).rejects.toThrow(/invalid tenant_scope/);
     expect(handle.calls).toHaveLength(0);
@@ -970,7 +1061,7 @@ describe("setTenantScope", () => {
     const { setTenantScope } = await import("../src/lib/connections.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setTenantScope(customer, "conn-1", schemaScope, deps);
+    const result = await setTenantScope(customer, "conn-1", schemaScope, deps, ACTOR);
 
     expect(result).toMatchObject({ mcpToken: "tok-1" });
     expect(deps.pushPolicy).toHaveBeenCalledWith("tok-1", [
@@ -992,6 +1083,7 @@ describe("setTenantScope", () => {
         "conn-1",
         { column: "public.tenant_id", overrides: {}, exempt: [] },
         deps,
+        ACTOR,
       ),
     ).rejects.toThrow(/invalid tenant_scope/);
     expect(handle.calls).toHaveLength(0);
@@ -1007,6 +1099,7 @@ describe("setTenantScope", () => {
         "conn-1",
         { column: null, overrides: { "bad name": "tenant_id" }, exempt: [] },
         deps,
+        ACTOR,
       ),
     ).rejects.toThrow(/invalid tenant_scope/);
     await expect(
@@ -1015,6 +1108,7 @@ describe("setTenantScope", () => {
         "conn-1",
         { column: null, overrides: { orders: "tenant id" }, exempt: [] },
         deps,
+        ACTOR,
       ),
     ).rejects.toThrow(/invalid tenant_scope/);
     expect(handle.calls).toHaveLength(0);
@@ -1030,8 +1124,68 @@ describe("setTenantScope", () => {
         "conn-1",
         { column: "tenant_id", overrides: {}, exempt: ["bad name"] },
         deps,
+        ACTOR,
       ),
     ).rejects.toThrow(/invalid tenant_scope/);
+  });
+
+  it("emits TENANT_SCOPE_CHANGED audit row stamped with the actor", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setTenantScope } = await import("../src/lib/connections.ts");
+    const { auditEventsIndex } = await import("@midplane-cloud/db");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setTenantScope(customer, "conn-1", strictScope, deps, ACTOR);
+
+    const audit = handle.calls.find(
+      (c) => c.op === "insert" && c.table === auditEventsIndex,
+    );
+    expect(audit, "TENANT_SCOPE_CHANGED audit row must be inserted").toBeDefined();
+    const row = audit?.set as
+      | {
+          eventType: string;
+          customerId: string;
+          tenantId: string;
+          actorClerkUserId: string;
+          payload: {
+            connection_id: string;
+            database_name: string;
+            config: typeof strictScope;
+          };
+        }
+      | undefined;
+    expect(row?.eventType).toBe("TENANT_SCOPE_CHANGED");
+    expect(row?.customerId).toBe(customer.id);
+    expect(row?.tenantId).toBe("conn-1");
+    expect(row?.actorClerkUserId).toBe(ACTOR);
+    expect(row?.payload.connection_id).toBe("conn-1");
+    expect(row?.payload.database_name).toBe("main");
+    expect(row?.payload.config).toEqual(strictScope);
+  });
+
+  it("does NOT emit TENANT_SCOPE_CHANGED when engine rejects the config", async () => {
+    handle.queueSelect([{ id: "conn-1", mcpToken: "tok-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setTenantScope, EnginePolicyRejected } = await import(
+      "../src/lib/connections.ts"
+    );
+    const { auditEventsIndex } = await import("@midplane-cloud/db");
+    const deps = makePolicyDeps({
+      rejected: { status: 400, body: "tenant_scope.column: must match identifier regex" },
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      setTenantScope(customer, "conn-1", strictScope, deps, ACTOR),
+    ).rejects.toBeInstanceOf(EnginePolicyRejected);
+    const audit = handle.calls.find(
+      (c) => c.op === "insert" && c.table === auditEventsIndex,
+    );
+    expect(audit, "audit row must NOT be written for rejected configs").toBeUndefined();
+    errorSpy.mockRestore();
   });
 });
 

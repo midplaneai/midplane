@@ -1,3 +1,4 @@
+import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
@@ -66,6 +67,10 @@ export default async function DatabaseDetail({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    // Clerk user id stamps the POLICY_CHANGED audit row's actor — answers
+    // "who changed the policy?" in the audit log.
+    const { userId } = await auth();
+    if (!userId) redirect("/");
 
     const raw = formData.get("policy");
     if (typeof raw !== "string") {
@@ -80,7 +85,7 @@ export default async function DatabaseDetail({
     const policy = parsePolicyOrThrow(parsed);
 
     const ctx = getMcpProxyContext();
-    const result = await setTableAccess(customer, id, policy, ctx, name);
+    const result = await setTableAccess(customer, id, policy, ctx, userId, name);
     if (!result) notFound();
     revalidatePath(`/connections/${id}/databases/${name}`);
   }
@@ -89,6 +94,9 @@ export default async function DatabaseDetail({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    // Clerk user id stamps the TENANT_SCOPE_CHANGED audit row's actor.
+    const { userId } = await auth();
+    if (!userId) redirect("/");
 
     const raw = formData.get("config");
     if (typeof raw !== "string") {
@@ -106,7 +114,7 @@ export default async function DatabaseDetail({
     const config = parseTenantScopeOrThrow(parsed);
 
     const ctx = getMcpProxyContext();
-    const result = await setTenantScope(customer, id, config, ctx, name);
+    const result = await setTenantScope(customer, id, config, ctx, userId, name);
     if (!result) notFound();
     revalidatePath(`/connections/${id}/databases/${name}`);
   }

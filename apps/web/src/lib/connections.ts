@@ -227,6 +227,7 @@ export async function setTableAccess(
   id: string,
   policy: TableAccessPolicy,
   deps: PolicyPushDeps,
+  actorClerkUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
 ): Promise<{ mcpToken: string } | null> {
   const validation = validatePolicy(policy);
@@ -303,7 +304,11 @@ export async function setTableAccess(
     if ("rejected" in pushResult) {
       // Engine kept the previous policy. Don't fall back — respawn
       // would re-read this same (rejected) policy from PG and fail to
-      // boot. Surface the engine's message to the caller.
+      // boot. Surface the engine's message to the caller. We also skip
+      // the POLICY_CHANGED audit row: the connections-row update is
+      // committed (validator drift is unreachable in practice; if it
+      // happens, engine state stays put and the dashboard surfaces the
+      // error), but recording "policy changed" would be a lie.
       console.error(
         "[setTableAccess] engine rejected policy (validator drift)",
         pushResult.rejected,
@@ -322,6 +327,33 @@ export async function setTableAccess(
       err,
     );
     await deps.registry.invalidate(result.mcpToken).catch(() => undefined);
+  }
+
+  // Cloud-emitted audit row, distinct from the engine's POLICY_RELOADED:
+  // this one carries actor_clerk_user_id, so the audit log answers "who
+  // changed the policy?" without needing the OSS engine to thread an
+  // actor through /admin/policy. tenant_id = connection_id so a future
+  // per-connection audit view can filter on it for free. Best-effort:
+  // failure to write audit shouldn't undo the durable policy change
+  // (which is already committed in PG and pushed to engine).
+  try {
+    await db.insert(auditEventsIndex).values({
+      id: ulid(),
+      customerId: customer.id,
+      tenantId: id,
+      region: customer.region,
+      queryId: ulid(),
+      ts: new Date(),
+      eventType: "POLICY_CHANGED",
+      payload: {
+        connection_id: id,
+        database_name: dbName,
+        policy: validation.value,
+      },
+      actorClerkUserId,
+    });
+  } catch (err) {
+    console.error("[setTableAccess] POLICY_CHANGED audit write failed", err);
   }
 
   return result;
@@ -352,6 +384,7 @@ export async function setTenantScope(
   id: string,
   config: TenantScopeConfig,
   deps: PolicyPushDeps,
+  actorClerkUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
 ): Promise<{ mcpToken: string } | null> {
   // Cloud-side validation before touching PG. The YAML emitter would also
@@ -439,6 +472,29 @@ export async function setTenantScope(
       err,
     );
     await deps.registry.invalidate(result.mcpToken).catch(() => undefined);
+  }
+
+  // Cloud-emitted audit row, same shape as POLICY_CHANGED (see setTableAccess
+  // for the rationale). TENANT_SCOPE_CHANGED records "who reconfigured tenant
+  // isolation on which DB?" — directly relevant to row-level security audits.
+  try {
+    await db.insert(auditEventsIndex).values({
+      id: ulid(),
+      customerId: customer.id,
+      tenantId: id,
+      region: customer.region,
+      queryId: ulid(),
+      ts: new Date(),
+      eventType: "TENANT_SCOPE_CHANGED",
+      payload: {
+        connection_id: id,
+        database_name: dbName,
+        config: validation.value,
+      },
+      actorClerkUserId,
+    });
+  } catch (err) {
+    console.error("[setTenantScope] TENANT_SCOPE_CHANGED audit write failed", err);
   }
 
   return { mcpToken: result.mcpToken };
