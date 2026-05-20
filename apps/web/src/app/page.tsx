@@ -43,6 +43,7 @@ export default async function Landing() {
             <a href="#audit">Audit</a>
             <a href="#teams">Teams</a>
             <a href="#hosted">Hosted</a>
+            <a href="#pricing">Pricing</a>
             <a href="#quickstart">Quickstart</a>
           </nav>
           <div className="topright">
@@ -827,11 +828,156 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §08 — Quickstart */}
+        {/* §08 — Pricing */}
+        <section className="sec" id="pricing">
+          <div className="sec-top">
+            <div className="sec-num">
+              <b>08</b>Pricing
+            </div>
+            <div>
+              <h2 className="sec-h">
+                Pay for scale, <em>not the safety engine.</em>
+              </h2>
+              <p className="sec-sub">
+                Policy enforcement, audit log, and tenant isolation are on
+                every tier. Tiers gate structural growth — more connections,
+                more seats, longer retention, enterprise SSO. Query volume is
+                never metered.
+              </p>
+            </div>
+          </div>
+          <div className="pricing">
+            <div className="tier free">
+              <div className="tier-head">
+                <span className="tier-name">Free</span>
+                <span className="tier-price">
+                  $0 <small>/ month</small>
+                </span>
+                <span className="tier-sub">For one engineer evaluating.</span>
+              </div>
+              <ul className="tier-rows">
+                <li>
+                  <span>Connections</span>
+                  <b>1</b>
+                </li>
+                <li>
+                  <span>MCP tokens</span>
+                  <b>1</b>
+                </li>
+                <li>
+                  <span>Seats</span>
+                  <b>1</b>
+                </li>
+                <li>
+                  <span>Audit retention</span>
+                  <b>7 days</b>
+                </li>
+                <li>
+                  <span>SSO / SAML</span>
+                  <b className="muted">—</b>
+                </li>
+                <li>
+                  <span>Support</span>
+                  <b>Community</b>
+                </li>
+              </ul>
+              <a className="ebtn outline tier-cta" href="/sign-up">
+                Start free →
+              </a>
+            </div>
+            <div className="tier pro">
+              <div className="tier-head">
+                <span className="tier-name">Pro</span>
+                <span className="tier-price">
+                  $49 <small>/ month</small>
+                </span>
+                <span className="tier-sub">
+                  For a small team putting agents into production.
+                </span>
+              </div>
+              <ul className="tier-rows">
+                <li>
+                  <span>Connections</span>
+                  <b>10</b>
+                </li>
+                <li>
+                  <span>MCP tokens</span>
+                  <b>10</b>
+                </li>
+                <li>
+                  <span>Seats</span>
+                  <b>10</b>
+                </li>
+                <li>
+                  <span>Audit retention</span>
+                  <b>30 days</b>
+                </li>
+                <li>
+                  <span>SSO / SAML</span>
+                  <b className="muted">—</b>
+                </li>
+                <li>
+                  <span>Support</span>
+                  <b>Email</b>
+                </li>
+              </ul>
+              <a className="ebtn fill tier-cta" href="/sign-up">
+                Start Pro →
+              </a>
+            </div>
+            <div className="tier team">
+              <div className="tier-head">
+                <span className="tier-name">Team</span>
+                <span className="tier-price">
+                  $399 <small>/ month</small>
+                </span>
+                <span className="tier-sub">
+                  When security or compliance asks.
+                </span>
+              </div>
+              <ul className="tier-rows">
+                <li>
+                  <span>Connections</span>
+                  <b>Unlimited</b>
+                </li>
+                <li>
+                  <span>MCP tokens</span>
+                  <b>Unlimited</b>
+                </li>
+                <li>
+                  <span>Seats</span>
+                  <b>Unlimited</b>
+                </li>
+                <li>
+                  <span>Audit retention</span>
+                  <b>180 days</b>
+                </li>
+                <li>
+                  <span>SSO / SAML</span>
+                  <b className="allow">✓</b>
+                </li>
+                <li>
+                  <span>Support</span>
+                  <b>Priority email</b>
+                </li>
+              </ul>
+              <a className="ebtn outline tier-cta" href="/sign-up">
+                Start Team →
+              </a>
+            </div>
+          </div>
+          <p className="pricing-custom">
+            <b>Custom needs?</b> BYOK, dedicated region, SOC2 / HIPAA
+            artifacts, SAML below Team, custom retention, SLA —{" "}
+            <a href="mailto:sales@midplane.ai">talk to us</a>.
+          </p>
+        </section>
+
+        {/* §09 — Quickstart */}
         <section className="sec" id="quickstart">
           <div className="sec-top">
             <div className="sec-num">
-              <b>08</b>Quickstart
+              <b>09</b>Quickstart
             </div>
             <div>
               <h2 className="sec-h">
@@ -956,6 +1102,7 @@ export default async function Landing() {
             <a href="#teams">Teams</a>
             <a href="#audit">Audit</a>
             <a href="#policy">Policy</a>
+            <a href="#pricing">Pricing</a>
           </div>
           <div>
             <h5>Docs</h5>
