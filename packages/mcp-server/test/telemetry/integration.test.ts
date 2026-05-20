@@ -167,6 +167,7 @@ describe("initTelemetry — debug", () => {
         agent_name: "a",
         agent_version: null,
         agent_intent: null,
+        mcp_token_id: null,
         ts: Date.now(),
         schema_version: 3,
         event_type: "DECIDED",

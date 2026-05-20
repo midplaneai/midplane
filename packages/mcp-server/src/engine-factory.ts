@@ -357,12 +357,14 @@ function makeEngineEntry(
   // truth for the live mappings: engineEntry.holder.tenantScope.
   const ctxBase: EngineContext = {
     tenant_id: cfg.tenantId,
-    // Per-session agent name/version come from MCP `clientInfo` and are
-    // overlaid by buildServer's ctxFor — ctxBase carries the null
-    // defaults so non-MCP callers (admin endpoints, future tooling) get
-    // a well-typed ctx without crossing the MCP layer.
+    // Per-session agent name/version come from MCP `clientInfo` and the
+    // per-session `mcp_token_id` comes from the X-Midplane-Token-Id
+    // header; both are overlaid by buildServer's ctxFor. ctxBase carries
+    // the null defaults so non-MCP callers (admin endpoints, future
+    // tooling) get a well-typed ctx without crossing the MCP layer.
     agent_name: null,
     agent_version: null,
+    mcp_token_id: null,
     role: "agent_readonly",
   };
 
@@ -626,11 +628,13 @@ async function finalizeReload(
       query_id: ulid(),
       tenant_id: cfg.tenantId,
       database: s.name,
-      // POLICY_RELOADED is operator-driven — there's no calling agent
-      // and no per-call intent. Always null.
+      // POLICY_RELOADED is operator-driven — there's no calling agent,
+      // no per-call intent, and no cloud-issued token id (admin endpoint
+      // auth is the bearer token, not an X-Midplane-Token-Id). All null.
       agent_name: null,
       agent_version: null,
       agent_intent: null,
+      mcp_token_id: null,
       ts: Date.now(),
       schema_version: 3,
       event_type: "POLICY_RELOADED",

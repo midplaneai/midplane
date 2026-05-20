@@ -30,6 +30,7 @@ URL must be `http://` or `https://`; anything else fails fast at boot.
   "agent_name": "claude-code",
   "agent_version": "0.42.1",
   "agent_intent": "investigating slow user lookup",
+  "mcp_token_id": "01HZX3KQ7B9YV2RTNGH7MJSPVB",
   "policy_rule": "writes_require_approval",
   "reason": "Midplane denied this query because writes require approval.",
   "statement_type": "DELETE",
@@ -47,11 +48,21 @@ populated (the MCP SDK rejects calls missing it before the engine
 runs); for non-`query` events (e.g. denials surfaced through other
 paths) it can be `null`.
 
+`mcp_token_id` (added in 0.6.0) is the cloud-issued ULID for the MCP
+token that opened the session, read from the `X-Midplane-Token-Id`
+header at MCP `initialize`. It is `null` for self-host deploys (no
+cloud proxy injecting the header), for sessions whose `initialize`
+request carried a malformed header (a malformed header is ignored, not
+rejected), and on any non-MCP caller. Receivers wanting per-token
+attribution key on this field; receivers that don't care can ignore it.
+
 Receivers that pinned to `schema_version: 2` should widen their handler:
 the `intent_source` key is gone (per-call intent now has one source —
 the `intent` tool arg — so the column was always-redundant). Receivers
 on `schema_version: 1` should also drop `agent_identity` and adopt the
-split `agent_name`/`agent_version` keys.
+split `agent_name`/`agent_version` keys. The 0.6.0 `mcp_token_id`
+addition is additive-nullable and does **not** bump `schema_version` —
+v3 receivers that don't know the field just ignore it.
 
 `sql_preview` is truncated at 1024 characters; `sql_truncated` flags when truncation occurred. Both are empty/false when the engine could not match an `ATTEMPTED` row to the denial (rare — only happens under buffer pressure).
 

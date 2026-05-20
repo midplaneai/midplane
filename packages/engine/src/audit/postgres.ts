@@ -13,10 +13,10 @@ import { AuditUnavailableError } from "../errors.ts";
 const INSERT_SQL = `
   INSERT INTO audit_events_index
     (id, customer_id, tenant_id, database, query_id,
-     agent_name, agent_version, agent_intent,
+     agent_name, agent_version, agent_intent, mcp_token_id,
      ts, event_type, payload, schema_version)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-          to_timestamp($9::double precision / 1000), $10, $11::jsonb, $12)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+          to_timestamp($10::double precision / 1000), $11, $12::jsonb, $13)
 `;
 
 export interface PostgresAuditWriterOptions {
@@ -48,6 +48,7 @@ export class PostgresAuditWriter implements AuditWriter {
         event.agent_name,
         event.agent_version,
         event.agent_intent,
+        event.mcp_token_id,
         event.ts,
         event.event_type,
         JSON.stringify(event.payload),

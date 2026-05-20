@@ -164,6 +164,7 @@ describe("http transport — audit indexer pull endpoints", () => {
       agent_name: null,
       agent_version: null,
       agent_intent: null,
+      mcp_token_id: null,
       ts: 1_700_000_000_000 + n,
       schema_version: 3,
       event_type: "ATTEMPTED",

@@ -16,6 +16,7 @@ function event(partial: Partial<AuditEvent> & { event_type: AuditEvent["event_ty
     agent_name: "agent-x",
     agent_version: "1.0.0",
     agent_intent: null,
+    mcp_token_id: null,
     ts: 1_700_000_000_000,
     schema_version: 3,
     ...partial,

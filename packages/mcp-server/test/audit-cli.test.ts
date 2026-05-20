@@ -50,6 +50,7 @@ async function writeEvent(
     agent_name: "test-agent",
     agent_version: "0.0.1",
     agent_intent: null,
+    mcp_token_id: null,
     ts,
     schema_version: 3 as const,
   };

@@ -83,6 +83,7 @@ export const baseCtx: EngineContext = {
   tenant_id: "__self_host__",
   agent_name: "test-agent",
   agent_version: "0.0.1",
+  mcp_token_id: null,
   role: "agent_readonly",
 };
 

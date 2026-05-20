@@ -14,10 +14,11 @@ CREATE TABLE IF NOT EXISTS audit_events (
   agent_name      TEXT,                          -- MCP clientInfo.name (e.g. "claude-code"); NULL for non-MCP callers
   agent_version   TEXT,                          -- MCP clientInfo.version (e.g. "0.42.1"); NULL for non-MCP callers
   agent_intent    TEXT,                          -- per-call free-text task description (≤ 500 chars); required tool arg on `query`, NULL on schema-browsing tools and POLICY_RELOADED
+  mcp_token_id    TEXT,                          -- cloud-injected ULID identifying the MCP token that initialized this session (`X-Midplane-Token-Id` header at MCP initialize). NULL when the header was absent or malformed, and on all non-MCP callers (admin endpoints, audit pull, POLICY_RELOADED).
   ts              INTEGER NOT NULL,              -- ms epoch (use unixepoch * 1000 for ts in Postgres mirror)
   event_type      TEXT    NOT NULL,              -- ATTEMPTED | DECIDED | EXECUTED | FAILED | POLICY_RELOADED
   payload         TEXT    NOT NULL,              -- JSON; shape determined by event_type (see audit-types.ts)
-  schema_version  INTEGER NOT NULL DEFAULT 3     -- bump on row-shape break; indexer reads multiple versions. v1: pre-0.3 (no agent_*/intent fields). v2: 0.3.x (agent_name+version+intent+intent_source). v3: 0.4.x (intent_source dropped, single structured intent arg).
+  schema_version  INTEGER NOT NULL DEFAULT 3     -- bump on row-shape break; indexer reads multiple versions. v1: pre-0.3 (no agent_*/intent fields). v2: 0.3.x (agent_name+version+intent+intent_source). v3: 0.4.x (intent_source dropped, single structured intent arg). The 0.6.0 mcp_token_id addition is additive-nullable — no schema_version bump, v3 readers ignore the extra column.
   -- Hash-chain extension (added in V2 for compliance buyer):
   -- prev_hash    TEXT,                           -- SHA-256 of previous row's (id || payload)
   -- signature    TEXT                            -- HMAC-SHA-256 of (id || prev_hash || payload) with per-tenant key
@@ -51,6 +52,7 @@ PRAGMA temp_store = MEMORY;
 --   agent_name      TEXT,                            -- MCP clientInfo.name
 --   agent_version   TEXT,                            -- MCP clientInfo.version
 --   agent_intent    TEXT,                            -- per-call task description (≤ 500 chars)
+--   mcp_token_id    TEXT,                            -- ULID identifying the cloud-issued MCP token this session was opened with (cloud-side FK to mcp_tokens). NULL on non-MCP callers + POLICY_RELOADED.
 --   ts              TIMESTAMPTZ NOT NULL,
 --   event_type      TEXT        NOT NULL CHECK (event_type IN ('ATTEMPTED','DECIDED','EXECUTED','FAILED','POLICY_RELOADED')),
 --   payload         JSONB       NOT NULL,

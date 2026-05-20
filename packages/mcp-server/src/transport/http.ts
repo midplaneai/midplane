@@ -23,6 +23,7 @@ import {
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { SqliteAuditWriter } from "@midplane/engine";
 import { logger } from "../logger.ts";
+import { parseMcpTokenIdHeader } from "./token-header.ts";
 
 const DEFAULT_AUDIT_LIMIT = 500;
 const MAX_AUDIT_LIMIT = 1000;
@@ -33,10 +34,21 @@ export interface HttpHandle {
   close(): Promise<void>;
 }
 
+// Per-session context the transport captures from the initialize request
+// and hands to the server factory. Today this carries the cloud-issued
+// `mcp_token_id` (X-Midplane-Token-Id, captured at MCP `initialize` and
+// frozen for the session's lifetime). Stays null when the header was
+// absent or malformed at initialize — never re-read on later requests,
+// matching the per-token attribution spec.
+export interface SessionContext {
+  mcp_token_id: string | null;
+}
+
 // The MCP SDK's McpServer holds a single Protocol → single transport. Each
 // concurrent MCP session therefore needs its own McpServer instance. The
-// caller provides a factory; it's invoked once per session.
-export type ServerFactory = () => McpServer;
+// caller provides a factory; it's invoked once per session and receives the
+// per-session context captured from the initialize request.
+export type ServerFactory = (sessionContext: SessionContext) => McpServer;
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
@@ -181,12 +193,29 @@ async function handle(
       return;
     }
 
-    const server = serverFactory();
+    // Capture the cloud-issued token id ONCE, on the initialize request.
+    // Per spec, the session keeps this value for its lifetime — later
+    // requests on the same session id don't refresh it. A NULL here
+    // means the initialize request didn't carry the header (or carried
+    // a malformed one); audit rows from this session will have
+    // mcp_token_id IS NULL for the session's lifetime.
+    const sessionContext: SessionContext = {
+      mcp_token_id: parseMcpTokenIdHeader(req.headers),
+    };
+    const server = serverFactory(sessionContext);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
         sessions.set(id, { transport, server });
-        logger.info({ sessionId: id }, "session initialized");
+        logger.info(
+          {
+            sessionId: id,
+            // Boolean only — never log the token id itself. The id is
+            // cloud-side opaque and stays in audit rows where it belongs.
+            mcp_token_id_present: sessionContext.mcp_token_id !== null,
+          },
+          "session initialized",
+        );
       },
     });
     transport.onclose = () => {

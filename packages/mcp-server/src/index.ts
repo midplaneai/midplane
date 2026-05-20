@@ -67,18 +67,30 @@ export async function runServer(): Promise<void> {
 
   if (cfg.transport === "stdio") {
     logger.info({ transport: "stdio", databases: handle.registry.names() }, "starting mcp-server");
-    const server = buildServer({ handle, telemetry });
+    // stdio has no HTTP headers — no X-Midplane-Token-Id channel. Pass
+    // an empty sessionContext so the field is well-defined null on
+    // audit rows from stdio sessions (matches the spec: only MCP
+    // sessions opened over HTTP through the cloud proxy carry a token id).
+    const server = buildServer({
+      handle,
+      telemetry,
+      sessionContext: { mcp_token_id: null },
+    });
     await startStdio(server);
     close = async () => {
       await telemetry.shutdown();
       await handle.close();
     };
   } else {
-    const http = await startHttp(() => buildServer({ handle, telemetry }), {
-      port: cfg.port,
-      indexer: { audit: handle.registry.audit, token: cfg.indexerToken },
-      admin: { setPolicy: (yaml) => handle.registry.setPolicy(yaml) },
-    });
+    const http = await startHttp(
+      (sessionContext) =>
+        buildServer({ handle, telemetry, sessionContext }),
+      {
+        port: cfg.port,
+        indexer: { audit: handle.registry.audit, token: cfg.indexerToken },
+        admin: { setPolicy: (yaml) => handle.registry.setPolicy(yaml) },
+      },
+    );
     close = async () => {
       await http.close();
       await telemetry.shutdown();

@@ -55,6 +55,14 @@ import { handleListDatabases } from "./tools/list-databases.ts";
 export interface BuildServerOptions {
   handle: EngineHandle;
   telemetry?: TelemetryHandle;
+  // Per-session context captured by the transport at MCP `initialize`.
+  // Today this carries the cloud-issued `mcp_token_id` (X-Midplane-Token-Id
+  // HTTP header). The HTTP transport's per-session serverFactory hands
+  // this in; stdio and tests can leave it undefined — null mcp_token_id
+  // is the well-defined "no cloud token attribution" state.
+  sessionContext?: {
+    mcp_token_id: string | null;
+  };
 }
 
 const NOOP_TELEMETRY: TelemetryHandle = {
@@ -67,11 +75,16 @@ const NOOP_TELEMETRY: TelemetryHandle = {
 export function buildServer(opts: BuildServerOptions): McpServer {
   const server = new McpServer({
     name: "midplane-mcp-server",
-    version: "0.5.0",
+    version: "0.6.0",
   });
 
   const telemetry = opts.telemetry ?? NOOP_TELEMETRY;
   const registry = opts.handle.registry;
+  // Frozen for the session's lifetime. Captured by the HTTP transport at
+  // MCP `initialize` from the X-Midplane-Token-Id header and stamped on
+  // every audit row this session emits. Null when the header was absent
+  // or malformed, and on stdio / tests that don't construct one.
+  const mcpTokenId = opts.sessionContext?.mcp_token_id ?? null;
 
   // Resolve agent name+version dynamically from the SDK's per-session
   // clientInfo (populated after MCP `initialize`). Both fields are
@@ -97,6 +110,7 @@ export function buildServer(opts: BuildServerOptions): McpServer {
       ...entry.ctxBase,
       agent_name: name,
       agent_version: version,
+      mcp_token_id: mcpTokenId,
     };
   };
 

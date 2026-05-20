@@ -27,6 +27,7 @@ interface RawRow {
   agent_name: string | null;
   agent_version: string | null;
   agent_intent: string | null;
+  mcp_token_id: string | null;
   ts: number;
   event_type: string;
   payload: string;
@@ -111,6 +112,7 @@ function rowToJson(r: RawRow): string {
     agent_name: r.agent_name,
     agent_version: r.agent_version,
     agent_intent: r.agent_intent,
+    mcp_token_id: r.mcp_token_id,
     ts: r.ts,
     event_type: r.event_type,
     payload: JSON.parse(r.payload),
@@ -125,7 +127,7 @@ function rowToJson(r: RawRow): string {
 // insert whose random suffix happens to sort below the previously emitted id.
 // `rowid` is strictly monotonic for new inserts, which is what tail needs.
 const SELECT_COLS =
-  "rowid, id, query_id, tenant_id, database, agent_name, agent_version, agent_intent, ts, event_type, payload, schema_version";
+  "rowid, id, query_id, tenant_id, database, agent_name, agent_version, agent_intent, mcp_token_id, ts, event_type, payload, schema_version";
 
 async function tail(args: string[]): Promise<void> {
   const opts = parseFlags(args, { backfill: String(TAIL_BACKFILL_DEFAULT), follow: "true" });

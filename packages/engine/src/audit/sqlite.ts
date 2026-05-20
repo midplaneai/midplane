@@ -21,15 +21,15 @@ const SCHEMA_PATH = join(__dirname, "schema.sql");
 const INSERT_SQL = `
   INSERT INTO audit_events (
     id, query_id, tenant_id, database,
-    agent_name, agent_version, agent_intent,
+    agent_name, agent_version, agent_intent, mcp_token_id,
     ts, event_type, payload, schema_version
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const READ_SINCE_SQL = `
   SELECT id, query_id, tenant_id, database,
-         agent_name, agent_version, agent_intent,
+         agent_name, agent_version, agent_intent, mcp_token_id,
          ts, event_type, payload, schema_version
   FROM audit_events
   WHERE id > ?
@@ -51,6 +51,7 @@ export interface AuditEventRow {
   agent_name: string | null;
   agent_version: string | null;
   agent_intent: string | null;
+  mcp_token_id: string | null;
   ts: number;
   event_type: string;
   payload: unknown;
@@ -65,6 +66,7 @@ interface RawAuditRow {
   agent_name: string | null;
   agent_version: string | null;
   agent_intent: string | null;
+  mcp_token_id: string | null;
   ts: number;
   event_type: string;
   payload: string;
@@ -154,6 +156,14 @@ export class SqliteAuditWriter implements AuditWriter {
           "UPDATE audit_events SET schema_version = 3 WHERE schema_version = 2",
         );
       }
+      // 0.5 → 0.6: add `mcp_token_id` for cloud-side per-token audit
+      // attribution. Additive-nullable; pre-existing rows read NULL.
+      // schema_version stays at 3 — the column is forward-compatible the
+      // same way `database` was added in 0.2 without bumping (older
+      // readers can ignore the unknown column on a wide row).
+      if (!this.hasColumn("audit_events", "mcp_token_id")) {
+        this.db.run("ALTER TABLE audit_events ADD COLUMN mcp_token_id TEXT");
+      }
     }
 
     // PRAGMAs in the schema file run during table create. We also explicitly
@@ -193,6 +203,7 @@ export class SqliteAuditWriter implements AuditWriter {
         event.agent_name,
         event.agent_version,
         event.agent_intent,
+        event.mcp_token_id,
         event.ts,
         event.event_type,
         JSON.stringify(event.payload),
@@ -219,6 +230,7 @@ export class SqliteAuditWriter implements AuditWriter {
       agent_name: r.agent_name,
       agent_version: r.agent_version,
       agent_intent: r.agent_intent,
+      mcp_token_id: r.mcp_token_id,
       ts: r.ts,
       event_type: r.event_type,
       payload: JSON.parse(r.payload),

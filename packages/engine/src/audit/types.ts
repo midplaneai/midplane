@@ -121,6 +121,19 @@ const AgentVersion = z.string().min(1).max(64).nullable();
 // describe_table) and on POLICY_RELOADED.
 const AgentIntent = z.string().min(1).max(500).nullable();
 
+// `mcp_token_id` is the cloud-issued ULID for the MCP token that opened
+// this session, captured from the `X-Midplane-Token-Id` header on the
+// MCP `initialize` request and stamped on every audit row from the
+// session. Cloud-side, the indexer joins this back to its `mcp_tokens`
+// table to answer "which token ran this query?" in the audit UI. The
+// engine itself never inspects the value — it's a tenant-scoped opaque
+// identifier. 64-char cap is defensive against pathological input
+// before any storage; the proxy always sends a 26-char ULID. Null on
+// the MCP `initialize` of a session whose header was absent or
+// malformed (header parser ignores malformed, never rejects), on
+// non-MCP callers (admin endpoints, audit pull), and on POLICY_RELOADED.
+const McpTokenId = z.string().min(1).max(64).nullable();
+
 export const AuditEvent = z.discriminatedUnion("event_type", [
   z.object({
     id: z.string(),
@@ -130,6 +143,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
+    mcp_token_id: McpTokenId,
     ts: z.number().int(),
     schema_version: z.literal(3),
     event_type: z.literal("ATTEMPTED"),
@@ -143,6 +157,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
+    mcp_token_id: McpTokenId,
     ts: z.number().int(),
     schema_version: z.literal(3),
     event_type: z.literal("DECIDED"),
@@ -156,6 +171,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
+    mcp_token_id: McpTokenId,
     ts: z.number().int(),
     schema_version: z.literal(3),
     event_type: z.literal("EXECUTED"),
@@ -169,6 +185,7 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     agent_name: AgentName,
     agent_version: AgentVersion,
     agent_intent: AgentIntent,
+    mcp_token_id: McpTokenId,
     ts: z.number().int(),
     schema_version: z.literal(3),
     event_type: z.literal("FAILED"),
@@ -179,13 +196,15 @@ export const AuditEvent = z.discriminatedUnion("event_type", [
     query_id: z.string(),
     tenant_id: z.string(),
     database: DatabaseName,
-    // POLICY_RELOADED has no calling agent; both names and intent are
-    // always null. They're still on the row so every event in the union
-    // has the same column shape (the indexer's `isValidAuditRow` check
-    // doesn't have to special-case POLICY_RELOADED).
+    // POLICY_RELOADED has no calling agent; agent fields, intent, and
+    // the cloud-injected token id are always null. They're still on the
+    // row so every event in the union has the same column shape (the
+    // indexer's `isValidAuditRow` check doesn't have to special-case
+    // POLICY_RELOADED).
     agent_name: z.null(),
     agent_version: z.null(),
     agent_intent: z.null(),
+    mcp_token_id: z.null(),
     ts: z.number().int(),
     schema_version: z.literal(3),
     event_type: z.literal("POLICY_RELOADED"),

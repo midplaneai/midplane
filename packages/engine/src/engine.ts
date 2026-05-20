@@ -28,6 +28,14 @@ export type EngineContext = {
   // Stamped on every audit row emitted from the session.
   agent_name: string | null;
   agent_version: string | null;
+  // Cloud-issued ULID identifying the MCP token that opened this session.
+  // Sourced from the `X-Midplane-Token-Id` HTTP header at MCP `initialize`
+  // and cached on the session — the engine never reads the header itself.
+  // Stamped on every audit row so cloud-side indexers can answer "which
+  // token ran this query?" without joining back to live session state.
+  // Null when the header was absent or malformed at initialize, on
+  // non-MCP callers, and on POLICY_RELOADED audit rows.
+  mcp_token_id: string | null;
   role?: string;
   // Optional opt-in tenant-scope context. Legacy `mappings` is a flat
   // `table → column` dict (pre-0.5.0). The 0.5.0 shape adds a universal
@@ -122,6 +130,7 @@ export class Engine {
       agent_name: input.ctx.agent_name,
       agent_version: input.ctx.agent_version,
       agent_intent: intent,
+      mcp_token_id: input.ctx.mcp_token_id,
       ts: this.now(),
       schema_version: 3,
       event_type: "ATTEMPTED",
@@ -167,6 +176,7 @@ export class Engine {
             agent_name: input.ctx.agent_name,
             agent_version: input.ctx.agent_version,
             agent_intent: intent,
+            mcp_token_id: input.ctx.mcp_token_id,
             ts: this.now(),
             schema_version: 3,
             event_type: "DECIDED",
@@ -184,6 +194,7 @@ export class Engine {
             agent_name: input.ctx.agent_name,
             agent_version: input.ctx.agent_version,
             agent_intent: intent,
+            mcp_token_id: input.ctx.mcp_token_id,
             ts: this.now(),
             schema_version: 3,
             event_type: "DECIDED",
@@ -227,6 +238,7 @@ export class Engine {
         agent_name: input.ctx.agent_name,
         agent_version: input.ctx.agent_version,
         agent_intent: intent,
+        mcp_token_id: input.ctx.mcp_token_id,
         ts: this.now(),
         schema_version: 3,
         event_type: "FAILED",
@@ -254,6 +266,7 @@ export class Engine {
       agent_name: input.ctx.agent_name,
       agent_version: input.ctx.agent_version,
       agent_intent: intent,
+      mcp_token_id: input.ctx.mcp_token_id,
       ts: this.now(),
       schema_version: 3,
       event_type: "EXECUTED",

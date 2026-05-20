@@ -4,6 +4,20 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-20
+
+### Added
+
+- **Per-token audit attribution via `X-Midplane-Token-Id`.** The cloud proxy injects an `X-Midplane-Token-Id` HTTP header on every forwarded MCP request, naming the cloud-side token that opened the session. The engine reads it once at the MCP `initialize` handshake, caches it on the session, and stamps `mcp_token_id` on every audit row emitted from that session — `ATTEMPTED`, `DECIDED`, `EXECUTED`, `FAILED`. The SQLite `audit_events` table grows a nullable `mcp_token_id TEXT` column (in-place `ALTER TABLE` migration on first 0.6.0 boot); existing rows read NULL. `GET /audit/since/<cursor>` returns the field under the same snake_case key in every row's JSON. `midplane audit tail | since` JSON output picks it up automatically. The hosted Postgres mirror schema (`audit_events_index`) and `PostgresAuditWriter` get the same column. The deny-webhook payload also carries `mcp_token_id`, additive-nullable (receivers that don't know the field ignore it; receivers that want per-token attribution start reading it).
+
+  Header is **header-only** — no fallback channels. Format is a 26-char Crockford base32 ULID (`^[0-9A-HJKMNP-TV-Z]{26}$`); a defensive 64-char cap is applied before any validation so a pathological header never reaches the regex. A present-but-malformed header is **ignored** (treated as no header); the request is never rejected — the engine remains tolerant of misbehaving clients. Stdio sessions, non-MCP callers (admin endpoints, audit pull), and `POLICY_RELOADED` rows always have `mcp_token_id = NULL`. The `audit.schema_version` does NOT bump (stays at `3`): the column is additive-nullable, same pattern as the `database` column added in 0.2.0 — v3 readers ignore the unknown column on the wider row, v3 writers fill it.
+
+### Why
+
+The "safer than direct DSN" trust posture for cloud Midplane requires audit rows to answer "which token ran this query?" customers issuing multiple named tokens per connection (e.g., one for CI, one for an interactive analyst) need to attribute every query to the token that authorized it, not just to the customer's MCP session. Pre-0.6.0 the engine had no channel from the cloud proxy to the audit row that carried token identity. This shipping the OSS half of a lockstep cloud/OSS change: the cloud-side `mcp_tokens` table and `audit_events_index.mcp_token_id` column ship in cloud PR1 (independent of this release); cloud PR2 then pins to this tag, the proxy starts injecting the header, and the indexer reads `mcp_token_id` from this PR's pull payload into the cloud audit table.
+
+The header-only, ignore-malformed contract was chosen over a multi-channel resolver (the 0.3.0 `agent_intent` design ripped out in 0.4.0) because the cloud proxy is the only legitimate source — there's no scenario where a self-host operator hand-injects token ids — and tolerating malformed input keeps the engine from being weaponized against its own clients by a misconfigured intermediary. The session-frozen capture at MCP `initialize` (rather than re-read per request) matches the proxy's per-token session affinity and prevents a mid-session attacker from re-stamping rows under a different token id.
+
 ## [0.5.0] — 2026-05-18
 
 ### Added

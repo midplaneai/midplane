@@ -53,10 +53,12 @@ export function loadDenyWebhookConfig(
 
 export interface DenyWebhookPayload {
   event: "denial";
-  // Bumped to 3 alongside the 0.4.0 audit-row schema change: per-call
-  // intent is now a single structured tool arg, so `intent_source` is
-  // gone from the wire format. Receivers pinned to schema 2 should
-  // either widen their handler or pin to <0.4.0.
+  // Stays at 3: the 0.6.0 `mcp_token_id` field is additive-nullable. v3
+  // receivers that don't know the field ignore it; receivers that want
+  // per-token attribution start reading it. The 0.4.0 schema_version=3
+  // bump captured the only wire-format-narrowing change. Receivers
+  // pinned to schema 2 should either widen their handler or pin to
+  // <0.4.0.
   schema_version: 3;
   ts: number;
   query_id: string;
@@ -65,6 +67,11 @@ export interface DenyWebhookPayload {
   agent_name: string | null;
   agent_version: string | null;
   agent_intent: string | null;
+  // Cloud-issued ULID for the MCP token that opened this session
+  // (`X-Midplane-Token-Id` header at MCP `initialize`). NULL when the
+  // header was absent or malformed and on non-MCP callers. Added 0.6.0;
+  // additive-nullable so the wire schema_version doesn't bump.
+  mcp_token_id: string | null;
   policy_rule: string;
   reason: string;
   statement_type: string | null;
@@ -190,6 +197,7 @@ export class DenyWebhookAuditWriter implements AuditWriter {
       agent_name: event.agent_name,
       agent_version: event.agent_version,
       agent_intent: event.agent_intent,
+      mcp_token_id: event.mcp_token_id,
       policy_rule: event.payload.policy_rule,
       reason: event.payload.reason,
       statement_type: event.payload.statement_type ?? null,
