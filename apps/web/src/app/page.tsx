@@ -366,15 +366,45 @@ export default async function Landing() {
                 <div className="pui-sec-title">Per-table overrides</div>
                 <div className="pui-row">
                   <span className="pui-key">feature_flags</span>
-                  <span className="pui-val pui-val-rw">read + write</span>
+                  <span className="pui-row-end">
+                    <span className="pui-val pui-val-rw">read + write</span>
+                    <button
+                      type="button"
+                      className="pui-x"
+                      aria-label="Remove"
+                      tabIndex={-1}
+                    >
+                      ×
+                    </button>
+                  </span>
                 </div>
                 <div className="pui-row">
                   <span className="pui-key">audit_log</span>
-                  <span className="pui-val pui-val-deny">deny</span>
+                  <span className="pui-row-end">
+                    <span className="pui-val pui-val-deny">deny</span>
+                    <button
+                      type="button"
+                      className="pui-x"
+                      aria-label="Remove"
+                      tabIndex={-1}
+                    >
+                      ×
+                    </button>
+                  </span>
                 </div>
                 <div className="pui-row">
                   <span className="pui-key">stripe.charges</span>
-                  <span className="pui-val pui-val-deny">deny</span>
+                  <span className="pui-row-end">
+                    <span className="pui-val pui-val-deny">deny</span>
+                    <button
+                      type="button"
+                      className="pui-x"
+                      aria-label="Remove"
+                      tabIndex={-1}
+                    >
+                      ×
+                    </button>
+                  </span>
                 </div>
                 <div className="pui-row pui-add">
                   <span className="pui-key">+ add table</span>
@@ -392,33 +422,25 @@ export default async function Landing() {
                   <span className="pui-key">Default column</span>
                   <span className="pui-val">tenant_id</span>
                 </div>
-                <div className="pui-row">
-                  <span className="pui-key">orders</span>
-                  <span className="pui-val">override · org_id</span>
-                </div>
-                <div className="pui-row">
-                  <span className="pui-key">geo_lookup</span>
-                  <span className="pui-val pui-val-locked">exempt</span>
-                </div>
-              </div>
-
-              <div className="pui-section">
-                <div className="pui-sec-title">Always denied</div>
-                <div className="pui-row">
-                  <span className="pui-key">Multi-statement</span>
-                  <span className="pui-val pui-val-locked">deny · locked</span>
-                </div>
-                <div className="pui-row">
-                  <span className="pui-key">DDL</span>
-                  <span className="pui-val pui-val-locked">deny · locked</span>
-                </div>
               </div>
 
               <div className="pui-foot">
-                <span>changes take effect immediately</span>
-                <span>no agent restart</span>
+                <span>Changes take effect immediately — no agent restart.</span>
+                <span className="pui-actions">
+                  <button type="button" className="pui-save" tabIndex={-1}>
+                    Save permissions
+                  </button>
+                </span>
               </div>
             </div>
+
+            {/* Engine invariants live OUTSIDE the editor — they're hardcoded
+                in the parser, not configurable rows. */}
+            <p className="pui-note">
+              <span className="pui-note-label">Engine invariants</span>
+              Multi-statement queries and DDL are always denied at the parser —
+              not configurable, not in the editor.
+            </p>
           </div>
         </section>
 
