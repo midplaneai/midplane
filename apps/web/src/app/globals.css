@@ -169,7 +169,7 @@
 .editorial-page .ba-card.bad .ba-tag .dot { background: var(--paper-deny); }
 .editorial-page .ba-card.good .ba-tag .dot { background: var(--paper-allow); }
 .editorial-page .ba-tag .ts { margin-left: auto; color: var(--ink-2); letter-spacing: 0.04em; text-transform: none; font-size: 12px; }
-.editorial-page .ba-claim { margin: 0; font-size: 30px; letter-spacing: -0.02em; line-height: 1.1; font-weight: 600; max-width: 18ch; color: var(--ink); }
+.editorial-page .ba-claim { margin: 0; font-size: 30px; letter-spacing: -0.02em; line-height: 1.1; font-weight: 600; max-width: 18ch; color: var(--ink); text-wrap: balance; }
 .editorial-page .ba-card.bad .ba-claim em { font-style: normal; color: var(--paper-deny); font-weight: 600; }
 .editorial-page .ba-card.good .ba-claim em { font-style: normal; color: var(--paper-allow); font-weight: 600; }
 .editorial-page .ba-query { margin: 0; font-family: var(--font-geist-mono); font-size: 13px; line-height: 1.55; color: var(--ink); background: var(--paper); border: 1px solid var(--line); padding: 14px 16px; white-space: pre; overflow-x: auto; }
