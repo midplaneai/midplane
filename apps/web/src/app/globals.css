@@ -157,8 +157,8 @@
 .editorial-page .eyebrow .sep { width: 24px; height: 1px; background: var(--line-2); }
 
 /* before/after hero (the default — matches the saved variant in the design) */
-.editorial-page .hero-ba { padding: 56px 0 32px; display: grid; gap: 40px; }
-.editorial-page .ba-h1 { font-size: 88px; line-height: 0.98; letter-spacing: -0.035em; margin: 0; font-weight: 600; text-wrap: balance; max-width: 18ch; }
+.editorial-page .hero-ba { padding: 40px 0 32px; display: grid; gap: 32px; }
+.editorial-page .ba-h1 { font-size: 88px; line-height: 0.92; letter-spacing: -0.035em; margin: 0; font-weight: 600; text-wrap: balance; max-width: 18ch; }
 .editorial-page .ba-h1 em { font-style: normal; color: var(--paper-deny); font-weight: 600; }
 .editorial-page .ba-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .editorial-page .ba-card { background: var(--paper-2); border: 1px solid var(--line); padding: 22px 24px 20px; display: flex; flex-direction: column; gap: 14px; }
