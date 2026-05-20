@@ -110,11 +110,18 @@ export default clerkMiddleware(async (auth, req) => {
   const claim = readRegionClaim(sessionClaims as never);
 
   if (claim === null) {
-    // Authenticated user with no region in session. Either pre-backfill, or
-    // they just signed up and JWT hasn't refreshed. Send them to the
-    // picker. Alert hook is here — emit once per request. The landing is
-    // exempt — signed-in users without a region claim can still see the
-    // marketing surface (e.g. to revisit pricing).
+    // Authenticated user with no region in session. Three cases:
+    //   1. Clerk session token doesn't expose org.publicMetadata (default),
+    //   2. JWT is cached and hasn't picked up a recent publicMetadata write,
+    //   3. User genuinely hasn't picked a region yet.
+    // We can't tell them apart from the JWT alone, so don't redirect — let
+    // the request through and rely on the downstream auth check:
+    // (app)/layout.tsx calls currentCustomer() (DB lookup on clerk_org_id);
+    // if no row exists, the layout itself redirects to /signup/region.
+    // Redirecting here would create a loop in cases 1/2 because the
+    // server action that just wrote the DB row + Clerk metadata can't
+    // refresh the JWT in the same redirect.
+    // Keep the warn — it's still useful as a JWT-staleness/config alert.
     console.warn(
       JSON.stringify({
         level: "warn",
@@ -125,9 +132,6 @@ export default clerkMiddleware(async (auth, req) => {
         path: url.pathname,
       }),
     );
-    if (url.pathname !== "/" && url.pathname !== "/signup/region") {
-      return NextResponse.redirect(new URL("/signup/region", req.url));
-    }
     return;
   }
 
