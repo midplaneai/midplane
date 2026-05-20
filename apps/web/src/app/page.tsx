@@ -226,28 +226,6 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* Why this exists — short pull right after the hero. */}
-        <section className="why-intro">
-          <div className="lbl">
-            <b>Why</b>this exists
-          </div>
-          <div>
-            <blockquote>
-              &ldquo;We&apos;ll <span className="strike">just be careful</span>{" "}
-              <em>build a&nbsp;guardrail.</em>&rdquo;
-            </blockquote>
-            <p className="by">
-              — What you say <b>after</b> the postmortem, not before. Every team
-              that lets agents touch production Postgres ends up having a version
-              of this conversation.{" "}
-              <b>
-                Midplane is the version where the conversation happens once,
-                ahead of time, in a policy your team reviews like code.
-              </b>
-            </p>
-          </div>
-        </section>
-
         {/* §01 — How it works */}
         <section className="sec" id="how">
           <div className="sec-top">
@@ -550,7 +528,7 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §04 — Teams */}
+        {/* §04 — Teams (compressed strip) */}
         <section className="sec" id="teams">
           <div className="sec-top">
             <div className="sec-num">
@@ -558,51 +536,29 @@ export default async function Landing() {
             </div>
             <div>
               <h2 className="sec-h">
-                Set it up once. <em>Roll it out to everyone.</em>
+                A workspace per organization. <em>Email or SSO.</em>
               </h2>
               <p className="sec-sub">
-                Your team lives behind a Clerk organization. One shared MCP
-                URL, one policy, one audit log — and every change to the policy
-                is stamped with the engineer who made it.
+                Each workspace is a Clerk organization. Members sign in by
+                email or — on the Team tier — SAML. Per-engineer query
+                attribution is on the roadmap; policy changes are already
+                stamped to the engineer who made them.
               </p>
             </div>
           </div>
-          <div className="teamcard">
-            <h3>acme · production</h3>
-            <p>
-              Invite by email or sign in with SSO. Admins edit policy and
-              rotate the MCP URL; members read the audit log.
-            </p>
-            <div className="members">
-              <div className="member">
-                <span className="who">lena@acme.dev</span>
-                <span className="tok">admin</span>
-                <span className="scope">
-                  <b>Google</b> SSO
-                </span>
-                <span className="qs">joined Mar 12</span>
-              </div>
-              <div className="member">
-                <span className="who">marco@acme.dev</span>
-                <span className="tok">member</span>
-                <span className="scope">
-                  <b>Google</b> SSO
-                </span>
-                <span className="qs">joined Apr 02</span>
-              </div>
-              <div className="member">
-                <span className="who">priya@acme.dev</span>
-                <span className="tok">admin</span>
-                <span className="scope">
-                  <b>Okta</b> SAML
-                </span>
-                <span className="qs">joined Apr 09</span>
-              </div>
+          <div className="teams-strip">
+            <div className="item">
+              <b>One shared MCP URL</b>
+              Hand it to every engineer on the team. One policy, one audit log.
             </div>
-            <div className="invite">
-              <span className="pill">+ invite by email</span>
-              <span className="pill">SSO / SAML on the Team tier</span>
-              <span className="pill">policy edits actor-stamped</span>
+            <div className="item">
+              <b>Email + SSO / SAML</b>
+              Email invites on every tier. Google + Okta SAML at the Team tier.
+            </div>
+            <div className="item">
+              <b>Policy edits actor-stamped</b>
+              Every change to table access or tenant scope records the engineer
+              who made it.
             </div>
           </div>
         </section>
