@@ -24,6 +24,7 @@ import {
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
 import { normalizeName } from "./connection-name.ts";
+import { tokenEnvFromConfig } from "./token-env.ts";
 import { createToken } from "./tokens.ts";
 
 export {
@@ -94,17 +95,6 @@ export function isValidDatabaseName(s: unknown): s is string {
 }
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
-
-/** Pick the prefix env family from the deploy tier. NODE_ENV=production
- *  → 'live' so a leaked production token is identifiable as such by
- *  scanners (and is visibly distinct from a dev token in the dashboard).
- *  Everything else → 'test'. Override via MIDPLANE_TOKEN_ENV when a
- *  staging deploy wants 'live' prefixes or a prod canary wants 'test'. */
-function tokenEnvFromConfig(env: NodeJS.ProcessEnv): "live" | "test" {
-  const override = env.MIDPLANE_TOKEN_ENV;
-  if (override === "live" || override === "test") return override;
-  return env.NODE_ENV === "production" ? "live" : "test";
-}
 
 // Shared create-connection path used by both the Server Action behind the
 // paste-DSN form and the JSON POST /api/connections route. Encrypts the

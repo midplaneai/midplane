@@ -3,27 +3,26 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { ShowOnceUrl } from "@/components/show-once-url";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
 import { getConnectionWithMainDatabase } from "@/lib/connections";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
-import { ShowOnceUrl } from "./show-once-url";
+import { consumeShowOnceCookie } from "./consume-action";
 
-// Post-create success page (PR2 of mcp_url_auth_security — minimal stub;
-// PR3 owns the polished UX). The default token's plaintext URL is
-// delivered via an httpOnly cookie set by /connections/new's server
-// action, displayed ONCE by the ShowOnceUrl client island. The island
-// fires a Server Action on mount to delete the cookie — Server
-// Components can read cookies but cannot mutate them, so the delete
-// MUST happen behind a Server Action / Route Handler boundary.
+// Post-create success page. The default token's plaintext URL arrives
+// via an httpOnly cookie set by the /connections/new server action
+// (cookie crosses the redirect boundary; the React state in the calling
+// component is gone by the time we render). The ShowOnceUrl client
+// island fires a Server Action on mount to delete the cookie — Server
+// Components can read but not mutate cookies in Next 15.
 //
-// On reload the cookie is gone, so we render the "already shown"
-// fallback that explains the URL is no longer retrievable and points
-// to the (future) token list. A reload before the consume action
-// completes is still safe: the URL is rendered for the second time,
-// but the cookie has a 5-minute TTL so the worst case is bounded.
+// On reload (or any second render) the cookie is gone, so we render the
+// "already shown" fallback that explains the URL is no longer
+// retrievable and points back to the connection page where the token
+// list lives.
 
 export default async function ConnectionCreated({
   params,
@@ -38,10 +37,10 @@ export default async function ConnectionCreated({
   if (!result) redirect("/dashboard");
   const { connection } = result;
 
-  // Server Components can READ cookies safely; mutation lives in the
-  // consume-action.ts Server Action invoked by ShowOnceUrl on mount.
   const cookieStore = await cookies();
   const mcpUrl = cookieStore.get(SHOW_ONCE_COOKIE)?.value ?? null;
+  const connectionLabel = connection.name ?? connection.id.slice(0, 12);
+  const connectionHref = `/connections/${connection.id}`;
 
   return (
     <>
@@ -50,38 +49,43 @@ export default async function ConnectionCreated({
           <b className="font-medium text-foreground">Connections</b>
         </Link>
         <span className="mx-2 text-subtle">/</span>
-        <span className="font-mono">
-          {connection.name ?? connection.id.slice(0, 12)}
-        </span>
+        <Link href={connectionHref} className="font-mono">
+          {connectionLabel}
+        </Link>
         <span className="mx-2 text-subtle">/</span>Connected
       </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[760px]">
           <PageHeader
             title="Connection ready"
-            subtitle="Point your agent at the URL below. Midplane proxies its calls through your access policy."
+            subtitle="One default token has been minted. Point your agent at the URL below; Midplane proxies its calls through your access policy."
           />
 
           {mcpUrl ? (
-            <section className="space-y-4 rounded-lg border border-[hsl(var(--warn)/0.4)] bg-card p-6">
-              <div className="space-y-1">
-                <h2 className="text-sm font-medium text-foreground">
-                  Copy this URL now
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  This is the only time you&apos;ll see the full URL. We
-                  store only a hashed digest; once you leave this page, the
-                  plaintext is gone. Create a new token from the dashboard
-                  if you lose it.
-                </p>
-              </div>
-              <ShowOnceUrl mcpUrl={mcpUrl} />
+            <div className="space-y-4">
+              <section className="space-y-4 rounded-lg border border-[hsl(var(--warn)/0.4)] bg-card p-6">
+                <div className="space-y-1">
+                  <h2 className="text-sm font-medium text-foreground">
+                    Copy this URL now
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    This is the only time you&apos;ll see the full URL. We
+                    store only a hashed digest; once you leave this page the
+                    plaintext is gone. Lost it? Revoke the token and mint a
+                    new one from the connection page.
+                  </p>
+                </div>
+                <ShowOnceUrl mcpUrl={mcpUrl} onMount={consumeShowOnceCookie} />
+              </section>
+
+              <WhatsNext connectionHref={connectionHref} />
+
               <div className="pt-2">
-                <Link href="/dashboard">
-                  <Button size="sm">Done — open dashboard</Button>
+                <Link href={connectionHref}>
+                  <Button size="sm">Done — manage tokens</Button>
                 </Link>
               </div>
-            </section>
+            </div>
           ) : (
             <section className="space-y-3 rounded-lg border border-border bg-card p-6">
               <h2 className="text-sm font-medium text-foreground">
@@ -90,12 +94,12 @@ export default async function ConnectionCreated({
               <p className="text-xs text-muted-foreground">
                 The default token&apos;s URL was displayed once when this
                 connection was created. We don&apos;t persist the plaintext;
-                create a new token from the dashboard to set up an
+                mint a new token from the connection page to set up an
                 additional agent.
               </p>
               <div className="pt-2">
-                <Link href="/dashboard">
-                  <Button size="sm">Open dashboard</Button>
+                <Link href={connectionHref}>
+                  <Button size="sm">Open connection</Button>
                 </Link>
               </div>
             </section>
@@ -103,5 +107,42 @@ export default async function ConnectionCreated({
         </div>
       </PageContainer>
     </>
+  );
+}
+
+function WhatsNext({ connectionHref }: { connectionHref: string }) {
+  return (
+    <section className="space-y-3 rounded-lg border border-border bg-card p-6">
+      <h2 className="text-sm font-medium text-foreground">What&apos;s next</h2>
+      <ol className="space-y-2 text-xs text-muted-foreground">
+        <li>
+          <span className="font-medium text-foreground">1. Add the URL to your agent.</span>{" "}
+          In Cursor, open <span className="font-mono text-foreground">Settings → MCP</span>{" "}
+          and paste the URL as a new server. In Claude Code, add it to{" "}
+          <span className="font-mono text-foreground">.claude/mcp.json</span>{" "}
+          under <span className="font-mono text-foreground">servers</span>.
+        </li>
+        <li>
+          <span className="font-medium text-foreground">2. Try a query.</span>{" "}
+          Ask your agent to list tables. The first request boots the
+          Midplane engine in this connection&apos;s region; subsequent
+          requests reuse it.
+        </li>
+        <li>
+          <span className="font-medium text-foreground">3. Watch the audit log.</span>{" "}
+          Every query lands in the dashboard with its policy decision and
+          which token issued it.
+        </li>
+      </ol>
+      <p className="pt-1 text-[11px] text-subtle">
+        Need more tokens (separate laptops, CI, mobile)?{" "}
+        <Link
+          href={connectionHref}
+          className="text-[hsl(var(--brand))] underline underline-offset-2"
+        >
+          Mint another from the connection page →
+        </Link>
+      </p>
+    </section>
   );
 }
