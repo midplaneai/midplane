@@ -69,7 +69,7 @@ export default async function Landing() {
           </div>
 
           <h1 className="pri-h1">
-            Production access for <em>your AI agents.</em>
+            Production Postgres access for <em>your AI agents.</em>
           </h1>
 
           <div className="ba-foot">
