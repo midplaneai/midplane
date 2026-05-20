@@ -412,9 +412,18 @@
 .editorial-page footer.efoot .brand .mark::before, .editorial-page footer.efoot .brand .mark::after { background: var(--ink); }
 
 /* responsive — collapse multi-column blocks under 960px */
+/* Touch targets: nav/topright/footer/anchor links need >= 44px on touch
+ * viewports per the iOS HIG and Material guidelines. On desktop the
+ * smaller targets are fine (cursor precision), so we only enforce the
+ * larger hit area at touch sizes. */
 @media (max-width: 960px) {
   .editorial-page .page { padding: 0 24px; }
   .editorial-page .nav { display: none; }
+  .editorial-page .topright { gap: 12px; row-gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .editorial-page .topright a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 4px; }
+  .editorial-page .topright a.ebtn { padding: 11px 18px; }
+  .editorial-page footer.efoot a { min-height: 44px; display: inline-flex; align-items: center; }
+  .editorial-page footer.efoot h5 + a { margin-top: -5px; }
   .editorial-page .ba-h1 { font-size: 56px; }
   .editorial-page .ba-pair { grid-template-columns: 1fr; }
   .editorial-page .ba-foot { grid-template-columns: 1fr; gap: 32px; }
