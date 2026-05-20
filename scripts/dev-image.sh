@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Build the OSS engine image locally so the router has something to spawn.
-# midplane/midplane:0.5.0 is not yet pushed to Docker Hub; until it is, every
-# dev box needs to build from a local OSS clone. Override path with OSS_REPO.
+# Use this when developing against an unreleased OSS branch or when the
+# published `midplane/midplane:<tag>` isn't yet on Docker Hub. Override the
+# clone path with OSS_REPO; override the tag with MIDPLANE_OSS_IMAGE.
 
 set -euo pipefail
 
 OSS_REPO="${OSS_REPO:-/Users/dustinlange/dev/midplane}"
-IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.5.0}"
+IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.6.0}"
 
 if [[ ! -d "$OSS_REPO" ]]; then
   echo "OSS repo not found at $OSS_REPO"

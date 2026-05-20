@@ -31,7 +31,7 @@ describe("DockerSpawner", () => {
     ) as unknown as typeof fetch;
 
     const spawner = new DockerSpawner({
-      image: "midplane/midplane:0.5.0",
+      image: "midplane/midplane:0.6.0",
       exec,
       fetch: fetchFn,
       bootTimeoutMs: 1000,
@@ -56,7 +56,7 @@ describe("DockerSpawner", () => {
     expect(exec).toHaveBeenCalled();
 
     const runArgs = exec.mock.calls[0]?.[1] ?? [];
-    expect(runArgs).toContain("midplane/midplane:0.5.0");
+    expect(runArgs).toContain("midplane/midplane:0.6.0");
     // Multi-DB: DSN is injected as a per-DB env var (MIDPLANE_DSN_<id>),
     // never as a top-level DATABASE_URL — the YAML's `url:` references
     // the env via ${...} interpolation.

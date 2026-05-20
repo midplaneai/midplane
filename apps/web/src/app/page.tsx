@@ -754,7 +754,7 @@ export default async function Landing() {
                 github · <b>midplaneai/midplane</b>
               </span>
               <div className="footnote">
-                <span>docker pull midplane/midplane:0.5.0</span>
+                <span>docker pull midplane/midplane:0.6.0</span>
                 <span>install &lt; 30s</span>
               </div>
             </div>
