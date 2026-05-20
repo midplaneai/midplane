@@ -733,7 +733,7 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §07 — Hosted / self-host */}
+        {/* §06 — Hosted / self-host */}
         <section className="sec" id="hosted">
           <div className="sec-top">
             <div className="sec-num">
@@ -741,22 +741,22 @@ export default async function Landing() {
             </div>
             <div>
               <h2 className="sec-h">
-                Cloud, by default. <em>Self-host if you have to.</em>
+                Same engine. <em>Two ways to run it.</em>
               </h2>
               <p className="sec-sub">
-                Most teams start on hosted and stay there. The engine is open
-                source under MIT and you can run the container yourself — worth
-                it if your security team requires on-prem, but you&apos;re
-                taking on patching, audit storage, region handling, and HA in
-                exchange.
+                Midplane is MIT-licensed open source. Run it on our hosted
+                cloud or run the container yourself. The policy engine, audit
+                format, and configuration files are identical either way — you
+                can start hosted and move to self-host (or the reverse) without
+                rewriting anything.
               </p>
             </div>
           </div>
           <div className="parity">
             <div>
               <div className="tag">
-                <span className="d allow" aria-hidden />
-                <span>Hosted · EU + US · Recommended</span>
+                <span className="d" aria-hidden />
+                <span>Hosted · EU + US</span>
               </div>
               <h3>We host it.</h3>
               <p>
@@ -787,7 +787,7 @@ export default async function Landing() {
                 </li>
               </ul>
               <span className="image-tag mono">
-                fly · <b>eu (fra) + us (iad)</b>
+                fly · <b>eu + us</b>
               </span>
               <div className="footnote">
                 <span>setup &lt; 60s</span>
@@ -797,27 +797,27 @@ export default async function Landing() {
             <div>
               <div className="tag">
                 <span className="d" aria-hidden />
-                <span>Self-host · MIT · Alternative</span>
+                <span>Self-host · MIT</span>
               </div>
               <h3>You host it.</h3>
               <p>
-                Same engine, same policy, same audit format. Worth it if your
-                security team requires on-prem, regulated air-gapped, or you
-                already run a serious Postgres platform.
+                Run the same container in your own infrastructure. Common
+                reasons: on-prem requirement, air-gapped network, existing
+                Postgres platform you want to extend.
               </p>
               <ul className="host-list">
                 <li>
                   <span className="mk">○</span>
                   <span>
-                    You own patching, upgrades, audit storage, HA, and region
-                    handling.
+                    You handle patching, upgrades, audit storage, HA, and
+                    region routing.
                   </span>
                 </li>
                 <li>
                   <span className="mk">○</span>
                   <span>
-                    Open source, MIT licensed. The engine is identical to the
-                    one we run.
+                    Open source, MIT licensed. Same engine, same policy
+                    format, same audit shape as the hosted plane.
                   </span>
                 </li>
               </ul>
