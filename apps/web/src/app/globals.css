@@ -100,6 +100,11 @@
  * dark dashboard — the dark hues read muddy on cream.
  * =========================================================================== */
 .editorial-page {
+  /* Safety net against any narrow horizontal overflow (long mono spans,
+   * dense grid templates) on small viewports. Internal scroll on
+   * specific elements (.at-table, .ba-query) still works because they
+   * have their own overflow-x: auto. */
+  overflow-x: clip;
   --paper: #f3efe7;
   --paper-2: #eae5d9;
   --paper-3: #e0dccf;
@@ -295,7 +300,18 @@
 .editorial-page .audit-card .head { padding: 18px 24px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; }
 .editorial-page .audit-card .head h4 { margin: 0; font-size: 17px; font-weight: 600; }
 .editorial-page .audit-card .head .meta { margin-left: auto; font-family: var(--font-geist-mono); font-size: 12px; color: var(--ink-3); }
-.editorial-page .at-table { font-family: var(--font-geist-mono); font-size: 13px; }
+.editorial-page .at-table { font-family: var(--font-geist-mono); font-size: 13px; overflow-x: auto; }
+/* Grid items default to min-width: auto, which pulls min-content of long
+ * mono spans (EncryptionContext={…}, SQL snippets) into the column track.
+ * On narrow viewports that pushes the page document past the viewport.
+ * Override to 0 so the track resolves to the container width; the inner
+ * <pre>/.mono scrolls or wraps within. */
+.editorial-page .ba-pair > * { min-width: 0; }
+.editorial-page .iso > *,
+.editorial-page .iso-diagram .lane > *,
+.editorial-page .iso-diagram .box { min-width: 0; }
+.editorial-page .iso-copy { overflow-wrap: anywhere; }
+.editorial-page .iso-diagram .box { flex-wrap: wrap; }
 .editorial-page .at-table .hd, .editorial-page .at-table .tr { display: grid; grid-template-columns: 100px 70px 1fr 160px 60px; align-items: center; padding: 14px 24px; gap: 14px; border-bottom: 1px solid var(--line); }
 .editorial-page .at-table .hd { color: var(--ink-3); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; background: var(--paper-3); }
 .editorial-page .at-table .tr:last-child { border-bottom: 0; }
