@@ -640,7 +640,7 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §06 — Isolation */}
+        {/* §05 — Isolation */}
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
@@ -648,36 +648,42 @@ export default async function Landing() {
             </div>
             <div>
               <h2 className="sec-h">
-                Your data stays in your database. <em>Always.</em>
+                What we store. <em>What we don&apos;t.</em>
               </h2>
               <p className="sec-sub">
-                Midplane brokers the query and writes the audit row, then
-                forwards results to the agent without inspecting or persisting
-                them. The little state we do hold — connection metadata,
-                policy, audit — is region-pinned and per-workspace-encrypted,
-                so a compromise in one region can&apos;t reach into another.
+                Midplane brokers the query and writes an audit row. The query
+                results forward straight to the agent — we don&apos;t inspect
+                them, we don&apos;t persist them. The little we do hold —
+                connection credentials, policy, audit log — is encrypted per
+                workspace and pinned to the region you pick at signup.
               </p>
             </div>
           </div>
           <div className="iso">
             <div className="iso-copy">
               <h3>What lives where.</h3>
-              <p>The data plane is your Postgres. We are a control plane in front of it.</p>
+              <p>The data plane is your Postgres. We&apos;re a control plane in front of it.</p>
               <ul>
                 <li>
                   <span>
-                    <b>Region-pinned by default.</b> Your workspace&apos;s
-                    connection metadata, policy, and audit log live in{" "}
-                    <span className="mono">eu</span> (Frankfurt) — or{" "}
-                    <span className="mono">us</span> (Dulles). They never cross.
+                    <b>Query results pass through, unstored.</b> We see the SQL
+                    and the decision (allow / deny), we forward the rows. The
+                    rows themselves don&apos;t sit in our system.
                   </span>
                 </li>
                 <li>
                   <span>
-                    <b>Per-workspace encryption.</b> Your DSN is
-                    envelope-encrypted with an AWS KMS key bound to{" "}
-                    <span className="mono">EncryptionContext={"{"}workspace_id{"}"}</span>.
-                    Another workspace&apos;s key can&apos;t decrypt yours.
+                    <b>Per-workspace encryption.</b> Connection credentials,
+                    policy, and audit log are envelope-encrypted with a KMS
+                    key bound to your workspace. We can&apos;t decrypt another
+                    workspace&apos;s data with yours.
+                  </span>
+                </li>
+                <li>
+                  <span>
+                    <b>Region-pinned.</b> Pick <span className="mono">eu</span>{" "}
+                    or <span className="mono">us</span> at signup; the control
+                    plane stays there.
                   </span>
                 </li>
               </ul>
@@ -699,7 +705,7 @@ export default async function Landing() {
               <div className="lane">
                 <div className="lbl">
                   MIDPLANE
-                  <b>eu (Frankfurt) or us (Dulles)</b>
+                  <b>eu or us · your pick</b>
                 </div>
                 <div className="box midplane">
                   <span>
@@ -718,14 +724,10 @@ export default async function Landing() {
                 </div>
                 <div className="box your">
                   <span>
-                    <b>your data</b> · rows never leave
+                    <b>your data</b> · query results forward through us
                   </span>
-                  <span className="tag">stays put</span>
+                  <span className="tag">unstored</span>
                 </div>
-              </div>
-              <div className="barrier">
-                <span>EU plane ↔ US plane</span>
-                <b>never crosses</b>
               </div>
             </div>
           </div>
