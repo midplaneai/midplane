@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
-    "./policy": "./src/policy.ts"
+    "./policy": "./src/policy.ts",
+    "./token-format": "./src/token-format.ts"
   },
   "scripts": {
     "generate": "drizzle-kit generate",
