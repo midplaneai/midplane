@@ -143,8 +143,8 @@
 .editorial-page .nav { display: flex; gap: 28px; margin-left: 48px; font-size: 14px; color: var(--ink-2); }
 .editorial-page .nav a:hover { color: var(--ink); }
 .editorial-page .topright { margin-left: auto; display: flex; align-items: center; gap: 16px; font-size: 14px; }
-.editorial-page .topright a { color: var(--ink-2); }
-.editorial-page .topright a:hover { color: var(--ink); }
+.editorial-page .topright a:not(.ebtn) { color: var(--ink-2); }
+.editorial-page .topright a:not(.ebtn):hover { color: var(--ink); }
 .editorial-page .ebtn { display: inline-flex; align-items: center; gap: 10px; padding: 11px 18px; border-radius: 6px; font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer; font-family: inherit; }
 .editorial-page .ebtn.fill { background: var(--ink); color: var(--paper); }
 .editorial-page .ebtn.fill:hover { background: #000; }
