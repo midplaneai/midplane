@@ -66,8 +66,12 @@ export default clerkMiddleware(async (auth, req) => {
   const appRegion = thisAppRegion();
 
   // Apex unauth: let /signup/region render; everything else redirects to
-  // /signup/region so the user lands on the picker.
+  // /signup/region so the user lands on the picker. The landing (/) is
+  // exempt from every apex redirect — it has no region-specific content
+  // and signed-in users may revisit it to share with teammates or
+  // re-read the pricing table.
   if (host === APEX_HOST) {
+    if (url.pathname === "/") return;
     const { userId, sessionClaims } = await auth();
     if (!userId) {
       // Unauth: only /signup/region renders; other paths bounce to it.
@@ -108,7 +112,9 @@ export default clerkMiddleware(async (auth, req) => {
   if (claim === null) {
     // Authenticated user with no region in session. Either pre-backfill, or
     // they just signed up and JWT hasn't refreshed. Send them to the
-    // picker. Alert hook is here — emit once per request.
+    // picker. Alert hook is here — emit once per request. The landing is
+    // exempt — signed-in users without a region claim can still see the
+    // marketing surface (e.g. to revisit pricing).
     console.warn(
       JSON.stringify({
         level: "warn",
@@ -119,14 +125,17 @@ export default clerkMiddleware(async (auth, req) => {
         path: url.pathname,
       }),
     );
-    if (url.pathname !== "/signup/region") {
+    if (url.pathname !== "/" && url.pathname !== "/signup/region") {
       return NextResponse.redirect(new URL("/signup/region", req.url));
     }
     return;
   }
 
   if (claim !== appRegion) {
-    // Cross-region. Log always; redirect only when enforcement is on.
+    // Cross-region. Log always; redirect only when enforcement is on. The
+    // landing is exempt — it has no region-specific content, so a US user
+    // hitting eu.app.midplane.ai/ should see the marketing page rather
+    // than getting bounced across regions.
     console.warn(
       JSON.stringify({
         level: "warn",
@@ -140,7 +149,7 @@ export default clerkMiddleware(async (auth, req) => {
         enforced: enforceEnabled(),
       }),
     );
-    if (enforceEnabled()) {
+    if (enforceEnabled() && url.pathname !== "/") {
       const target = `https://${REGION_HOST[claim]}${url.pathname}${url.search}`;
       return NextResponse.redirect(target);
     }
