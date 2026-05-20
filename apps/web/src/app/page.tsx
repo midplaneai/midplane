@@ -41,7 +41,6 @@ export default async function Landing() {
             <a href="#how">Product</a>
             <a href="#policy">Policy</a>
             <a href="#audit">Audit</a>
-            <a href="#teams">Teams</a>
             <a href="#hosted">Hosted</a>
             <a href="#pricing">Pricing</a>
             <a href="#quickstart">Quickstart</a>
@@ -550,57 +549,23 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §04 — Teams (compressed strip) */}
-        <section className="sec" id="teams">
-          <div className="sec-top">
-            <div className="sec-num">
-              <b>04</b>Teams
-            </div>
-            <div>
-              <h2 className="sec-h">
-                A workspace per organization. <em>Email or SSO.</em>
-              </h2>
-              <p className="sec-sub">
-                Each workspace is a Clerk organization. Members sign in by
-                email or — on the Team tier — SAML. Per-engineer query
-                attribution is on the roadmap; policy changes are already
-                stamped to the engineer who made them.
-              </p>
-            </div>
-          </div>
-          <div className="teams-strip">
-            <div className="item">
-              <b>One shared MCP URL</b>
-              Hand it to every engineer on the team. One policy, one audit log.
-            </div>
-            <div className="item">
-              <b>Email + SSO / SAML</b>
-              Email invites on every tier. Google + Okta SAML at the Team tier.
-            </div>
-            <div className="item">
-              <b>Policy edits actor-stamped</b>
-              Every change to table access or tenant scope records the engineer
-              who made it.
-            </div>
-          </div>
-        </section>
-
-        {/* §05 — Audit */}
+        {/* §04 — Audit */}
         <section className="sec" id="audit">
           <div className="sec-top">
             <div className="sec-num">
-              <b>05</b>Audit
+              <b>04</b>Audit
             </div>
             <div>
               <h2 className="sec-h">
                 Every query. Every decision. <em>Filterable.</em>
               </h2>
               <p className="sec-sub">
-                Append-only. Filterable by agent, table, tenant, decision. The
-                MCP client and the agent&apos;s declared intent are stamped on
-                every row — so you can ask &ldquo;what was{" "}
-                <span className="mono">claude-code</span> trying to do?&rdquo;
-                six months later.
+                Append-only. Filterable by agent, table, tenant, decision.
+                Every row records the MCP client and the agent&apos;s declared
+                intent — and for changes you make in the dashboard, the
+                engineer who made them. So six months later you can ask
+                &ldquo;what was <span className="mono">claude-code</span>{" "}
+                trying to do?&rdquo; or &ldquo;who flipped that flag?&rdquo;
               </p>
             </div>
           </div>
@@ -679,7 +644,7 @@ export default async function Landing() {
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
-              <b>06</b>Isolation
+              <b>05</b>Isolation
             </div>
             <div>
               <h2 className="sec-h">
@@ -770,7 +735,7 @@ export default async function Landing() {
         <section className="sec" id="hosted">
           <div className="sec-top">
             <div className="sec-num">
-              <b>07</b>Hosted
+              <b>06</b>Hosted
             </div>
             <div>
               <h2 className="sec-h">
@@ -869,7 +834,7 @@ export default async function Landing() {
         <section className="sec" id="pricing">
           <div className="sec-top">
             <div className="sec-num">
-              <b>08</b>Pricing
+              <b>07</b>Pricing
             </div>
             <div>
               <h2 className="sec-h">
@@ -1014,7 +979,7 @@ export default async function Landing() {
         <section className="sec" id="quickstart">
           <div className="sec-top">
             <div className="sec-num">
-              <b>09</b>Quickstart
+              <b>08</b>Quickstart
             </div>
             <div>
               <h2 className="sec-h">
@@ -1135,7 +1100,6 @@ export default async function Landing() {
             <h5>Product</h5>
             <a href="#hosted">Hosted</a>
             <a href="#hosted">Self-host</a>
-            <a href="#teams">Teams</a>
             <a href="#audit">Audit</a>
             <a href="#policy">Policy</a>
             <a href="#pricing">Pricing</a>
