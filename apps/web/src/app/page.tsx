@@ -755,8 +755,8 @@ export default async function Landing() {
               </div>
               <h3>We host it.</h3>
               <p>
-                Sign up, paste your DSNs, invite your team, hand each engineer
-                their MCP URL. You get back hours of platform work.
+                Sign up, paste your DSNs, drop the MCP URL into your agent.
+                You get back hours of platform work.
               </p>
               <ul className="cloud-list">
                 <li>
@@ -835,12 +835,12 @@ export default async function Landing() {
             </div>
             <div>
               <h2 className="sec-h">
-                From signup to first allowed query: <em>~60 seconds.</em>
+                From signup to first allowed query: <em>~45 seconds.</em>
               </h2>
               <p className="sec-sub">
-                Five steps, one MCP URL, the client your team already uses.
-                Cursor, Claude Code and Claude Desktop are verified — every
-                other MCP client we&apos;ve tested works too.
+                Four steps, one MCP URL, the client you already use. Cursor,
+                Claude Code and Claude Desktop are verified — every other MCP
+                client we&apos;ve tested works too.
               </p>
             </div>
           </div>
@@ -856,14 +856,10 @@ export default async function Landing() {
             </div>
             <div className="t-step">
               <span className="t-time">00:30</span>
-              <span className="t-act">Invite your team</span>
-            </div>
-            <div className="t-step">
-              <span className="t-time">00:45</span>
               <span className="t-act">Drop the MCP URL into your client</span>
             </div>
             <div className="t-step done">
-              <span className="t-time">01:00</span>
+              <span className="t-time">00:45</span>
               <span className="t-act">First query, logged</span>
             </div>
           </div>

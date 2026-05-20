@@ -369,7 +369,7 @@
 .editorial-page .parity ul.host-list li .mk { font-family: var(--font-geist-mono); color: var(--ink-3); }
 
 /* quickstart timeline */
-.editorial-page .timeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; border: 1px solid var(--line); background: var(--paper-2); margin-bottom: 32px; }
+.editorial-page .timeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--line); background: var(--paper-2); margin-bottom: 32px; }
 .editorial-page .timeline .t-step { padding: 18px 18px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; position: relative; }
 .editorial-page .timeline .t-step:last-child { border-right: 0; }
 .editorial-page .timeline .t-time { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.08em; color: var(--ink-3); text-transform: uppercase; }
