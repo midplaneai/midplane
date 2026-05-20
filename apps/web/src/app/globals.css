@@ -156,7 +156,14 @@
 .editorial-page .eyebrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--paper-allow); }
 .editorial-page .eyebrow .sep { width: 24px; height: 1px; background: var(--line-2); }
 
-/* before/after hero (the default — matches the saved variant in the design) */
+/* enablement hero — productivity-led, no BA pair (which now lives in §01) */
+.editorial-page .hero-pri { padding: 72px 0 56px; display: grid; gap: 48px; }
+.editorial-page .pri-h1 { font-size: 96px; line-height: 0.94; letter-spacing: -0.04em; margin: 0; font-weight: 700; text-wrap: balance; max-width: 16ch; }
+.editorial-page .pri-h1 em { font-style: normal; color: var(--accent-blue); font-weight: 700; }
+.editorial-page .lede { font-size: 21px; line-height: 1.45; color: var(--ink-2); max-width: 46ch; text-wrap: pretty; font-weight: 400; margin: 0 0 28px; }
+.editorial-page .lede strong { color: var(--ink); font-weight: 600; }
+
+/* before/after pair — was the hero, now lives inside §01 "What changes" */
 .editorial-page .hero-ba { padding: 40px 0 32px; display: grid; gap: 32px; }
 .editorial-page .ba-h1 { font-size: 88px; line-height: 0.92; letter-spacing: -0.035em; margin: 0; font-weight: 600; text-wrap: balance; max-width: 18ch; }
 .editorial-page .ba-h1 em { font-style: normal; color: var(--paper-deny); font-weight: 600; }
@@ -476,6 +483,7 @@
   .editorial-page .topright a.ebtn { padding: 11px 18px; }
   .editorial-page footer.efoot a { min-height: 44px; display: inline-flex; align-items: center; }
   .editorial-page footer.efoot h5 + a { margin-top: -5px; }
+  .editorial-page .pri-h1 { font-size: 52px; }
   .editorial-page .ba-h1 { font-size: 56px; }
   .editorial-page .ba-pair { grid-template-columns: 1fr; }
   .editorial-page .ba-foot { grid-template-columns: 1fr; gap: 32px; }

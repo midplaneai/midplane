@@ -57,8 +57,10 @@ export default async function Landing() {
           </div>
         </header>
 
-        {/* Before/After hero — same query, two endings. */}
-        <section className="hero-ba">
+        {/* Enablement hero — productivity promise. The BA pair (postmortem
+            story) was here; it's now §01 "What changes" as a demonstration
+            rather than the lead. */}
+        <section className="hero-pri">
           <div className="eyebrow">
             <span className="dot" aria-hidden />
             <span>Access layer for your existing Postgres</span>
@@ -66,77 +68,21 @@ export default async function Landing() {
             <span>v0.5.0 · EU + US</span>
           </div>
 
-          <h1 className="ba-h1">
-            Same agent.
+          <h1 className="pri-h1">
+            Cursor, Claude Code,
             <br />
-            Same Postgres.
-            <br />
-            <em>One ends in a postmortem.</em>
+            <em>on your real database.</em>
           </h1>
-
-          <div className="ba-pair">
-            <article className="ba-card bad">
-              <div className="ba-tag">
-                <span className="dot" aria-hidden />
-                <span>Without midplane</span>
-                <span className="ts mono">tue 09:17:34</span>
-              </div>
-              <h2 className="ba-claim">
-                Production gone in <em>nine seconds.</em>
-              </h2>
-              <pre className="ba-query">
-                <span className="com"># cursor agent, cleaning up stale rows</span>
-                {"\n"}WITH cleanup AS ({"\n"}{"  "}DELETE FROM users{"\n"}{"  "}RETURNING *{"\n"}){"\n"}SELECT count(*) FROM cleanup;
-              </pre>
-              <div className="ba-arrow">runs against your Postgres</div>
-              <div className="ba-outcome bad">
-                <div className="o-head">
-                  <span>postgres · prod</span>
-                  <span>0.9 s</span>
-                </div>
-                users · <b className="d">41,802 rows deleted</b>
-                <br />
-                production: <b className="d">gone</b>
-              </div>
-              <div className="ba-epilogue">
-                09:18 — <b>#incidents · sev1</b> · &ldquo;what happened?&rdquo;
-              </div>
-            </article>
-
-            <article className="ba-card good">
-              <div className="ba-tag">
-                <span className="dot" aria-hidden />
-                <span>With midplane</span>
-                <span className="ts mono">tue 09:17:34</span>
-              </div>
-              <h2 className="ba-claim">
-                Denied <em>before it runs.</em>
-              </h2>
-              <pre className="ba-query">
-                <span className="com"># same agent, same query</span>
-                {"\n"}WITH cleanup AS ({"\n"}{"  "}DELETE FROM users{"\n"}{"  "}RETURNING *{"\n"}){"\n"}SELECT count(*) FROM cleanup;
-              </pre>
-              <div className="ba-arrow">hits midplane policy first</div>
-              <div className="ba-outcome good">
-                <div className="o-head">
-                  <span>midplane · policy</span>
-                  <span>table_access</span>
-                </div>
-                <b className="d">DENIED</b> · <span className="mono">users</span> is not in
-                the opt-in write list
-                <br />
-                the <span className="mono">DELETE</span> in the CTE was caught at
-                parse time
-              </div>
-              <div className="ba-epilogue">
-                09:17 — <b>audit logged</b> · agent pivots to a{" "}
-                <span className="mono">SELECT</span>
-              </div>
-            </article>
-          </div>
 
           <div className="ba-foot">
             <div>
+              <p className="lede">
+                Midplane sits in front of your existing Postgres and{" "}
+                <strong>bounds what each query can do</strong>. Your
+                engineers&apos; agents get to read prod safely, build
+                dashboards from chat, and debug live — work that
+                wasn&apos;t safe to give an agent yesterday.
+              </p>
               <div className="hero-ctas">
                 <a className="ebtn fill" href="/sign-up">
                   Start free →
@@ -225,11 +171,94 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §01 — How it works */}
+        {/* §01 — What changes. The same query an engineer's agent might
+            run, with and without midplane. Was the hero; demoted to a
+            section so the hero can lead on enablement. */}
+        <section className="sec">
+          <div className="sec-top">
+            <div className="sec-num">
+              <b>01</b>What changes
+            </div>
+            <div>
+              <h2 className="sec-h">
+                Same agent. Same Postgres.{" "}
+                <em>One ends in a postmortem.</em>
+              </h2>
+              <p className="sec-sub">
+                The same query your engineer&apos;s agent might run on a
+                Tuesday morning, with and without midplane in front of
+                Postgres.
+              </p>
+            </div>
+          </div>
+          <div className="ba-pair">
+            <article className="ba-card bad">
+              <div className="ba-tag">
+                <span className="dot" aria-hidden />
+                <span>Without midplane</span>
+                <span className="ts mono">tue 09:17:34</span>
+              </div>
+              <h2 className="ba-claim">
+                Production gone in <em>nine seconds.</em>
+              </h2>
+              <pre className="ba-query">
+                <span className="com"># cursor agent, cleaning up stale rows</span>
+                {"\n"}WITH cleanup AS ({"\n"}{"  "}DELETE FROM users{"\n"}{"  "}RETURNING *{"\n"}){"\n"}SELECT count(*) FROM cleanup;
+              </pre>
+              <div className="ba-arrow">runs against your Postgres</div>
+              <div className="ba-outcome bad">
+                <div className="o-head">
+                  <span>postgres · prod</span>
+                  <span>0.9 s</span>
+                </div>
+                users · <b className="d">41,802 rows deleted</b>
+                <br />
+                production: <b className="d">gone</b>
+              </div>
+              <div className="ba-epilogue">
+                09:18 — <b>#incidents · sev1</b> · &ldquo;what happened?&rdquo;
+              </div>
+            </article>
+
+            <article className="ba-card good">
+              <div className="ba-tag">
+                <span className="dot" aria-hidden />
+                <span>With midplane</span>
+                <span className="ts mono">tue 09:17:34</span>
+              </div>
+              <h2 className="ba-claim">
+                Denied <em>before it runs.</em>
+              </h2>
+              <pre className="ba-query">
+                <span className="com"># same agent, same query</span>
+                {"\n"}WITH cleanup AS ({"\n"}{"  "}DELETE FROM users{"\n"}{"  "}RETURNING *{"\n"}){"\n"}SELECT count(*) FROM cleanup;
+              </pre>
+              <div className="ba-arrow">hits midplane policy first</div>
+              <div className="ba-outcome good">
+                <div className="o-head">
+                  <span>midplane · policy</span>
+                  <span>table_access</span>
+                </div>
+                <b className="d">DENIED</b> ·{" "}
+                <span className="mono">users</span> is not in the opt-in write
+                list
+                <br />
+                the <span className="mono">DELETE</span> in the CTE was caught
+                at parse time
+              </div>
+              <div className="ba-epilogue">
+                09:17 — <b>audit logged</b> · agent pivots to a{" "}
+                <span className="mono">SELECT</span>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        {/* §02 — How it works */}
         <section className="sec" id="how">
           <div className="sec-top">
             <div className="sec-num">
-              <b>01</b>How it works
+              <b>02</b>How it works
             </div>
             <div>
               <h2 className="sec-h">
@@ -314,7 +343,7 @@ export default async function Landing() {
         <section className="sec" id="policy">
           <div className="sec-top">
             <div className="sec-num">
-              <b>02</b>Policy
+              <b>03</b>Policy
             </div>
             <div>
               <h2 className="sec-h">
@@ -447,7 +476,7 @@ export default async function Landing() {
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
-              <b>03</b>vs Postgres roles
+              <b>04</b>vs Postgres roles
             </div>
             <div>
               <h2 className="sec-h">
@@ -553,7 +582,7 @@ export default async function Landing() {
         <section className="sec" id="audit">
           <div className="sec-top">
             <div className="sec-num">
-              <b>04</b>Audit
+              <b>05</b>Audit
             </div>
             <div>
               <h2 className="sec-h">
@@ -644,7 +673,7 @@ export default async function Landing() {
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
-              <b>05</b>Isolation
+              <b>06</b>Isolation
             </div>
             <div>
               <h2 className="sec-h">
@@ -737,7 +766,7 @@ export default async function Landing() {
         <section className="sec" id="hosted">
           <div className="sec-top">
             <div className="sec-num">
-              <b>06</b>Hosted
+              <b>07</b>Hosted
             </div>
             <div>
               <h2 className="sec-h">
@@ -836,7 +865,7 @@ export default async function Landing() {
         <section className="sec" id="pricing">
           <div className="sec-top">
             <div className="sec-num">
-              <b>07</b>Pricing
+              <b>08</b>Pricing
             </div>
             <div>
               <h2 className="sec-h">
@@ -981,7 +1010,7 @@ export default async function Landing() {
         <section className="sec" id="quickstart">
           <div className="sec-top">
             <div className="sec-num">
-              <b>08</b>Quickstart
+              <b>09</b>Quickstart
             </div>
             <div>
               <h2 className="sec-h">
