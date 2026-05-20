@@ -981,7 +981,7 @@ export default async function Landing() {
             </div>
             <div>
               <h2 className="sec-h">
-                From signup to first allowed query: <em>~45 seconds.</em>
+                From signup to first allowed query: <em>under a minute.</em>
               </h2>
               <p className="sec-sub">
                 Four steps, one MCP URL, the client you already use. Cursor,
@@ -997,15 +997,15 @@ export default async function Landing() {
               <span className="t-act">Sign up</span>
             </div>
             <div className="t-step">
-              <span className="t-time">00:15</span>
+              <span className="t-time">00:20</span>
               <span className="t-act">Paste your DSN</span>
             </div>
             <div className="t-step">
-              <span className="t-time">00:30</span>
+              <span className="t-time">00:40</span>
               <span className="t-act">Drop the MCP URL into your client</span>
             </div>
             <div className="t-step done">
-              <span className="t-time">00:45</span>
+              <span className="t-time">01:00</span>
               <span className="t-act">First query, logged</span>
             </div>
           </div>
