@@ -39,13 +39,24 @@ const CreateBody = z.object({
   // these are the four customer-selectable options; an arbitrary
   // expires-in-days int is not accepted via the API (defense against
   // bookmark-able 36500-day tokens that defeat the rotation cadence).
-  expiresInDays: z.union([
-    z.literal(30),
-    z.literal(90),
-    z.literal(365),
-    z.null(),
-  ]),
+  //
+  // Coerce before validation so form-encoded clients (where every value
+  // arrives as a string) get the same accept-set as JSON callers.
+  // "30"/"90"/"365" → number; "" / "null" / "never" → null.
+  expiresInDays: z.preprocess(
+    coerceExpiresInDays,
+    z.union([z.literal(30), z.literal(90), z.literal(365), z.null()]),
+  ),
 });
+
+function coerceExpiresInDays(val: unknown): unknown {
+  if (val === null) return null;
+  if (typeof val === "string") {
+    if (val === "" || val === "null" || val === "never") return null;
+    if (/^\d+$/.test(val)) return Number.parseInt(val, 10);
+  }
+  return val;
+}
 
 export async function GET(
   _req: Request,

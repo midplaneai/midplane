@@ -95,6 +95,15 @@ function jsonRequest(method: string, body?: unknown): Request {
   });
 }
 
+function formRequest(method: string, fields: Record<string, string>): Request {
+  const body = new URLSearchParams(fields).toString();
+  return new Request("https://midplane.test/api", {
+    method,
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+}
+
 describe("GET /api/connections/[id]/tokens", () => {
   it("401 when no Clerk session", async () => {
     currentCustomerMock = vi.fn(async () => null);
@@ -235,6 +244,39 @@ describe("POST /api/connections/[id]/tokens", () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.expiresAt).toBeNull();
+    const args = createTokenMock.mock.calls[0]!;
+    expect(args[2].expiresAt).toBeNull();
+  });
+
+  it("form-encoded body: numeric expiresInDays arrives as a string and is coerced", async () => {
+    // FormData submits stringify everything — without coercion the
+    // numeric-literal union would 400 on a valid expiry. Regression test
+    // for an earlier bug where the route accepted only JSON.
+    createTokenMock = vi.fn(async () => ({
+      id: "tok-4",
+      plaintext: "mp_test_form_value",
+    }));
+    const { POST } = await loadCollectionRoute();
+    const res = await POST(
+      formRequest("POST", { name: "ci", expiresInDays: "90" }),
+      { params: makeParams({ id: "conn-1" }) },
+    );
+    expect(res.status).toBe(201);
+    const args = createTokenMock.mock.calls[0]!;
+    expect(args[2].expiresAt).toBeInstanceOf(Date);
+  });
+
+  it("form-encoded body: expiresInDays='' coerces to never-expires", async () => {
+    createTokenMock = vi.fn(async () => ({
+      id: "tok-5",
+      plaintext: "mp_test_forever_form",
+    }));
+    const { POST } = await loadCollectionRoute();
+    const res = await POST(
+      formRequest("POST", { name: "forever-form", expiresInDays: "" }),
+      { params: makeParams({ id: "conn-1" }) },
+    );
+    expect(res.status).toBe(201);
     const args = createTokenMock.mock.calls[0]!;
     expect(args[2].expiresAt).toBeNull();
   });
