@@ -23,11 +23,14 @@
 //     no longer claims it. If multi-token-per-connection ships, swap §04
 //     back to a member-with-tokens table.
 import { auth } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
 
 export default async function Landing() {
+  // Signed-in users still see the landing — they may be sharing it with
+  // teammates, revisiting the pricing page, or comparing tier limits.
+  // Topbar swaps the Sign in / Start free pair for a Dashboard link so
+  // they have a one-click way into the app from here.
   const { userId } = await auth();
-  if (userId) redirect("/dashboard");
+  const isSignedIn = !!userId;
 
   return (
     <main className="editorial-page">
@@ -50,10 +53,18 @@ export default async function Landing() {
               EU + US ●
             </a>
             <a href="https://github.com/midplaneai/midplane">GitHub</a>
-            <a href="/sign-in">Sign in</a>
-            <a className="ebtn fill" href="/sign-up">
-              Start free
-            </a>
+            {isSignedIn ? (
+              <a className="ebtn fill" href="/dashboard">
+                Dashboard →
+              </a>
+            ) : (
+              <>
+                <a href="/sign-in">Sign in</a>
+                <a className="ebtn fill" href="/sign-up">
+                  Start free
+                </a>
+              </>
+            )}
           </div>
         </header>
 
@@ -84,9 +95,6 @@ export default async function Landing() {
               <div className="hero-ctas">
                 <a className="ebtn fill" href="/sign-up">
                   Start free →
-                </a>
-                <a className="ebtn outline" href="/sign-up">
-                  Book a 15-min walkthrough
                 </a>
                 <span className="cmd">
                   no credit card · <b>free for 1 connection · 1 seat</b>
@@ -997,9 +1005,6 @@ export default async function Landing() {
             <div className="ctas">
               <a className="ebtn fill" href="/sign-up">
                 Start free →
-              </a>
-              <a className="ebtn outline" href="/sign-up">
-                Book a 15-min walkthrough
               </a>
               <a className="ebtn outline" href="#how">
                 Read the docs
