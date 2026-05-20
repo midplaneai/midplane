@@ -1071,18 +1071,17 @@ export default async function Landing() {
           <div className="inner">
             <div>
               <h2>
-                Start free.
-                <br />
-                Upgrade when <em>your team does.</em>
+                Let Claude query <em>your real database.</em>
               </h2>
               <p>
-                Free for 1 connection, 1 seat, 7-day audit. Pro at $49/mo for
-                10 of each and 30-day audit. Team at $399/mo for unlimited
-                seats, 180-day audit, and SSO / SAML. EU + US regions; same
-                policy engine on every tier.
+                Build the dashboards you never had time to build. Run the prod
+                query you didn&apos;t want to copy-paste into a chat window.
+                Your engineers do it in the client they already use — every
+                query bounded by policy, every action logged.
               </p>
               <div className="meta">
-                v0.5.0 · <b>EU Frankfurt + US Dulles</b> · status.midplane.ai
+                Free for 1 engineer · <b>Pro $49/mo</b> · <b>Team $399/mo</b>{" "}
+                · same safety engine on every tier · EU + US
               </div>
             </div>
             <div className="ctas">
