@@ -22,14 +22,13 @@
 // trust posture is identical to what a real signup would produce.
 
 import { execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 
 import { expect, test } from "@playwright/test";
 import { eq } from "drizzle-orm";
-import { ulid } from "ulid";
 
 import { connections, customers, getDb } from "@midplane-cloud/db";
-import { encryptDsn, makeKmsContext } from "@midplane-cloud/kms";
+
+import { containerNameFor, seedConnection } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -65,35 +64,17 @@ test.beforeAll(async () => {
     { stdio: ["ignore", "pipe", "pipe"] },
   );
 
-  // 2. Cloud DB seed: customer + encrypted connection pointing at sidecar.
-  // The OSS container will reach the sidecar at host.docker.internal:<port>.
+  // 2. Cloud DB seed: customer + encrypted connection + connection_databases
+  // + mcp_tokens row pointing at the sidecar Postgres. seedConnection
+  // mints a real token (HMAC-hashed via the regional pepper) so the
+  // proxy's resolveByToken finds it the same way a UI-created connection
+  // would. The container reaches the sidecar via host.docker.internal.
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
-  const kms = makeKmsContext(process.env);
-  const { ciphertext, kmsKeyId } = await encryptDsn(
-    kms,
-    customerDsn,
-    (customerId = ulid()),
-    "eu",
-  );
-  mcpToken = randomUUID().replace(/-/g, "");
-  connectionId = ulid();
-  const db = getDb("eu");
-  await db.insert(customers).values({
-    id: customerId,
-    clerkOrgId: `org_e2e-${customerId}`,
-    email: `e2e-${customerId}@example.test`,
-    region: "eu",
-  });
-  await db.insert(connections).values({
-    id: connectionId,
-    customerId,
-    region: "eu",
-    encryptedDsn: ciphertext,
-    kmsKeyId,
-    mcpToken,
-  });
-
-  proxiedContainerName = `midplane-${mcpToken.slice(0, 16)}`;
+  const seeded = await seedConnection({ region: "eu", dsn: customerDsn });
+  customerId = seeded.customerId;
+  connectionId = seeded.connectionId;
+  mcpToken = seeded.tokenPlaintext;
+  proxiedContainerName = containerNameFor(connectionId);
 });
 
 test.afterAll(async () => {

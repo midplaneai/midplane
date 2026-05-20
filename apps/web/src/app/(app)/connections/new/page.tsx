@@ -1,7 +1,10 @@
+import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
+import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { AccessRadio } from "@/components/access-radio";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -15,6 +18,17 @@ import {
   isValidDsn,
   MAX_CONNECTION_NAME_LENGTH,
 } from "@/lib/connections";
+
+// PR2 of mcp_url_auth_security: a fresh connection mints a default token
+// whose plaintext is delivered ONCE via an httpOnly cookie set in the
+// server action and consumed by the post-create success page. The
+// cookie has a 5-minute TTL so a long-tail browser-back doesn't keep
+// the URL retrievable; the success page deletes the cookie on read so
+// a reload removes the plaintext. PR3 replaces this with a proper token
+// management surface; this is the minimal stub specified by the design
+// doc.
+export const SHOW_ONCE_COOKIE = "midplane.show_once_url";
+const SHOW_ONCE_TTL_SECONDS = 5 * 60;
 
 export default async function NewConnection() {
   const customer = await currentCustomer();
@@ -107,6 +121,8 @@ async function createAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
+  const { userId } = await auth();
+  if (!userId) redirect("/signup/region");
 
   const dsn = formData.get("dsn");
   if (!isValidDsn(dsn)) {
@@ -125,9 +141,28 @@ async function createAction(formData: FormData) {
       ? (accessRaw as AccessLevel)
       : "read";
 
-  const { id } = await createConnection(customer, dsn, name, defaultAccess);
-  // Land on the dashboard with the agent-setup sheet auto-opened for this
-  // new connection. The sheet strips the ?setup= param after first open so
-  // a reload doesn't re-trigger.
-  redirect(`/dashboard?setup=${id}`);
+  const { id, defaultTokenPlaintext } = await createConnection(
+    customer,
+    dsn,
+    name,
+    defaultAccess,
+    userId,
+  );
+  const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
+
+  // Stash the plaintext URL in an httpOnly cookie. The success page
+  // reads + deletes it; a reload of the success page shows the
+  // "already consumed" state so the plaintext never appears twice in
+  // the user's view. 5-minute TTL bounds the leakage window if the user
+  // walks away from the browser between create and success-page-read.
+  const c = await cookies();
+  c.set(SHOW_ONCE_COOKIE, mcpUrl, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: SHOW_ONCE_TTL_SECONDS,
+    path: "/",
+  });
+
+  redirect(`/connections/${id}/created`);
 }

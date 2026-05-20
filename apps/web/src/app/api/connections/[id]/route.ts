@@ -14,10 +14,13 @@
 // serving the OLD DSN until the 30-min idle timer fires. rotateConnection
 // in @/lib/connections is the single place that orchestrates DB write +
 // both cache invalidations; this route is just the HTTP shell around it.
+//
+// PR2 of mcp_url_auth_security: rotation no longer returns a token —
+// the agent-facing URL is unchanged because tokens are independent of
+// DSN rotation. Response carries only { id } (the connection id).
+// Token lifecycle (list / create / revoke) lives on PR3's surface.
 
 import { z } from "zod";
-
-import { mintMcpUrl } from "@midplane-cloud/router";
 
 import {
   deleteConnection,
@@ -64,8 +67,7 @@ export async function PATCH(
   if (!rotated) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
-  const mcpUrl = mintMcpUrl(rotated.region, rotated.mcpToken, process.env);
-  return Response.json({ id: rotated.id, mcpUrl });
+  return Response.json({ id: rotated.id });
 }
 
 export async function DELETE(
@@ -82,7 +84,7 @@ export async function DELETE(
     return Response.json({ error: "not found" }, { status: 404 });
   }
   const ctx = getMcpProxyContext();
-  await ctx.registry.invalidate(deleted.mcpToken).catch((err) => {
+  await ctx.registry.invalidate(deleted.id).catch((err) => {
     console.error("[DELETE /api/connections] registry.invalidate failed", err);
   });
   return Response.json({ ok: true });

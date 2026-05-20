@@ -130,7 +130,11 @@ export class FlyMachineSpawner implements Spawner {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        name: `mcp-${opts.token.slice(0, 16)}`,
+        // Machine name derived from the connection ULID, lowercased to
+        // match Fly's naming rules. Stable for the connection's lifetime;
+        // siblings tokens on the same connection share one machine. The
+        // plaintext token never reaches the Fly API surface.
+        name: `mcp-${opts.connectionId.slice(0, 16).toLowerCase()}`,
         region: flyRegion,
         config: {
           image: this.image,

@@ -127,6 +127,13 @@
       "when": 1777644000011,
       "tag": "0017_mcp_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1777644000012,
+      "tag": "0018_mcp_tokens_cleanup",
+      "breakpoints": true
     }
   ]
 }

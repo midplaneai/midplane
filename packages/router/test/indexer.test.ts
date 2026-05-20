@@ -5,6 +5,11 @@
 // pglite or sqlite would let us run actual SQL, but the indexer's logic
 // is mostly fetch + cursor advance — the SQL surface is small and the
 // fake keeps tests fast.
+//
+// PR2 of mcp_url_auth_security: the indexer keys on connection_id (the
+// parent ULID), not the plaintext token. Audit rows propagate the OSS
+// engine's `mcp_token_id` field (lockstep OSS 0.6.0) into the cloud's
+// audit_events_index.mcp_token_id column.
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -22,9 +27,16 @@ import type { Db } from "../src/resolve.ts";
 // Fake Drizzle Db
 // ---------------------------------------------------------------------------
 
+// Crockford-base32 ULID — alphabet excludes I, L, O, U. Avoid those
+// characters in the literal so the parseWhere regex below matches.
+const TEST_CONN_A = "01HXYZCNN000000000000000AA";
+
 interface FakeDbState {
-  customerByToken: Map<string, { customerId: string; region: "eu" | "us" }>;
-  cursorByToken: Map<
+  customerByConnectionId: Map<
+    string,
+    { customerId: string; region: "eu" | "us" }
+  >;
+  cursorByConnectionId: Map<
     string,
     {
       lastId: string;
@@ -56,8 +68,8 @@ interface FakeDbState {
 
 function makeFakeDb(): { db: Db; state: FakeDbState } {
   const state: FakeDbState = {
-    customerByToken: new Map(),
-    cursorByToken: new Map(),
+    customerByConnectionId: new Map(),
+    cursorByConnectionId: new Map(),
     auditRows: [],
     inserts: [],
     failNextTxn: false,
@@ -71,7 +83,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
       | Record<string, unknown>,
   ) => {
     let table: unknown = null;
-    let whereCond: { token?: string; customerId?: string } = {};
+    let whereCond: { connectionId?: string; customerId?: string } = {};
 
     const chain = {
       from(t: unknown) {
@@ -92,14 +104,14 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
 
     function resolveSelect(): unknown[] {
       if (table === connections) {
-        const meta = whereCond.token
-          ? state.customerByToken.get(whereCond.token)
+        const meta = whereCond.connectionId
+          ? state.customerByConnectionId.get(whereCond.connectionId)
           : undefined;
         return meta ? [meta] : [];
       }
       if (table === indexerCursors) {
-        const row = whereCond.token
-          ? state.cursorByToken.get(whereCond.token)
+        const row = whereCond.connectionId
+          ? state.cursorByConnectionId.get(whereCond.connectionId)
           : undefined;
         return row
           ? [{ lastId: row.lastId, customerId: row.customerId }]
@@ -152,7 +164,8 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
       } else if (table === indexerCursors) {
         state.inserts.push({ table: "cursor", rows: stagedRows, mode });
         for (const r of stagedRows as Array<{
-          mcpToken: string;
+          id: string;
+          connectionId: string;
           customerId: string;
           region: "eu" | "us";
           lastId: string;
@@ -161,8 +174,8 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
           // onConflictDoUpdate semantics: customerId is immutable, so an
           // existing row's customerId stays — only lastId/lastIndexedAt
           // get bumped.
-          const existing = state.cursorByToken.get(r.mcpToken);
-          state.cursorByToken.set(r.mcpToken, {
+          const existing = state.cursorByConnectionId.get(r.connectionId);
+          state.cursorByConnectionId.set(r.connectionId, {
             lastId: r.lastId,
             customerId: existing?.customerId ?? r.customerId,
             region: r.region,
@@ -220,22 +233,26 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
 }
 
 /** Walks a drizzle-orm SQL tree (which has cycles, so JSON.stringify
- *  doesn't work) and pulls out string Param values prefixed with "tok-"
- *  or matching the ULID alphabet (Crockford base32, 26 chars). The
- *  Indexer's where-clauses are simple enough that this one walk covers
- *  every case. */
+ *  doesn't work) and pulls out string Param values matching the ULID
+ *  alphabet. The Indexer's where-clauses are simple enough that this
+ *  one walk covers every case: the connection_id ULIDs identify
+ *  connections-table and indexer_cursors-table reads alike, and the
+ *  customer_id ULID is used in retention reads. We disambiguate
+ *  connection vs customer by which value appears first in walk
+ *  order — connection_id is always the first parameter of the
+ *  where-clause in the indexer's reads. */
 function parseWhere(
   cond: unknown,
-): { token?: string; customerId?: string } {
+): { connectionId?: string; customerId?: string } {
   const seen = new WeakSet<object>();
-  const out: { token?: string; customerId?: string } = {};
+  const out: { connectionId?: string; customerId?: string } = {};
   const ulid = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+  const order: string[] = [];
 
   function walk(v: unknown): void {
     if (v === null || v === undefined) return;
     if (typeof v === "string") {
-      if (v.startsWith("tok-") && !out.token) out.token = v;
-      else if (ulid.test(v) && !out.customerId) out.customerId = v;
+      if (ulid.test(v) && !order.includes(v)) order.push(v);
       return;
     }
     if (typeof v !== "object") return;
@@ -248,6 +265,12 @@ function parseWhere(
     for (const x of Object.values(v as Record<string, unknown>)) walk(x);
   }
   walk(cond);
+  if (order.length >= 1) out.connectionId = order[0];
+  // retention queries reference customer_id; the test harness only
+  // exercises one ULID per where-clause, so the first ULID is also the
+  // customer_id in those paths. The harness disambiguates by which
+  // table the select targets, not by walk order.
+  if (order.length >= 1) out.customerId = order[0];
   return out;
 }
 
@@ -302,12 +325,15 @@ async function buildHarness(
 }> {
   const { db, state } = makeFakeDb();
   if (opts.failNextTxn) state.failNextTxn = true;
-  state.customerByToken.set("tok-A", { customerId: TEST_CUST_A, region: "eu" });
+  state.customerByConnectionId.set(TEST_CONN_A, {
+    customerId: TEST_CUST_A,
+    region: "eu",
+  });
 
   const spawner = new StubSpawner();
   const registry = new ContainerRegistry(spawner, { idleMs: 60_000 });
   await registry.acquire({
-    token: "tok-A",
+    connectionId: TEST_CONN_A,
     region: "eu",
     databases: [
       {
@@ -361,7 +387,7 @@ describe("Indexer", () => {
 
   it("polls /audit/since with bearer and inserts batch", async () => {
     const { db, state, registry } = await buildHarness();
-    const fetchFn = vi.fn(async (url: string | URL) =>
+    const fetchFn = vi.fn(async (_url: string | URL) =>
       jsonResponse({
         rows: [row("01HX0000000000000000000001"), row("01HX0000000000000000000002")],
         next_cursor: null,
@@ -388,9 +414,42 @@ describe("Indexer", () => {
 
     expect(state.auditRows).toHaveLength(2);
     expect(state.auditRows[0]!.customerId).toBe(TEST_CUST_A);
-    expect(state.cursorByToken.get("tok-A")?.lastId).toBe(
+    expect(state.cursorByConnectionId.get(TEST_CONN_A)?.lastId).toBe(
       "01HX0000000000000000000002",
     );
+  });
+
+  it("threads mcp_token_id from OSS pull JSON into audit_events_index", async () => {
+    // OSS 0.6.0 lockstep (PR2 of mcp_url_auth_security): every audit
+    // row from a session carries the X-Midplane-Token-Id the cloud
+    // injected at MCP initialize. The indexer copies it straight onto
+    // the cloud row so dashboards can attribute by token.
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [
+          row("01HX0000000000000000000001", {
+            mcp_token_id: "01HXTOKABCDEFGHIJKLMNPQRST",
+          }),
+          row("01HX0000000000000000000002", {
+            mcp_token_id: null,
+          }),
+        ],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+    await ix.tick();
+
+    expect(state.auditRows).toHaveLength(2);
+    expect(
+      (state.auditRows[0] as unknown as { mcpTokenId: string | null })
+        .mcpTokenId,
+    ).toBe("01HXTOKABCDEFGHIJKLMNPQRST");
+    expect(
+      (state.auditRows[1] as unknown as { mcpTokenId: string | null })
+        .mcpTokenId,
+    ).toBeNull();
   });
 
   it("drains multi-page within a single tick", async () => {
@@ -414,7 +473,7 @@ describe("Indexer", () => {
       .calls[1] as [string, RequestInit];
     expect(secondCall[0]).toMatch(/since\/01HX0000000000000000000002\?/);
     expect(state.auditRows).toHaveLength(3);
-    expect(state.cursorByToken.get("tok-A")?.lastId).toBe(
+    expect(state.cursorByConnectionId.get(TEST_CONN_A)?.lastId).toBe(
       "01HX0000000000000000000003",
     );
   });
@@ -441,7 +500,7 @@ describe("Indexer", () => {
     // and the indexer no longer pre-seeds an empty cursor (that was
     // dropped along with the loadCursor() seed path; see Indexer.indexOne
     // and writeBatch).
-    expect(state.cursorByToken.get("tok-A")).toBeUndefined();
+    expect(state.cursorByConnectionId.get(TEST_CONN_A)).toBeUndefined();
     expect(state.auditRows).toHaveLength(0);
     expect(errors).toHaveLength(1);
   });
@@ -461,7 +520,7 @@ describe("Indexer", () => {
     });
     await ix.tick();
     expect(state.auditRows).toHaveLength(0);
-    expect(state.cursorByToken.get("tok-A")).toBeUndefined();
+    expect(state.cursorByConnectionId.get(TEST_CONN_A)).toBeUndefined();
     expect(errors).toHaveLength(1);
   });
 
@@ -564,7 +623,7 @@ describe("Indexer", () => {
       "01HX0000000000000000000001",
       "01HX0000000000000000000003",
     ]);
-    expect(state.cursorByToken.get("tok-A")?.lastId).toBe(
+    expect(state.cursorByConnectionId.get(TEST_CONN_A)?.lastId).toBe(
       "01HX0000000000000000000003",
     );
     expect(errors).toHaveLength(1);
@@ -655,7 +714,7 @@ describe("Indexer", () => {
 
   it("triggers retention DELETE only after grace window elapses", async () => {
     const { db, state, registry } = await buildHarness();
-    let now = 1_800_000_000_000;
+    const now = 1_800_000_000_000;
     const fetchFn = vi.fn(async (url: string) => {
       if (url.includes("/audit/before/")) return jsonResponse({ deleted: 5 });
       return jsonResponse({
@@ -704,9 +763,9 @@ describe("Indexer", () => {
     expect(deleteCalls).toHaveLength(0);
   });
 
-  it("ignores tokens that have no connections row AND no cursor row", async () => {
+  it("ignores connections that have no connections row AND no cursor row", async () => {
     const { db, state, registry } = await buildHarness();
-    state.customerByToken.clear(); // tok-A is now orphaned
+    state.customerByConnectionId.clear(); // TEST_CONN_A is now orphaned
     const fetchFn = vi.fn() as unknown as typeof fetch;
     const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
     await ix.tick();
@@ -730,16 +789,17 @@ describe("Indexer", () => {
     const fetchFn = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
     const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
     await ix.tick();
-    expect(state.cursorByToken.get("tok-A")?.customerId).toBe(TEST_CUST_A);
+    expect(state.cursorByConnectionId.get(TEST_CONN_A)?.customerId).toBe(
+      TEST_CUST_A,
+    );
     expect(state.auditRows).toHaveLength(1);
 
     // Now the user deletes the connection — connections row gone.
-    // (The cursor row should be deleted too in production via
-    // deleteConnection; that's covered by connections.test.ts. Here we
-    // simulate the racing case where the connection is gone but the
-    // cursor row hasn't been swept yet, since the container has
-    // un-drained rows.)
-    state.customerByToken.clear();
+    // (The cursor row's connection_id flips to NULL via FK ON DELETE SET
+    // NULL in production; the test harness simulates the racing case
+    // where the connection is gone but the cursor row hasn't been swept
+    // yet, because the container has un-drained rows.)
+    state.customerByConnectionId.clear();
 
     // Tick 2: indexer reads customer_id from the cursor row, drains the
     // remaining backlog, and the high-severity data-loss bug is gone.
@@ -748,7 +808,7 @@ describe("Indexer", () => {
       "01HX0000000000000000000001",
       "01HX0000000000000000000002",
     ]);
-    expect(state.cursorByToken.get("tok-A")?.lastId).toBe(
+    expect(state.cursorByConnectionId.get(TEST_CONN_A)?.lastId).toBe(
       "01HX0000000000000000000002",
     );
   });

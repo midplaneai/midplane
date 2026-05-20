@@ -51,6 +51,7 @@ let testEmail = "";
 let clerkUserId = "";
 let clerkOrgId = "";
 let mcpToken = "";
+let connectionId = "";
 let proxiedContainerName = "";
 
 test.beforeAll(async () => {
@@ -106,7 +107,7 @@ test.afterAll(async () => {
       for (const c of conns) {
         await db
           .delete(indexerCursors)
-          .where(eq(indexerCursors.mcpToken, c.mcpToken));
+          .where(eq(indexerCursors.connectionId, c.id));
       }
       await db
         .delete(connections)
@@ -153,18 +154,38 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   await page.getByLabel(/database_url/i).fill(customerDsn);
   await page.getByRole("button", { name: /create connection/i }).click();
-  await page.waitForURL(/\/connections\/[A-Z0-9]+/i, { timeout: 15_000 });
+  // PR2 of mcp_url_auth_security: the create flow redirects to a
+  // per-connection success page at /connections/<id>/created where the
+  // plaintext URL is shown exactly once.
+  await page.waitForURL(/\/connections\/[A-Z0-9]+\/created/i, {
+    timeout: 15_000,
+  });
+  const urlPath = new URL(page.url()).pathname;
+  const connIdMatch = /\/connections\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
+    urlPath,
+  );
+  if (!connIdMatch?.[1]) {
+    throw new Error(`could not parse connection id from ${urlPath}`);
+  }
+  connectionId = connIdMatch[1];
 
   // 4. MCP URL is rendered on the success page; reading it from the DOM
   // proves the dashboard surfaces what an actual user would copy into
-  // Cursor. Pulling mcpToken back out of the URL is the contract the
-  // /mcp/<token> route depends on.
+  // Cursor. PR2 of mcp_url_auth_security: the token format is now
+  // `mp_(live|test)_<32 hex>_<6 base32>` (47 chars) — the regex below
+  // matches both env families.
   const mcpUrl = await page.locator("input[readonly]").first().inputValue();
-  expect(mcpUrl).toMatch(/^https?:\/\/.+\/mcp\/[a-f0-9]{32}$/);
-  const tokenMatch = /\/mcp\/([a-f0-9]{32})$/.exec(mcpUrl);
+  expect(mcpUrl).toMatch(
+    /^https?:\/\/.+\/mcp\/mp_(live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6}$/,
+  );
+  const tokenMatch = /\/mcp\/(mp_(?:live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6})$/.exec(
+    mcpUrl,
+  );
   if (!tokenMatch?.[1]) throw new Error(`could not parse mcp token from ${mcpUrl}`);
   mcpToken = tokenMatch[1];
-  proxiedContainerName = `midplane-${mcpToken.slice(0, 16)}`;
+  // Container naming switched to connection-id keying (PR2). The slice
+  // matches the spawner's `midplane-${connectionId.slice(0, 16).toLowerCase()}`.
+  proxiedContainerName = `midplane-${connectionId.slice(0, 16).toLowerCase()}`;
 
   // 5. Hit the MCP URL exactly the way Cursor would: initialize, ack,
   // tools/call. baseURL is rewritten in case the rendered MIDPLANE_PUBLIC_HOST

@@ -11,15 +11,22 @@
 // real DecryptCache, ContainerRegistry, and Docker-spawned OSS containers,
 // proving the cache-coherence invariant the route relies on.
 //
+// PR2 of mcp_url_auth_security: rotation is no longer associated with the
+// agent-facing token. ContainerRegistry keys on connection_id; the
+// token URL is unaffected by DSN rotation (this is the design — agents
+// don't re-paste a URL because the DB password changed).
+//
 // Gate: E2E_LIVE=1. Requires:
 //   - docker on PATH
-//   - midplane/midplane:0.1.0 image present (`bun run dev:image`)
+//   - midplane/midplane image present (`bun run dev:image`)
 //   - .env.local DATABASE_URL pointing at a Neon dev branch
 //   - .env.local MIDPLANE_KMS_DEV_KEY_EU set
+//   - .env.local MIDPLANE_TOKEN_PEPPER_EU_V1 set
 //
 // Test plan:
 //   1. Spin up TWO sidecar Postgres instances (A, B) with distinguishable data
-//   2. Seed customer + connection pointing at sidecar A
+//   2. Seed customer + connection + connection_databases pointing at sidecar A
+//      plus a real mcp_tokens row (via seedConnection helper)
 //   3. Resolve + spawn → query SELECT site FROM marker; assert "alpha"
 //   4. Rotate to sidecar B's DSN via rotateConnection
 //   5. Resolve + spawn again → query; assert "bravo" (proves both layers
@@ -27,15 +34,19 @@
 //      NEW container with the NEW DSN env)
 
 import { execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 
 import { expect, test } from "@playwright/test";
-import { eq } from "drizzle-orm";
-import { ulid } from "ulid";
+import { and, eq } from "drizzle-orm";
 
-import { connections, customers, getDb } from "@midplane-cloud/db";
 import {
-  encryptDsn,
+  connectionDatabases,
+  connections,
+  customers,
+  getDb,
+  indexerCursors,
+  mcpTokens,
+} from "@midplane-cloud/db";
+import {
   makeKmsContext,
   type KmsContext,
 } from "@midplane-cloud/kms";
@@ -47,6 +58,8 @@ import {
 } from "@midplane-cloud/router";
 
 import { rotateConnection } from "../apps/web/src/lib/connections";
+
+import { containerNameFor, seedConnection } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -62,9 +75,9 @@ let pgPortA = 0;
 let pgPortB = 0;
 let dsnA = "";
 let dsnB = "";
-let mcpToken = "";
 let customerId = "";
 let connectionId = "";
+let connectionDatabaseId = "";
 let proxiedContainerName = "";
 
 let kms: KmsContext;
@@ -80,36 +93,19 @@ test.beforeAll(async () => {
   dsnA = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPortA}/${PG_DB}`;
   dsnB = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPortB}/${PG_DB}`;
 
-  // Seed customer + connection pointing at sidecar A.
-  kms = makeKmsContext(process.env);
-  const { ciphertext, kmsKeyId } = await encryptDsn(
-    kms,
-    dsnA,
-    (customerId = ulid()),
-    "eu",
-  );
-  mcpToken = randomUUID().replace(/-/g, "");
-  connectionId = ulid();
-  const db = getDb("eu");
-  await db.insert(customers).values({
-    id: customerId,
-    clerkOrgId: `org_e2e-${customerId}`,
-    email: `e2e-${customerId}@example.test`,
-    region: "eu",
-  });
-  await db.insert(connections).values({
-    id: connectionId,
-    customerId,
-    region: "eu",
-    encryptedDsn: ciphertext,
-    kmsKeyId,
-    mcpToken,
-  });
-
-  proxiedContainerName = `midplane-${mcpToken.slice(0, 16)}`;
+  // Seed customer + connection + connection_databases (DSN ciphertext on
+  // child row, per migration 0008) + mcp_tokens (PR2 of
+  // mcp_url_auth_security: token surface lives here, hashed at rest).
+  const seeded = await seedConnection({ region: "eu", dsn: dsnA });
+  customerId = seeded.customerId;
+  connectionId = seeded.connectionId;
+  connectionDatabaseId = seeded.connectionDatabaseId;
+  proxiedContainerName = containerNameFor(connectionId);
 
   // Build the same router primitives the dev server uses. These are the
   // singletons rotateConnection must invalidate.
+  kms = makeKmsContext(process.env);
+  const db = getDb("eu");
   cache = new DecryptCache();
   registry = new ContainerRegistry(new DockerSpawner());
   resolver = new DsnResolver({ db, cache, kms });
@@ -129,6 +125,12 @@ test.afterAll(async () => {
   if (connectionId || customerId) {
     const db = getDb("eu");
     if (connectionId) {
+      // Cursor + token rows cascade via FK on the connections delete,
+      // but explicitly delete the cursor first (FK ON DELETE SET NULL
+      // would leave an orphan otherwise). mcp_tokens cascades.
+      await db
+        .delete(indexerCursors)
+        .where(eq(indexerCursors.connectionId, connectionId));
       await db.delete(connections).where(eq(connections.id, connectionId));
     }
     if (customerId) {
@@ -137,18 +139,29 @@ test.afterAll(async () => {
   }
 });
 
-test("rotation: cache + registry invalidated, next query hits the new sidecar", async ({
-  request: _request,
-}) => {
+test("rotation: cache + registry invalidated, next query hits the new sidecar", async () => {
+  const db = getDb("eu");
   // Phase 1 — current DSN (sidecar A). Resolve + spawn + query.
-  const conn1 = await fetchConnRow(connectionId);
-  const decrypted1 = await resolver.resolve(conn1);
+  const cdb1 = await fetchConnectionDatabase(connectionDatabaseId);
+  const decrypted1 = await resolver.resolve({
+    connectionDatabase: cdb1,
+    region: "eu",
+    customerId,
+  });
   expect(decrypted1.ok).toBe(true);
   if (!decrypted1.ok) return;
   const c1 = await registry.acquire({
-    token: mcpToken,
+    connectionId,
     region: "eu",
-    dsn: decrypted1.plaintext,
+    databases: [
+      {
+        name: "main",
+        connectionDatabaseId,
+        dsn: decrypted1.plaintext,
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: { column: null, overrides: {}, exempt: [] },
+      },
+    ],
   });
   const site1 = await runSelectMarker(c1.host, c1.port);
   expect(site1, "first query must hit sidecar A").toBe("alpha");
@@ -169,15 +182,31 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
     registry,
   });
   expect(rotated, "rotation must succeed for owned row").not.toBeNull();
-  expect(rotated?.mcpToken, "mcp_token MUST be reused on rotation").toBe(
-    mcpToken,
-  );
+  // PR2 of mcp_url_auth_security: rotation no longer returns mcpToken.
+  // The agent-facing token surface is independent of DSN rotation — the
+  // assertion below confirms the contract.
+  expect(rotated?.id).toBe(connectionId);
+  // Tokens are unaffected by rotation: the same plaintext continues to
+  // resolve. Query mcp_tokens to confirm the row's hash hasn't been
+  // rewritten by the rotation path.
+  const tokenRows = await db
+    .select()
+    .from(mcpTokens)
+    .where(
+      and(eq(mcpTokens.connectionId, connectionId), eq(mcpTokens.name, "default")),
+    );
+  expect(tokenRows.length).toBe(1);
+  expect(tokenRows[0]!.status).toBe("active");
 
   // Phase 3 — same connection id, fresh resolve + acquire. Cache miss
   // forces KMS to decrypt the NEW ciphertext; registry miss forces a NEW
   // container spawn with dsnB in env.
-  const conn2 = await fetchConnRow(connectionId);
-  const decrypted2 = await resolver.resolve(conn2);
+  const cdb2 = await fetchConnectionDatabase(connectionDatabaseId);
+  const decrypted2 = await resolver.resolve({
+    connectionDatabase: cdb2,
+    region: "eu",
+    customerId,
+  });
   expect(decrypted2.ok).toBe(true);
   if (!decrypted2.ok) return;
   expect(decrypted2.source, "post-rotation must hit KMS, not cache").toBe(
@@ -186,9 +215,17 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
   expect(decrypted2.plaintext).toBe(dsnB);
 
   const c2 = await registry.acquire({
-    token: mcpToken,
+    connectionId,
     region: "eu",
-    dsn: decrypted2.plaintext,
+    databases: [
+      {
+        name: "main",
+        connectionDatabaseId,
+        dsn: decrypted2.plaintext,
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: { column: null, overrides: {}, exempt: [] },
+      },
+    ],
   });
   // The new container may bind a different host port — proves it's a fresh
   // spawn rather than the stale entry. (host:port can match by coincidence
@@ -233,11 +270,14 @@ async function waitForPgDb(name: string, deadlineMs = 30_000): Promise<void> {
   throw new Error(`sidecar ${name} not ready within ${deadlineMs}ms`);
 }
 
-async function fetchConnRow(id: string) {
+async function fetchConnectionDatabase(id: string) {
   const db = getDb("eu");
-  const rows = await db.select().from(connections).where(eq(connections.id, id));
+  const rows = await db
+    .select()
+    .from(connectionDatabases)
+    .where(eq(connectionDatabases.id, id));
   const row = rows[0];
-  if (!row) throw new Error(`connection ${id} vanished`);
+  if (!row) throw new Error(`connection_databases ${id} vanished`);
   return row;
 }
 

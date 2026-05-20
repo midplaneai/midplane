@@ -21,8 +21,10 @@ import {
   makeKmsContext,
   type Region,
 } from "@midplane-cloud/kms";
+import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
 import { normalizeName } from "./connection-name.ts";
+import { createToken } from "./tokens.ts";
 
 export {
   MAX_CONNECTION_NAME_LENGTH,
@@ -77,9 +79,10 @@ export async function emitConfigAuditRow(
 
 // Default child name applied to the auto-created DB when a connection is
 // first created. A connection has 1+ children, all of which share the
-// connection's mcp_token; the add-second-DB flow lives in PR-C and the
-// per-DB helpers below take an explicit `dbName` argument that defaults
-// to this value.
+// connection's token surface (mcp_tokens table — multi-token per
+// connection since PR2 of mcp_url_auth_security). Add-second-DB flow
+// lives in PR-C and the per-DB helpers below take an explicit `dbName`
+// argument that defaults to this value.
 export const DEFAULT_DATABASE_NAME = "main";
 
 // Mirror of the OSS engine's DB_NAME_RE. A name validated here also
@@ -90,18 +93,37 @@ export function isValidDatabaseName(s: unknown): s is string {
   return typeof s === "string" && DB_NAME_RE.test(s);
 }
 
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** Pick the prefix env family from the deploy tier. NODE_ENV=production
+ *  → 'live' so a leaked production token is identifiable as such by
+ *  scanners (and is visibly distinct from a dev token in the dashboard).
+ *  Everything else → 'test'. Override via MIDPLANE_TOKEN_ENV when a
+ *  staging deploy wants 'live' prefixes or a prod canary wants 'test'. */
+function tokenEnvFromConfig(env: NodeJS.ProcessEnv): "live" | "test" {
+  const override = env.MIDPLANE_TOKEN_ENV;
+  if (override === "live" || override === "test") return override;
+  return env.NODE_ENV === "production" ? "live" : "test";
+}
+
 // Shared create-connection path used by both the Server Action behind the
-// paste-DSN form and the JSON POST /api/connections route. Encrypts the DSN
-// with the customer's region key, persists the ciphertext on a
-// connection_databases row named "main", and mints an opaque MCP token on
-// the parent connection. Returns the new parent id and token; the caller
-// decides whether to render a success page or return JSON.
+// paste-DSN form and the JSON POST /api/connections route. Encrypts the
+// DSN with the customer's region key, persists the ciphertext on a
+// connection_databases row named "main", and auto-mints a default
+// mcp_tokens row (PR2 of mcp_url_auth_security — D3: first-token UX).
+//
+// Returns the new parent id and the default token's PLAINTEXT — the
+// caller renders the plaintext URL ONCE on the post-create success page
+// and never sees it again. The plaintext is not retrievable from the DB
+// (only the HMAC-SHA256(pepper) digest is stored), which is the
+// show-once property.
 export async function createConnection(
   customer: Customer,
   dsn: string,
   name: string | null = null,
   defaultAccess: AccessLevel = "read",
-): Promise<{ id: string; mcpToken: string }> {
+  actorClerkUserId: string,
+): Promise<{ id: string; defaultTokenPlaintext: string }> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
     kms,
@@ -111,8 +133,6 @@ export async function createConnection(
   );
 
   const id = ulid();
-  // 32 hex chars (~128 bits of entropy) — opaque, URL-safe, no PII.
-  const mcpToken = crypto.randomUUID().replace(/-/g, "");
 
   // Initial policy: default = customer's choice from the create form,
   // tables = {} (per-table overrides are added later from the permission
@@ -132,7 +152,6 @@ export async function createConnection(
       customerId: customer.id,
       region: customer.region,
       name: normalizeName(name),
-      mcpToken,
     });
     await tx.insert(connectionDatabases).values({
       id: childId,
@@ -144,7 +163,48 @@ export async function createConnection(
     });
   });
 
-  return { id, mcpToken };
+  // Mint the default token outside the connection-insert transaction so
+  // a KMS / pepper hiccup at token-mint time doesn't roll back the
+  // already-encrypted DSN. If mint fails, the connection exists without
+  // any usable token — the operator is alerted; the user can create one
+  // from the dashboard in PR3 (and meanwhile the show-once path is the
+  // only delivery channel for plaintext, so a retry is safe to compose
+  // out of band).
+  //
+  // Pepper is loaded once per call. V1 has exactly one pepper kid per
+  // region; rotation introduces additional kids and createToken picks
+  // the first map entry — that's the active write-side kid.
+  const peppers = await loadPepperFromKms(customer.region, process.env);
+  const firstPepperKid = peppers.keys().next().value as string | undefined;
+  if (!firstPepperKid) {
+    throw new Error(
+      `no pepper available for region '${customer.region}' — token mint cannot proceed`,
+    );
+  }
+  const pepperBuf = peppers.get(firstPepperKid)!;
+  const expiresAt = new Date(Date.now() + NINETY_DAYS_MS);
+  const minted = await createToken(
+    customer,
+    id,
+    {
+      name: "default",
+      expiresAt,
+      actorClerkUserId,
+      env: tokenEnvFromConfig(process.env),
+    },
+    { kid: firstPepperKid, pepper: pepperBuf },
+  );
+  if (!minted) {
+    // The connection row was just inserted with this customer's id; the
+    // mint's ownership check should pass. If it didn't, something is
+    // wrong with the bind / RLS — surface loudly so the operator can
+    // catch a misconfig before a customer hits it.
+    throw new Error(
+      "createConnection: token mint returned null for just-created connection (RLS or ownership misconfig)",
+    );
+  }
+
+  return { id, defaultTokenPlaintext: minted.plaintext };
 }
 
 export function isValidDsn(s: unknown): s is string {
@@ -170,22 +230,27 @@ export async function renameConnection(
 }
 
 // Delete a connection only if it belongs to the calling customer. Returns
-// the number of rows deleted (0 if the id is unknown OR owned by another
-// customer — the caller can't distinguish, by design, to avoid leaking
-// existence). The matching indexer_cursors row is also removed so the
-// staleness probe and any operational reporting on cursors don't pick
-// up orphans for connections that no longer exist.
+// the deleted row's id (the registry / cursor key in the hybrid model)
+// or null (when the id is unknown OR owned by another customer — the
+// caller can't distinguish, by design, to avoid leaking existence).
 //
 // Children in connection_databases are removed by the FK ON DELETE
-// CASCADE declared in 0008 — no explicit child delete here.
+// CASCADE declared in 0008. mcp_tokens rows are removed by the FK ON
+// DELETE CASCADE declared in 0017. The matching indexer_cursors row's
+// connection_id flips to NULL via FK ON DELETE SET NULL (0018) — it
+// outlives the connection by design so the indexer can finish draining
+// any backlog before a future sweeper deletes it. We additionally
+// delete the cursor explicitly to keep clean-slate dashboard semantics
+// when there's no pending backlog; the FK is the durable enforcer if
+// this best-effort delete is bypassed.
 //
-// Returns the deleted row's mcpToken so the caller can stop the running
+// Returns the deleted row's id so the caller can stop the running
 // container — without that step the OSS sidecar lingers (still holding
 // the now-deleted DSNs in env) until its 30-minute idle timer fires.
 export async function deleteConnection(
   customer: Customer,
   id: string,
-): Promise<{ mcpToken: string } | null> {
+): Promise<{ id: string } | null> {
   const db = getDb(customer.region);
   return db.transaction(async (tx) => {
     const deleted = await tx
@@ -193,13 +258,20 @@ export async function deleteConnection(
       .where(
         and(eq(connections.id, id), eq(connections.customerId, customer.id)),
       )
-      .returning({ id: connections.id, mcpToken: connections.mcpToken });
+      .returning({ id: connections.id });
     const row = deleted[0];
     if (!row) return null;
+    // Best-effort cursor cleanup. The FK ON DELETE SET NULL has already
+    // fired by the time this runs (the connections delete cascaded
+    // through the FK), so any cursor for this connection now has
+    // connection_id=NULL. We delete the now-orphaned cursor explicitly
+    // to keep the dashboard clean; the future orphan-sweeper handles the
+    // race where the indexer is mid-drain and a row gets re-stamped
+    // briefly.
     await tx
       .delete(indexerCursors)
-      .where(eq(indexerCursors.mcpToken, row.mcpToken));
-    return { mcpToken: row.mcpToken };
+      .where(eq(indexerCursors.connectionId, row.id));
+    return { id: row.id };
   });
 }
 
@@ -211,7 +283,9 @@ export interface RotationCaches {
    *  connection_databases.id (the credential), not the parent connection.
    *  Multi-DB rollout in 0008. */
   cache: { invalidate(connectionDatabaseId: string, region: Region): void };
-  registry: { invalidate(token: string): Promise<void> };
+  /** ContainerRegistry invalidate is keyed on the parent connection id
+   *  (PR2 of mcp_url_auth_security — was plaintext token). */
+  registry: { invalidate(connectionId: string): Promise<void> };
 }
 
 // Dependencies setTableAccess needs to push the new policy to the
@@ -222,9 +296,9 @@ export interface RotationCaches {
 // be listed since OSS drops absent entries from the engine's registry.
 // The caller loads sibling DBs from PG and assembles the full set.
 export interface PolicyPushDeps {
-  registry: { invalidate(token: string): Promise<void> };
+  registry: { invalidate(connectionId: string): Promise<void> };
   pushPolicy(
-    token: string,
+    connectionId: string,
     databases: readonly DatabaseEntry[],
   ): Promise<
     | { delivered: true }
@@ -275,7 +349,7 @@ export async function setTableAccess(
   deps: PolicyPushDeps,
   actorClerkUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
-): Promise<{ mcpToken: string } | null> {
+): Promise<{ id: string } | null> {
   const validation = validatePolicy(policy);
   if (!validation.ok) {
     const summary = validation.errors
@@ -302,10 +376,10 @@ export async function setTableAccess(
   // addDatabase/removeDatabase/renameDatabase below. NOTE: a narrower
   // race remains between commit-of-T1 and pushPolicy-of-T1 vs T2 — the
   // engine converges on the next edit since each push sends full state,
-  // but a per-token push mutex would close it fully.
+  // but a per-connection push mutex would close it fully.
   const result = await db.transaction(async (tx) => {
     const parent = await tx
-      .select({ mcpToken: connections.mcpToken })
+      .select({ id: connections.id })
       .from(connections)
       .where(
         and(eq(connections.id, id), eq(connections.customerId, customer.id)),
@@ -333,7 +407,7 @@ export async function setTableAccess(
       })
       .from(connectionDatabases)
       .where(eq(connectionDatabases.connectionId, id));
-    return { mcpToken: parent[0]!.mcpToken, siblings };
+    return { id: parent[0]!.id, siblings };
   });
 
   if (!result) return null;
@@ -346,7 +420,7 @@ export async function setTableAccess(
   }));
 
   try {
-    const pushResult = await deps.pushPolicy(result.mcpToken, databases);
+    const pushResult = await deps.pushPolicy(result.id, databases);
     if ("rejected" in pushResult) {
       // Engine kept the previous policy. Don't fall back — respawn
       // would re-read this same (rejected) policy from PG and fail to
@@ -372,7 +446,7 @@ export async function setTableAccess(
       "[setTableAccess] hot reload failed; falling back to respawn",
       err,
     );
-    await deps.registry.invalidate(result.mcpToken).catch(() => undefined);
+    await deps.registry.invalidate(result.id).catch(() => undefined);
   }
 
   // Cloud-emitted audit row, distinct from the engine's POLICY_RELOADED:
@@ -430,7 +504,7 @@ export async function setTenantScope(
   deps: PolicyPushDeps,
   actorClerkUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
-): Promise<{ mcpToken: string } | null> {
+): Promise<{ id: string } | null> {
   // Cloud-side validation before touching PG. The YAML emitter would also
   // throw, but failing here gives a clean per-field error message to the
   // dashboard action instead of bubbling a serialization throw out of
@@ -458,7 +532,7 @@ export async function setTenantScope(
   // up with the loser's stale view of the winner's DB.
   const result = await db.transaction(async (tx) => {
     const parent = await tx
-      .select({ mcpToken: connections.mcpToken })
+      .select({ id: connections.id })
       .from(connections)
       .where(
         and(eq(connections.id, id), eq(connections.customerId, customer.id)),
@@ -486,7 +560,7 @@ export async function setTenantScope(
       })
       .from(connectionDatabases)
       .where(eq(connectionDatabases.connectionId, id));
-    return { mcpToken: parent[0]!.mcpToken, siblings };
+    return { id: parent[0]!.id, siblings };
   });
 
   if (!result) return null;
@@ -499,7 +573,7 @@ export async function setTenantScope(
   }));
 
   try {
-    const pushResult = await deps.pushPolicy(result.mcpToken, databases);
+    const pushResult = await deps.pushPolicy(result.id, databases);
     if ("rejected" in pushResult) {
       // Engine kept the previous policy. Don't fall back — respawn would
       // re-read the same (rejected) config from PG and fail to boot.
@@ -515,7 +589,7 @@ export async function setTenantScope(
       "[setTenantScope] hot reload failed; falling back to respawn",
       err,
     );
-    await deps.registry.invalidate(result.mcpToken).catch(() => undefined);
+    await deps.registry.invalidate(result.id).catch(() => undefined);
   }
 
   // Cloud-emitted audit row, same shape as POLICY_CHANGED (see setTableAccess
@@ -537,7 +611,7 @@ export async function setTenantScope(
     console.error("[setTenantScope] TENANT_SCOPE_CHANGED audit write failed", err);
   }
 
-  return { mcpToken: result.mcpToken };
+  return { id: result.id };
 }
 
 // Rotate one DB's DSN on a connection: re-encrypt with the customer's
@@ -556,9 +630,12 @@ export async function setTenantScope(
 // the named child does not exist (caller can't distinguish, mirroring
 // deleteConnection's leakage-avoidance shape).
 //
-// mcp_token is intentionally NOT rotated — the URL is a contract with the
-// agent runtime; rotating it would force re-paste and defeat the purpose
-// of in-place credential rotation.
+// Tokens are intentionally NOT rotated by DSN rotation — the agent-
+// facing URL is a contract with the agent runtime; rotating it would
+// force re-paste and defeat the purpose of in-place credential rotation.
+// (The hybrid token model in PR2 of mcp_url_auth_security makes this
+// stronger still: a connection can have many sibling tokens, each with
+// independent lifecycle. DSN rotation touches no token row at all.)
 //
 // Failure isolation: if cache.invalidate throws, the DB write is already
 // committed (we don't roll back — "DSN rotated" is the durable fact);
@@ -571,7 +648,7 @@ export async function rotateConnection(
   dsn: string,
   caches: RotationCaches,
   dbName: string = DEFAULT_DATABASE_NAME,
-): Promise<{ id: string; mcpToken: string; region: Region } | null> {
+): Promise<{ id: string; region: Region } | null> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
     kms,
@@ -583,13 +660,12 @@ export async function rotateConnection(
   const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
     // Ownership-gated parent read first — confirms the connection belongs
-    // to this customer and gives us the mcp_token + region for the cache
-    // invalidation step. Returning null here is indistinguishable from
-    // "id unknown", which is the leakage shape we want.
+    // to this customer and gives us the region for the cache invalidation
+    // step. Returning null here is indistinguishable from "id unknown",
+    // which is the leakage shape we want.
     const parent = await tx
       .select({
         id: connections.id,
-        mcpToken: connections.mcpToken,
         region: connections.region,
       })
       .from(connections)
@@ -616,7 +692,6 @@ export async function rotateConnection(
     if (updated.length === 0) return null;
     return {
       id: parent[0]!.id,
-      mcpToken: parent[0]!.mcpToken,
       region: parent[0]!.region,
       connectionDatabaseId: updated[0]!.id,
     };
@@ -630,14 +705,13 @@ export async function rotateConnection(
     console.error("[rotateConnection] cache.invalidate failed", err);
   }
   try {
-    await caches.registry.invalidate(result.mcpToken);
+    await caches.registry.invalidate(result.id);
   } catch (err) {
     console.error("[rotateConnection] registry.invalidate failed", err);
   }
 
   return {
     id: result.id,
-    mcpToken: result.mcpToken,
     region: result.region,
   };
 }
@@ -738,7 +812,7 @@ export async function getConnectionWithMainDatabase(
 // DecryptCache invalidation is moot. The running container needs to
 // respawn so the OSS engine picks up the new YAML `databases:` block.
 export interface DatabaseMutationDeps {
-  registry: { invalidate(token: string): Promise<void> };
+  registry: { invalidate(connectionId: string): Promise<void> };
 }
 
 /** Returned when a sibling DB already owns the requested name. */
@@ -781,7 +855,7 @@ function isUniqueDbNameViolation(err: unknown): boolean {
 // Add a new DB to an existing connection. Encrypts the DSN with the
 // customer's region key, inserts the child row, and invalidates the
 // running container so the next spawn includes the new entry in the
-// YAML `databases:` block. Returns the new child id + parent mcpToken.
+// YAML `databases:` block. Returns the new child id + connection id.
 //
 // Throws DatabaseNameTaken if the name collides with an existing
 // sibling. Returns null when the connection is unknown OR owned by
@@ -795,7 +869,7 @@ export async function addDatabase(
   dsn: string,
   defaultAccess: AccessLevel,
   deps: DatabaseMutationDeps,
-): Promise<{ id: string; mcpToken: string } | null> {
+): Promise<{ id: string; connectionId: string } | null> {
   if (!isValidDatabaseName(dbName)) {
     throw new Error(
       `invalid database name: must match ${DB_NAME_RE} (lowercase alnum + _- , 1–32 chars, leading letter)`,
@@ -821,7 +895,7 @@ export async function addDatabase(
   try {
     result = await db.transaction(async (tx) => {
       // Ownership-gated parent read first AND lock — gives us the
-      // mcp_token for the registry invalidation, ensures we never
+      // connection id for the registry invalidation, ensures we never
       // write through to a foreign customer's connection, and
       // serializes concurrent add/remove/rename on this same
       // connection. Without the lock, two parallel adds for the same
@@ -830,7 +904,7 @@ export async function addDatabase(
       // would escape as a raw Postgres error instead of
       // DatabaseNameTaken.
       const parent = await tx
-        .select({ mcpToken: connections.mcpToken })
+        .select({ id: connections.id })
         .from(connections)
         .where(
           and(
@@ -868,7 +942,7 @@ export async function addDatabase(
         kmsKeyId,
         tableAccess,
       });
-      return { mcpToken: parent[0]!.mcpToken };
+      return { id: parent[0]!.id };
     });
   } catch (err) {
     // Belt-and-suspenders: the FOR UPDATE lock plus the pre-check
@@ -886,12 +960,12 @@ export async function addDatabase(
   if ("error" in result) throw new DatabaseNameTaken(dbName);
 
   try {
-    await deps.registry.invalidate(result.mcpToken);
+    await deps.registry.invalidate(result.id);
   } catch (err) {
     console.error("[addDatabase] registry.invalidate failed", err);
   }
 
-  return { id: childId, mcpToken: result.mcpToken };
+  return { id: childId, connectionId: result.id };
 }
 
 // Remove a named DB from a connection. The connection itself is
@@ -909,7 +983,7 @@ export async function removeDatabase(
   connectionId: string,
   dbName: string,
   deps: DatabaseMutationDeps,
-): Promise<{ mcpToken: string } | null> {
+): Promise<{ id: string } | null> {
   const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
     // Lock the parent connection row at the top of the txn so any
@@ -920,7 +994,7 @@ export async function removeDatabase(
     // connection child-less — violating LastDatabaseProtected and
     // breaking the next engine spawn.
     const parent = await tx
-      .select({ mcpToken: connections.mcpToken })
+      .select({ id: connections.id })
       .from(connections)
       .where(
         and(
@@ -955,19 +1029,19 @@ export async function removeDatabase(
       )
       .returning({ id: connectionDatabases.id });
     if (deleted.length === 0) return null;
-    return { mcpToken: parent[0]!.mcpToken };
+    return { id: parent[0]!.id };
   });
 
   if (!result) return null;
   if ("error" in result) throw new LastDatabaseProtected();
 
   try {
-    await deps.registry.invalidate(result.mcpToken);
+    await deps.registry.invalidate(result.id);
   } catch (err) {
     console.error("[removeDatabase] registry.invalidate failed", err);
   }
 
-  return { mcpToken: result.mcpToken };
+  return { id: result.id };
 }
 
 // Rename a DB alias. The OSS engine treats `database` as the agent-facing
@@ -984,7 +1058,7 @@ export async function renameDatabase(
   oldName: string,
   newName: string,
   deps: DatabaseMutationDeps,
-): Promise<{ mcpToken: string } | null> {
+): Promise<{ id: string } | null> {
   if (!isValidDatabaseName(newName)) {
     throw new Error(
       `invalid database name: must match ${DB_NAME_RE} (lowercase alnum + _- , 1–32 chars, leading letter)`,
@@ -996,7 +1070,7 @@ export async function renameDatabase(
     // an attacker that a connection exists by returning null vs. a no-op.
     const db = getDb(customer.region);
     const parent = await db
-      .select({ mcpToken: connections.mcpToken })
+      .select({ id: connections.id })
       .from(connections)
       .where(
         and(
@@ -1006,7 +1080,7 @@ export async function renameDatabase(
       )
       .limit(1);
     if (parent.length === 0) return null;
-    return { mcpToken: parent[0]!.mcpToken };
+    return { id: parent[0]!.id };
   }
 
   const db = getDb(customer.region);
@@ -1020,7 +1094,7 @@ export async function renameDatabase(
       // unique constraint and bubble up as a raw 500 instead of the
       // typed DatabaseNameTaken the dashboard knows how to handle.
       const parent = await tx
-        .select({ mcpToken: connections.mcpToken })
+        .select({ id: connections.id })
         .from(connections)
         .where(
           and(
@@ -1060,7 +1134,7 @@ export async function renameDatabase(
         )
         .returning({ id: connectionDatabases.id });
       if (updated.length === 0) return null;
-      return { mcpToken: parent[0]!.mcpToken };
+      return { id: parent[0]!.id };
     });
   } catch (err) {
     if (isUniqueDbNameViolation(err)) {
@@ -1073,12 +1147,12 @@ export async function renameDatabase(
   if ("error" in result) throw new DatabaseNameTaken(newName);
 
   try {
-    await deps.registry.invalidate(result.mcpToken);
+    await deps.registry.invalidate(result.id);
   } catch (err) {
     console.error("[renameDatabase] registry.invalidate failed", err);
   }
 
-  return { mcpToken: result.mcpToken };
+  return { id: result.id };
 }
 
 /** Server-side fetch for the hierarchical dashboard. Returns one row per
@@ -1090,12 +1164,12 @@ export type DashboardDatabase = typeof connectionDatabases.$inferSelect & {
    *  customer's region. NULL when the agent has never queried this DB —
    *  the dashboard renders this as "awaiting first query".
    *
-   *  KNOWN LIMITATION: audit_events_index has no `mcp_token` /
-   *  `connection_id` column today, so the max-ts aggregate fan-ins
-   *  across same-named DBs in different connections of the same
-   *  customer-region. If a customer has two connections each with a
-   *  "main" DB, both rows show the same lastQueryAt. PR-C accepts this
-   *  for v1; a future schema migration adds the disambiguator. */
+   *  KNOWN LIMITATION: audit_events_index has no `connection_id` column
+   *  today, so the max-ts aggregate fan-ins across same-named DBs in
+   *  different connections of the same customer-region. If a customer
+   *  has two connections each with a "main" DB, both rows show the same
+   *  lastQueryAt. PR-C accepts this for v1; a future schema migration
+   *  adds the disambiguator. */
   lastQueryAt: Date | null;
 };
 
@@ -1162,7 +1236,7 @@ export async function listDashboardConnections(
       .from(connections)
       .leftJoin(
         indexerCursors,
-        eq(indexerCursors.mcpToken, connections.mcpToken),
+        eq(indexerCursors.connectionId, connections.id),
       )
       .where(eq(connections.customerId, customer.id))
       .orderBy(desc(connections.createdAt)),
@@ -1223,14 +1297,13 @@ export async function getDashboardFreshness(
     db
       .select({
         id: connections.id,
-        mcpToken: connections.mcpToken,
         lastIndexedAt: indexerCursors.lastIndexedAt,
         lastErrorAt: indexerCursors.lastErrorAt,
       })
       .from(connections)
       .leftJoin(
         indexerCursors,
-        eq(indexerCursors.mcpToken, connections.mcpToken),
+        eq(indexerCursors.connectionId, connections.id),
       )
       .where(eq(connections.customerId, customer.id))
       .orderBy(desc(connections.createdAt)),

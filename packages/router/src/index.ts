@@ -8,8 +8,8 @@ export { DsnResolver } from "./decrypt.ts";
 export type { ResolveDsnDeps, ResolveDsnResult } from "./decrypt.ts";
 export { loadRegions, mintMcpUrl } from "./region.ts";
 export type { RegionConfig } from "./region.ts";
-export { resolveByToken } from "./resolve.ts";
-export type { Db } from "./resolve.ts";
+export { resolveByToken, bumpLastUsed } from "./resolve.ts";
+export type { Db, ResolvedConnection } from "./resolve.ts";
 export { ContainerRegistry } from "./spawner.ts";
 export type {
   ActiveContainer,
@@ -24,5 +24,7 @@ export { FlyMachineSpawner } from "./spawner-fly.ts";
 export type { FlyMachineSpawnerOptions } from "./spawner-fly.ts";
 export { Indexer } from "./indexer.ts";
 export type { ContainerAuditRow, IndexerOptions } from "./indexer.ts";
+export { ExpirySweeper } from "./expiry-sweeper.ts";
+export type { ExpirySweeperOptions } from "./expiry-sweeper.ts";
 export { pushPolicy, PushPolicyError } from "./admin.ts";
 export type { PushPolicyDeps, PushPolicyResult } from "./admin.ts";

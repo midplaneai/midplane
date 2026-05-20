@@ -16,18 +16,29 @@
 //      24h grace window from the container — only after they are confirmed
 //      indexed (id <= cursor.lastId).
 //
+// PR2 of mcp_url_auth_security:
+//   - Cursor rows keyed on connection_id (was: plaintext mcp_token).
+//     Synthetic id PK; nullable connection_id FK ON DELETE SET NULL so a
+//     cursor survives connection deletion long enough to drain the
+//     engine's remaining rows.
+//   - mcp_token_id propagated from the OSS pull JSON (lockstep OSS 0.6.0)
+//     to audit_events_index.mcp_token_id so dashboards can attribute
+//     every audit row to the specific token that authorized the session.
+//
 // Failure modes:
 //   - Postgres unreachable: leave cursor row untouched, log onError, do
 //     NOT issue the container DELETE. Container's SQLite keeps growing
 //     until indexer recovers — this is the design.
-//   - Container 5xx / network error: log onError, skip this token this
-//     tick, retry next tick. Cursor unchanged.
-//   - Container 401: token rotation drift on cloud side; log loudly and
-//     skip — operator alert.
+//   - Container 5xx / network error: log onError, skip this connection
+//     this tick, retry next tick. Cursor unchanged.
+//   - Container 401: indexer token rotation drift; log loudly and skip
+//     — operator alert.
 //   - Container 404 (route unconfigured): treat as soft skip; the OSS
 //     image may not have INDEXER_TOKEN set in dev. Log once per token.
 
 import { and, eq, lt, sql as drizzleSql } from "drizzle-orm";
+import { ulid } from "ulid";
+
 import {
   auditEventsIndex,
   connections,
@@ -65,7 +76,10 @@ export interface IndexerOptions {
   now?: () => number;
   onError?: (
     err: unknown,
-    ctx: { token: string; phase: "fetch" | "write" | "retention" },
+    ctx: {
+      connectionId: string;
+      phase: "fetch" | "write" | "retention";
+    },
   ) => void;
 }
 
@@ -91,6 +105,12 @@ export interface ContainerAuditRow {
    *  single-DB containers. The cloud defaults to "main" when missing so
    *  audit rows from a 0.1.x → 0.2.x rollout window stay attributable. */
   database?: string;
+  /** Per-token attribution stamped by the OSS engine (≥0.6.0) from the
+   *  `X-Midplane-Token-Id` header the cloud proxy injects on every MCP
+   *  request. NULL for sessions started before the lockstep upgrade,
+   *  non-MCP callers, and rows where the header was missing or
+   *  malformed. */
+  mcp_token_id?: string | null;
   ts: number;
   event_type: "ATTEMPTED" | "DECIDED" | "EXECUTED" | "FAILED" | "POLICY_RELOADED";
   payload: Record<string, unknown>;
@@ -135,14 +155,20 @@ export class Indexer {
   private readonly fetchFn: typeof fetch;
   private readonly nowFn: () => number;
   private readonly onError:
-    | ((err: unknown, ctx: { token: string; phase: "fetch" | "write" | "retention" }) => void)
+    | ((
+        err: unknown,
+        ctx: {
+          connectionId: string;
+          phase: "fetch" | "write" | "retention";
+        },
+      ) => void)
     | undefined;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private retentionTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRetentionAt = 0;
-  /** Per-token customer_id cache. Customer_id is immutable for the
-   *  lifetime of the connection (and connection lifetime > registry entry),
-   *  so there's no staleness concern. */
+  /** Per-connection customer_id cache. customer_id is immutable for the
+   *  lifetime of the connection (and connection lifetime > registry
+   *  entry), so there's no staleness concern. */
   private readonly customerCache = new Map<
     string,
     { customerId: string; region: Region }
@@ -190,7 +216,10 @@ export class Indexer {
       try {
         await this.indexOne(container);
       } catch (err) {
-        this.onError?.(err, { token: container.token, phase: "fetch" });
+        this.onError?.(err, {
+          connectionId: container.connectionId,
+          phase: "fetch",
+        });
       }
     }
 
@@ -200,7 +229,10 @@ export class Indexer {
         try {
           await this.sweepRetention(container);
         } catch (err) {
-          this.onError?.(err, { token: container.token, phase: "retention" });
+          this.onError?.(err, {
+            connectionId: container.connectionId,
+            phase: "retention",
+          });
         }
       }
     }
@@ -220,13 +252,15 @@ export class Indexer {
 
   private async indexOne(container: ActiveContainer): Promise<void> {
     // Prefer the cursor row's customer_id (stamped on first index). It
-    // survives connection deletion/rotation, so backlog drainage works
-    // even when the user deletes a connection 5 seconds after first use.
-    // Fall back to the connections table on first sighting only.
-    const cursorRow = await this.loadCursorRow(container.token);
+    // survives connection deletion via FK ON DELETE SET NULL: the row's
+    // connection_id flips to NULL but customer_id stays, so backlog
+    // drainage works even when the user deletes a connection 5 seconds
+    // after first use. Fall back to the connections table on first
+    // sighting only.
+    const cursorRow = await this.loadCursorRow(container.connectionId);
     let customerId = cursorRow?.customerId;
     if (!customerId) {
-      const meta = await this.resolveCustomer(container.token);
+      const meta = await this.resolveCustomer(container.connectionId);
       if (!meta) {
         // Truly orphaned: no cursor row AND no connection row. Skip.
         return;
@@ -242,9 +276,17 @@ export class Indexer {
       const resp = await this.fetchSince(container, cursor);
       if (resp.rows.length === 0) return;
       try {
-        await this.writeBatch(container.token, container.region, customerId, resp);
+        await this.writeBatch(
+          container.connectionId,
+          container.region,
+          customerId,
+          resp,
+        );
       } catch (err) {
-        this.onError?.(err, { token: container.token, phase: "write" });
+        this.onError?.(err, {
+          connectionId: container.connectionId,
+          phase: "write",
+        });
         return;
       }
       cursor = resp.rows[resp.rows.length - 1]!.id;
@@ -276,7 +318,7 @@ export class Indexer {
   }
 
   private async writeBatch(
-    token: string,
+    connectionId: string,
     region: Region,
     customerId: string,
     resp: AuditSinceResponse,
@@ -292,7 +334,7 @@ export class Indexer {
     if (skipped > 0) {
       this.onError?.(
         new Error(`indexer: ${skipped} audit rows failed schema validation`),
-        { token, phase: "write" },
+        { connectionId, phase: "write" },
       );
     }
     const lastId = resp.rows[resp.rows.length - 1]!.id;
@@ -336,25 +378,38 @@ export class Indexer {
               eventType: row.event_type,
               payload: row.payload,
               schemaVersion: row.schema_version,
+              // OSS 0.6.0 lockstep: per-token attribution stamped on
+              // every row from a session via X-Midplane-Token-Id. NULL
+              // for pre-0.6.0 sessions and any row where the header was
+              // missing/malformed at session initialize.
+              mcpTokenId: row.mcp_token_id ?? null,
             })),
           )
           .onConflictDoNothing({ target: auditEventsIndex.id });
       }
 
+      // Cursor upsert keyed on the partial unique index in 0018:
+      //   UNIQUE (connection_id) WHERE connection_id IS NOT NULL.
+      // Drizzle 0.38 supports `targetWhere` so the ON CONFLICT clause
+      // names the predicate at the SQL boundary, matching the partial
+      // index. The synthetic id is only consulted on first insert; the
+      // existing row keeps its id on update. customer_id is also
+      // immutable on conflict (matches the pre-PR2 indexer contract).
+      const cursorId = ulid();
       await tx
         .insert(indexerCursors)
         .values({
-          mcpToken: token,
+          id: cursorId,
+          connectionId,
           customerId,
           region,
           lastId,
           lastIndexedAt: indexedAt,
         })
         .onConflictDoUpdate({
-          target: indexerCursors.mcpToken,
+          target: indexerCursors.connectionId,
+          targetWhere: drizzleSql`connection_id IS NOT NULL`,
           set: {
-            // customerId NOT updated on conflict — once stamped it's
-            // immutable. (Connection rotation doesn't change customer.)
             lastId,
             lastIndexedAt: indexedAt,
             lastError: null,
@@ -365,7 +420,7 @@ export class Indexer {
   }
 
   private async loadCursorRow(
-    token: string,
+    connectionId: string,
   ): Promise<{ lastId: string; customerId: string } | null> {
     const rows = await this.db
       .select({
@@ -373,7 +428,7 @@ export class Indexer {
         customerId: indexerCursors.customerId,
       })
       .from(indexerCursors)
-      .where(eq(indexerCursors.mcpToken, token))
+      .where(eq(indexerCursors.connectionId, connectionId))
       .limit(1);
     return rows[0] ?? null;
   }
@@ -382,7 +437,7 @@ export class Indexer {
     // Retention reads customer_id off the cursor row — no fallback to
     // connections needed because the cursor row is always populated by
     // the time any rows are ack'd into Postgres (writeBatch upserts it).
-    const cursorRow = await this.loadCursorRow(container.token);
+    const cursorRow = await this.loadCursorRow(container.connectionId);
     if (!cursorRow || !cursorRow.lastId) return;
     const customerId = cursorRow.customerId;
     const ackId = cursorRow.lastId;
@@ -431,9 +486,9 @@ export class Indexer {
   }
 
   private async resolveCustomer(
-    token: string,
+    connectionId: string,
   ): Promise<{ customerId: string; region: Region } | null> {
-    const cached = this.customerCache.get(token);
+    const cached = this.customerCache.get(connectionId);
     if (cached) return cached;
     const rows = await this.db
       .select({
@@ -441,12 +496,12 @@ export class Indexer {
         region: connections.region,
       })
       .from(connections)
-      .where(eq(connections.mcpToken, token))
+      .where(eq(connections.id, connectionId))
       .limit(1);
     const row = rows[0];
     if (!row) return null;
     const meta = { customerId: row.customerId, region: row.region as Region };
-    this.customerCache.set(token, meta);
+    this.customerCache.set(connectionId, meta);
     return meta;
   }
 }
@@ -502,6 +557,18 @@ function isValidAuditRow(row: unknown): row is ContainerAuditRow {
   if (
     r.database !== undefined &&
     (typeof r.database !== "string" || r.database.length === 0)
+  ) {
+    return false;
+  }
+  // mcp_token_id is optional and may be null; when present it must be a
+  // non-empty string. Don't enforce ULID shape here — the FK to
+  // mcp_tokens(id) is the durable enforcer; a malformed string just
+  // fails the INSERT and the cursor advances past the row (matches the
+  // "drop schema-invalid rows but advance cursor" posture above).
+  if (
+    r.mcp_token_id !== null &&
+    r.mcp_token_id !== undefined &&
+    (typeof r.mcp_token_id !== "string" || r.mcp_token_id.length === 0)
   ) {
     return false;
   }

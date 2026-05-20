@@ -6,9 +6,17 @@
 //   DockerSpawner       local `docker run` (dev / Playwright / no-Fly).
 //   FlyMachineSpawner   Fly Machines API (production; needs FLY_API_TOKEN).
 //
-// The registry is the same in both cases: a per-token map of running
-// containers, with a per-token mutex so concurrent first-requests don't
-// double-spawn, and a 30-minute idle timer that triggers stop().
+// The registry is the same in both cases: a per-connection map of running
+// containers, with a per-connection mutex so concurrent first-requests
+// don't double-spawn, and a 30-minute idle timer that triggers stop().
+//
+// Keying note (PR2 of mcp_url_auth_security): the registry keys on the
+// CONNECTION id, not the plaintext token. The hybrid multi-token model
+// shares one container across every sibling token on a connection — the
+// container's session-frozen X-Midplane-Token-Id (set by the proxy from
+// the matched mcp_tokens row) is what discriminates audit attribution.
+// Pre-PR2, the registry keyed on the plaintext token, which was a leak
+// vector (process memory, container names, env-var names).
 //
 // Trust posture note: the DSN is NEVER logged or persisted. It is passed
 // to the Spawner backend via env injection (Docker -e, Fly machine config)
@@ -42,12 +50,16 @@ export interface SpawnDatabase {
 }
 
 export interface SpawnOptions {
-  token: string;
+  /** Stable parent-connection ULID. Used as the registry key, the
+   *  container name suffix (lowercased), and (in production) the Fly
+   *  machine name suffix. Token plaintext is NEVER passed to the
+   *  spawner. */
+  connectionId: string;
   region: Region;
-  /** One container per token, N>=1 DBs per container. The cloud always
-   *  emits the multi-DB YAML shape, even for N=1; OSS 0.2.0 treats a
-   *  one-entry `databases:` array identically to the legacy single-DB
-   *  shape, so the spawn path stays single-branched. */
+  /** One container per CONNECTION, N>=1 DBs per container. The cloud
+   *  always emits the multi-DB YAML shape, even for N=1; OSS 0.2.0
+   *  treats a one-entry `databases:` array identically to the legacy
+   *  single-DB shape, so the spawn path stays single-branched. */
   databases: readonly SpawnDatabase[];
 }
 
@@ -63,7 +75,7 @@ interface RegistryEntry {
 }
 
 export interface ActiveContainer {
-  token: string;
+  connectionId: string;
   region: Region;
   host: string;
   port: number;
@@ -90,12 +102,13 @@ export class ContainerRegistry {
   }
 
   async acquire(opts: SpawnOptions): Promise<SpawnedContainer> {
-    const existing = this.entries.get(opts.token);
+    const key = opts.connectionId;
+    const existing = this.entries.get(key);
     if (existing) {
-      this.touch(opts.token, existing);
+      this.touch(key, existing);
       return existing.container;
     }
-    const pending = this.inflight.get(opts.token);
+    const pending = this.inflight.get(key);
     if (pending) return pending;
 
     const promise = (async () => {
@@ -104,31 +117,31 @@ export class ContainerRegistry {
         const entry: RegistryEntry = {
           container,
           region: opts.region,
-          idleTimer: this.scheduleStop(opts.token),
+          idleTimer: this.scheduleStop(key),
           lastTouchedAt: this.now(),
         };
-        this.entries.set(opts.token, entry);
+        this.entries.set(key, entry);
         return container;
       } finally {
-        this.inflight.delete(opts.token);
+        this.inflight.delete(key);
       }
     })();
-    this.inflight.set(opts.token, promise);
+    this.inflight.set(key, promise);
     return promise;
   }
 
-  /** Returns the live container for `token` if one is up, else `null`.
-   *  Does NOT spawn and does NOT block on an in-flight spawn — used by
-   *  cloud admin paths (policy hot-reload) that want to mutate a running
-   *  engine without keeping it warm. A concurrent spawn that lands after
-   *  this call is fine: the saver writes Postgres before calling here,
-   *  so the new container's spawn-time read of `tableAccess` already
-   *  picks up the change. */
-  getActive(token: string): ActiveContainer | null {
-    const entry = this.entries.get(token);
+  /** Returns the live container for `connectionId` if one is up, else
+   *  `null`. Does NOT spawn and does NOT block on an in-flight spawn —
+   *  used by cloud admin paths (policy hot-reload) that want to mutate
+   *  a running engine without keeping it warm. A concurrent spawn that
+   *  lands after this call is fine: the saver writes Postgres before
+   *  calling here, so the new container's spawn-time read of
+   *  `tableAccess` already picks up the change. */
+  getActive(connectionId: string): ActiveContainer | null {
+    const entry = this.entries.get(connectionId);
     if (!entry) return null;
     return {
-      token,
+      connectionId,
       region: entry.region,
       host: entry.container.host,
       port: entry.container.port,
@@ -136,13 +149,13 @@ export class ContainerRegistry {
   }
 
   /** Snapshot of active containers — used by the audit indexer to know
-   *  who to poll. Returned as a plain array so callers can iterate without
-   *  holding a reference into the live map. */
+   *  which connections to poll. Returned as a plain array so callers
+   *  can iterate without holding a reference into the live map. */
   list(): ActiveContainer[] {
     const out: ActiveContainer[] = [];
-    for (const [token, entry] of this.entries) {
+    for (const [connectionId, entry] of this.entries) {
       out.push({
-        token,
+        connectionId,
         region: entry.region,
         host: entry.container.host,
         port: entry.container.port,
@@ -151,42 +164,42 @@ export class ContainerRegistry {
     return out;
   }
 
-  async invalidate(token: string): Promise<void> {
+  async invalidate(connectionId: string): Promise<void> {
     // A concurrent acquire() may have a spawn in flight when we're called
     // (typical during connection rotation: a request started just before
     // the customer paste-rotated). If we returned now without awaiting it,
     // the spawn would land in `entries` AFTER our invalidate and run with
     // the pre-rotation DSN until the next idle expiry. Wait for it to
     // settle (success or failure), then evict whatever ended up there.
-    const pending = this.inflight.get(token);
+    const pending = this.inflight.get(connectionId);
     if (pending) {
       await pending.catch(() => undefined);
     }
-    const entry = this.entries.get(token);
+    const entry = this.entries.get(connectionId);
     if (!entry) return;
     clearTimeout(entry.idleTimer);
-    this.entries.delete(token);
+    this.entries.delete(connectionId);
     await entry.container.stop().catch(() => undefined);
   }
 
   async shutdown(): Promise<void> {
-    const tokens = [...this.entries.keys()];
-    await Promise.all(tokens.map((t) => this.invalidate(t)));
+    const keys = [...this.entries.keys()];
+    await Promise.all(keys.map((k) => this.invalidate(k)));
   }
 
   size(): number {
     return this.entries.size;
   }
 
-  private touch(token: string, entry: RegistryEntry): void {
+  private touch(key: string, entry: RegistryEntry): void {
     entry.lastTouchedAt = this.now();
     clearTimeout(entry.idleTimer);
-    entry.idleTimer = this.scheduleStop(token);
+    entry.idleTimer = this.scheduleStop(key);
   }
 
-  private scheduleStop(token: string) {
+  private scheduleStop(key: string) {
     const timer = setTimeout(() => {
-      void this.invalidate(token);
+      void this.invalidate(key);
     }, this.idleMs);
     if (typeof timer === "object" && timer && "unref" in timer) {
       (timer as { unref: () => void }).unref();

@@ -51,29 +51,31 @@ describe("regions", () => {
   });
 });
 
-describe("connections (0008-slimmed parent)", () => {
-  it("holds identity + token only — credential columns moved to connection_databases", () => {
+describe("connections (0008-slimmed parent + 0018 cleanup)", () => {
+  it("holds identity only — credential columns moved to connection_databases; mcp_token moved to mcp_tokens", () => {
     const cols = Object.keys(connections);
     for (const col of [
       "id",
       "customerId",
       "region",
       "name",
-      "mcpToken",
       "createdAt",
     ]) {
       expect(cols).toContain(col);
     }
-    // Moved to connection_databases in migration 0008. Asserting absence
-    // here protects against accidentally re-adding the column to the
-    // parent (which would silently regress the per-credential cache fence
-    // and KMS grace-window tracking).
+    // Moved to connection_databases in migration 0008 (encryptedDsn etc.)
+    // and to mcp_tokens in migration 0017/0018 (mcpToken). Asserting absence
+    // here protects against accidentally re-adding any of them to the
+    // parent: encryptedDsn would silently regress the per-credential cache
+    // fence and KMS grace-window tracking; mcpToken would re-introduce the
+    // plaintext bearer column the PR2 cleanup explicitly drops.
     for (const col of [
       "encryptedDsn",
       "kmsKeyId",
       "tableAccess",
       "rotatedAt",
       "lastKmsSuccessAt",
+      "mcpToken",
     ]) {
       expect(cols).not.toContain(col);
     }
