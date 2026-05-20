@@ -44,8 +44,8 @@ export default async function RegionPicker() {
             Pick your data region
           </h1>
           <p className="text-sm text-muted-foreground">
-            Your audit log and encrypted credentials live in this region. We
-            can&apos;t change it later — region migration is a V2 feature.
+            Your audit log and encrypted credentials live in this region. This
+            choice is permanent — we can&apos;t move an account between regions.
           </p>
         </div>
 
@@ -69,7 +69,7 @@ function RegionCard({
   suggested,
 }: {
   region: Region;
-  suggested: Region;
+  suggested: Region | null;
 }) {
   return (
     <label className="flex cursor-pointer flex-col gap-2 rounded-lg border border-border bg-card p-4 transition-colors has-[:checked]:border-[hsl(var(--brand))] has-[:checked]:ring-2 has-[:checked]:ring-ring">

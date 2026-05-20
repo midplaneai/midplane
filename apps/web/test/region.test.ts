@@ -12,7 +12,12 @@ describe("defaultRegionForCountry", () => {
   it("maps US/other to us", () => {
     expect(defaultRegionForCountry("US")).toBe("us");
     expect(defaultRegionForCountry("BR")).toBe("us");
-    expect(defaultRegionForCountry(null)).toBe("us");
+  });
+
+  it("returns null when country is unknown", () => {
+    expect(defaultRegionForCountry(null)).toBeNull();
+    expect(defaultRegionForCountry(undefined)).toBeNull();
+    expect(defaultRegionForCountry("")).toBeNull();
   });
 
   it("is case-insensitive", () => {

@@ -13,8 +13,9 @@ const EU_COUNTRIES = new Set([
 
 export function defaultRegionForCountry(
   countryCode: string | null | undefined,
-): Region {
-  if (countryCode && EU_COUNTRIES.has(countryCode.toUpperCase())) return "eu";
+): Region | null {
+  if (!countryCode) return null;
+  if (EU_COUNTRIES.has(countryCode.toUpperCase())) return "eu";
   return "us";
 }
 
