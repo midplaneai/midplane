@@ -11,9 +11,5 @@ export default async function AuthenticatedLayout({
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
 
-  return (
-    <AppShell email={customer.email} region={customer.region}>
-      {children}
-    </AppShell>
-  );
+  return <AppShell region={customer.region}>{children}</AppShell>;
 }

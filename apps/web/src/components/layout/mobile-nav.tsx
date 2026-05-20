@@ -1,10 +1,9 @@
 "use client";
 
-import { UserButton } from "@clerk/nextjs";
+import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { BrandLockup } from "@/components/layout/brand-mark";
 import { NAV_ITEMS } from "@/components/layout/nav-items";
 import { RegionBadge } from "@/components/ui/region-badge";
 import { cn } from "@/lib/utils";
@@ -15,9 +14,11 @@ export function MobileNav({ region }: { region: Region }) {
   return (
     <div className="flex flex-col border-b border-border bg-card md:hidden">
       <div className="flex h-12 items-center gap-3 px-4">
-        <Link href="/dashboard" className="flex-shrink-0">
-          <BrandLockup />
-        </Link>
+        <OrganizationSwitcher
+          hidePersonal
+          afterCreateOrganizationUrl="/signup/region"
+          afterSelectOrganizationUrl="/dashboard"
+        />
         <div className="ml-auto flex items-center gap-3">
           <RegionBadge region={region} />
           <UserButton afterSignOutUrl="/" />
