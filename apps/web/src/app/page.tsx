@@ -293,7 +293,7 @@ export default async function Landing() {
           </div>
           <div className="split-pair">
             <div className="copy">
-              <h4>policy</h4>
+              <span className="copy-eyebrow">policy</span>
               <h2>
                 Opt in <span style={{ color: "var(--accent-blue)" }}>per table.</span>
               </h2>

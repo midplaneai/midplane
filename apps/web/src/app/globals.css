@@ -231,7 +231,7 @@
 
 /* policy section + editor mockup */
 .editorial-page .split-pair { display: grid; grid-template-columns: 1.05fr 1fr; gap: 64px; align-items: start; }
-.editorial-page .split-pair .copy h4 { font-family: var(--font-geist-mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 14px; }
+.editorial-page .split-pair .copy .copy-eyebrow { display: block; font-family: var(--font-geist-mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 14px; }
 .editorial-page .split-pair .copy h2 { margin: 0 0 18px; font-size: 48px; line-height: 1.05; letter-spacing: -0.028em; font-weight: 600; text-wrap: balance; max-width: 14ch; }
 .editorial-page .split-pair .copy p { margin: 0 0 14px; font-size: 17px; line-height: 1.5; color: var(--ink-2); max-width: 46ch; }
 .editorial-page .policy-ui { background: var(--paper-2); border: 1px solid var(--line); position: relative; }
