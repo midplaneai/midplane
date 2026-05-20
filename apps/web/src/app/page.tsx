@@ -69,9 +69,7 @@ export default async function Landing() {
           </div>
 
           <h1 className="pri-h1">
-            Cursor, Claude Code,
-            <br />
-            <em>on your real database.</em>
+            Production access for <em>your AI agents.</em>
           </h1>
 
           <div className="ba-foot">
