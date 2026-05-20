@@ -472,117 +472,11 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §03 — vs Postgres roles */}
-        <section className="sec">
-          <div className="sec-top">
-            <div className="sec-num">
-              <b>04</b>vs Postgres roles
-            </div>
-            <div>
-              <h2 className="sec-h">
-                &ldquo;Couldn&apos;t I just use a Postgres role?&rdquo;{" "}
-                <em>You can, until you can&apos;t.</em>
-              </h2>
-              <p className="sec-sub">
-                A read-only role covers the first step. Per-engineer audit,
-                strict tenant isolation, multi-DB rollout, and catching
-                agent-shaped queries (a DELETE hiding in a CTE) need logic
-                Postgres doesn&apos;t have.
-              </p>
-            </div>
-          </div>
-          <div className="vs">
-            <div className="cell head">Capability</div>
-            <div className="cell head">Postgres role + GRANT</div>
-            <div className="cell head you">Midplane policy</div>
-
-            <div className="cell q">Per-table write opt-in</div>
-            <div className="cell">
-              <span className="pill kind">fragile</span>
-              <div>
-                Per-table{" "}
-                <span className="mono">GRANT INSERT/UPDATE/DELETE</span>. Easy
-                to forget one, drift from code, miss new tables.
-              </div>
-            </div>
-            <div className="cell">
-              <span className="pill yes">first-class</span>
-              <div>
-                One row per table in the policy editor. Reviewed in the same PR
-                as the migration.
-              </div>
-            </div>
-
-            <div className="cell q">Tenant predicate on every query</div>
-            <div className="cell">
-              <span className="pill kind">via RLS</span>
-              <div>
-                Row-level security + <span className="mono">SET app.tenant_id</span> from
-                app code. Bypassed the moment the session variable is missed.
-              </div>
-            </div>
-            <div className="cell">
-              <span className="pill yes">enforced</span>
-              <div>Strict mode checks the query itself. Joins and CTEs included.</div>
-            </div>
-
-            <div className="cell q">
-              Catch <span className="mono">DELETE</span> hidden in a CTE
-            </div>
-            <div className="cell">
-              <span className="pill no">no</span>
-              <div>
-                Postgres just runs it. Roles act on permissions, not query
-                shape.
-              </div>
-            </div>
-            <div className="cell">
-              <span className="pill yes">yes</span>
-              <div>Rejected before it reaches the database.</div>
-            </div>
-
-            <div className="cell q">Per-agent attribution + declared intent</div>
-            <div className="cell">
-              <span className="pill no">no</span>
-              <div>
-                Postgres only sees connection #4521 from{" "}
-                <span className="mono">app_user@10.0.x</span>. No idea which
-                MCP client, with what task.
-              </div>
-            </div>
-            <div className="cell">
-              <span className="pill yes">yes</span>
-              <div>
-                Every row stamps the agent (
-                <span className="mono">cursor</span>,{" "}
-                <span className="mono">claude-code</span>, …) and the task the
-                agent declared it was working on.
-              </div>
-            </div>
-
-            <div className="cell q">Roll out across many databases</div>
-            <div className="cell">
-              <span className="pill kind">per-DB</span>
-              <div>
-                Repeat the role and grants in every database — prod, staging,
-                analytics. Keep them in sync forever.
-              </div>
-            </div>
-            <div className="cell">
-              <span className="pill yes">one policy</span>
-              <div>
-                One policy fronts all your databases. Per-database scopes per
-                token.
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* §04 — Audit */}
+        {/* §04 — Audit (was §05; vs-roles dropped) */}
         <section className="sec" id="audit">
           <div className="sec-top">
             <div className="sec-num">
-              <b>05</b>Audit
+              <b>04</b>Audit
             </div>
             <div>
               <h2 className="sec-h">
@@ -673,7 +567,7 @@ export default async function Landing() {
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
-              <b>06</b>Isolation
+              <b>05</b>Isolation
             </div>
             <div>
               <h2 className="sec-h">
@@ -766,7 +660,7 @@ export default async function Landing() {
         <section className="sec" id="hosted">
           <div className="sec-top">
             <div className="sec-num">
-              <b>07</b>Hosted
+              <b>06</b>Hosted
             </div>
             <div>
               <h2 className="sec-h">
@@ -865,7 +759,7 @@ export default async function Landing() {
         <section className="sec" id="pricing">
           <div className="sec-top">
             <div className="sec-num">
-              <b>08</b>Pricing
+              <b>07</b>Pricing
             </div>
             <div>
               <h2 className="sec-h">
@@ -1010,7 +904,7 @@ export default async function Landing() {
         <section className="sec" id="quickstart">
           <div className="sec-top">
             <div className="sec-num">
-              <b>09</b>Quickstart
+              <b>08</b>Quickstart
             </div>
             <div>
               <h2 className="sec-h">
