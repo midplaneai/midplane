@@ -36,13 +36,14 @@
 //   - Container 404 (route unconfigured): treat as soft skip; the OSS
 //     image may not have INDEXER_TOKEN set in dev. Log once per token.
 
-import { and, eq, lt, sql as drizzleSql } from "drizzle-orm";
+import { and, eq, inArray, lt, sql as drizzleSql } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
   connections,
   indexerCursors,
+  mcpTokens,
 } from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
 import type { Db } from "./resolve.ts";
@@ -173,6 +174,17 @@ export class Indexer {
     string,
     { customerId: string; region: Region }
   >();
+  /** Per-connection synthetic cursor id. Populated on first cursor hit
+   *  (or first writeBatch upsert) and used afterwards for all reads and
+   *  writes on that cursor — by id, never by connection_id. This is what
+   *  preserves the drain-after-delete promise: ON DELETE SET NULL on the
+   *  indexer_cursors → connections FK flips the cursor's connection_id
+   *  to NULL, so any WHERE connection_id = $1 query misses. The synthetic
+   *  id is stable; re-INSERTing with the (now-dangling) connection_id
+   *  would also violate the FK. Process-local — on restart, undrained
+   *  orphan cursors are unrecoverable (same limitation the in-memory
+   *  ContainerRegistry has had since day one). */
+  private readonly cursorIdByConnectionId = new Map<string, string>();
 
   constructor(opts: IndexerOptions) {
     if (!opts.indexerToken) {
@@ -348,6 +360,36 @@ export class Indexer {
       throw new Error(`indexer: invalid customer_id ${customerId}`);
     }
 
+    // FK guard for audit_events_index.mcp_token_id (FK ON DELETE SET
+    // NULL on existing rows; INSERTs still fail if the referenced
+    // mcp_tokens row is gone). When a customer deletes a connection
+    // while the OSS container still has backlog rows in its SQLite, the
+    // CASCADE through connections → mcp_tokens has already fired by the
+    // time the indexer drains those rows. INSERTing them with the
+    // (now-dangling) mcp_token_id would violate
+    // audit_events_index_mcp_token_id_fk and roll back the whole batch.
+    //
+    // Probe the still-extant token ids referenced in this batch and
+    // NULL out the rest before the insert. One extra round trip per
+    // batch in the steady state where every referenced token is still
+    // live; the alternative (catch FK and retry without the column) is
+    // both more code and would mask other FK failures.
+    const referencedTokenIds = Array.from(
+      new Set(
+        valid
+          .map((r) => r.mcp_token_id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ),
+    );
+    let extantTokenIds = new Set<string>();
+    if (referencedTokenIds.length > 0) {
+      const tokenRows = await this.db
+        .select({ id: mcpTokens.id })
+        .from(mcpTokens)
+        .where(inArray(mcpTokens.id, referencedTokenIds));
+      extantTokenIds = new Set(tokenRows.map((r) => r.id));
+    }
+
     await this.db.transaction(async (tx) => {
       // Bind RLS so the INSERT passes the audit_events_index policy after
       // 0004_force_rls. Without this, the policy's USING clause
@@ -380,57 +422,117 @@ export class Indexer {
               schemaVersion: row.schema_version,
               // OSS 0.6.0 lockstep: per-token attribution stamped on
               // every row from a session via X-Midplane-Token-Id. NULL
-              // for pre-0.6.0 sessions and any row where the header was
-              // missing/malformed at session initialize.
-              mcpTokenId: row.mcp_token_id ?? null,
+              // for pre-0.6.0 sessions, rows where the header was
+              // missing/malformed at session initialize, and the
+              // post-connection-delete case where the referenced
+              // mcp_tokens row has been CASCADE-deleted (see FK guard
+              // above).
+              mcpTokenId:
+                row.mcp_token_id && extantTokenIds.has(row.mcp_token_id)
+                  ? row.mcp_token_id
+                  : null,
             })),
           )
           .onConflictDoNothing({ target: auditEventsIndex.id });
       }
 
-      // Cursor upsert keyed on the partial unique index in 0018:
-      //   UNIQUE (connection_id) WHERE connection_id IS NOT NULL.
-      // Drizzle 0.38 supports `targetWhere` so the ON CONFLICT clause
-      // names the predicate at the SQL boundary, matching the partial
-      // index. The synthetic id is only consulted on first insert; the
-      // existing row keeps its id on update. customer_id is also
-      // immutable on conflict (matches the pre-PR2 indexer contract).
-      const cursorId = ulid();
-      await tx
-        .insert(indexerCursors)
-        .values({
-          id: cursorId,
-          connectionId,
-          customerId,
-          region,
-          lastId,
-          lastIndexedAt: indexedAt,
-        })
-        .onConflictDoUpdate({
-          target: indexerCursors.connectionId,
-          targetWhere: drizzleSql`connection_id IS NOT NULL`,
-          set: {
+      // Cursor write. Two paths:
+      //
+      // (a) cached cursor id → UPDATE by id. Stable across ON DELETE SET
+      //     NULL flipping the cursor's connection_id to NULL. Without
+      //     this branch, the upsert below would try to re-INSERT a row
+      //     carrying the now-deleted connection_id and trip the FK.
+      //
+      // (b) no cache yet → INSERT with full row + connection_id (which
+      //     still exists at first sighting since the container is
+      //     running; the connections row hasn't been deleted yet). ON
+      //     CONFLICT on the partial unique index updates the existing
+      //     row. After the upsert, look up the row's synthetic id to
+      //     stamp the cache for subsequent ticks.
+      const cachedCursorId = this.cursorIdByConnectionId.get(connectionId);
+      if (cachedCursorId) {
+        await tx
+          .update(indexerCursors)
+          .set({
             lastId,
             lastIndexedAt: indexedAt,
             lastError: null,
             lastErrorAt: null,
-          },
-        });
+          })
+          .where(eq(indexerCursors.id, cachedCursorId));
+      } else {
+        const cursorId = ulid();
+        await tx
+          .insert(indexerCursors)
+          .values({
+            id: cursorId,
+            connectionId,
+            customerId,
+            region,
+            lastId,
+            lastIndexedAt: indexedAt,
+          })
+          .onConflictDoUpdate({
+            target: indexerCursors.connectionId,
+            targetWhere: drizzleSql`connection_id IS NOT NULL`,
+            set: {
+              lastId,
+              lastIndexedAt: indexedAt,
+              lastError: null,
+              lastErrorAt: null,
+            },
+          });
+        // ON CONFLICT doesn't return the existing row, so look it up to
+        // get the real id (which may be the just-inserted cursorId on a
+        // clean insert, or the pre-existing id on conflict).
+        const stamped = await tx
+          .select({ id: indexerCursors.id })
+          .from(indexerCursors)
+          .where(eq(indexerCursors.connectionId, connectionId))
+          .limit(1);
+        if (stamped[0]) {
+          this.cursorIdByConnectionId.set(connectionId, stamped[0].id);
+        }
+      }
     });
   }
 
   private async loadCursorRow(
     connectionId: string,
   ): Promise<{ lastId: string; customerId: string } | null> {
+    // Consult the in-memory cache first: once we know the cursor's
+    // synthetic id, the lookup is stable even after the connection FK
+    // sets connection_id to NULL. A stale cache (e.g., the orphan-cursor
+    // sweeper deleted the row out from under us) drops the entry and
+    // falls through to the connection_id query — at which point we'll
+    // also miss and the caller treats this as no-cursor-yet (which is
+    // correct: the row is gone).
+    const cachedCursorId = this.cursorIdByConnectionId.get(connectionId);
+    if (cachedCursorId) {
+      const rows = await this.db
+        .select({
+          lastId: indexerCursors.lastId,
+          customerId: indexerCursors.customerId,
+        })
+        .from(indexerCursors)
+        .where(eq(indexerCursors.id, cachedCursorId))
+        .limit(1);
+      if (rows[0]) return rows[0];
+      this.cursorIdByConnectionId.delete(connectionId);
+    }
+
     const rows = await this.db
       .select({
+        id: indexerCursors.id,
         lastId: indexerCursors.lastId,
         customerId: indexerCursors.customerId,
       })
       .from(indexerCursors)
       .where(eq(indexerCursors.connectionId, connectionId))
       .limit(1);
-    return rows[0] ?? null;
+    if (!rows[0]) return null;
+    this.cursorIdByConnectionId.set(connectionId, rows[0].id);
+    return { lastId: rows[0].lastId, customerId: rows[0].customerId };
   }
 
   private async sweepRetention(container: ActiveContainer): Promise<void> {

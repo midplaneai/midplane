@@ -18,16 +18,16 @@ import {
   isValidDsn,
   MAX_CONNECTION_NAME_LENGTH,
 } from "@/lib/connections";
+import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
 // PR2 of mcp_url_auth_security: a fresh connection mints a default token
 // whose plaintext is delivered ONCE via an httpOnly cookie set in the
-// server action and consumed by the post-create success page. The
-// cookie has a 5-minute TTL so a long-tail browser-back doesn't keep
-// the URL retrievable; the success page deletes the cookie on read so
-// a reload removes the plaintext. PR3 replaces this with a proper token
-// management surface; this is the minimal stub specified by the design
-// doc.
-export const SHOW_ONCE_COOKIE = "midplane.show_once_url";
+// server action and consumed by the post-create success page's
+// ShowOnceUrl client island (which fires a Server Action to delete the
+// cookie). The cookie has a 5-minute TTL so a long-tail browser-back
+// doesn't keep the URL retrievable. PR3 replaces this with a proper
+// token management surface; this is the minimal stub specified by the
+// design doc.
 const SHOW_ONCE_TTL_SECONDS = 5 * 60;
 
 export default async function NewConnection() {

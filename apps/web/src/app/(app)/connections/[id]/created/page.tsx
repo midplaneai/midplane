@@ -3,27 +3,27 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { CopyButton } from "@/components/copy-button";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
 import { getConnectionWithMainDatabase } from "@/lib/connections";
+import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
+
+import { ShowOnceUrl } from "./show-once-url";
 
 // Post-create success page (PR2 of mcp_url_auth_security — minimal stub;
 // PR3 owns the polished UX). The default token's plaintext URL is
 // delivered via an httpOnly cookie set by /connections/new's server
-// action, displayed ONCE on this page, then the cookie is deleted on
-// read so a reload removes the plaintext from view.
+// action, displayed ONCE by the ShowOnceUrl client island. The island
+// fires a Server Action on mount to delete the cookie — Server
+// Components can read cookies but cannot mutate them, so the delete
+// MUST happen behind a Server Action / Route Handler boundary.
 //
-// If the cookie is absent (direct nav, reload after first read, expired
-// TTL), we render a fallback that explains why the URL is no longer
-// retrievable and points to PR3's future token list — keeps the
-// "show once" property visible to the user rather than failing
-// silently.
-
-const SHOW_ONCE_COOKIE = "midplane.show_once_url";
+// On reload the cookie is gone, so we render the "already shown"
+// fallback that explains the URL is no longer retrievable and points
+// to the (future) token list. A reload before the consume action
+// completes is still safe: the URL is rendered for the second time,
+// but the cookie has a 5-minute TTL so the worst case is bounded.
 
 export default async function ConnectionCreated({
   params,
@@ -38,14 +38,10 @@ export default async function ConnectionCreated({
   if (!result) redirect("/dashboard");
   const { connection } = result;
 
-  // Read + delete the cookie atomically: a reload will see the cookie
-  // absent and render the "already shown" fallback below. httpOnly
-  // means the URL never enters the JS heap, only this server render.
+  // Server Components can READ cookies safely; mutation lives in the
+  // consume-action.ts Server Action invoked by ShowOnceUrl on mount.
   const cookieStore = await cookies();
   const mcpUrl = cookieStore.get(SHOW_ONCE_COOKIE)?.value ?? null;
-  if (mcpUrl) {
-    cookieStore.delete(SHOW_ONCE_COOKIE);
-  }
 
   return (
     <>
@@ -79,18 +75,7 @@ export default async function ConnectionCreated({
                   if you lose it.
                 </p>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="mcp-url">MCP endpoint URL</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="mcp-url"
-                    readOnly
-                    value={mcpUrl}
-                    className="font-mono"
-                  />
-                  <CopyButton value={mcpUrl} />
-                </div>
-              </div>
+              <ShowOnceUrl mcpUrl={mcpUrl} />
               <div className="pt-2">
                 <Link href="/dashboard">
                   <Button size="sm">Done — open dashboard</Button>
