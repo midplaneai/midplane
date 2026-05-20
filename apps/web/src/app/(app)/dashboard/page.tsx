@@ -4,10 +4,8 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
-import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { CopyButton } from "@/components/copy-button";
 import { AddDatabaseForm } from "@/components/dashboard/add-database-form";
 import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
 import { DatabaseRow } from "@/components/dashboard/database-row";
@@ -17,7 +15,6 @@ import {
 } from "@/components/dashboard/freshness-provider";
 import { LiveConnectionFreshness } from "@/components/dashboard/live-connection-freshness";
 import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
-import { SetupAgentControl } from "@/components/dashboard/setup-agent-control";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -37,6 +34,12 @@ import {
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 
+// PR2 of mcp_url_auth_security: the dashboard no longer renders the
+// agent-facing URL because the plaintext token is not retrievable from
+// the DB (only its HMAC digest is stored). The "Setup agent" sheet and
+// per-row URL display are removed from this page; PR3 owns the token
+// management surface (list / create / revoke) that replaces them.
+
 export default async function Dashboard({
   searchParams,
 }: {
@@ -45,9 +48,13 @@ export default async function Dashboard({
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
 
+  // PR1's create flow redirected to /dashboard?setup=<id> to auto-open
+  // the agent setup sheet. PR2 routes new connections through the
+  // dedicated /connections/<id>/created success page instead. Strip
+  // the stale param if a bookmarked URL still carries it.
+  void searchParams;
+
   const rows = await listDashboardConnections(customer);
-  const setupParam = (await searchParams).setup;
-  const autoOpenId = typeof setupParam === "string" ? setupParam : null;
 
   return (
     <>
@@ -84,7 +91,6 @@ export default async function Dashboard({
             <ul className="divide-y divide-border border-y border-border">
               {rows.map((row) => {
                 const { connection: c, databases, cursor } = row;
-                const mcpUrl = mintMcpUrl(c.region, c.mcpToken, process.env);
                 return (
                   <li key={c.id} className="bg-background">
                     <ConnectionHeader
@@ -93,9 +99,6 @@ export default async function Dashboard({
                       region={c.region}
                       initialLastIndexedAt={cursor.lastIndexedAt}
                       initialLastErrorAt={cursor.lastErrorAt}
-                      mcpUrl={mcpUrl}
-                      mcpToken={c.mcpToken}
-                      autoOpen={autoOpenId === c.id}
                     />
                     <DatabaseList
                       connectionId={c.id}
@@ -139,18 +142,12 @@ function ConnectionHeader({
   region,
   initialLastIndexedAt,
   initialLastErrorAt,
-  mcpUrl,
-  mcpToken,
-  autoOpen,
 }: {
   id: string;
   name: string | null;
   region: string;
   initialLastIndexedAt: Date | null;
   initialLastErrorAt: Date | null;
-  mcpUrl: string;
-  mcpToken: string;
-  autoOpen: boolean;
 }) {
   return (
     <div className="px-1 pt-4 pb-2">
@@ -172,18 +169,6 @@ function ConnectionHeader({
           initialLastErrorAt={initialLastErrorAt}
         />
         <ConnectionRowMenu id={id} name={name} deleteAction={deleteAction} />
-        <SetupAgentControl
-          connectionName={name}
-          mcpUrl={mcpUrl}
-          mcpToken={mcpToken}
-          autoOpen={autoOpen}
-        />
-      </div>
-      <div className="mt-2 flex items-center gap-2">
-        <span className="truncate font-mono text-xs text-muted-foreground">
-          {mcpUrl}
-        </span>
-        <CopyButton value={mcpUrl} label="Copy URL" />
       </div>
     </div>
   );
@@ -226,10 +211,6 @@ function DatabaseList({
   );
 }
 
-// formatRelative + lastQueryLabel were moved into DatabaseRow — the
-// per-DB last-query label now updates client-side from the polling
-// snapshot, so the formatting belongs alongside that consumer.
-
 async function renameAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
@@ -265,7 +246,7 @@ async function deleteAction(formData: FormData) {
   const deleted = await deleteConnection(customer, id);
   if (deleted) {
     const ctx = getMcpProxyContext();
-    await ctx.registry.invalidate(deleted.mcpToken).catch((err) => {
+    await ctx.registry.invalidate(deleted.id).catch((err) => {
       console.error("[dashboard.deleteAction] registry.invalidate failed", err);
     });
   }

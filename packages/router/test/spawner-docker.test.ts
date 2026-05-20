@@ -31,14 +31,14 @@ describe("DockerSpawner", () => {
     ) as unknown as typeof fetch;
 
     const spawner = new DockerSpawner({
-      image: "midplane/midplane:0.5.0",
+      image: "midplane/midplane:0.6.0",
       exec,
       fetch: fetchFn,
       bootTimeoutMs: 1000,
     });
 
     const c = await spawner.spawn({
-      token: "tok-abc",
+      connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
       region: "eu",
       databases: [
         {
@@ -56,7 +56,7 @@ describe("DockerSpawner", () => {
     expect(exec).toHaveBeenCalled();
 
     const runArgs = exec.mock.calls[0]?.[1] ?? [];
-    expect(runArgs).toContain("midplane/midplane:0.5.0");
+    expect(runArgs).toContain("midplane/midplane:0.6.0");
     // Multi-DB: DSN is injected as a per-DB env var (MIDPLANE_DSN_<id>),
     // never as a top-level DATABASE_URL — the YAML's `url:` references
     // the env via ${...} interpolation.
@@ -112,7 +112,7 @@ describe("DockerSpawner", () => {
 
     await expect(
       spawner.spawn({
-        token: "t",
+        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
         region: "eu",
         databases: [
           {
@@ -133,7 +133,11 @@ describe("DockerSpawner", () => {
   it("rejects an empty databases array", async () => {
     const spawner = new DockerSpawner({});
     await expect(
-      spawner.spawn({ token: "t", region: "eu", databases: [] }),
+      spawner.spawn({
+        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        region: "eu",
+        databases: [],
+      }),
     ).rejects.toThrow(/at least one database/);
   });
 });

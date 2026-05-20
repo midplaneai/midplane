@@ -14,12 +14,18 @@
 // cloud audit_events_index on a 5s cadence. Off when INDEXER_TOKEN is
 // unset (dev convenience — OSS containers without the token don't expose
 // the /audit endpoints anyway).
+//
+// PR2 of mcp_url_auth_security: ContainerRegistry keys on connection_id,
+// not the plaintext mcp_token. The pushPolicy helper takes a connectionId.
+// The ExpirySweeper runs alongside the Indexer in the regional process
+// and flips expired-but-still-active rows on mcp_tokens.
 
 import {
   ContainerRegistry,
   DecryptCache,
   DockerSpawner,
   DsnResolver,
+  ExpirySweeper,
   FlyMachineSpawner,
   Indexer,
   loadRegions,
@@ -36,6 +42,7 @@ interface McpProxyContext {
   registry: ContainerRegistry;
   resolver: DsnResolver;
   indexer: Indexer | null;
+  expirySweeper: ExpirySweeper | null;
   /** Hot-reload a connection's table_access + tenant_scope.mappings on
    *  its running engine, if any. The body must list every DB the
    *  connection owns — DBs absent from the body are dropped from the
@@ -43,7 +50,7 @@ interface McpProxyContext {
    *  active container OR `INDEXER_TOKEN` is unset (laptop dev); the
    *  next spawn will read the new policy from Postgres on its own. */
   pushPolicy(
-    token: string,
+    connectionId: string,
     databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult>;
 }
@@ -101,18 +108,43 @@ export function getMcpProxyContext(): McpProxyContext {
         // Audit indexing failures are operationally significant but not
         // fatal — log via console for now; the dashboard staleness banner
         // is the user-visible signal.
-        console.error("[indexer]", ctx.phase, ctx.token.slice(0, 8), err);
+        console.error(
+          "[indexer]",
+          ctx.phase,
+          ctx.connectionId.slice(0, 8),
+          err,
+        );
       },
     });
     indexer.start();
   }
 
+  // Expiry sweeper runs alongside the indexer in the regional process.
+  // Independent of indexerToken — even in laptop dev without the indexer
+  // we want expired tokens to flip status so the dashboard renders
+  // truthfully. Durable enforcement of expiry happens in resolveByToken
+  // (NOW() in the WHERE filter); the sweeper is for dashboard /
+  // audit ordering.
+  const expirySweeper = new ExpirySweeper({
+    db,
+    onSweep: ({ affected }) => {
+      console.log(`[expiry-sweeper] flipped ${affected} token(s) to expired`);
+    },
+    onError: (err) => {
+      console.error("[expiry-sweeper]", err);
+    },
+  });
+  expirySweeper.start();
+
   const pushPolicy = async (
-    token: string,
+    connectionId: string,
     databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult> => {
     if (!indexerToken) return { delivered: false };
-    return pushPolicyHelper(token, databases, { registry, indexerToken });
+    return pushPolicyHelper(connectionId, databases, {
+      registry,
+      indexerToken,
+    });
   };
 
   const ctx: McpProxyContext = {
@@ -120,6 +152,7 @@ export function getMcpProxyContext(): McpProxyContext {
     registry,
     resolver,
     indexer,
+    expirySweeper,
     pushPolicy,
   };
   g[GLOBAL_KEY] = ctx;

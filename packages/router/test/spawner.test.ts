@@ -27,8 +27,8 @@ class StubSpawner implements Spawner {
   }
 }
 
-const opts = (token = "tok-a"): SpawnOptions => ({
-  token,
+const opts = (connectionId = "01HXYZCONN000000000000000A"): SpawnOptions => ({
+  connectionId,
   region: "eu",
   databases: [
     {
@@ -42,7 +42,7 @@ const opts = (token = "tok-a"): SpawnOptions => ({
 });
 
 describe("ContainerRegistry", () => {
-  it("spawns once per token, reuses on second acquire", async () => {
+  it("spawns once per connection, reuses on second acquire", async () => {
     const stub = new StubSpawner();
     const reg = new ContainerRegistry(stub);
     const a = await reg.acquire(opts());
@@ -65,11 +65,11 @@ describe("ContainerRegistry", () => {
     expect(b.port).toBe(c.port);
   });
 
-  it("scopes registry per token", async () => {
+  it("scopes registry per connection", async () => {
     const stub = new StubSpawner();
     const reg = new ContainerRegistry(stub);
-    await reg.acquire(opts("tok-a"));
-    await reg.acquire(opts("tok-b"));
+    await reg.acquire(opts("01HXYZCONN000000000000000A"));
+    await reg.acquire(opts("01HXYZCONN000000000000000B"));
     expect(stub.calls).toBe(2);
     expect(reg.size()).toBe(2);
   });
@@ -79,7 +79,7 @@ describe("ContainerRegistry", () => {
     const reg = new ContainerRegistry(stub);
     const first = await reg.acquire(opts());
     const stopSpy = first.stop as ReturnType<typeof vi.fn>;
-    await reg.invalidate("tok-a");
+    await reg.invalidate("01HXYZCONN000000000000000A");
     expect(stopSpy).toHaveBeenCalled();
     expect(reg.size()).toBe(0);
     await reg.acquire(opts());
@@ -107,7 +107,7 @@ describe("ContainerRegistry", () => {
     const reg = new ContainerRegistry(stub);
     const spawning = reg.acquire(opts());
     // Fire invalidate while spawn is still pending.
-    const invalidating = reg.invalidate("tok-a");
+    const invalidating = reg.invalidate("01HXYZCONN000000000000000A");
     const spawned = await spawning;
     const stopSpy = spawned.stop as ReturnType<typeof vi.fn>;
     await invalidating;
@@ -115,20 +115,20 @@ describe("ContainerRegistry", () => {
     expect(reg.size()).toBe(0);
   });
 
-  it("getActive returns ActiveContainer for live tokens, null otherwise", async () => {
+  it("getActive returns ActiveContainer for live connections, null otherwise", async () => {
     const stub = new StubSpawner();
     const reg = new ContainerRegistry(stub);
-    expect(reg.getActive("tok-a")).toBeNull();
+    expect(reg.getActive("01HXYZCONN000000000000000A")).toBeNull();
 
-    const c = await reg.acquire(opts("tok-a"));
-    const active = reg.getActive("tok-a");
+    const c = await reg.acquire(opts("01HXYZCONN000000000000000A"));
+    const active = reg.getActive("01HXYZCONN000000000000000A");
     expect(active).not.toBeNull();
     expect(active?.host).toBe(c.host);
     expect(active?.port).toBe(c.port);
     expect(active?.region).toBe("eu");
-    expect(active?.token).toBe("tok-a");
+    expect(active?.connectionId).toBe("01HXYZCONN000000000000000A");
 
-    expect(reg.getActive("tok-b")).toBeNull();
+    expect(reg.getActive("01HXYZCONN000000000000000B")).toBeNull();
   });
 
   it("getActive does NOT block on an in-flight spawn (returns null)", async () => {
@@ -138,10 +138,10 @@ describe("ContainerRegistry", () => {
     const stub = new StubSpawner();
     stub.delayMs = 50;
     const reg = new ContainerRegistry(stub);
-    const spawning = reg.acquire(opts("tok-a"));
-    expect(reg.getActive("tok-a")).toBeNull();
+    const spawning = reg.acquire(opts("01HXYZCONN000000000000000A"));
+    expect(reg.getActive("01HXYZCONN000000000000000A")).toBeNull();
     await spawning;
-    expect(reg.getActive("tok-a")).not.toBeNull();
+    expect(reg.getActive("01HXYZCONN000000000000000A")).not.toBeNull();
   });
 
   it("idle timer triggers stop after idleMs", async () => {

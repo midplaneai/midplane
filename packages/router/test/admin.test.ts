@@ -38,8 +38,11 @@ const databases: readonly DatabaseEntry[] = [
   },
 ];
 
-const opts = (token = "tok-a"): SpawnOptions => ({
-  token,
+const CONN_A = "01HXYZCONNAAAAAAAAAAAAAAAA";
+const CONN_B = "01HXYZCONNBBBBBBBBBBBBBBBB";
+
+const opts = (connectionId = CONN_A): SpawnOptions => ({
+  connectionId,
   region: "eu",
   databases: [
     {
@@ -52,9 +55,11 @@ const opts = (token = "tok-a"): SpawnOptions => ({
   ],
 });
 
-async function makeRegWithActive(token = "tok-a"): Promise<ContainerRegistry> {
+async function makeRegWithActive(
+  connectionId = CONN_A,
+): Promise<ContainerRegistry> {
   const reg = new ContainerRegistry(new FakeSpawner());
-  await reg.acquire(opts(token));
+  await reg.acquire(opts(connectionId));
   return reg;
 }
 
@@ -62,7 +67,7 @@ describe("pushPolicy", () => {
   it("returns delivered:false when no active container (no fetch)", async () => {
     const reg = new ContainerRegistry(new FakeSpawner());
     const fetchFn = vi.fn();
-    const result = await pushPolicy("tok-missing", databases, {
+    const result = await pushPolicy("01HXYZCONNMISSING000000000", databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -74,7 +79,7 @@ describe("pushPolicy", () => {
   it("posts YAML with bearer + content-type, returns delivered:true on 200", async () => {
     const reg = await makeRegWithActive();
     const fetchFn = vi.fn(async () => new Response("", { status: 200 }));
-    const result = await pushPolicy("tok-a", databases, {
+    const result = await pushPolicy(CONN_A, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -110,7 +115,7 @@ describe("pushPolicy", () => {
           status: 400,
         }),
     );
-    const result = await pushPolicy("tok-a", databases, {
+    const result = await pushPolicy(CONN_A, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -126,7 +131,7 @@ describe("pushPolicy", () => {
   it("treats 404 as delivered:false (engine route absent / dev)", async () => {
     const reg = await makeRegWithActive();
     const fetchFn = vi.fn(async () => new Response("", { status: 404 }));
-    const result = await pushPolicy("tok-a", databases, {
+    const result = await pushPolicy(CONN_A, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -140,7 +145,7 @@ describe("pushPolicy", () => {
       async () => new Response("bad bearer", { status: 401 }),
     );
     await expect(
-      pushPolicy("tok-a", databases, {
+      pushPolicy(CONN_A, databases, {
         registry: reg,
         indexerToken: "wrong",
         fetch: fetchFn,
@@ -154,7 +159,7 @@ describe("pushPolicy", () => {
       async () => new Response("boom", { status: 500 }),
     );
     await expect(
-      pushPolicy("tok-a", databases, {
+      pushPolicy(CONN_A, databases, {
         registry: reg,
         indexerToken: "secret",
         fetch: fetchFn,
@@ -168,7 +173,7 @@ describe("pushPolicy", () => {
       throw new Error("ECONNREFUSED");
     });
     await expect(
-      pushPolicy("tok-a", databases, {
+      pushPolicy(CONN_A, databases, {
         registry: reg,
         indexerToken: "secret",
         fetch: fetchFn,
@@ -176,14 +181,15 @@ describe("pushPolicy", () => {
     ).rejects.toThrow("ECONNREFUSED");
   });
 
-  // Per-token push mutex: closes the narrower race the FOR UPDATE lock
-  // on the parent connection row doesn't cover. Two writers can commit
-  // in order, then both reach the network and (because HTTP isn't
-  // ordered) the older view can land last, leaving the engine on stale
-  // state. The mutex chains pushes for the same token so the second
-  // push doesn't start until the first one resolves.
-  it("serializes two concurrent pushes for the same token (FIFO push order)", async () => {
-    const reg = await makeRegWithActive("tok-serial");
+  // Per-connection push mutex: closes the narrower race the FOR UPDATE
+  // lock on the parent connection row doesn't cover. Two writers can
+  // commit in order, then both reach the network and (because HTTP
+  // isn't ordered) the older view can land last, leaving the engine on
+  // stale state. The mutex chains pushes for the same connection so the
+  // second push doesn't start until the first one resolves.
+  it("serializes two concurrent pushes for the same connection (FIFO push order)", async () => {
+    const CONN_SERIAL = "01HXYZCONNSERIAL0000000000";
+    const reg = await makeRegWithActive(CONN_SERIAL);
 
     let inFlight = 0;
     let peakInFlight = 0;
@@ -209,12 +215,12 @@ describe("pushPolicy", () => {
       }
     });
 
-    const p1 = pushPolicy("tok-serial", databases, {
+    const p1 = pushPolicy(CONN_SERIAL, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
     });
-    const p2 = pushPolicy("tok-serial", databases, {
+    const p2 = pushPolicy(CONN_SERIAL, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
@@ -232,10 +238,10 @@ describe("pushPolicy", () => {
     expect(peakInFlight).toBe(1);
   });
 
-  it("does not block pushes for different tokens (mutex is per-token)", async () => {
-    const reg = await makeRegWithActive("tok-a");
-    // Acquire a second container so /admin/policy resolves for tok-b too.
-    await reg.acquire(opts("tok-b"));
+  it("does not block pushes for different connections (mutex is per-connection)", async () => {
+    const reg = await makeRegWithActive(CONN_A);
+    // Acquire a second container so /admin/policy resolves for CONN_B too.
+    await reg.acquire(opts(CONN_B));
 
     let aInFlight = 0;
     let bInFlight = 0;
@@ -246,9 +252,9 @@ describe("pushPolicy", () => {
     });
 
     const fetchFn = vi.fn(async (_url: string | URL | Request) => {
-      // tok-a's container is on port 31000, tok-b is on 31001 (the fake
-      // spawner increments per spawn — but our fake returns the same
-      // host/port. Tag by which call this is instead.
+      // CONN_A's container is on port 31000, CONN_B is on 31001 (the
+      // fake spawner increments per spawn — but our fake returns the
+      // same host/port. Tag by which call this is instead.
       const isA = aInFlight === 0 && bInFlight === 0;
       if (isA) {
         aInFlight++;
@@ -268,20 +274,20 @@ describe("pushPolicy", () => {
       }
     });
 
-    const pA = pushPolicy("tok-a", databases, {
+    const pA = pushPolicy(CONN_A, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
     });
-    const pB = pushPolicy("tok-b", databases, {
+    const pB = pushPolicy(CONN_B, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
     });
 
     await new Promise((r) => setTimeout(r, 10));
-    // tok-b shouldn't be blocked by tok-a — both pushes can be in
-    // flight at the same time since the mutex keys on token.
+    // CONN_B shouldn't be blocked by CONN_A — both pushes can be in
+    // flight at the same time since the mutex keys on connection.
     expect(peakConcurrent).toBe(2);
 
     resolveA!();
@@ -289,7 +295,8 @@ describe("pushPolicy", () => {
   });
 
   it("a failed first push does not poison the second (chain catches and continues)", async () => {
-    const reg = await makeRegWithActive("tok-poison");
+    const CONN_POISON = "01HXYZCONNPOISON0000000000";
+    const reg = await makeRegWithActive(CONN_POISON);
 
     let call = 0;
     const fetchFn = vi.fn(async () => {
@@ -298,12 +305,12 @@ describe("pushPolicy", () => {
       return new Response("", { status: 200 });
     });
 
-    const p1 = pushPolicy("tok-poison", databases, {
+    const p1 = pushPolicy(CONN_POISON, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,
     });
-    const p2 = pushPolicy("tok-poison", databases, {
+    const p2 = pushPolicy(CONN_POISON, databases, {
       registry: reg,
       indexerToken: "secret",
       fetch: fetchFn,

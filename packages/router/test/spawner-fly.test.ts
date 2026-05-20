@@ -88,7 +88,7 @@ describe("FlyMachineSpawner", () => {
     });
 
     const c = await spawner.spawn({
-      token: "tok",
+      connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
       region: "eu",
       databases: [
         {
@@ -136,7 +136,7 @@ describe("FlyMachineSpawner", () => {
 
     await expect(
       spawner.spawn({
-        token: "t",
+        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
         region: "eu",
         databases: [
           {

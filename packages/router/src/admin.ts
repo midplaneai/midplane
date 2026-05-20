@@ -16,6 +16,12 @@
 // the body are dropped from the engine's registry.
 //
 // Auth reuses INDEXER_TOKEN.
+//
+// PR2 of mcp_url_auth_security: the container key is now `connectionId`
+// (the stable parent ULID) instead of the plaintext mcp_token. Multi-
+// token sibling rows on the same connection share one container; the
+// engine discriminates audit attribution via X-Midplane-Token-Id, not
+// via per-token containers.
 
 import {
   serializeMultiDbPolicyToYaml,
@@ -47,46 +53,46 @@ export type PushPolicyResult =
   // Surface `body` to the user so they can correct the policy.
   | { rejected: { status: number; body: string } };
 
-// Per-token serialization for the HTTP push. Closes the narrower race
-// the FOR UPDATE lock on the parent connection row doesn't cover: T1
-// commits, T2 commits (txn-serialized so T2 sees T1's state), both
+// Per-connection serialization for the HTTP push. Closes the narrower
+// race the FOR UPDATE lock on the parent connection row doesn't cover:
+// T1 commits, T2 commits (txn-serialized so T2 sees T1's state), both
 // reach the network. If T1's push is slow it can land AFTER T2's push,
-// leaving the engine on T1's pre-T2 view. Chaining each push behind
-// the previous one for the same token preserves commit order on the
+// leaving the engine on T1's pre-T2 view. Chaining each push behind the
+// previous one for the same connection preserves commit order on the
 // engine side. In-memory only; distributed pushes are out of scope.
 const inflightPushes = new Map<string, Promise<unknown>>();
 
 export async function pushPolicy(
-  token: string,
+  connectionId: string,
   databases: readonly DatabaseEntry[],
   deps: PushPolicyDeps,
 ): Promise<PushPolicyResult> {
-  // Acquire the per-token lock by chaining onto the previous push. Use
-  // .then(fn) on the queue tail so failures don't poison subsequent
+  // Acquire the per-connection lock by chaining onto the previous push.
+  // Use .then(fn) on the queue tail so failures don't poison subsequent
   // pushes — every chained run starts from a resolved Promise.
-  const previous = inflightPushes.get(token) ?? Promise.resolve();
+  const previous = inflightPushes.get(connectionId) ?? Promise.resolve();
   const run = previous
     .catch(() => undefined)
-    .then(() => doPush(token, databases, deps));
-  inflightPushes.set(token, run);
+    .then(() => doPush(connectionId, databases, deps));
+  inflightPushes.set(connectionId, run);
   try {
     return await run;
   } finally {
     // Clear only when we're still the queue head; if another push
     // chained behind us, leave their entry in place so a third push
     // can find it.
-    if (inflightPushes.get(token) === run) {
-      inflightPushes.delete(token);
+    if (inflightPushes.get(connectionId) === run) {
+      inflightPushes.delete(connectionId);
     }
   }
 }
 
 async function doPush(
-  token: string,
+  connectionId: string,
   databases: readonly DatabaseEntry[],
   deps: PushPolicyDeps,
 ): Promise<PushPolicyResult> {
-  const active = deps.registry.getActive(token);
+  const active = deps.registry.getActive(connectionId);
   if (!active) return { delivered: false };
 
   const fetchFn = deps.fetch ?? fetch;

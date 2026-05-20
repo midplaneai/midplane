@@ -19,7 +19,6 @@ import { randomUUID } from "node:crypto";
 
 import { expect, test } from "@playwright/test";
 import { and, eq, gte } from "drizzle-orm";
-import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
@@ -28,7 +27,8 @@ import {
   getDb,
   indexerCursors,
 } from "@midplane-cloud/db";
-import { encryptDsn, makeKmsContext } from "@midplane-cloud/kms";
+
+import { containerNameFor, seedConnection } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -42,6 +42,7 @@ const INDEXER_TOKEN = process.env.INDEXER_TOKEN ?? `idx-${randomUUID()}`;
 
 let pgPort = 0;
 let mcpToken = "";
+let tokenId = "";
 let customerId = "";
 let connectionId = "";
 let containerName = "";
@@ -63,32 +64,12 @@ test.beforeAll(async () => {
   );
 
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
-  const kms = makeKmsContext(process.env);
-  customerId = ulid();
-  const { ciphertext, kmsKeyId } = await encryptDsn(
-    kms,
-    customerDsn,
-    customerId,
-    "eu",
-  );
-  mcpToken = randomUUID().replace(/-/g, "");
-  connectionId = ulid();
-  const db = getDb("eu");
-  await db.insert(customers).values({
-    id: customerId,
-    clerkOrgId: `org_e2e-idx-${customerId}`,
-    email: `e2e-idx-${customerId}@example.test`,
-    region: "eu",
-  });
-  await db.insert(connections).values({
-    id: connectionId,
-    customerId,
-    region: "eu",
-    encryptedDsn: ciphertext,
-    kmsKeyId,
-    mcpToken,
-  });
-  containerName = `midplane-${mcpToken.slice(0, 16)}`;
+  const seeded = await seedConnection({ region: "eu", dsn: customerDsn });
+  customerId = seeded.customerId;
+  connectionId = seeded.connectionId;
+  mcpToken = seeded.tokenPlaintext;
+  tokenId = seeded.tokenId;
+  containerName = containerNameFor(connectionId);
 });
 
 test.afterAll(async () => {
@@ -102,9 +83,12 @@ test.afterAll(async () => {
   }
   const db = getDb("eu");
   if (connectionId) {
+    // FK ON DELETE SET NULL flips connection_id to NULL when the
+    // connection row is dropped; explicitly delete any cursor row first
+    // so the test doesn't leak orphans into the dev DB.
     await db
       .delete(indexerCursors)
-      .where(eq(indexerCursors.mcpToken, mcpToken));
+      .where(eq(indexerCursors.connectionId, connectionId));
     await db.delete(connections).where(eq(connections.id, connectionId));
   }
   if (customerId) {
@@ -177,12 +161,19 @@ test("indexer drains container audit rows into audit_events_index within 15s", a
   expect(types.has("ATTEMPTED")).toBe(true);
   expect(types.has("EXECUTED")).toBe(true);
 
-  // Step 3: cursor row updated.
+  // Step 3: cursor row updated (PR2 of mcp_url_auth_security: cursors
+  // key on connection_id, not the plaintext token).
   const cursorRows = await db
     .select()
     .from(indexerCursors)
-    .where(eq(indexerCursors.mcpToken, mcpToken));
+    .where(eq(indexerCursors.connectionId, connectionId));
   expect(cursorRows[0]?.lastId).toBeTruthy();
+  // Each indexed row also carries mcp_token_id propagated from the OSS
+  // engine (X-Midplane-Token-Id session-freeze). Assert every row in
+  // this batch points back at the token we minted in beforeAll.
+  for (const r of indexed) {
+    expect(r.mcpTokenId).toBe(tokenId);
+  }
 
   // Step 4: prove DELETE /audit/before honors the bearer and prunes rows.
   // We hit the container directly rather than spinning up a second

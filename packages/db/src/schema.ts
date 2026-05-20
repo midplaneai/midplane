@@ -96,9 +96,8 @@ export const connections = pgTable(
     region: text("region", { enum: REGIONS }).notNull(),
     // User-supplied label so a customer with multiple connections can tell
     // them apart in the dashboard. Nullable for rows created before this
-    // column existed; the UI falls back to the MCP URL when null.
+    // column existed; the UI falls back to the connection id when null.
     name: text("name"),
-    mcpToken: text("mcp_token").notNull().unique(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -287,19 +286,32 @@ export const auditEventsIndex = pgTable(
 
 // --- indexer_cursors --------------------------------------------------------
 //
-// One row per mcp_token the indexer has ever drained. Holds the bookmark
-// (last_id) the next poll resumes from, plus customer_id stamped on the
-// first successful index — once stamped, the indexer can keep draining
-// even after the user deletes or rotates the underlying connection row,
-// which is exactly the design requirement (audit-grade write-through:
-// rows must reach Postgres regardless of what the user does to the
-// connection mid-flight). Rows are deleted by the connections API on
-// hard-delete to avoid orphan accumulation.
+// One row per connection the indexer has ever drained. Holds the
+// bookmark (last_id) the next poll resumes from, plus customer_id
+// stamped on the first successful index — once stamped, the indexer
+// can keep draining even after the user deletes the underlying
+// connection row, which is exactly the design requirement (audit-grade
+// write-through: rows must reach Postgres regardless of what the user
+// does to the connection mid-flight).
+//
+// Schema shape (PR2 of mcp_url_auth_security):
+//   - id            synthetic ULID PK (was: plaintext mcp_token)
+//   - connection_id nullable FK to connections(id) ON DELETE SET NULL.
+//                   When the connection is hard-deleted, this flips to
+//                   NULL; the row lingers until the indexer drains the
+//                   remaining backlog and a future sweeper cleans
+//                   orphan rows. Migration 0018 owns the partial unique
+//                   index `indexer_cursors_connection_id_uq` keyed on
+//                   `(connection_id) WHERE connection_id IS NOT NULL`
+//                   — Drizzle's index DSL can't express the predicate,
+//                   so the schema declaration here mirrors the column
+//                   only; the migration owns the index detail.
 
 export const indexerCursors = pgTable(
   "indexer_cursors",
   {
-    mcpToken: text("mcp_token").primaryKey(),
+    id: text("id").primaryKey(), // ULID
+    connectionId: text("connection_id"),
     customerId: text("customer_id").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
     lastId: text("last_id").notNull().default(""), // ULIDs sort lex; "" precedes all real ids
@@ -311,8 +323,17 @@ export const indexerCursors = pgTable(
       .notNull(),
   },
   (t) => ({
+    connectionFk: foreignKey({
+      name: "indexer_cursors_connection_fk",
+      columns: [t.connectionId],
+      foreignColumns: [connections.id],
+    }).onDelete("set null"),
     regionIdx: index("indexer_cursors_region_idx").on(t.region),
     customerIdx: index("indexer_cursors_customer_id_idx").on(t.customerId),
+    // See header comment — the partial unique predicate lives in the
+    // migration. This non-unique declaration is the read-side mirror so
+    // typecheck + schema-shape tests see the index column.
+    connectionIdx: index("indexer_cursors_connection_id_idx").on(t.connectionId),
   }),
 );
 

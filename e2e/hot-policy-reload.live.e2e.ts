@@ -8,21 +8,19 @@
 //
 // Gated on E2E_LIVE=1, like the other live e2es. Requires:
 //   - docker on PATH
-//   - midplane/midplane:0.1.0 image WITH /admin/policy support
-//     (rebuild from local OSS clone via `bun run dev:image`)
+//   - midplane/midplane:0.6.0 image (or local build via `bun run dev:image`)
 //   - .env.local DATABASE_URL pointing at a Neon dev branch
 //   - .env.local INDEXER_TOKEN set (the engine 404s without it)
 //   - .env.local MIDPLANE_KMS_DEV_KEY_EU set
 
 import { execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 
 import { expect, test } from "@playwright/test";
 import { eq } from "drizzle-orm";
-import { ulid } from "ulid";
 
 import { connections, customers, getDb } from "@midplane-cloud/db";
-import { encryptDsn, makeKmsContext } from "@midplane-cloud/kms";
+
+import { containerNameFor, seedConnection } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -56,33 +54,13 @@ test.beforeAll(async () => {
   );
 
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
-  const kms = makeKmsContext(process.env);
-  const { ciphertext, kmsKeyId } = await encryptDsn(
-    kms,
-    customerDsn,
-    (customerId = ulid()),
-    "eu",
-  );
-  mcpToken = randomUUID().replace(/-/g, "");
-  connectionId = ulid();
-  const db = getDb("eu");
-  await db.insert(customers).values({
-    id: customerId,
-    clerkOrgId: `org_policy-e2e-${customerId}`,
-    email: `policy-e2e-${customerId}@example.test`,
-    region: "eu",
-  });
-  await db.insert(connections).values({
-    id: connectionId,
-    customerId,
-    region: "eu",
-    encryptedDsn: ciphertext,
-    kmsKeyId,
-    mcpToken,
-    // Start permissive so the first query succeeds.
-    tableAccess: { default: "read", tables: {} },
-  });
-  proxiedContainerName = `midplane-${mcpToken.slice(0, 16)}`;
+  // Seed permissive (default 'read') so the first query succeeds; the
+  // test flips a specific table to 'deny' via setTableAccess.
+  const seeded = await seedConnection({ region: "eu", dsn: customerDsn });
+  customerId = seeded.customerId;
+  connectionId = seeded.connectionId;
+  mcpToken = seeded.tokenPlaintext;
+  proxiedContainerName = containerNameFor(connectionId);
 });
 
 test.afterAll(async () => {
