@@ -31,7 +31,7 @@ import { type TableAccessPolicy, type TenantScopeConfig } from "./policy.ts";
 export const REGIONS = ["eu", "us"] as const;
 export type Region = (typeof REGIONS)[number];
 
-// --- bytea (encrypted DSN) --------------------------------------------------
+// --- bytea (encrypted DSN, HMAC token hashes) -------------------------------
 
 const bytea = customType<{ data: Buffer; notNull: true; default: false }>({
   dataType() {
@@ -39,6 +39,20 @@ const bytea = customType<{ data: Buffer; notNull: true; default: false }>({
   },
   toDriver(value) {
     return value;
+  },
+});
+
+// --- inet (last_used_ip on mcp_tokens) --------------------------------------
+//
+// Postgres native inet stores both IPv4 and IPv6 with subnet semantics;
+// Drizzle's pg-core kit doesn't export a builtin, so we model it as a
+// customType. The driver returns inet values as canonical strings
+// (e.g. "203.0.113.42", "2001:db8::1") which is what we render in the
+// dashboard — no further conversion needed.
+
+const inet = customType<{ data: string; notNull: false; default: false }>({
+  dataType() {
+    return "inet";
   },
 });
 
@@ -218,11 +232,27 @@ export const auditEventsIndex = pgTable(
     // in the loop. Customer/tenant scope is the org; this column adds the
     // actor identity inside that scope.
     actorClerkUserId: text("actor_clerk_user_id"),
+    // Per-token audit attribution. The OSS engine stamps this on every
+    // audit row from a session via the X-Midplane-Token-Id header (wired
+    // by PR2 of mcp_url_auth_security). Cloud-emitted TOKEN_CREATED /
+    // TOKEN_REVOKED rows stamp it directly. NULL for rows where no token
+    // identity applies (engine pre-lockstep, REGION_CHANGED, etc.).
+    mcpTokenId: text("mcp_token_id"),
   },
   (t) => ({
     customerTsIdx: index("audit_customer_region_ts_idx").on(
       t.customerId,
       t.region,
+      t.ts.desc(),
+    ),
+    // Partial index (WHERE mcp_token_id IS NOT NULL) — Drizzle can't
+    // express the predicate; the migration owns that detail and this
+    // declaration mirrors the read-side existence so type inference and
+    // the schema-shape tests see the index.
+    customerTokenTsIdx: index("audit_customer_region_token_ts_idx").on(
+      t.customerId,
+      t.region,
+      t.mcpTokenId,
       t.ts.desc(),
     ),
     customerTypeTsIdx: index("audit_customer_region_type_ts_idx").on(
@@ -286,6 +316,95 @@ export const indexerCursors = pgTable(
   }),
 );
 
+// --- mcp_tokens -------------------------------------------------------------
+//
+// One row per agent-facing MCP token. Multi-token per connection
+// (`connection_id` is the FK, NOT unique), prefix+CRC format
+// (`mp_(live|test)_<32 hex>_<6 base32>` — see packages/db/src/token-format),
+// HMAC-SHA256(pepper) hashing at rest (see packages/kms/src/pepper). Stores
+// creator identity, optional expiry, last-used surface, and revocation
+// state for the dashboard list / "show once" mint flow / audit.
+//
+// PR2 will wire the proxy to inject X-Midplane-Token-Id from the matched
+// row and the OSS engine (lockstep) will stamp it on every audit event.
+//
+// The matching partial index `mcp_tokens_expires_at_idx` (`WHERE
+// expires_at IS NOT NULL AND status='active'`) lives in 0017_mcp_tokens.sql
+// — Drizzle's index DSL can't express the WHERE predicate, so the migration
+// owns that detail. The read-side declaration below is the unindexed mirror
+// so the schema-shape tests still see the column.
+
+export const MCP_TOKEN_STATUSES = ["active", "revoked", "expired"] as const;
+export type McpTokenStatus = (typeof MCP_TOKEN_STATUSES)[number];
+
+export const mcpTokens = pgTable(
+  "mcp_tokens",
+  {
+    id: text("id").primaryKey(), // ULID
+    connectionId: text("connection_id").notNull(),
+    // User-supplied label, unique within the connection. Mirrors how
+    // connection_databases.name is scoped.
+    name: text("name").notNull(),
+    // "mp_live" or "mp_test" — the env prefix from the plaintext token,
+    // copied here for dashboard rendering and scanner identification.
+    prefix: text("prefix").notNull(),
+    // Last 4 chars of the 32-hex entropy portion (NOT the trailing CRC).
+    // Surfaced on the dashboard list so users can recognize their tokens
+    // without storing plaintext.
+    last4: text("last4").notNull(),
+    // HMAC-SHA256(pepper, plaintext) — 32 bytes. Unique so a future
+    // pepper-rotation conflict (same plaintext hashes to the same value
+    // under the same kid) surfaces as a write error rather than silent
+    // collision.
+    tokenHash: bytea("token_hash").notNull(),
+    // Kid of the pepper used to hash this row's token_hash. V1 always
+    // "v1-<region>"; rotation introduces "v2-..." and the lookup tries
+    // each kid in the in-memory map.
+    pepperKid: text("pepper_kid").notNull(),
+    // Clerk user id of the actor who minted the token. Distinct from
+    // customer scope (the org) — this is the user inside that org.
+    createdByUserId: text("created_by_user_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // NULL = never expires. The conditional sweeper (PR2) transitions
+    // active+expired rows to status='expired' with revoked_reason='expired';
+    // the runtime lookup also rejects expired tokens immediately, so the
+    // sweeper is for dashboard truthfulness, not durable enforcement.
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    // Conditionally updated by the proxy with a 5-min debounce (PR2's
+    // resolveByToken). Stays NULL until the first successful use.
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    lastUsedIp: inet("last_used_ip"),
+    lastUsedUa: text("last_used_ua"),
+    status: text("status", { enum: MCP_TOKEN_STATUSES })
+      .notNull()
+      .default("active"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    // Free-form reason tag: 'user_action' | 'expired' | 'admin' (the
+    // sweeper writes 'expired'; the API writes 'user_action').
+    revokedReason: text("revoked_reason"),
+  },
+  (t) => ({
+    connectionFk: foreignKey({
+      name: "mcp_tokens_connection_fk",
+      columns: [t.connectionId],
+      foreignColumns: [connections.id],
+    }).onDelete("cascade"),
+    connectionStatusIdx: index("mcp_tokens_connection_status_idx").on(
+      t.connectionId,
+      t.status,
+    ),
+    // See header comment — the partial predicate lives in the migration.
+    expiresAtIdx: index("mcp_tokens_expires_at_idx").on(t.expiresAt),
+    tokenHashUq: unique("mcp_tokens_token_hash_uq").on(t.tokenHash),
+    nameUq: unique("mcp_tokens_name_per_connection_uq").on(
+      t.connectionId,
+      t.name,
+    ),
+  }),
+);
+
 // --- types ------------------------------------------------------------------
 
 export type Customer = typeof customers.$inferSelect;
@@ -298,5 +417,7 @@ export type AuditEvent = typeof auditEventsIndex.$inferSelect;
 export type NewAuditEvent = typeof auditEventsIndex.$inferInsert;
 export type IndexerCursor = typeof indexerCursors.$inferSelect;
 export type NewIndexerCursor = typeof indexerCursors.$inferInsert;
+export type McpToken = typeof mcpTokens.$inferSelect;
+export type NewMcpToken = typeof mcpTokens.$inferInsert;
 
 export { sql };

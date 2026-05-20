@@ -6,6 +6,7 @@ import type { Region } from "./schema.ts";
 
 export * from "./schema.ts";
 export * from "./policy.ts";
+export * from "./token-format.ts";
 
 // One pool per region. The original single-slot `cached` would let the first
 // caller's region win the cache for the process lifetime (silent cross-region
