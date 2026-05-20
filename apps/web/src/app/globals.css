@@ -39,9 +39,12 @@
     --primary: 0 0% 96%;            /* #f5f5f5 */
     --primary-foreground: 0 0% 4%;  /* #0a0a0a */
 
-    /* Focus ring + brand accent */
-    --ring: 209 100% 71%;           /* #6cb6ff */
-    --brand: 209 100% 71%;          /* #6cb6ff (alias for clarity) */
+    /* Focus ring + brand accent. Same hue (225°) as the landing's
+     * --accent-blue (#1d4eff), lifted from 56% → 65% lightness so it
+     * clears WCAG AA against --background (#0a0a0a). One brand blue
+     * across marketing and app, tone-mapped per medium. */
+    --ring: 225 100% 65%;           /* #4a78ff */
+    --brand: 225 100% 65%;          /* #4a78ff (alias for clarity) */
 
     /* Semantic — query lifecycle vocabulary */
     --allow: 137 27% 49%;           /* #5a9c6e */

@@ -31,7 +31,7 @@ that renders. The token values here mirror those mocked up in
   - Caption / label: 11–12, often `text-transform: uppercase`, `letter-spacing: 0.04em`
 
 ## Color
-- **Approach:** Restrained. One accent (`#6cb6ff`) plus three semantic colors that map to product mechanics. Everything else is neutral grays.
+- **Approach:** Restrained. One accent (`#4a78ff`) plus three semantic colors that map to product mechanics. Everything else is neutral grays.
 
 ### Surfaces
 | Token | Value | Use |
@@ -53,7 +53,7 @@ that renders. The token values here mirror those mocked up in
 ### Accent + Semantic
 | Token | Value | Use |
 |---|---|---|
-| `--accent` | `#6cb6ff` | Links, focus rings, active nav indicator, "key" highlights in code |
+| `--brand` (alias `--ring`) | `#4a78ff` | Links, focus rings, active nav indicator, "key" highlights in code. Same hue (225°) as the marketing landing's `#1d4eff`, lifted to 65% lightness so it clears WCAG AA against `#0a0a0a`. (shadcn's `--accent` token is the dark surface `#1d1d1d`, not this — see Surfaces table.) |
 | `--allow` | `#5a9c6e` | Allowed query, success, live freshness dot |
 | `--deny` | `#c87070` | Denied query, error, destructive intent |
 | `--warn` | `#d4a04c` | Staleness, warnings, anomaly flags |
@@ -83,16 +83,44 @@ Each semantic color also has a paired `--{name}-bg` at ~8% alpha for badge/banne
 - **Honor `prefers-reduced-motion`** on every animated element.
 
 ## Brand Mark
-A 16–18px notched square. CSS:
+A 16–18px square with a 1px cross slit (window-mullion). 4px corner radius.
+Background uses `--foreground`; the two slits use `--background` so the mark
+reads as light-on-dark in the app and ink-on-paper on the editorial landing.
+
+CSS shape:
 ```css
-clip-path: polygon(0 0, 100% 0, 100% 65%, 65% 100%, 0 100%);
-background: var(--text-0);
+.mark {
+  width: 18px; height: 18px;
+  background: var(--foreground);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+.mark::before { /* horizontal slit */
+  content: ""; position: absolute;
+  left: 0; right: 0; top: 50%; height: 1px;
+  background: var(--background);
+}
+.mark::after { /* vertical slit */
+  content: ""; position: absolute;
+  top: 0; bottom: 0; left: 50%; width: 1px;
+  background: var(--background);
+}
 ```
-Renders inline next to the wordmark "midplane" (lowercase, Geist 600, `letter-spacing: -0.01em`).
+
+The React component (`apps/web/src/components/layout/brand-mark.tsx`) uses
+two child `<span>`s instead of pseudo-elements so the slit colors stay bound
+to the same `--foreground` / `--background` tokens that drive the rest of
+the design system. The landing renders the same mark via the `.editorial-page
+.mark` selector in `globals.css`, with `--ink` / `--paper` substituted for
+`--foreground` / `--background`.
+
+Renders inline next to the wordmark "midplane" (lowercase, Geist 600,
+`letter-spacing: -0.01em`).
 
 ## Component Conventions
 - **Buttons:** Primary = `bg-foreground text-background`. Secondary = `bg-secondary border-border`. Destructive uses `--deny`. No gradient buttons. No oversized primary CTAs.
-- **Inputs:** 40px tall, `bg-background` (or `bg-muted` for readonly), `border-input`, `rounded-md`, focus ring `--ring` (which is `--accent`).
+- **Inputs:** 40px tall, `bg-background` (or `bg-muted` for readonly), `border-input`, `rounded-md`, focus ring `--ring` (which is `--brand`).
 - **Tables:** 11px uppercase header text in `--text-2`, 12px body in `--text-1`, hover row in `--bg-1`. Row borders in `--bg-1` (subtle), table header border in `--border` (visible).
 - **Badges:** 10px uppercase mono with a 4×4px dot when semantic. Allow/deny/warn pulled from semantic tokens.
 - **Empty states:** Dashed border in `--border`, padding 40px+, title in `--text-0`, body in `--text-2`.
@@ -113,3 +141,4 @@ Renders inline next to the wordmark "midplane" (lowercase, Geist 600, `letter-sp
 | 2026-04-29 | Initial midplane token system + 3 page mockups (landing, audit dashboard, onboarding) | Manual design exploration via /design-shotgun + /design-html. Locked palette and type. |
 | 2026-04-30 | Adopted as canonical via /design-consultation; written into DESIGN.md | Existing tokens were already coherent and partially shipped (audit page). Goal: stop the design drift, propagate everywhere. |
 | 2026-04-30 | Split `text-1` (body) from `text-2` (tertiary): `--muted-foreground` is now `#b4b4b4`; new `--subtle` at `#707070` for labels/timestamps. Added lucide icons to sidebar. Added `:-webkit-autofill` rule to keep `Input` bg dark in Chrome. | First-pass review caught body copy at 4:1 contrast, sidebar reading as broken icons, password input rendering pale lavender on autofill. |
+| 2026-05-20 | Brand accent retuned: `--brand` / `--ring` moved from `#6cb6ff` (info-blue cyan) to `#4a78ff` (saturated blue, hue 225°). Brand mark redrawn as a window-mullion (square + 1px cross slits) matching the editorial landing. | Landing's `#1d4eff` and the app's `#6cb6ff` read as different brand colors. Unified the hue across both — landing keeps `#1d4eff` on paper; the app uses a 9-point-lighter cousin tone-mapped for AA contrast on `#0a0a0a`. Mark swap unifies the glyph between marketing and app surfaces. |

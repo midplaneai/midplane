@@ -9,13 +9,15 @@ export function BrandMark({ className, size = 18 }: BrandMarkProps) {
   return (
     <span
       aria-hidden
-      className={cn("inline-block bg-foreground", className)}
-      style={{
-        width: size,
-        height: size,
-        clipPath: "polygon(0 0, 100% 0, 100% 65%, 65% 100%, 0 100%)",
-      }}
-    />
+      className={cn(
+        "relative inline-block overflow-hidden bg-foreground",
+        className,
+      )}
+      style={{ width: size, height: size, borderRadius: 4 }}
+    >
+      <span className="absolute inset-x-0 top-1/2 h-px bg-background" />
+      <span className="absolute inset-y-0 left-1/2 w-px bg-background" />
+    </span>
   );
 }
 
