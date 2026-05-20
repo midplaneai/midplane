@@ -23,6 +23,7 @@
 //     no longer claims it. If multi-token-per-connection ships, swap §04
 //     back to a member-with-tokens table.
 import { auth } from "@clerk/nextjs/server";
+import Link from "next/link";
 
 export default async function Landing() {
   // Signed-in users still see the landing — they may be sharing it with
@@ -59,10 +60,10 @@ export default async function Landing() {
               </a>
             ) : (
               <>
-                <a href="/sign-in">Sign in</a>
-                <a className="ebtn fill" href="/sign-up">
+                <Link href="/sign-in">Sign in</Link>
+                <Link className="ebtn fill" href="/sign-up">
                   Start free
-                </a>
+                </Link>
               </>
             )}
           </div>
@@ -93,9 +94,9 @@ export default async function Landing() {
                 wasn&apos;t safe to give an agent yesterday.
               </p>
               <div className="hero-ctas">
-                <a className="ebtn fill" href="/sign-up">
+                <Link className="ebtn fill" href="/sign-up">
                   Start free →
-                </a>
+                </Link>
                 <span className="cmd">
                   no credit card · <b>free for 1 connection · 1 seat</b>
                 </span>
@@ -814,9 +815,9 @@ export default async function Landing() {
                   <b>Community</b>
                 </li>
               </ul>
-              <a className="ebtn outline tier-cta" href="/sign-up">
+              <Link className="ebtn outline tier-cta" href="/sign-up">
                 Start free →
-              </a>
+              </Link>
             </div>
             <div className="tier pro">
               <div className="tier-head">
@@ -854,9 +855,9 @@ export default async function Landing() {
                   <b>Email</b>
                 </li>
               </ul>
-              <a className="ebtn fill tier-cta" href="/sign-up">
+              <Link className="ebtn fill tier-cta" href="/sign-up">
                 Start Pro →
-              </a>
+              </Link>
             </div>
             <div className="tier team">
               <div className="tier-head">
@@ -894,9 +895,9 @@ export default async function Landing() {
                   <b>Priority email</b>
                 </li>
               </ul>
-              <a className="ebtn outline tier-cta" href="/sign-up">
+              <Link className="ebtn outline tier-cta" href="/sign-up">
                 Start Team →
-              </a>
+              </Link>
             </div>
           </div>
           <p className="pricing-custom">
@@ -1003,9 +1004,9 @@ export default async function Landing() {
               </div>
             </div>
             <div className="ctas">
-              <a className="ebtn fill" href="/sign-up">
+              <Link className="ebtn fill" href="/sign-up">
                 Start free →
-              </a>
+              </Link>
               <a className="ebtn outline" href="#how">
                 Read the docs
               </a>
