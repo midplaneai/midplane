@@ -54,13 +54,29 @@ describe("loadPepperFromKms (env mode)", () => {
     ).rejects.toThrow(/MIDPLANE_KMS_MODE/);
   });
 
-  it("kms-mode is intentionally not yet wired", async () => {
+});
+
+describe("loadPepperFromKms (kms mode, pre-AWS validation)", () => {
+  // The live round-trip against a real CMK lives in
+  // kms-mode.live.e2e.test.ts. These assertions all fire before any AWS
+  // call, so they run without credentials.
+  it("throws when the region's CMK ARN env var is missing", async () => {
     await expect(
       loadPepperFromKms("eu", {
         MIDPLANE_KMS_MODE: "kms",
       } as NodeJS.ProcessEnv),
-    ).rejects.toThrow(/kms-mode pepper not yet wired/);
+    ).rejects.toThrow(/MIDPLANE_KMS_KEY_EU/);
   });
+
+  it("throws when the wrapped-pepper env var is missing", async () => {
+    await expect(
+      loadPepperFromKms("eu", {
+        MIDPLANE_KMS_MODE: "kms",
+        MIDPLANE_KMS_KEY_EU: "arn:aws:kms:eu-central-1:0:key/x",
+      } as NodeJS.ProcessEnv),
+    ).rejects.toThrow(/MIDPLANE_TOKEN_PEPPER_CT_EU_V1/);
+  });
+
 });
 
 describe("hashToken", () => {

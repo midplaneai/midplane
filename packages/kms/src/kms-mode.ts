@@ -14,6 +14,7 @@
 
 import {
   DecryptCommand,
+  EncryptCommand,
   GenerateDataKeyCommand,
   KMSClient,
 } from "@aws-sdk/client-kms";
@@ -25,6 +26,14 @@ import type { EncryptResult } from "./index.ts";
 const NONCE_LEN = 12;
 const TAG_LEN = 16;
 const KMS_VERSION = 0x02; // distinguishes from env-mode wire
+
+// Encryption context for the token pepper. Bound to region + a fixed purpose
+// string so a leaked DSN ciphertext (purpose unset) can never be Decrypt-ed
+// through the pepper path, and an EU pepper ciphertext can never be
+// Decrypt-ed under the US CMK. The kid string itself is NOT in the context
+// — rotation rolls the env-var name (`_V1` → `_V2`), so the operator
+// re-encrypts the new pepper out-of-band.
+const PEPPER_PURPOSE = "token-pepper";
 
 const clients = new Map<Region, KMSClient>();
 
@@ -130,4 +139,47 @@ export async function decryptKms(
   ]).toString("utf8");
   dataKey.fill(0);
   return plaintext;
+}
+
+// --- Token pepper (region-scoped, no envelope) ------------------------------
+//
+// The pepper is a 32-byte HMAC key used for hashing mcp_tokens.token_hash at
+// rest. Unlike DSNs there's no per-customer binding — one pepper per region
+// per kid. KMS Decrypt on a ≤4KB plaintext does not need an envelope layer,
+// so the wire format is just the raw `kms:Encrypt` CiphertextBlob.
+//
+// Operator workflow:
+//   $ scripts/encrypt-token-pepper.sh eu <CMK ARN>
+// emits a base64 string that goes into MIDPLANE_TOKEN_PEPPER_CT_<REGION>_V1.
+
+export async function encryptPepperKms(
+  plaintext: Buffer,
+  cmkArn: string,
+  region: Region,
+): Promise<Buffer> {
+  const out = await clientFor(region).send(
+    new EncryptCommand({
+      KeyId: cmkArn,
+      Plaintext: plaintext,
+      EncryptionContext: { region, purpose: PEPPER_PURPOSE },
+    }),
+  );
+  if (!out.CiphertextBlob) throw new Error("KMS Encrypt returned empty payload");
+  return Buffer.from(out.CiphertextBlob);
+}
+
+export async function decryptPepperKms(
+  ciphertext: Buffer,
+  cmkArn: string,
+  region: Region,
+): Promise<Buffer> {
+  const out = await clientFor(region).send(
+    new DecryptCommand({
+      CiphertextBlob: ciphertext,
+      KeyId: cmkArn,
+      EncryptionContext: { region, purpose: PEPPER_PURPOSE },
+    }),
+  );
+  if (!out.Plaintext) throw new Error("KMS Decrypt returned empty payload");
+  return Buffer.from(out.Plaintext);
 }

@@ -10,13 +10,18 @@
 // Mode parity with index.ts:
 //   "env"  base64 secret from MIDPLANE_TOKEN_PEPPER_<REGION>_V1. Dev /
 //          staging only. No envelope encryption.
-//   "kms"  scaffolded; PR2 wires real KMS decrypt of a per-region
-//          wrapped pepper ciphertext. Throws today.
+//   "kms"  KMS-encrypted ciphertext from MIDPLANE_TOKEN_PEPPER_CT_<REGION>_V1
+//          (base64). The per-region CMK ARN comes from MIDPLANE_KMS_KEY_<REGION>,
+//          same source the DSN path reads. EncryptionContext is bound to
+//          `{region, purpose: "token-pepper"}` so a DSN ciphertext can't be
+//          misrouted through this path and an EU ciphertext can't be
+//          Decrypt-ed under the US CMK.
 //
 // All exports are pure crypto + env lookup — no DB, no logging.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { decryptPepperKms } from "./kms-mode.ts";
 import type { Region } from "./types.ts";
 
 const PEPPER_LEN = 32;
@@ -54,12 +59,29 @@ export async function loadPepperFromKms(
     return map;
   }
   if (mode === "kms") {
-    // PR2 wires the real KMS decrypt of a wrapped pepper ciphertext from
-    // a known-location env var (e.g. MIDPLANE_TOKEN_PEPPER_CT_<REGION>_V1)
-    // or SSM parameter, paired with per-region IAM scoping that mirrors
-    // index.ts's DSN-key resolution. Until then, kms-mode pepper loading
-    // is intentionally not wired so a misconfigured prod fails fast.
-    throw new Error("kms-mode pepper not yet wired (lands in PR2)");
+    const arnVar = `MIDPLANE_KMS_KEY_${region.toUpperCase()}`;
+    const arn = env[arnVar];
+    if (!arn) {
+      throw new Error(
+        `${arnVar} is not set (required for kms-mode pepper in region '${region}')`,
+      );
+    }
+    const ctVar = `MIDPLANE_TOKEN_PEPPER_CT_${region.toUpperCase()}_V1`;
+    const raw = env[ctVar];
+    if (!raw) {
+      throw new Error(
+        `${ctVar} is not set (required for kms-mode pepper in region '${region}')`,
+      );
+    }
+    const ciphertext = Buffer.from(raw, "base64");
+    const pepper = await decryptPepperKms(ciphertext, arn, region);
+    if (pepper.length !== PEPPER_LEN) {
+      throw new Error(
+        `${ctVar} decrypted to ${pepper.length} bytes (expected ${PEPPER_LEN})`,
+      );
+    }
+    map.set(kid, pepper);
+    return map;
   }
   throw new Error(
     `MIDPLANE_KMS_MODE must be 'env' or 'kms' (got '${mode}')`,
