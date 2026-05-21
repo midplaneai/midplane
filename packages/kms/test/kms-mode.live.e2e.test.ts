@@ -14,7 +14,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import { randomBytes } from "node:crypto";
+
 import { decryptDsn, encryptDsn, makeKmsContext } from "../src/index.ts";
+import { decryptPepperKms, encryptPepperKms } from "../src/kms-mode.ts";
+import { loadPepperFromKms } from "../src/pepper.ts";
 
 const LIVE =
   process.env.E2E_LIVE === "1" && Boolean(process.env.MIDPLANE_KMS_KEY_EU);
@@ -90,6 +94,40 @@ describe.skipIf(!LIVE)("kms-mode KMS round-trip (live)", () => {
         kmsKeyId,
       );
       expect(out).toBe(dsn);
+    },
+  );
+
+  it("round-trips a token pepper through the EU CMK", async () => {
+    const pepper = randomBytes(32);
+    const cmk = process.env.MIDPLANE_KMS_KEY_EU!;
+    const ciphertext = await encryptPepperKms(pepper, cmk, "eu");
+    const out = await decryptPepperKms(ciphertext, cmk, "eu");
+    expect(out.equals(pepper)).toBe(true);
+  });
+
+  it("loadPepperFromKms decrypts a wrapped pepper at boot", async () => {
+    const pepper = randomBytes(32);
+    const cmk = process.env.MIDPLANE_KMS_KEY_EU!;
+    const ciphertext = await encryptPepperKms(pepper, cmk, "eu");
+    const map = await loadPepperFromKms("eu", {
+      MIDPLANE_KMS_MODE: "kms",
+      MIDPLANE_KMS_KEY_EU: cmk,
+      MIDPLANE_TOKEN_PEPPER_CT_EU_V1: ciphertext.toString("base64"),
+    } as NodeJS.ProcessEnv);
+    expect(map.get("v1-eu")?.equals(pepper)).toBe(true);
+  });
+
+  it.skipIf(!process.env.MIDPLANE_KMS_KEY_US)(
+    "rejects an EU pepper ciphertext Decrypt-ed under the US CMK (EncryptionContext mismatch)",
+    async () => {
+      // EncryptionContext is `{region, purpose: "token-pepper"}`. Cross-region
+      // replay is what we care about — the same CMK family in another region
+      // must not unwrap an EU pepper.
+      const pepper = randomBytes(32);
+      const euCmk = process.env.MIDPLANE_KMS_KEY_EU!;
+      const usCmk = process.env.MIDPLANE_KMS_KEY_US!;
+      const wrapped = await encryptPepperKms(pepper, euCmk, "eu");
+      await expect(decryptPepperKms(wrapped, usCmk, "us")).rejects.toThrow();
     },
   );
 });
