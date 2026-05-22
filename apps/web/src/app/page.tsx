@@ -50,11 +50,10 @@ export default async function Landing() {
             <a href="#audit">Audit</a>
             <a href="#hosted">Hosted</a>
             <a href="#pricing">Pricing</a>
-            <a href="#quickstart">Quickstart</a>
           </nav>
           <div className="topright">
             <a href="#hosted" className="mono">
-              EU + US ●
+              eu<span className="c">:</span>us ●
             </a>
             <a href="https://github.com/midplaneai/midplane">GitHub</a>
             {isSignedIn ? (
@@ -80,7 +79,7 @@ export default async function Landing() {
             <span className="dot" aria-hidden />
             <span>Access layer for your existing Postgres</span>
             <span className="sep" aria-hidden />
-            <span>v0.5.0 · EU + US</span>
+            <span>v0.5.0 · eu<span className="c">:</span>us</span>
           </div>
 
           <h1 className="pri-h1">
@@ -129,9 +128,7 @@ export default async function Landing() {
             the §01..§04 spine. */}
         <section className="sec demo-sec" id="try">
           <div className="sec-top">
-            <div className="sec-num">
-              <b>—</b>Try
-            </div>
+            <div className="sec-num">—&nbsp;try</div>
             <div>
               <h2 className="sec-h">
                 Ask the database. Watch the policy decide.
@@ -153,7 +150,8 @@ export default async function Landing() {
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
-              <b>01</b>What changes
+              <b>01</b>
+              <span className="c">:</span>stakes
             </div>
             <div>
               <h2 className="sec-h">
@@ -171,7 +169,7 @@ export default async function Landing() {
             <article className="ba-card bad">
               <div className="ba-tag">
                 <span className="dot" aria-hidden />
-                <span>Without midplane</span>
+                <span>before<span className="c">:</span>midplane</span>
                 <span className="ts mono">tue 09:17:34</span>
               </div>
               <h2 className="ba-claim">
@@ -199,7 +197,7 @@ export default async function Landing() {
             <article className="ba-card good">
               <div className="ba-tag">
                 <span className="dot" aria-hidden />
-                <span>With midplane</span>
+                <span>after<span className="c">:</span>midplane</span>
                 <span className="ts mono">tue 09:17:34</span>
               </div>
               <h2 className="ba-claim">
@@ -238,7 +236,8 @@ export default async function Landing() {
         <section className="sec" id="how">
           <div className="sec-top">
             <div className="sec-num">
-              <b>02</b>How it works
+              <b>02</b>
+              <span className="c">:</span>flow
             </div>
             <div>
               <h2 className="sec-h">
@@ -273,7 +272,10 @@ export default async function Landing() {
               </div>
               <div className="flow-checkpoints">
                 <article className="flow-check">
-                  <span className="flow-check-num mono">01 · policy</span>
+                  <span className="flow-check-num mono">
+                    <b>01</b>
+                    <span className="c">:</span>policy
+                  </span>
                   <h3 className="flow-check-title">Decided.</h3>
                   <pre className="flow-check-body">
                     {"table_access · "}
@@ -291,7 +293,10 @@ export default async function Landing() {
                   </p>
                 </article>
                 <article className="flow-check">
-                  <span className="flow-check-num mono">02 · audit</span>
+                  <span className="flow-check-num mono">
+                    <b>02</b>
+                    <span className="c">:</span>audit
+                  </span>
                   <h3 className="flow-check-title">Logged.</h3>
                   <pre className="flow-check-body">
                     {"audit_log ←\n  who   = lena@acme\n  agent = claude-code\n  table = users\n  stage = ATTEMPTED\n  "}
@@ -303,7 +308,10 @@ export default async function Landing() {
                   </p>
                 </article>
                 <article className="flow-check">
-                  <span className="flow-check-num mono">03 · execute</span>
+                  <span className="flow-check-num mono">
+                    <b>03</b>
+                    <span className="c">:</span>execute
+                  </span>
                   <h3 className="flow-check-title">…or denied.</h3>
                   <pre className="flow-check-body">
                     <span className="a">allow</span>
@@ -329,7 +337,8 @@ export default async function Landing() {
         <section className="sec" id="policy">
           <div className="sec-top">
             <div className="sec-num">
-              <b>03</b>Policy
+              <b>03</b>
+              <span className="c">:</span>policy
             </div>
             <div>
               <h2 className="sec-h">
@@ -345,7 +354,6 @@ export default async function Landing() {
           </div>
           <div className="split-pair">
             <div className="copy">
-              <span className="copy-eyebrow">policy</span>
               <h2>
                 Opt in <span style={{ color: "var(--accent-blue)" }}>per table.</span>
               </h2>
@@ -480,7 +488,8 @@ export default async function Landing() {
         <section className="sec" id="audit">
           <div className="sec-top">
             <div className="sec-num">
-              <b>04</b>Audit
+              <b>04</b>
+              <span className="c">:</span>audit
             </div>
             <div>
               <h2 className="sec-h">
@@ -571,7 +580,8 @@ export default async function Landing() {
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
-              <b>05</b>Isolation
+              <b>05</b>
+              <span className="c">:</span>isolation
             </div>
             <div>
               <h2 className="sec-h">
@@ -645,7 +655,8 @@ export default async function Landing() {
         <section className="sec" id="hosted">
           <div className="sec-top">
             <div className="sec-num">
-              <b>06</b>Hosted
+              <b>06</b>
+              <span className="c">:</span>hosted
             </div>
             <div>
               <h2 className="sec-h">
@@ -667,7 +678,8 @@ export default async function Landing() {
         <section className="sec" id="pricing">
           <div className="sec-top">
             <div className="sec-num">
-              <b>07</b>Pricing
+              <b>07</b>
+              <span className="c">:</span>pricing
             </div>
             <div>
               <h2 className="sec-h">
@@ -804,7 +816,7 @@ export default async function Landing() {
           <p className="pricing-custom">
             <b>Custom needs?</b> BYOK, dedicated region, SOC2 / HIPAA
             artifacts, SAML below Team, custom retention, SLA —{" "}
-            <a href="mailto:sales@midplane.ai">talk to us</a>.
+            <a href="mailto:info@midplane.ai">talk to us</a>.
           </p>
         </section>
 
@@ -816,7 +828,8 @@ export default async function Landing() {
         <section className="sec" id="quickstart">
           <div className="sec-top">
             <div className="sec-num">
-              <b>08</b>Quickstart
+              <b>08</b>
+              <span className="c">:</span>start
             </div>
             <div>
               <h2 className="sec-h">
@@ -865,9 +878,6 @@ export default async function Landing() {
               <Link className="ebtn fill" href="/sign-up">
                 Start free →
               </Link>
-              <a className="ebtn outline" href="#how">
-                Read the docs
-              </a>
             </div>
           </div>
         </section>
@@ -888,26 +898,15 @@ export default async function Landing() {
           <div>
             <h5>Product</h5>
             <a href="#hosted">Hosted</a>
-            <a href="#hosted">Self-host</a>
             <a href="#audit">Audit</a>
             <a href="#policy">Policy</a>
             <a href="#pricing">Pricing</a>
-          </div>
-          <div>
-            <h5>Docs</h5>
-            <a href="#quickstart">Quickstart</a>
-            <a href="#policy">Policy reference</a>
-            <a href="#quickstart">MCP clients</a>
-            <a href="https://github.com/midplaneai/midplane">Changelog</a>
           </div>
           <div>
             <h5>Open</h5>
             <a href="https://github.com/midplaneai/midplane">
               github.com/midplaneai/midplane
             </a>
-            <a href="#">Status</a>
-            <a href="#">Security</a>
-            <a href="#">Contact</a>
           </div>
         </footer>
       </div>
