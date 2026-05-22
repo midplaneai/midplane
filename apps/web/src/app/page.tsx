@@ -25,6 +25,7 @@
 import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 
+import { HostedTabs } from "./_landing/hosted-tabs";
 import { QuickstartClients } from "./_landing/quickstart-clients";
 import { DemoChat } from "./demo/demo-chat";
 
@@ -632,84 +633,7 @@ export default async function Landing() {
               </p>
             </div>
           </div>
-          <div className="parity">
-            <div>
-              <div className="tag">
-                <span className="d" aria-hidden />
-                <span>Hosted · EU + US</span>
-              </div>
-              <h3>We host it.</h3>
-              <p>
-                Sign up, paste your DSNs, drop the MCP URL into your agent.
-                You get back hours of platform work.
-              </p>
-              <ul className="cloud-list">
-                <li>
-                  <span className="mk">✓</span>
-                  <span>
-                    <b>Isolation managed</b> — region pinning, per-workspace KMS,
-                    scoped connection pools.
-                  </span>
-                </li>
-                <li>
-                  <span className="mk">✓</span>
-                  <span>
-                    <b>Audit storage included</b> — 7 / 30 / 180-day retention
-                    by tier. Append-only, queryable from the dashboard.
-                  </span>
-                </li>
-                <li>
-                  <span className="mk">✓</span>
-                  <span>
-                    <b>Free forever</b> — 1 connection, 1 seat, 7-day audit
-                    retention. No credit card. Query volume is not metered.
-                  </span>
-                </li>
-              </ul>
-              <span className="image-tag mono">
-                fly · <b>eu + us</b>
-              </span>
-              <div className="footnote">
-                <span>setup &lt; 60s</span>
-                <span>v0.5.0</span>
-              </div>
-            </div>
-            <div>
-              <div className="tag">
-                <span className="d" aria-hidden />
-                <span>Self-host · MIT</span>
-              </div>
-              <h3>You host it.</h3>
-              <p>
-                Run the same container in your own infrastructure. Common
-                reasons: on-prem requirement, air-gapped network, existing
-                Postgres platform you want to extend.
-              </p>
-              <ul className="host-list">
-                <li>
-                  <span className="mk">○</span>
-                  <span>
-                    You handle patching, upgrades, audit storage, HA, and
-                    region routing.
-                  </span>
-                </li>
-                <li>
-                  <span className="mk">○</span>
-                  <span>
-                    Open source, MIT licensed. Same engine, same policy
-                    format, same audit shape as the hosted plane.
-                  </span>
-                </li>
-              </ul>
-              <span className="image-tag mono">
-                github · <b>midplaneai/midplane</b>
-              </span>
-              <div className="footnote">
-                <span>docker pull midplane/midplane:0.6.0</span>
-                <span>install &lt; 30s</span>
-              </div>
-            </div>
-          </div>
+          <HostedTabs />
         </section>
 
         {/* §08 — Pricing */}
