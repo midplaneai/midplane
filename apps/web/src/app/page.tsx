@@ -25,6 +25,8 @@
 import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 
+import { CyclingAgent } from "./_landing/cycling-agent";
+import { HostedTabs } from "./_landing/hosted-tabs";
 import { DemoChat } from "./demo/demo-chat";
 
 export default async function Landing() {
@@ -146,65 +148,6 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* Now you can — the enablement beat. What becomes possible once the
-            policy + audit + isolation story below is in place. */}
-        <section className="nyc-sec">
-          <div className="lbl">
-            <b>Now you can</b>safely
-          </div>
-          <div>
-            <p className="nyc-lede">
-              Let your engineers point Claude at your <em>real</em> production
-              database — for the work they couldn&apos;t trust an agent with
-              yesterday.
-            </p>
-            <div className="nyc-cards">
-              <article className="nyc-card">
-                <span className="kicker">Query prod in plain English.</span>
-                <p>
-                  Ask Claude how retention shifted last month. It runs the
-                  read, you see the answer — no SQL copy-paste, no DSN on
-                  anyone&apos;s laptop.
-                </p>
-                <pre className="snippet">
-                  <span className="you">you:</span> how many active users last
-                  week?{"\n"}
-                  <span className="ai">claude:</span> <b>1,402</b> active ·
-                  +18% wow
-                </pre>
-              </article>
-              <article className="nyc-card">
-                <span className="kicker">Build a one-off dashboard.</span>
-                <p>
-                  &ldquo;Chart signups by region for the last 30 days.&rdquo;
-                  The agent picks the right tables, queries, and hands you a
-                  chart in minutes.
-                </p>
-                <pre className="snippet">
-                  <span className="you">you:</span> signups by region, 30d
-                  {"\n"}
-                  <span className="ai">claude:</span> <b>chart ready</b> · eu
-                  612 · us 590 · other 200
-                </pre>
-              </article>
-              <article className="nyc-card">
-                <span className="kicker">Debug live without paging anyone.</span>
-                <p>
-                  Prod incident at 02:00 — your on-call asks Claude to poke
-                  around the rows through the MCP URL. Every query logged, no
-                  leaked credentials.
-                </p>
-                <pre className="snippet">
-                  <span className="you">you:</span> why are checkouts
-                  failing?{"\n"}
-                  <span className="ai">claude:</span> <b>session_token</b>{" "}
-                  null for 12% of rows since 02:14
-                </pre>
-              </article>
-            </div>
-          </div>
-        </section>
-
         {/* §01 — What changes. The same query an engineer's agent might
             run, with and without midplane. Was the hero; demoted to a
             section so the hero can lead on enablement. */}
@@ -288,7 +231,11 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §02 — How it works */}
+        {/* §02 — How it works. Was four stacked step cards (setup + three
+            per-query beats), each restating a slice of the same story.
+            Collapsed into a single flow diagram: a small one-time setup
+            band above, then the three per-query checkpoints inside one
+            bordered midplane block. */}
         <section className="sec" id="how">
           <div className="sec-top">
             <div className="sec-num">
@@ -306,64 +253,70 @@ export default async function Landing() {
               </p>
             </div>
           </div>
-          <div className="mech">
-            <div className="step">
-              <div className="n">Setup · once</div>
-              <h3>One URL replaces the connection string.</h3>
-              <p>
-                Drop a Midplane MCP URL into Cursor, Claude Code or Claude
-                Desktop. The agent never sees your DSN, password, or network.
-              </p>
-              <div className="ascii">
-                {"cursor / claude / codex\n   │\n   ▼\n"}
-                <b>{"https://eu.midplane.ai\n   /mcp/tok_3f12…"}</b>
-              </div>
+          <div className="flow">
+            <div className="flow-setup">
+              <span className="flow-setup-label mono">Setup · once</span>
+              <span className="flow-setup-desc">
+                Drop a Midplane MCP URL into your agent. The agent never sees
+                your DSN, password, or network.
+              </span>
+              <span className="flow-setup-token mono">
+                cursor / claude{" "}
+                <span className="flow-setup-arrow" aria-hidden>
+                  →
+                </span>{" "}
+                <b>https://eu.midplane.ai/mcp/&lt;tok&gt;</b>
+              </span>
             </div>
-            <div className="step">
-              <div className="n">Per query · 01</div>
-              <h3>Policy decides every query.</h3>
-              <p>
-                Read-only by default. Writes only on opted-in tables. Tenant
-                predicate required. Multi-statement and DDL — even hidden inside
-                a CTE — are always denied.
-              </p>
-              <div className="ascii">
-                {"table_access · "}
-                <span className="a">ALLOW</span>
-                {"\ntenant_scope · "}
-                <span className="a">ALLOW</span>
-                {"\nmulti_stmt   · "}
-                <span className="d">DENY</span>
-                {"\nddl          · "}
-                <span className="d">DENY</span>
+            <div className="flow-runtime">
+              <div className="flow-runtime-tag mono">
+                Midplane · every query
               </div>
-            </div>
-            <div className="step">
-              <div className="n">Per query · 02</div>
-              <h3>Logged before it runs.</h3>
-              <p>
-                Every attempt — allowed or denied — is written before the query
-                touches Postgres. If logging fails, the query is rejected.
-              </p>
-              <div className="ascii">
-                {"audit_log ←\n  who   = lena@acme\n  agent = claude-code\n  table = users\n  stage = ATTEMPTED\n  "}
-                <b>committed</b>
-              </div>
-            </div>
-            <div className="step">
-              <div className="n">Per query · 03</div>
-              <h3>…or return a clean deny.</h3>
-              <p>
-                Allowed queries hit Postgres normally. Denied queries return a
-                structured error the agent can read and pivot from — no surprise
-                crashes, no half-written rows.
-              </p>
-              <div className="ascii">
-                {"EXECUTED\n└ "}
-                <span className="a">25 rows</span>
-                {" · 4.1 ms\n\nDENIED\n└ "}
-                <span className="d">reason: table_access</span>
-                {"\n└ users.email · write\n└ not in opt-in list"}
+              <div className="flow-checkpoints">
+                <article className="flow-check">
+                  <span className="flow-check-num mono">01 · policy</span>
+                  <h3 className="flow-check-title">Decided.</h3>
+                  <pre className="flow-check-body">
+                    {"table_access · "}
+                    <span className="a">allow</span>
+                    {"\ntenant_scope · "}
+                    <span className="a">allow</span>
+                    {"\nmulti_stmt   · "}
+                    <span className="d">deny</span>
+                    {"\nddl          · "}
+                    <span className="d">deny</span>
+                  </pre>
+                  <p className="flow-check-caption">
+                    Read-only default, writes per opt-in table, tenant
+                    predicate required.
+                  </p>
+                </article>
+                <article className="flow-check">
+                  <span className="flow-check-num mono">02 · audit</span>
+                  <h3 className="flow-check-title">Logged.</h3>
+                  <pre className="flow-check-body">
+                    {"audit_log ←\n  who   = lena@acme\n  agent = claude-code\n  table = users\n  stage = ATTEMPTED\n  "}
+                    <b>committed</b>
+                  </pre>
+                  <p className="flow-check-caption">
+                    Written before Postgres sees the query. Log failure rejects
+                    the query.
+                  </p>
+                </article>
+                <article className="flow-check">
+                  <span className="flow-check-num mono">03 · execute</span>
+                  <h3 className="flow-check-title">…or denied.</h3>
+                  <pre className="flow-check-body">
+                    <span className="a">allow</span>
+                    {" → postgres\n     └ 25 rows · 4.1 ms\n\n"}
+                    <span className="d">deny</span>
+                    {" → structured reply\n     └ reason: table_access\n     └ agent pivots"}
+                  </pre>
+                  <p className="flow-check-caption">
+                    Allowed queries run normally. Denied queries return a
+                    parsable error — no half-writes.
+                  </p>
+                </article>
               </div>
             </div>
           </div>
@@ -402,6 +355,32 @@ export default async function Landing() {
                 win over bare names. Saves push to the engine over the admin
                 channel; the agent&apos;s active MCP session keeps running.
               </p>
+              {/* Engine invariants — hardcoded at the parser, not editor
+                  rows. Lifted from a footnote into a proper callout so the
+                  always-denied dimension reads as a feature, not a caveat. */}
+              <div className="invariants">
+                <div className="invariants-label mono">Engine invariants</div>
+                <ul className="invariants-list">
+                  <li>
+                    <span className="invariants-tag mono">always deny</span>
+                    <span>
+                      <b>Multi-statement queries</b> — even a{" "}
+                      <span className="mono">DELETE</span> hidden inside a CTE.
+                    </span>
+                  </li>
+                  <li>
+                    <span className="invariants-tag mono">always deny</span>
+                    <span>
+                      <b>DDL</b> — <span className="mono">DROP</span>,{" "}
+                      <span className="mono">ALTER</span>,{" "}
+                      <span className="mono">CREATE</span> never reach Postgres.
+                    </span>
+                  </li>
+                </ul>
+                <p className="invariants-foot">
+                  Enforced at the parser. Not configurable, not in the editor.
+                </p>
+              </div>
             </div>
             <div className="policy-ui">
               <div className="pui-head">
@@ -495,14 +474,6 @@ export default async function Landing() {
                 </span>
               </div>
             </div>
-
-            {/* Engine invariants live OUTSIDE the editor — they're hardcoded
-                in the parser, not configurable rows. */}
-            <p className="pui-note">
-              <span className="pui-note-label">Engine invariants</span>
-              Multi-statement queries and DDL are always denied at the parser —
-              not configurable, not in the editor.
-            </p>
           </div>
         </section>
 
@@ -619,31 +590,12 @@ export default async function Landing() {
           <div className="iso">
             <div className="iso-copy">
               <h3>What lives where.</h3>
-              <p>The data plane is your Postgres. We&apos;re a control plane in front of it.</p>
-              <ul>
-                <li>
-                  <span>
-                    <b>Query results pass through, unstored.</b> We see the SQL
-                    and the decision (allow / deny), we forward the rows. The
-                    rows themselves don&apos;t sit in our system.
-                  </span>
-                </li>
-                <li>
-                  <span>
-                    <b>Per-workspace encryption.</b> Connection credentials,
-                    policy, and audit log are envelope-encrypted with a KMS
-                    key bound to your workspace. We can&apos;t decrypt another
-                    workspace&apos;s data with yours.
-                  </span>
-                </li>
-                <li>
-                  <span>
-                    <b>Region-pinned.</b> Pick <span className="mono">eu</span>{" "}
-                    or <span className="mono">us</span> at signup; the control
-                    plane stays there.
-                  </span>
-                </li>
-              </ul>
+              <p>
+                The data plane is your Postgres. We&apos;re a control plane in
+                front of it — query results pass through unstored, the little
+                we do hold is envelope-encrypted per workspace, and the whole
+                control plane is pinned to the region you pick at signup.
+              </p>
             </div>
             <div className="iso-diagram">
               <div className="lane">
@@ -709,84 +661,7 @@ export default async function Landing() {
               </p>
             </div>
           </div>
-          <div className="parity">
-            <div>
-              <div className="tag">
-                <span className="d" aria-hidden />
-                <span>Hosted · EU + US</span>
-              </div>
-              <h3>We host it.</h3>
-              <p>
-                Sign up, paste your DSNs, drop the MCP URL into your agent.
-                You get back hours of platform work.
-              </p>
-              <ul className="cloud-list">
-                <li>
-                  <span className="mk">✓</span>
-                  <span>
-                    <b>Isolation managed</b> — region pinning, per-workspace KMS,
-                    scoped connection pools.
-                  </span>
-                </li>
-                <li>
-                  <span className="mk">✓</span>
-                  <span>
-                    <b>Audit storage included</b> — 7 / 30 / 180-day retention
-                    by tier. Append-only, queryable from the dashboard.
-                  </span>
-                </li>
-                <li>
-                  <span className="mk">✓</span>
-                  <span>
-                    <b>Free forever</b> — 1 connection, 1 seat, 7-day audit
-                    retention. No credit card. Query volume is not metered.
-                  </span>
-                </li>
-              </ul>
-              <span className="image-tag mono">
-                fly · <b>eu + us</b>
-              </span>
-              <div className="footnote">
-                <span>setup &lt; 60s</span>
-                <span>v0.5.0</span>
-              </div>
-            </div>
-            <div>
-              <div className="tag">
-                <span className="d" aria-hidden />
-                <span>Self-host · MIT</span>
-              </div>
-              <h3>You host it.</h3>
-              <p>
-                Run the same container in your own infrastructure. Common
-                reasons: on-prem requirement, air-gapped network, existing
-                Postgres platform you want to extend.
-              </p>
-              <ul className="host-list">
-                <li>
-                  <span className="mk">○</span>
-                  <span>
-                    You handle patching, upgrades, audit storage, HA, and
-                    region routing.
-                  </span>
-                </li>
-                <li>
-                  <span className="mk">○</span>
-                  <span>
-                    Open source, MIT licensed. Same engine, same policy
-                    format, same audit shape as the hosted plane.
-                  </span>
-                </li>
-              </ul>
-              <span className="image-tag mono">
-                github · <b>midplaneai/midplane</b>
-              </span>
-              <div className="footnote">
-                <span>docker pull midplane/midplane:0.6.0</span>
-                <span>install &lt; 30s</span>
-              </div>
-            </div>
-          </div>
+          <HostedTabs />
         </section>
 
         {/* §08 — Pricing */}
@@ -934,7 +809,11 @@ export default async function Landing() {
           </p>
         </section>
 
-        {/* §09 — Quickstart */}
+        {/* §08 — Quickstart. The per-client config tabs that used to live
+            here showed mostly equivalent code (JSON for Cursor, CLI for
+            Claude Code, UI path for Claude Desktop) and read as boilerplate.
+            Replaced with a one-line client list; the satisfying single
+            command moved to the close band below. */}
         <section className="sec" id="quickstart">
           <div className="sec-top">
             <div className="sec-num">
@@ -945,9 +824,7 @@ export default async function Landing() {
                 From signup to first allowed query: <em>under a minute.</em>
               </h2>
               <p className="sec-sub">
-                Four steps, one MCP URL, the client you already use. Cursor,
-                Claude Code and Claude Desktop are verified — every other MCP
-                client we&apos;ve tested works too.
+                Four steps, one MCP URL, the client you already use.
               </p>
             </div>
           </div>
@@ -971,65 +848,20 @@ export default async function Landing() {
             </div>
           </div>
 
-          <div className="clients">
-            <div className="client">
-              <div className="name">
-                <h4>Cursor</h4>
-                <span className="v">verified</span>
-              </div>
-              <pre>
-                <span className="com"># ~/.cursor/mcp.json</span>
-                {"\n{\n  "}
-                <b>&quot;mcpServers&quot;</b>
-                {": {\n    "}
-                <b>&quot;midplane&quot;</b>
-                {": {\n      "}
-                <b>&quot;url&quot;</b>
-                {': "https://eu.midplane.ai/mcp/<tok>"\n    }\n  }\n}'}
-              </pre>
-            </div>
-            <div className="client">
-              <div className="name">
-                <h4>Claude Code</h4>
-                <span className="v">verified</span>
-              </div>
-              <pre>
-                <span className="com"># one line, terminal</span>
-                {"\nclaude mcp add \\\n  --transport http \\\n  midplane \\\n  https://eu.midplane.ai/mcp/<tok>"}
-              </pre>
-            </div>
-            <div className="client">
-              <div className="name">
-                <h4>Claude Desktop</h4>
-                <span className="v">verified</span>
-              </div>
-              <pre>
-                <span className="com"># Settings → Connectors → Add</span>
-                {"\nname: midplane\nurl:  https://eu.midplane.ai/mcp/<tok>\n\n"}
-                <span className="com"># or claude_desktop_config.json</span>
-              </pre>
-            </div>
-          </div>
+          <p className="qs-clients">
+            Verified with <b>Cursor</b>, <b>Claude Code</b>, and{" "}
+            <b>Claude Desktop</b>. Works with any MCP-capable client.
+          </p>
         </section>
 
-        {/* close band */}
+        {/* close band — final CTA. Hero already framed the value and the
+            pricing section above already showed tiers, so the band reduces
+            to the headline + buttons. */}
         <section className="close">
           <div className="inner">
-            <div>
-              <h2>
-                Let Claude query <em>your real database.</em>
-              </h2>
-              <p>
-                Build the dashboards you never had time to build. Run the prod
-                query you didn&apos;t want to copy-paste into a chat window.
-                Your engineers do it in the client they already use — every
-                query bounded by policy, every action logged.
-              </p>
-              <div className="meta">
-                Free for 1 engineer · <b>Pro $49/mo</b> · <b>Team $399/mo</b>{" "}
-                · same safety engine on every tier · EU + US
-              </div>
-            </div>
+            <h2>
+              Let <CyclingAgent /> query <em>your real database.</em>
+            </h2>
             <div className="ctas">
               <Link className="ebtn fill" href="/sign-up">
                 Start free →
