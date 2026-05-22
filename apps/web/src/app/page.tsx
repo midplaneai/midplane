@@ -953,24 +953,14 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* close band */}
+        {/* close band — final CTA. Hero already framed the value and the
+            pricing section above already showed tiers, so the band reduces
+            to the headline + buttons. */}
         <section className="close">
           <div className="inner">
-            <div>
-              <h2>
-                Let Claude query <em>your real database.</em>
-              </h2>
-              <p>
-                Build the dashboards you never had time to build. Run the prod
-                query you didn&apos;t want to copy-paste into a chat window.
-                Your engineers do it in the client they already use — every
-                query bounded by policy, every action logged.
-              </p>
-              <div className="meta">
-                Free for 1 engineer · <b>Pro $49/mo</b> · <b>Team $399/mo</b>{" "}
-                · same safety engine on every tier · EU + US
-              </div>
-            </div>
+            <h2>
+              Let Claude query <em>your real database.</em>
+            </h2>
             <div className="ctas">
               <Link className="ebtn fill" href="/sign-up">
                 Start free →

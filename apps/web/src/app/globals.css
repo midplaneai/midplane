@@ -459,13 +459,10 @@
 .editorial-page .close .inner { display: grid; grid-template-columns: 1fr auto; gap: 48px; align-items: end; max-width: 1344px; margin: 0 auto; }
 .editorial-page .close h2 { margin: 0; font-size: 96px; line-height: 0.95; letter-spacing: -0.035em; font-weight: 600; max-width: 14ch; color: var(--paper); }
 .editorial-page .close h2 em { font-style: normal; color: #f3a55b; }
-.editorial-page .close p { margin: 24px 0 0; font-size: 18px; color: rgba(243, 239, 231, 0.65); max-width: 46ch; line-height: 1.5; }
 .editorial-page .close .ctas { display: flex; flex-direction: column; gap: 14px; }
 .editorial-page .close .ebtn.fill { background: var(--paper); color: var(--ink); }
 .editorial-page .close .ebtn.outline { border-color: rgba(243, 239, 231, 0.4); color: var(--paper); }
 .editorial-page .close .ebtn.outline:hover { background: var(--paper); color: var(--ink); }
-.editorial-page .close .meta { margin-top: 36px; font-family: var(--font-geist-mono); font-size: 13px; color: rgba(243, 239, 231, 0.5); }
-.editorial-page .close .meta b { color: var(--paper); font-weight: 400; }
 
 /* footer */
 .editorial-page footer.efoot { padding: 48px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 48px; background: var(--ink); color: rgba(243, 239, 231, 0.5); margin: 0 -48px; border-top: 1px solid rgba(243, 239, 231, 0.08); }
