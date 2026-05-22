@@ -42,6 +42,39 @@ export {
 // inserts working).
 const CUSTOMER_ID_ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
+// Default projection for connection_databases reads that ship to UI
+// surfaces. Excludes `encryptedDsn` (bytea — Next 15 refuses to serialize
+// across the RSC boundary, but more importantly we want defense-in-depth:
+// the ciphertext should never leave Postgres unless we're about to
+// decrypt it) and `kmsKeyId` (reveals which KMS key wraps the credential
+// — not a smoking gun but irrelevant to any UI surface).
+//
+// Callers that genuinely need to decrypt a DSN (the tables-introspection
+// route, the proxy resolver) use the `*AndCredential` variants below, so
+// every wider-exposure read is greppable at code review time.
+const SAFE_DATABASE_COLUMNS = {
+  id: connectionDatabases.id,
+  connectionId: connectionDatabases.connectionId,
+  name: connectionDatabases.name,
+  tableAccess: connectionDatabases.tableAccess,
+  tenantScope: connectionDatabases.tenantScope,
+  rotatedAt: connectionDatabases.rotatedAt,
+  lastKmsSuccessAt: connectionDatabases.lastKmsSuccessAt,
+  createdAt: connectionDatabases.createdAt,
+} as const;
+
+export type SafeConnectionDatabase = Pick<
+  typeof connectionDatabases.$inferSelect,
+  | "id"
+  | "connectionId"
+  | "name"
+  | "tableAccess"
+  | "tenantScope"
+  | "rotatedAt"
+  | "lastKmsSuccessAt"
+  | "createdAt"
+>;
+
 export async function emitConfigAuditRow(
   customer: Customer,
   row: {
@@ -709,8 +742,50 @@ export async function rotateConnection(
 /** Read a connection plus one named child for the per-DB detail page.
  *  Returns null when the connection is unknown OR owned by another
  *  customer OR the named child does not exist (caller can't
- *  distinguish — same leakage shape as the rotate / delete paths). */
+ *  distinguish — same leakage shape as the rotate / delete paths).
+ *
+ *  Projects to `SafeConnectionDatabase` — no encryptedDsn / kmsKeyId.
+ *  Callers that need to decrypt (table introspection, proxy resolver)
+ *  must use {@link getConnectionWithDatabaseAndCredential}. */
 export async function getConnectionWithDatabase(
+  customer: Customer,
+  id: string,
+  name: string,
+): Promise<
+  | {
+      connection: typeof connections.$inferSelect;
+      database: SafeConnectionDatabase;
+    }
+  | null
+> {
+  const db = getDb(customer.region);
+  const connRows = await db
+    .select()
+    .from(connections)
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .limit(1);
+  const conn = connRows[0];
+  if (!conn) return null;
+  const dbRows = await db
+    .select(SAFE_DATABASE_COLUMNS)
+    .from(connectionDatabases)
+    .where(
+      and(
+        eq(connectionDatabases.connectionId, conn.id),
+        eq(connectionDatabases.name, name),
+      ),
+    )
+    .limit(1);
+  const database = dbRows[0];
+  if (!database) return null;
+  return { connection: conn, database };
+}
+
+/** Credential-bearing variant of {@link getConnectionWithDatabase}.
+ *  Pulls `encryptedDsn` + `kmsKeyId` so the caller can hand the row to
+ *  `DsnResolver.resolve(...)`. The encrypted ciphertext never reaches a
+ *  client component or response body — keep it on the server. */
+export async function getConnectionWithDatabaseAndCredential(
   customer: Customer,
   id: string,
   name: string,
@@ -748,14 +823,16 @@ export async function getConnectionWithDatabase(
  *  detail page (sibling tab strip is intentionally absent — PR-B locked
  *  the hierarchy as the navigation — but the dashboard renders the same
  *  list inline under each connection header). Returns null when the
- *  connection is unknown OR owned by another customer. */
+ *  connection is unknown OR owned by another customer.
+ *
+ *  Safe projection — no encryptedDsn / kmsKeyId. */
 export async function listDatabasesForConnection(
   customer: Customer,
   id: string,
 ): Promise<
   | {
       connection: typeof connections.$inferSelect;
-      databases: Array<typeof connectionDatabases.$inferSelect>;
+      databases: SafeConnectionDatabase[];
     }
   | null
 > {
@@ -768,7 +845,7 @@ export async function listDatabasesForConnection(
   const conn = connRows[0];
   if (!conn) return null;
   const databases = await db
-    .select()
+    .select(SAFE_DATABASE_COLUMNS)
     .from(connectionDatabases)
     .where(eq(connectionDatabases.connectionId, conn.id))
     .orderBy(asc(connectionDatabases.name));
@@ -777,8 +854,33 @@ export async function listDatabasesForConnection(
 
 /** Back-compat shim for callers that still expect the {connection,
  *  mainDatabase} shape. New code should call getConnectionWithDatabase
- *  directly with the name from the URL. */
+ *  directly with the name from the URL.
+ *
+ *  Returns the safe-projection database. For credential-bearing reads
+ *  use {@link getConnectionWithMainDatabaseAndCredential}. */
 export async function getConnectionWithMainDatabase(
+  customer: Customer,
+  id: string,
+): Promise<
+  | {
+      connection: typeof connections.$inferSelect;
+      mainDatabase: SafeConnectionDatabase;
+    }
+  | null
+> {
+  const result = await getConnectionWithDatabase(
+    customer,
+    id,
+    DEFAULT_DATABASE_NAME,
+  );
+  if (!result) return null;
+  return { connection: result.connection, mainDatabase: result.database };
+}
+
+/** Credential-bearing variant of {@link getConnectionWithMainDatabase}.
+ *  Used by the table-introspection route which decrypts the main DB's
+ *  DSN to query `information_schema`. */
+export async function getConnectionWithMainDatabaseAndCredential(
   customer: Customer,
   id: string,
 ): Promise<
@@ -788,7 +890,7 @@ export async function getConnectionWithMainDatabase(
     }
   | null
 > {
-  const result = await getConnectionWithDatabase(
+  const result = await getConnectionWithDatabaseAndCredential(
     customer,
     id,
     DEFAULT_DATABASE_NAME,
@@ -1149,7 +1251,7 @@ export async function renameDatabase(
  *  connection paired with EVERY child DB on it (each annotated with its
  *  own lastQueryAt from audit_events_index), plus the indexer cursor
  *  that drives the connection-level freshness dot. */
-export type DashboardDatabase = typeof connectionDatabases.$inferSelect & {
+export type DashboardDatabase = SafeConnectionDatabase & {
   /** Most recent ts on `audit_events_index` for this DB name within the
    *  customer's region. NULL when the agent has never queried this DB —
    *  the dashboard renders this as "awaiting first query".
@@ -1236,7 +1338,7 @@ export async function listDashboardConnections(
 
   const parentIds = parents.map((p) => p.connection.id);
   const children = await db
-    .select()
+    .select(SAFE_DATABASE_COLUMNS)
     .from(connectionDatabases)
     .where(inArray(connectionDatabases.connectionId, parentIds))
     .orderBy(asc(connectionDatabases.name));

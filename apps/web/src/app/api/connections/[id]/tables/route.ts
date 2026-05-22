@@ -21,7 +21,7 @@
 // save a policy. Hard 4xx is reserved for auth / not-found.
 
 import { currentCustomer } from "@/lib/customer";
-import { getConnectionWithMainDatabase } from "@/lib/connections";
+import { getConnectionWithMainDatabaseAndCredential } from "@/lib/connections";
 import { listTables } from "@/lib/list-tables";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 
@@ -52,8 +52,10 @@ export async function GET(
 
   // Multi-DB rollout (0009): credentials moved to connection_databases.
   // Single-DB scope for PR-A — read parent + main child via the helper;
-  // the introspection runs against the main child's DSN.
-  const result = await getConnectionWithMainDatabase(customer, id);
+  // the introspection runs against the main child's DSN. Uses the
+  // credential-bearing variant because the DSN ciphertext is required
+  // input to DsnResolver.resolve below.
+  const result = await getConnectionWithMainDatabaseAndCredential(customer, id);
   if (!result) {
     return Response.json({ error: "not found" }, { status: 404 });
   }

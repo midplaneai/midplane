@@ -58,7 +58,7 @@ export function VolumeSparkline({
       data-testid="volume-sparkline"
       data-total={totalQueries}
     >
-      <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-[0.04em] text-subtle">
+      <div className="mb-1 flex items-center justify-between font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
         <span>
           <b className="font-medium text-foreground">
             {totalQueries.toLocaleString()}

@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { type AccessLevel } from "@midplane-cloud/db/policy";
 
 import { cn } from "@/lib/utils";
@@ -16,15 +18,17 @@ export function AccessRadio({
 }: {
   value: AccessLevel;
   label: string;
-  description: string;
+  description: ReactNode;
   defaultChecked?: boolean;
   name?: string;
 }) {
   return (
     <label
       className={cn(
-        "flex cursor-pointer items-start gap-3 rounded-md border border-border bg-card p-3 transition-colors",
-        "hover:border-border-strong has-[:checked]:border-[hsl(var(--brand))] has-[:checked]:ring-1 has-[:checked]:ring-[hsl(var(--brand)/0.4)]",
+        "flex cursor-pointer items-start gap-3 rounded-none border border-border bg-card p-3 transition-shadow",
+        // Selection is signalled by a 3px inset left rail — not a full
+        // outline. Border stays the same; the rail is the spec-sheet mark.
+        "hover:border-border-strong has-[:checked]:shadow-[inset_3px_0_0_hsl(var(--brand))]",
       )}
     >
       <input

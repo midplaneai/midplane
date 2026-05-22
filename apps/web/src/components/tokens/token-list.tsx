@@ -152,7 +152,7 @@ function TokenRow({
           />
         </div>
       ) : (
-        <span className="shrink-0 font-mono text-[11px] uppercase tracking-[0.04em] text-subtle">
+        <span className="shrink-0 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
           (no actions)
         </span>
       )}

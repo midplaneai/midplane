@@ -29,7 +29,7 @@ export function LiveConnectionFreshness({
   };
   const state = computeFreshness(cursor);
   return (
-    <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.04em] text-subtle">
+    <span className="flex items-center gap-1.5 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
       <FreshnessDot state={state} />
       {FRESHNESS_LABELS[state]}
     </span>

@@ -4,10 +4,13 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Database } from "lucide-react";
 
-import {
-  type ConnectionDatabase,
-  type TableAccessPolicy,
-} from "@midplane-cloud/db";
+import { type TableAccessPolicy } from "@midplane-cloud/db";
+
+// Type-only import — `@/lib/connections` re-exports `getDb` which pulls
+// in the `postgres` driver (Node-only). `import type` erases at compile
+// time so the client bundle stays clean. See CLAUDE.md "Client-component
+// imports from @midplane-cloud/db".
+import type { SafeConnectionDatabase } from "@/lib/connections";
 
 import {
   AlertDialog,
@@ -52,7 +55,11 @@ export function DatabaseRow({
   renameAction,
 }: {
   connectionId: string;
-  database: ConnectionDatabase;
+  // Use the safe projection — never the full row. The full row includes
+  // `encryptedDsn: Uint8Array` which Next 15 refuses to serialize across
+  // the Server→Client boundary, and the upstream readers (e.g.
+  // listDashboardConnections) project sensitive columns away by default.
+  database: Pick<SafeConnectionDatabase, "name" | "tableAccess">;
   /** Server-rendered fallback for the per-DB last-query timestamp.
    *  Used until the freshness provider has data for this connection. */
   initialLastQueryAt: Date | null;

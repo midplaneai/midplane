@@ -1,8 +1,8 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
@@ -63,14 +63,16 @@ export default async function ConnectionSettings({
   return (
     <>
       <Topbar>
-        <Link href="/dashboard">
-          <b className="font-medium text-foreground">Connections</b>
-        </Link>
-        <span className="mx-2 text-subtle">/</span>
-        <span className="font-mono">
-          {conn.name ?? conn.id.slice(0, 12)}
-        </span>
-        <span className="mx-2 text-subtle">/</span>Settings
+        <Breadcrumb
+          items={[
+            { label: "Connections", href: "/dashboard" },
+            {
+              label: conn.name ?? conn.id.slice(0, 12),
+              href: `/connections/${conn.id}`,
+            },
+            { label: "Settings" },
+          ]}
+        />
       </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[760px]">
@@ -103,14 +105,16 @@ export default async function ConnectionSettings({
             </div>
           </section>
 
-          <section className="mt-6 space-y-3 rounded-lg border border-[hsl(var(--deny)/0.4)] bg-card p-6">
+          <section className="mt-6 space-y-3 rounded-none border border-[hsl(var(--deny)/0.4)] bg-card p-6">
             <h2 className="text-base font-medium text-foreground">
               Delete connection
             </h2>
             <p className="text-xs text-muted-foreground">
-              Stops the MCP endpoint and removes the encrypted row. All
-              tokens on this connection are revoked. Audit history stays
-              in the dashboard for compliance.
+              Stops the MCP endpoint and removes the encrypted row.{" "}
+              <strong className="font-medium text-foreground">
+                All tokens on this connection are revoked.
+              </strong>{" "}
+              Audit history stays in the dashboard for compliance.
             </p>
             <DeleteConnectionButton id={conn.id} action={deleteAction} />
           </section>

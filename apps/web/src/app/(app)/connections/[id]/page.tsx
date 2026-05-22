@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { TokenList } from "@/components/tokens/token-list";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { PageHeader } from "@/components/ui/page-header";
 import { getConnectionWithMainDatabase } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
@@ -41,11 +42,12 @@ export default async function ConnectionDetail({
   return (
     <>
       <Topbar>
-        <Link href="/dashboard">
-          <b className="font-medium text-foreground">Connections</b>
-        </Link>
-        <span className="mx-2 text-subtle">/</span>
-        <span className="font-mono">{connectionLabel}</span>
+        <Breadcrumb
+          items={[
+            { label: "Connections", href: "/dashboard" },
+            { label: connectionLabel },
+          ]}
+        />
       </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[920px]">

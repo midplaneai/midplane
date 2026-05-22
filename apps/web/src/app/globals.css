@@ -8,60 +8,71 @@
 
 @layer base {
   :root {
-    /* Surfaces — bg-0..3 ramp */
-    --background: 0 0% 4%;          /* #0a0a0a */
-    --card: 0 0% 7%;                /* #111111 */
-    --popover: 0 0% 9%;             /* #161616 */
-    --secondary: 0 0% 9%;           /* #161616 */
-    --muted: 0 0% 9%;               /* #161616 */
-    --accent: 0 0% 11%;             /* #1d1d1d */
+    /* Surfaces — warm-dark twin of the editorial paper scale.
+     * Same hue family as --ink in .editorial-page (#161412). The product
+     * is the dark side of the brand, not a literal inversion. */
+    --background: 30 10% 8%;        /* #161412 */
+    --card: 30 12% 10%;             /* #1c1916 */
+    --popover: 30 10% 12%;          /* #221f1c */
+    --secondary: 30 10% 12%;        /* #221f1c */
+    --muted: 30 10% 12%;            /* #221f1c */
+    --accent: 30 10% 12%;           /* #221f1c */
 
-    /* Text — text-0..2 ramp.
-     * --foreground = primary (headings, key data).
-     * --muted-foreground = body/secondary, used everywhere prose lives. Must
-     *   clear WCAG AA against --background (#0a0a0a → 4.5:1 needs ≥#a0a0a0).
-     * --subtle = tertiary only — labels, timestamps, table cell hints.
-     *   Below AA on purpose; never use for body copy. */
-    --foreground: 0 0% 96%;         /* #f5f5f5 */
-    --card-foreground: 0 0% 96%;
-    --popover-foreground: 0 0% 96%;
-    --secondary-foreground: 0 0% 96%;
-    --accent-foreground: 0 0% 96%;
-    --muted-foreground: 0 0% 71%;   /* #b4b4b4 — body */
-    --subtle: 0 0% 44%;             /* #707070 — labels/captions only */
+    /* Text — paper / body / subtle / placeholder.
+     * --foreground matches landing --paper exactly.
+     * --muted-foreground = body prose, AA on --background.
+     * --subtle = labels, timestamps. Tuned (not literal inversion). */
+    --foreground: 40 33% 93%;       /* #f3efe7 — paper */
+    --card-foreground: 40 33% 93%;
+    --popover-foreground: 40 33% 93%;
+    --secondary-foreground: 40 33% 93%;
+    --accent-foreground: 40 33% 93%;
+    --muted-foreground: 37 15% 70%; /* #bdb4a6 — body */
+    --subtle: 37 11% 59%;           /* #a39a8c — labels/captions only */
+    --placeholder: 33 8% 44%;       /* #7a7268 — input placeholder */
 
     /* Hairlines */
-    --border: 0 0% 14%;             /* #232323 */
-    --input: 0 0% 14%;              /* #232323 */
-    --border-strong: 0 0% 18%;      /* #2e2e2e */
+    --border: 30 10% 15%;           /* #2a2622 */
+    --input: 30 10% 15%;            /* #2a2622 */
+    --border-strong: 35 8% 23%;     /* #403c36 */
 
-    /* Primary = inverse (white-on-black button) */
-    --primary: 0 0% 96%;            /* #f5f5f5 */
-    --primary-foreground: 0 0% 4%;  /* #0a0a0a */
+    /* Primary = paper-on-ink (matches landing hero CTA) */
+    --primary: 40 33% 93%;          /* #f3efe7 */
+    --primary-foreground: 30 10% 8%;/* #161412 */
 
-    /* Focus ring + brand accent. Same hue (225°) as the landing's
-     * --accent-blue (#1d4eff), lifted from 56% → 65% lightness so it
-     * clears WCAG AA against --background (#0a0a0a). One brand blue
-     * across marketing and app, tone-mapped per medium. */
-    --ring: 225 100% 65%;           /* #4a78ff */
-    --brand: 225 100% 65%;          /* #4a78ff (alias for clarity) */
+    /* Brand accent — the literal landing blue. Restricted to decorative
+     * surfaces only (the colon, two-dot mark, 3px selection rail, focus
+     * rings, selected radio dot). NEVER on body text or links under 18px.
+     * Use --foreground for prose; the brand is a typesetting choice, not
+     * a text color. */
+    --ring: 227 100% 56%;           /* #1d4eff */
+    --brand: 227 100% 56%;          /* #1d4eff (alias for clarity) */
 
-    /* Semantic — query lifecycle vocabulary */
+    /* Semantic — query lifecycle vocabulary. Dark-tuned, NOT replaced
+     * with the editorial paper values (#1f6f47 / #c4321e) — those read
+     * muddy on dark. Calibrated for AA on --background. */
     --allow: 137 27% 49%;           /* #5a9c6e */
     --deny: 0 46% 62%;              /* #c87070 */
     --warn: 37 61% 56%;             /* #d4a04c */
+    --deny-tint: 0 46% 62%;         /* used as hsl(var(--deny-tint) / 0.07) for audit deny rows */
 
-    /* Semantic — data residency vocabulary. Distinct hues from the
-       query-lifecycle tokens so a region badge can't be mistaken for a
-       policy outcome. EU = teal, US = amber. */
+    /* Region — "where data lives." Distinct hues from semantic so a
+     * region badge can't be mistaken for a policy outcome. */
     --region-eu: 195 50% 50%;       /* #4099bf */
     --region-us: 25 60% 55%;        /* #db8e47 */
 
     /* Destructive (shadcn alias for --deny) */
     --destructive: 0 46% 62%;       /* #c87070 */
-    --destructive-foreground: 0 0% 96%;
+    --destructive-foreground: 40 33% 93%;
 
-    --radius: 0.5rem;
+    /* Radius scale per re-skin spec:
+     *   0      cards, panels, inputs, radio rows, dropdowns, sheets
+     *   3px    pills, badges                      → rounded-[3px]
+     *   6px    buttons                            → rounded-[6px]
+     *   50%    avatars, icon buttons              → rounded-full
+     * --radius is 0 so rounded-lg/md/sm all collapse to 0 (Tailwind
+     * clamps negative calc results). Buttons opt back in explicitly. */
+    --radius: 0;
   }
 }
 

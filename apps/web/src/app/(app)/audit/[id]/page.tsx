@@ -5,6 +5,7 @@ import { EventBadge } from "@/components/audit/event-badge";
 import { PayloadView } from "@/components/audit/payload-view";
 import { relativeTime } from "@/components/audit/relative-time";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -27,10 +28,12 @@ export default async function AuditDetailPage({ params }: PageProps) {
     return (
       <>
         <Topbar>
-          <Link href="/audit">
-            <b className="font-medium text-foreground">Audit log</b>
-          </Link>
-          <span className="mx-2 text-subtle">/</span>Not found
+          <Breadcrumb
+            items={[
+              { label: "Audit log", href: "/audit" },
+              { label: "Not found" },
+            ]}
+          />
         </Topbar>
         <PageContainer>
           <EmptyState
@@ -66,11 +69,12 @@ export default async function AuditDetailPage({ params }: PageProps) {
   return (
     <>
       <Topbar>
-        <Link href="/audit">
-          <b className="font-medium text-foreground">Audit log</b>
-        </Link>
-        <span className="mx-2 text-muted-foreground">/</span>
-        <span className="font-mono">{truncate(event.id, 16)}</span>
+        <Breadcrumb
+          items={[
+            { label: "Audit log", href: "/audit" },
+            { label: truncate(event.id, 16) },
+          ]}
+        />
       </Topbar>
       <PageContainer>
         <PageHeader
@@ -155,7 +159,7 @@ export default async function AuditDetailPage({ params }: PageProps) {
         </div>
 
         <section className="mt-6">
-          <h2 className="mb-3 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">
+          <h2 className="mb-3 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
             Lifecycle ({related.length} event{related.length === 1 ? "" : "s"}{" "}
             for this query)
           </h2>
@@ -193,7 +197,7 @@ export default async function AuditDetailPage({ params }: PageProps) {
 
 function Dt({ children }: { children: React.ReactNode }) {
   return (
-    <dt className="text-[11px] uppercase tracking-[0.04em] text-subtle">
+    <dt className="font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
       {children}
     </dt>
   );

@@ -73,7 +73,7 @@ function ConfigBlock({
 }) {
   return (
     <div className="space-y-2">
-      <p className="text-[11px] uppercase tracking-[0.04em] text-subtle">
+      <p className="font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
         {path}
       </p>
       <div className="relative rounded-md border border-border bg-muted">

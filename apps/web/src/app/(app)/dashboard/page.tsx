@@ -15,6 +15,7 @@ import {
 } from "@/components/dashboard/freshness-provider";
 import { LiveConnectionFreshness } from "@/components/dashboard/live-connection-freshness";
 import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -59,13 +60,21 @@ export default async function Dashboard({
   return (
     <>
       <Topbar>
-        <b className="font-medium text-foreground">{customer.email}</b>
-        <span className="mx-2 text-subtle">/</span>Connections
+        <Breadcrumb items={[{ label: "Connections" }]} />
       </Topbar>
       <PageContainer>
         <PageHeader
           title="Connections"
-          subtitle="Each connection is a hosted MCP endpoint with one or more databases. Point your agent at the URL; Midplane proxies its calls to the database under your access policy."
+          subtitle={
+            <>
+              Each connection is a{" "}
+              <strong className="font-medium text-foreground">
+                hosted MCP endpoint
+              </strong>{" "}
+              with one or more databases. Point your agent at the URL; Midplane
+              proxies its calls to the database under your access policy.
+            </>
+          }
           actions={
             <Link href="/connections/new">
               <Button size="sm">
@@ -79,7 +88,15 @@ export default async function Dashboard({
         {rows.length === 0 ? (
           <EmptyState
             title="No connections yet"
-            description="Add a Postgres connection to get a hosted MCP endpoint."
+            description={
+              <>
+                Add a Postgres connection to get a{" "}
+                <strong className="font-medium text-foreground">
+                  hosted MCP endpoint
+                </strong>
+                .
+              </>
+            }
             action={
               <Link href="/connections/new">
                 <Button size="sm">Connect Postgres</Button>
@@ -193,6 +210,9 @@ function DatabaseList({
           <DatabaseRow
             key={db.id}
             connectionId={connectionId}
+            // `db` is the safe projection from listDashboardConnections —
+            // no encryptedDsn / kmsKeyId, so it crosses the RSC boundary
+            // cleanly.
             database={db}
             initialLastQueryAt={db.lastQueryAt}
             initialLastIndexedAt={initialLastIndexedAt}
