@@ -508,7 +508,7 @@
   .editorial-page .topright { gap: 12px; row-gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
   .editorial-page .topright a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 4px; }
   .editorial-page .topright a.ebtn { padding: 11px 18px; }
-  .editorial-page footer.efoot a { min-height: 44px; display: inline-flex; align-items: center; }
+  .editorial-page footer.efoot a { min-height: 44px; display: flex; align-items: center; }
   .editorial-page footer.efoot h5 + a { margin-top: -5px; }
   .editorial-page .pri-h1 { font-size: 52px; }
   .editorial-page .ba-h1 { font-size: 56px; }
