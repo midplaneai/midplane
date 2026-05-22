@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 // Everything else requires a signed-in user.
 const isPublic = createRouteMatcher([
   "/",
+  "/demo",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/mcp/(.*)",
