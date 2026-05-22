@@ -254,15 +254,28 @@
 }
 
 /* mechanism */
-.editorial-page .mech { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-top: 8px; }
-.editorial-page .step { padding: 32px 28px; background: var(--paper-2); border: 1px solid var(--line); min-height: 340px; display: flex; flex-direction: column; }
-.editorial-page .step .n { font-family: var(--font-geist-mono); font-size: 12px; letter-spacing: 0.1em; color: var(--ink-3); margin-bottom: 16px; }
-.editorial-page .step h3 { margin: 0 0 14px; font-size: 28px; line-height: 1.1; letter-spacing: -0.02em; font-weight: 600; max-width: 14ch; }
-.editorial-page .step p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.55; }
-.editorial-page .step .ascii { margin-top: auto; padding-top: 24px; font-family: var(--font-geist-mono); font-size: 11px; color: var(--ink-3); line-height: 1.6; white-space: pre; }
-.editorial-page .step .ascii b { color: var(--ink); }
-.editorial-page .step .ascii .d { color: var(--paper-deny); }
-.editorial-page .step .ascii .a { color: var(--paper-allow); }
+/* flow — §02 How it works. One bordered block: setup beat above,
+   three per-query checkpoints inside the midplane region below. */
+.editorial-page .flow { margin-top: 8px; border: 1px solid var(--line); background: var(--paper-2); }
+.editorial-page .flow-setup { padding: 18px 24px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 130px 1fr auto; align-items: center; gap: 24px; }
+.editorial-page .flow-setup-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.editorial-page .flow-setup-desc { font-size: 13.5px; color: var(--ink-2); line-height: 1.5; max-width: 50ch; }
+.editorial-page .flow-setup-token { font-family: var(--font-geist-mono); font-size: 12px; color: var(--ink-3); background: var(--paper); border: 1px solid var(--line); padding: 8px 12px; }
+.editorial-page .flow-setup-token b { color: var(--ink); font-weight: 500; }
+.editorial-page .flow-setup-arrow { color: var(--ink-4); margin: 0 4px; }
+.editorial-page .flow-runtime { padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+.editorial-page .flow-runtime-tag { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.editorial-page .flow-checkpoints { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; position: relative; }
+/* small chevrons between checkpoints to suggest flow direction */
+.editorial-page .flow-check { background: var(--paper); border: 1px solid var(--line); padding: 20px 20px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; position: relative; }
+.editorial-page .flow-check + .flow-check::before { content: "→"; position: absolute; left: -12px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: var(--paper-2); color: var(--ink-3); font-family: var(--font-geist-mono); font-size: 14px; }
+.editorial-page .flow-check-num { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.08em; color: var(--ink-3); text-transform: lowercase; }
+.editorial-page .flow-check-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.15; color: var(--ink); }
+.editorial-page .flow-check-body { margin: 4px 0 0; font-family: var(--font-geist-mono); font-size: 11.5px; line-height: 1.7; color: var(--ink-3); white-space: pre; overflow-x: auto; }
+.editorial-page .flow-check-body b { color: var(--ink); font-weight: 500; }
+.editorial-page .flow-check-body .a { color: var(--paper-allow); font-weight: 500; }
+.editorial-page .flow-check-body .d { color: var(--paper-deny); font-weight: 500; }
+.editorial-page .flow-check-caption { margin: auto 0 0; padding-top: 12px; border-top: 1px dashed var(--line-2); font-size: 12.5px; color: var(--ink-2); line-height: 1.45; }
 
 /* policy section + editor mockup */
 .editorial-page .split-pair { display: grid; grid-template-columns: 1.05fr 1fr; gap: 64px; align-items: start; }
@@ -486,7 +499,12 @@
   .editorial-page .sec { padding: 64px 0; }
   .editorial-page .sec-top { grid-template-columns: 1fr; gap: 16px; }
   .editorial-page .sec-h { font-size: 36px; }
-  .editorial-page .mech { grid-template-columns: 1fr; }
+  .editorial-page .flow-setup { grid-template-columns: 1fr; gap: 10px; padding: 20px; }
+  .editorial-page .flow-setup-token { font-size: 11px; padding: 8px 10px; overflow-x: auto; }
+  .editorial-page .flow-runtime { padding: 20px; }
+  .editorial-page .flow-checkpoints { grid-template-columns: 1fr; gap: 8px; }
+  .editorial-page .flow-check + .flow-check::before { content: "↓"; left: 50%; top: -16px; transform: translateX(-50%); }
+  .editorial-page .flow-check-title { font-size: 20px; }
   .editorial-page .split-pair { grid-template-columns: 1fr; gap: 32px; }
   .editorial-page .vs { grid-template-columns: 1fr; }
   .editorial-page .vs > .cell:nth-child(3n) { border-right: 1px solid var(--line); }

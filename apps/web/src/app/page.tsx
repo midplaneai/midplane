@@ -231,7 +231,11 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §02 — How it works */}
+        {/* §02 — How it works. Was four stacked step cards (setup + three
+            per-query beats), each restating a slice of the same story.
+            Collapsed into a single flow diagram: a small one-time setup
+            band above, then the three per-query checkpoints inside one
+            bordered midplane block. */}
         <section className="sec" id="how">
           <div className="sec-top">
             <div className="sec-num">
@@ -249,64 +253,70 @@ export default async function Landing() {
               </p>
             </div>
           </div>
-          <div className="mech">
-            <div className="step">
-              <div className="n">Setup · once</div>
-              <h3>One URL replaces the connection string.</h3>
-              <p>
-                Drop a Midplane MCP URL into Cursor, Claude Code or Claude
-                Desktop. The agent never sees your DSN, password, or network.
-              </p>
-              <div className="ascii">
-                {"cursor / claude / codex\n   │\n   ▼\n"}
-                <b>{"https://eu.midplane.ai\n   /mcp/tok_3f12…"}</b>
-              </div>
+          <div className="flow">
+            <div className="flow-setup">
+              <span className="flow-setup-label mono">Setup · once</span>
+              <span className="flow-setup-desc">
+                Drop a Midplane MCP URL into your agent. The agent never sees
+                your DSN, password, or network.
+              </span>
+              <span className="flow-setup-token mono">
+                cursor / claude{" "}
+                <span className="flow-setup-arrow" aria-hidden>
+                  →
+                </span>{" "}
+                <b>https://eu.midplane.ai/mcp/&lt;tok&gt;</b>
+              </span>
             </div>
-            <div className="step">
-              <div className="n">Per query · 01</div>
-              <h3>Policy decides every query.</h3>
-              <p>
-                Read-only by default. Writes only on opted-in tables. Tenant
-                predicate required. Multi-statement and DDL — even hidden inside
-                a CTE — are always denied.
-              </p>
-              <div className="ascii">
-                {"table_access · "}
-                <span className="a">ALLOW</span>
-                {"\ntenant_scope · "}
-                <span className="a">ALLOW</span>
-                {"\nmulti_stmt   · "}
-                <span className="d">DENY</span>
-                {"\nddl          · "}
-                <span className="d">DENY</span>
+            <div className="flow-runtime">
+              <div className="flow-runtime-tag mono">
+                Midplane · every query
               </div>
-            </div>
-            <div className="step">
-              <div className="n">Per query · 02</div>
-              <h3>Logged before it runs.</h3>
-              <p>
-                Every attempt — allowed or denied — is written before the query
-                touches Postgres. If logging fails, the query is rejected.
-              </p>
-              <div className="ascii">
-                {"audit_log ←\n  who   = lena@acme\n  agent = claude-code\n  table = users\n  stage = ATTEMPTED\n  "}
-                <b>committed</b>
-              </div>
-            </div>
-            <div className="step">
-              <div className="n">Per query · 03</div>
-              <h3>…or return a clean deny.</h3>
-              <p>
-                Allowed queries hit Postgres normally. Denied queries return a
-                structured error the agent can read and pivot from — no surprise
-                crashes, no half-written rows.
-              </p>
-              <div className="ascii">
-                {"EXECUTED\n└ "}
-                <span className="a">25 rows</span>
-                {" · 4.1 ms\n\nDENIED\n└ "}
-                <span className="d">reason: table_access</span>
-                {"\n└ users.email · write\n└ not in opt-in list"}
+              <div className="flow-checkpoints">
+                <article className="flow-check">
+                  <span className="flow-check-num mono">01 · policy</span>
+                  <h3 className="flow-check-title">Decided.</h3>
+                  <pre className="flow-check-body">
+                    {"table_access · "}
+                    <span className="a">allow</span>
+                    {"\ntenant_scope · "}
+                    <span className="a">allow</span>
+                    {"\nmulti_stmt   · "}
+                    <span className="d">deny</span>
+                    {"\nddl          · "}
+                    <span className="d">deny</span>
+                  </pre>
+                  <p className="flow-check-caption">
+                    Read-only default, writes per opt-in table, tenant
+                    predicate required.
+                  </p>
+                </article>
+                <article className="flow-check">
+                  <span className="flow-check-num mono">02 · audit</span>
+                  <h3 className="flow-check-title">Logged.</h3>
+                  <pre className="flow-check-body">
+                    {"audit_log ←\n  who   = lena@acme\n  agent = claude-code\n  table = users\n  stage = ATTEMPTED\n  "}
+                    <b>committed</b>
+                  </pre>
+                  <p className="flow-check-caption">
+                    Written before Postgres sees the query. Log failure rejects
+                    the query.
+                  </p>
+                </article>
+                <article className="flow-check">
+                  <span className="flow-check-num mono">03 · execute</span>
+                  <h3 className="flow-check-title">…or denied.</h3>
+                  <pre className="flow-check-body">
+                    <span className="a">allow</span>
+                    {" → postgres\n     └ 25 rows · 4.1 ms\n\n"}
+                    <span className="d">deny</span>
+                    {" → structured reply\n     └ reason: table_access\n     └ agent pivots"}
+                  </pre>
+                  <p className="flow-check-caption">
+                    Allowed queries run normally. Denied queries return a
+                    parsable error — no half-writes.
+                  </p>
+                </article>
               </div>
             </div>
           </div>
