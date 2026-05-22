@@ -40,6 +40,8 @@ primary_region = "iad"
 #   MIDPLANE_KMS_MODE                     # "env" or "kms"
 #   MIDPLANE_KMS_DEV_KEY_US               # env-mode only: 32-byte hex
 #   MIDPLANE_KMS_KEY_US                   # kms-mode only: CMK ARN/alias in us-east-2
+#   MIDPLANE_TOKEN_PEPPER_US_V1           # env-mode only: base64 of 32 random bytes (HMAC key for mcp_tokens.token_hash)
+#   MIDPLANE_TOKEN_PEPPER_CT_US_V1        # kms-mode only: base64 CiphertextBlob from scripts/encrypt-token-pepper.sh
 #   FLY_API_TOKEN                         # for FlyMachineSpawner
 #   FLY_APP_US="midplane-us"
 #   FLY_REGION_US="iad"
