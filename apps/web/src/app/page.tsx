@@ -355,6 +355,32 @@ export default async function Landing() {
                 win over bare names. Saves push to the engine over the admin
                 channel; the agent&apos;s active MCP session keeps running.
               </p>
+              {/* Engine invariants — hardcoded at the parser, not editor
+                  rows. Lifted from a footnote into a proper callout so the
+                  always-denied dimension reads as a feature, not a caveat. */}
+              <div className="invariants">
+                <div className="invariants-label mono">Engine invariants</div>
+                <ul className="invariants-list">
+                  <li>
+                    <span className="invariants-tag mono">always deny</span>
+                    <span>
+                      <b>Multi-statement queries</b> — even a{" "}
+                      <span className="mono">DELETE</span> hidden inside a CTE.
+                    </span>
+                  </li>
+                  <li>
+                    <span className="invariants-tag mono">always deny</span>
+                    <span>
+                      <b>DDL</b> — <span className="mono">DROP</span>,{" "}
+                      <span className="mono">ALTER</span>,{" "}
+                      <span className="mono">CREATE</span> never reach Postgres.
+                    </span>
+                  </li>
+                </ul>
+                <p className="invariants-foot">
+                  Enforced at the parser. Not configurable, not in the editor.
+                </p>
+              </div>
             </div>
             <div className="policy-ui">
               <div className="pui-head">
@@ -448,14 +474,6 @@ export default async function Landing() {
                 </span>
               </div>
             </div>
-
-            {/* Engine invariants live OUTSIDE the editor — they're hardcoded
-                in the parser, not configurable rows. */}
-            <p className="pui-note">
-              <span className="pui-note-label">Engine invariants</span>
-              Multi-statement queries and DDL are always denied at the parser —
-              not configurable, not in the editor.
-            </p>
           </div>
         </section>
 

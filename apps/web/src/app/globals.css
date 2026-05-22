@@ -319,8 +319,15 @@
 .editorial-page .pui-actions { display: inline-flex; align-items: center; gap: 10px; }
 .editorial-page .pui-save { font-family: var(--font-geist); font-size: 12px; font-weight: 500; color: var(--paper); background: var(--ink); border: 0; padding: 6px 12px; border-radius: 4px; cursor: default; letter-spacing: 0; }
 .editorial-page .pui-save:hover { background: #000; }
-.editorial-page .pui-note { margin: 18px 0 0; font-family: var(--font-geist-mono); font-size: 11.5px; line-height: 1.55; color: var(--ink-3); display: flex; gap: 12px; align-items: baseline; max-width: 70ch; }
-.editorial-page .pui-note-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink); border: 1px solid var(--line-2); padding: 3px 8px; border-radius: 3px; background: var(--paper-2); font-weight: 500; flex-shrink: 0; }
+/* engine invariants callout — lives in the §03 left column, lifts the
+   always-denied-multi-stmt-DDL rules from a footnote into a feature beat */
+.editorial-page .invariants { margin-top: 28px; padding: 20px 22px; background: var(--paper-2); border: 1px solid var(--line); max-width: 46ch; }
+.editorial-page .invariants-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px; display: block; }
+.editorial-page .invariants-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.editorial-page .invariants-list li { display: grid; grid-template-columns: 86px 1fr; gap: 14px; align-items: baseline; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.editorial-page .invariants-list li b { color: var(--ink); font-weight: 500; }
+.editorial-page .invariants-tag { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--paper-deny); border: 1px solid var(--paper-deny); background: rgba(196, 50, 30, 0.06); padding: 3px 6px; border-radius: 3px; text-align: center; font-weight: 500; }
+.editorial-page .invariants-foot { margin: 14px 0 0; padding-top: 12px; border-top: 1px dashed var(--line-2); font-family: var(--font-geist-mono); font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
 
 /* vs Postgres roles */
 .editorial-page .vs { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid var(--line); background: var(--paper-2); }
