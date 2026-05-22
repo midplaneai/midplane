@@ -537,7 +537,7 @@
 .editorial-page .close .ebtn.outline:hover { background: var(--paper); color: var(--ink); }
 
 /* footer */
-.editorial-page footer.efoot { padding: 48px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 48px; background: var(--ink); color: rgba(243, 239, 231, 0.5); margin: 0 -48px; border-top: 1px solid rgba(243, 239, 231, 0.08); }
+.editorial-page footer.efoot { padding: 48px; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 48px; background: var(--ink); color: rgba(243, 239, 231, 0.5); margin: 0 -48px; border-top: 1px solid rgba(243, 239, 231, 0.08); }
 .editorial-page footer.efoot h5 { margin: 0 0 14px; font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(243, 239, 231, 0.4); font-weight: 500; }
 .editorial-page footer.efoot a { display: block; padding: 5px 0; color: rgba(243, 239, 231, 0.8); font-size: 14px; }
 .editorial-page footer.efoot a:hover { color: var(--paper); }

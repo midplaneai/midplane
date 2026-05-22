@@ -50,7 +50,6 @@ export default async function Landing() {
             <a href="#audit">Audit</a>
             <a href="#hosted">Hosted</a>
             <a href="#pricing">Pricing</a>
-            <a href="#quickstart">Quickstart</a>
           </nav>
           <div className="topright">
             <a href="#hosted" className="mono">
@@ -817,7 +816,7 @@ export default async function Landing() {
           <p className="pricing-custom">
             <b>Custom needs?</b> BYOK, dedicated region, SOC2 / HIPAA
             artifacts, SAML below Team, custom retention, SLA —{" "}
-            <a href="mailto:sales@midplane.ai">talk to us</a>.
+            <a href="mailto:info@midplane.ai">talk to us</a>.
           </p>
         </section>
 
@@ -879,9 +878,6 @@ export default async function Landing() {
               <Link className="ebtn fill" href="/sign-up">
                 Start free →
               </Link>
-              <a className="ebtn outline" href="#how">
-                Read the docs
-              </a>
             </div>
           </div>
         </section>
@@ -902,26 +898,15 @@ export default async function Landing() {
           <div>
             <h5>Product</h5>
             <a href="#hosted">Hosted</a>
-            <a href="#hosted">Self-host</a>
             <a href="#audit">Audit</a>
             <a href="#policy">Policy</a>
             <a href="#pricing">Pricing</a>
-          </div>
-          <div>
-            <h5>Docs</h5>
-            <a href="#quickstart">Quickstart</a>
-            <a href="#policy">Policy reference</a>
-            <a href="#quickstart">MCP clients</a>
-            <a href="https://github.com/midplaneai/midplane">Changelog</a>
           </div>
           <div>
             <h5>Open</h5>
             <a href="https://github.com/midplaneai/midplane">
               github.com/midplaneai/midplane
             </a>
-            <a href="#">Status</a>
-            <a href="#">Security</a>
-            <a href="#">Contact</a>
           </div>
         </footer>
       </div>
