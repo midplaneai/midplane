@@ -438,16 +438,11 @@
 .editorial-page .timeline .t-step.done { background: rgba(31, 111, 71, 0.06); }
 .editorial-page .timeline .t-step.done .t-time { color: var(--paper-allow); font-weight: 500; }
 
-/* clients */
-.editorial-page .clients { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 32px; }
-.editorial-page .client { background: var(--paper-2); border: 1px solid var(--line); padding: 24px; display: flex; flex-direction: column; gap: 16px; }
-.editorial-page .client .name { display: flex; align-items: baseline; justify-content: space-between; }
-.editorial-page .client .name h4 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
-.editorial-page .client .name .v { font-family: var(--font-geist-mono); font-size: 11px; color: var(--paper-allow); text-transform: uppercase; letter-spacing: 0.08em; }
-.editorial-page .client .name .v::before { content: "●"; margin-right: 6px; }
-.editorial-page .client pre { margin: 0; font-family: var(--font-geist-mono); font-size: 12.5px; line-height: 1.65; color: var(--ink-2); background: var(--paper); padding: 14px 16px; border: 1px solid var(--line); white-space: pre-wrap; }
-.editorial-page .client pre b { color: var(--ink); }
-.editorial-page .client pre .com { color: var(--ink-4); }
+/* clients — tabbed quickstart setup, see _landing/quickstart-clients.tsx */
+.editorial-page .clients-tabs { margin-top: 32px; }
+.editorial-page .quickstart-block { margin: 0; font-family: var(--font-geist-mono); font-size: 12.5px; line-height: 1.7; color: var(--ink-2); background: var(--paper-2); padding: 20px 22px; border: 1px solid var(--line); white-space: pre-wrap; overflow-x: auto; }
+.editorial-page .quickstart-block b { color: var(--ink); font-weight: 500; }
+.editorial-page .quickstart-block .com { color: var(--ink-4); }
 
 /* close band */
 .editorial-page .close { padding: 120px 48px; border-top: 1px solid var(--line); background: var(--ink); color: var(--paper); margin: 0 -48px; }
@@ -508,7 +503,6 @@
   .editorial-page .tier.pro::before { top: auto; bottom: calc(100% - 32px); }
   .editorial-page .timeline { grid-template-columns: 1fr; }
   .editorial-page .timeline .t-step { border-right: 0; border-bottom: 1px solid var(--line); }
-  .editorial-page .clients { grid-template-columns: 1fr; }
   .editorial-page .close { padding: 80px 24px; margin: 0 -24px; }
   .editorial-page .close .inner { grid-template-columns: 1fr; }
   .editorial-page .close h2 { font-size: 56px; }

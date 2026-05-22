@@ -25,6 +25,7 @@
 import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 
+import { QuickstartClients } from "./_landing/quickstart-clients";
 import { DemoChat } from "./demo/demo-chat";
 
 export default async function Landing() {
@@ -893,45 +894,7 @@ export default async function Landing() {
             </div>
           </div>
 
-          <div className="clients">
-            <div className="client">
-              <div className="name">
-                <h4>Cursor</h4>
-                <span className="v">verified</span>
-              </div>
-              <pre>
-                <span className="com"># ~/.cursor/mcp.json</span>
-                {"\n{\n  "}
-                <b>&quot;mcpServers&quot;</b>
-                {": {\n    "}
-                <b>&quot;midplane&quot;</b>
-                {": {\n      "}
-                <b>&quot;url&quot;</b>
-                {': "https://eu.midplane.ai/mcp/<tok>"\n    }\n  }\n}'}
-              </pre>
-            </div>
-            <div className="client">
-              <div className="name">
-                <h4>Claude Code</h4>
-                <span className="v">verified</span>
-              </div>
-              <pre>
-                <span className="com"># one line, terminal</span>
-                {"\nclaude mcp add \\\n  --transport http \\\n  midplane \\\n  https://eu.midplane.ai/mcp/<tok>"}
-              </pre>
-            </div>
-            <div className="client">
-              <div className="name">
-                <h4>Claude Desktop</h4>
-                <span className="v">verified</span>
-              </div>
-              <pre>
-                <span className="com"># Settings → Connectors → Add</span>
-                {"\nname: midplane\nurl:  https://eu.midplane.ai/mcp/<tok>\n\n"}
-                <span className="com"># or claude_desktop_config.json</span>
-              </pre>
-            </div>
-          </div>
+          <QuickstartClients />
         </section>
 
         {/* close band — final CTA. Hero already framed the value and the
