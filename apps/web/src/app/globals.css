@@ -461,12 +461,11 @@
 .editorial-page .timeline .t-step.done { background: rgba(31, 111, 71, 0.06); }
 .editorial-page .timeline .t-step.done .t-time { color: var(--paper-allow); font-weight: 500; }
 
-/* clients — tabbed quickstart setup, see _landing/quickstart-clients.tsx */
-.editorial-page .clients-tabs { margin-top: 32px; }
-.editorial-page .quickstart-block { margin: 0; font-family: var(--font-geist-mono); font-size: 13px; line-height: 1.7; color: var(--ink-2); background: var(--paper-2); padding: 24px 28px; border: 1px solid var(--line); white-space: pre-wrap; overflow-x: auto; display: inline-block; min-width: 0; max-width: 100%; }
-.editorial-page .clients-tabs [role="tabpanel"] { display: flex; }
-.editorial-page .quickstart-block b { color: var(--ink); font-weight: 500; }
-.editorial-page .quickstart-block .com { color: var(--ink-4); }
+/* qs-clients — one-line client list under the §08 timeline. The
+   per-client config tabs that lived here were dropped; the actual
+   command moved to the close-band one-liner. */
+.editorial-page .qs-clients { margin: 32px 0 0; font-size: 14px; color: var(--ink-2); line-height: 1.55; max-width: 60ch; }
+.editorial-page .qs-clients b { color: var(--ink); font-weight: 500; }
 
 /* close band */
 .editorial-page .close { padding: 120px 48px; border-top: 1px solid var(--line); background: var(--ink); color: var(--paper); margin: 0 -48px; }

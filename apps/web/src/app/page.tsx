@@ -27,7 +27,6 @@ import Link from "next/link";
 
 import { CyclingAgent } from "./_landing/cycling-agent";
 import { HostedTabs } from "./_landing/hosted-tabs";
-import { QuickstartClients } from "./_landing/quickstart-clients";
 import { DemoChat } from "./demo/demo-chat";
 
 export default async function Landing() {
@@ -810,7 +809,11 @@ export default async function Landing() {
           </p>
         </section>
 
-        {/* §09 — Quickstart */}
+        {/* §08 — Quickstart. The per-client config tabs that used to live
+            here showed mostly equivalent code (JSON for Cursor, CLI for
+            Claude Code, UI path for Claude Desktop) and read as boilerplate.
+            Replaced with a one-line client list; the satisfying single
+            command moved to the close band below. */}
         <section className="sec" id="quickstart">
           <div className="sec-top">
             <div className="sec-num">
@@ -821,9 +824,7 @@ export default async function Landing() {
                 From signup to first allowed query: <em>under a minute.</em>
               </h2>
               <p className="sec-sub">
-                Four steps, one MCP URL, the client you already use. Cursor,
-                Claude Code and Claude Desktop are verified — every other MCP
-                client we&apos;ve tested works too.
+                Four steps, one MCP URL, the client you already use.
               </p>
             </div>
           </div>
@@ -847,7 +848,10 @@ export default async function Landing() {
             </div>
           </div>
 
-          <QuickstartClients />
+          <p className="qs-clients">
+            Verified with <b>Cursor</b>, <b>Claude Code</b>, and{" "}
+            <b>Claude Desktop</b>. Works with any MCP-capable client.
+          </p>
         </section>
 
         {/* close band — final CTA. Hero already framed the value and the
