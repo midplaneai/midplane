@@ -202,7 +202,7 @@
 .editorial-page .ba-card { background: var(--paper-2); border: 1px solid var(--line); padding: 22px 24px 20px; display: flex; flex-direction: column; gap: 14px; }
 .editorial-page .ba-card.bad { border-color: rgba(196, 50, 30, 0.3); }
 .editorial-page .ba-card.good { border-color: rgba(31, 111, 71, 0.3); }
-.editorial-page .ba-tag { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; display: flex; align-items: center; gap: 10px; color: var(--ink-3); }
+.editorial-page .ba-tag { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.02em; text-transform: lowercase; display: flex; align-items: center; gap: 10px; color: var(--ink-3); }
 .editorial-page .ba-tag .dot { width: 8px; height: 8px; border-radius: 50%; }
 .editorial-page .ba-card.bad .ba-tag .dot { background: var(--paper-deny); }
 .editorial-page .ba-card.good .ba-tag .dot { background: var(--paper-allow); }
@@ -256,8 +256,16 @@
 /* section header */
 .editorial-page .sec { padding: 96px 0; border-top: 1px solid var(--line); position: relative; }
 .editorial-page .sec-top { display: grid; grid-template-columns: 200px 1fr; gap: 48px; margin-bottom: 48px; align-items: start; }
-.editorial-page .sec-num { font-family: var(--font-geist-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); padding-top: 8px; }
-.editorial-page .sec-num b { display: block; color: var(--ink); font-size: 48px; letter-spacing: -0.03em; text-transform: none; font-weight: 700; line-height: 1; margin-bottom: 8px; font-family: var(--font-geist); }
+/* Section spine: mono lowercase "NN:label" pair. The number used to be
+ * a 48px display element with the label beneath it; recast as a single
+ * typeset token joined by the brand colon, so the spine reads as
+ * editorial chrome and the section header carries the visual weight. */
+.editorial-page .sec-num { font-family: var(--font-geist-mono); font-size: 20px; letter-spacing: -0.005em; text-transform: lowercase; color: var(--ink-3); padding-top: 6px; line-height: 1.1; }
+.editorial-page .sec-num b { color: var(--ink); font-weight: 600; font-family: var(--font-geist-mono); }
+/* Brand colon utility for the editorial page — for use outside the
+ * wordmark in mono spine tokens (sec-num, flow-check-num, ba-tag, hero
+ * eyebrow region pill). Same blue as .mp-colon. */
+.editorial-page .c { color: var(--accent-blue); font-weight: 700; padding: 0 0.02em; }
 .editorial-page .sec-h { font-size: 54px; line-height: 1.02; letter-spacing: -0.03em; font-weight: 600; margin: 0; max-width: 18ch; text-wrap: balance; }
 .editorial-page .sec-h em { font-style: normal; color: var(--ink-3); }
 .editorial-page .sec-sub { margin-top: 18px; font-size: 18px; color: var(--ink-2); max-width: 60ch; line-height: 1.5; text-wrap: pretty; }
@@ -297,7 +305,8 @@
 /* small chevrons between checkpoints to suggest flow direction */
 .editorial-page .flow-check { background: var(--paper); border: 1px solid var(--line); padding: 20px 20px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; position: relative; }
 .editorial-page .flow-check + .flow-check::before { content: "→"; position: absolute; left: -12px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: var(--paper-2); color: var(--ink-3); font-family: var(--font-geist-mono); font-size: 14px; }
-.editorial-page .flow-check-num { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.08em; color: var(--ink-3); text-transform: lowercase; }
+.editorial-page .flow-check-num { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.02em; color: var(--ink-3); text-transform: lowercase; }
+.editorial-page .flow-check-num b { color: var(--ink); font-weight: 500; }
 .editorial-page .flow-check-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.15; color: var(--ink); }
 .editorial-page .flow-check-body { margin: 4px 0 0; font-family: var(--font-geist-mono); font-size: 11.5px; line-height: 1.7; color: var(--ink-3); white-space: pre; overflow-x: auto; }
 .editorial-page .flow-check-body b { color: var(--ink); font-weight: 500; }
@@ -308,7 +317,7 @@
 /* policy section + editor mockup */
 .editorial-page .split-pair { display: grid; grid-template-columns: 1.05fr 1fr; gap: 64px; align-items: start; }
 .editorial-page .split-pair .copy .copy-eyebrow { display: block; font-family: var(--font-geist-mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 14px; }
-.editorial-page .split-pair .copy h2 { margin: 0 0 18px; font-size: 48px; line-height: 1.05; letter-spacing: -0.028em; font-weight: 600; text-wrap: balance; max-width: 14ch; }
+.editorial-page .split-pair .copy h2 { margin: 0 0 14px; font-size: 24px; line-height: 1.2; letter-spacing: -0.015em; font-weight: 600; text-wrap: balance; max-width: 28ch; }
 .editorial-page .split-pair .copy p { margin: 0 0 14px; font-size: 17px; line-height: 1.5; color: var(--ink-2); max-width: 46ch; }
 .editorial-page .policy-ui { background: var(--paper-2); border: 1px solid var(--line); position: relative; }
 .editorial-page .policy-ui::before { content: "policy editor · dashboard"; position: absolute; top: -13px; left: 24px; background: var(--paper); padding: 0 10px; font-size: 11px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; font-family: var(--font-geist-mono); }
@@ -355,7 +364,7 @@
 .editorial-page .invariants-list li { display: grid; grid-template-columns: 86px 1fr; gap: 14px; align-items: baseline; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
 .editorial-page .invariants-list li b { color: var(--ink); font-weight: 500; }
 .editorial-page .invariants-tag { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--paper-deny); border: 1px solid var(--paper-deny); background: rgba(196, 50, 30, 0.06); padding: 3px 6px; border-radius: 3px; text-align: center; font-weight: 500; }
-.editorial-page .invariants-foot { margin: 14px 0 0; padding-top: 12px; border-top: 1px dashed var(--line-2); font-family: var(--font-geist-mono); font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
+.editorial-page .invariants-foot { margin: 22px 0 0; padding-top: 18px; border-top: 1px dashed var(--line-2); font-family: var(--font-geist-mono); font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
 
 /* vs Postgres roles */
 .editorial-page .vs { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid var(--line); background: var(--paper-2); }
