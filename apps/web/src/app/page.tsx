@@ -25,6 +25,8 @@
 import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 
+import { DemoChat } from "./demo/demo-chat";
+
 export default async function Landing() {
   // Signed-in users still see the landing — they may be sharing it with
   // teammates, revisiting the pricing page, or comparing tier limits.
@@ -116,6 +118,31 @@ export default async function Landing() {
                 <b>append-only</b>
               </div>
             </div>
+          </div>
+        </section>
+
+        {/* Embedded "try it" pane — live demo placed right after the
+            hero so the promise lands before the editorial unpacks it.
+            Intentionally unnumbered: the dark frame reads as a product
+            surface inside the light editorial flow, not as part of
+            the §01..§04 spine. */}
+        <section className="sec demo-sec" id="try">
+          <div className="sec-top">
+            <div className="sec-num">
+              <b>—</b>Try
+            </div>
+            <div>
+              <h2 className="sec-h">
+                Ask the database. Watch the policy decide.
+              </h2>
+              <p className="sec-sub">
+                Pick an example. Flip a table&apos;s access level. Re-pick
+                to watch the decision change.
+              </p>
+            </div>
+          </div>
+          <div className="demo-pane">
+            <DemoChat />
           </div>
         </section>
 
