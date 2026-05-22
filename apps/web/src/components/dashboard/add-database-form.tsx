@@ -165,7 +165,7 @@ export function AddDatabaseForm({
     <div className="border-t border-border bg-muted/20 px-3 py-3">
       <form onSubmit={handleSubmit} className="space-y-3">
         <div className="flex items-baseline justify-between">
-          <h3 className="text-xs font-medium uppercase tracking-[0.04em] text-subtle">
+          <h3 className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
             Add database
           </h3>
           <button

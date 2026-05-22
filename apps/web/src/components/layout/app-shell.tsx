@@ -1,5 +1,4 @@
 import { OrganizationSwitcher } from "@clerk/nextjs";
-import { Building2 } from "lucide-react";
 
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
@@ -12,17 +11,28 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
+// Two-dot mark — the colon broken into its parts, applied to navigation
+// chrome. Mirrors the wordmark's blue colon and tells the user this is
+// the mid:plane app without taking up an icon's worth of space.
+function WorkspaceMark() {
+  return (
+    <span
+      aria-hidden
+      className="inline-flex flex-shrink-0 items-center gap-[3px]"
+    >
+      <span className="block h-[5px] w-[5px] rounded-full bg-[hsl(var(--brand))]" />
+      <span className="block h-[5px] w-[5px] rounded-full bg-[hsl(var(--brand))]" />
+    </span>
+  );
+}
+
 export function AppShell({ region, children }: AppShellProps) {
   return (
     <div className="grid min-h-screen md:grid-cols-[220px_1fr]">
       <aside className="sticky top-0 hidden h-screen flex-col overflow-y-auto border-r border-border bg-card py-4 md:flex">
         <div className="px-[18px] pb-5">
           <div className="flex items-center gap-2.5 py-[7px]">
-            <Building2
-              aria-hidden
-              className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-              strokeWidth={1.5}
-            />
+            <WorkspaceMark />
             <OrganizationSwitcher
               hidePersonal
               afterCreateOrganizationUrl="/signup/region"
@@ -42,8 +52,8 @@ export function AppShell({ region, children }: AppShellProps) {
           </div>
         </div>
         <SidebarNav />
-        <div className="mt-2 px-[18px] pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">
-          Region
+        <div className="mt-2 px-[18px] pb-1 pt-2 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
+          region
         </div>
         <div className="px-[18px] py-[7px]">
           <RegionBadge region={region} />

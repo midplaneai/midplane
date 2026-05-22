@@ -26,7 +26,7 @@ const CHIP_INACTIVE =
 const CHIP_ACTIVE =
   "border-border-strong bg-popover text-foreground";
 const CHIP_LABEL =
-  "text-[11px] font-medium uppercase tracking-[0.04em] text-subtle";
+  "font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle";
 
 // Short labels for the chips. Differ from StatusBadge labels because the
 // chip strip is laid out horizontally and benefits from compact text;

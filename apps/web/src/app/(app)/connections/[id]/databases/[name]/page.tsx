@@ -1,5 +1,4 @@
 import { auth } from "@clerk/nextjs/server";
-import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
@@ -12,6 +11,7 @@ import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
 import { TenantScopeEditor } from "@/components/tenant-scope-editor";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { PageHeader } from "@/components/ui/page-header";
 import {
   getConnectionWithDatabase,
@@ -124,13 +124,13 @@ export default async function DatabaseDetail({
   return (
     <>
       <Topbar>
-        <Link href="/dashboard">
-          <b className="font-medium text-foreground">Connections</b>
-        </Link>
-        <span className="mx-2 text-subtle">/</span>
-        <span className="font-mono">{connectionLabel}</span>
-        <span className="mx-2 text-subtle">/</span>
-        <span className="font-mono">{db.name}</span>
+        <Breadcrumb
+          items={[
+            { label: "Connections", href: "/dashboard" },
+            { label: connectionLabel, href: `/connections/${conn.id}` },
+            { label: db.name },
+          ]}
+        />
       </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[760px]">
@@ -146,14 +146,16 @@ export default async function DatabaseDetail({
             subtitle="Per-table access policy and the encrypted Postgres credential."
           />
 
-          <section className="space-y-3 rounded-lg border border-border-strong bg-card p-6">
+          <section className="space-y-3 rounded-none border border-border-strong bg-card p-6">
             <h2 className="text-base font-medium text-foreground">
               Table permissions
             </h2>
             <p className="text-xs text-muted-foreground">
-              Per-table read / write policy enforced by the Midplane engine.
-              Saving stops the running session so the new policy takes effect
-              on the next agent request.
+              Per-table read / write policy enforced by the Midplane engine.{" "}
+              <strong className="font-medium text-foreground">
+                Saving stops the running session
+              </strong>{" "}
+              so the new policy takes effect on the next agent request.
             </p>
             <div className="pt-2">
               <PermissionGrid
@@ -164,16 +166,18 @@ export default async function DatabaseDetail({
             </div>
           </section>
 
-          <section className="mt-6 space-y-3 rounded-lg border border-border-strong bg-card p-6">
+          <section className="mt-6 space-y-3 rounded-none border border-border-strong bg-card p-6">
             <h2 className="text-base font-medium text-foreground">
               Tenant scoping
             </h2>
             <p className="text-xs text-muted-foreground">
               Force agent queries to only see rows belonging to one tenant.
-              Set the default tenant column once; every queried table is
-              automatically scoped on it. List exceptions for tables that
-              use a different column or that are intentionally shared
-              across tenants.
+              Set the default tenant column once; every queried table is{" "}
+              <strong className="font-medium text-foreground">
+                automatically scoped on it
+              </strong>
+              . List exceptions for tables that use a different column or that
+              are intentionally shared across tenants.
             </p>
             <div className="pt-2">
               <TenantScopeEditor
@@ -184,14 +188,17 @@ export default async function DatabaseDetail({
             </div>
           </section>
 
-          <section className="mt-6 space-y-3 rounded-lg border border-border-strong bg-card p-6">
+          <section className="mt-6 space-y-3 rounded-none border border-border-strong bg-card p-6">
             <h2 className="text-base font-medium text-foreground">
               Rotate connection string
             </h2>
             <p className="text-xs text-muted-foreground">
-              Paste a new Postgres URL to replace the encrypted ciphertext. The
-              MCP endpoint URL stays the same; running sessions are torn down
-              so the new credentials take effect on the next request.
+              Paste a new Postgres URL to replace the encrypted ciphertext.{" "}
+              <strong className="font-medium text-foreground">
+                The MCP endpoint URL stays the same
+              </strong>
+              ; running sessions are torn down so the new credentials take
+              effect on the next request.
               {db.rotatedAt ? (
                 <> Last rotated {formatRelative(db.rotatedAt)}.</>
               ) : null}

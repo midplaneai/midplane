@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { ShowOnceUrl } from "@/components/show-once-url";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
@@ -45,14 +46,13 @@ export default async function ConnectionCreated({
   return (
     <>
       <Topbar>
-        <Link href="/dashboard">
-          <b className="font-medium text-foreground">Connections</b>
-        </Link>
-        <span className="mx-2 text-subtle">/</span>
-        <Link href={connectionHref} className="font-mono">
-          {connectionLabel}
-        </Link>
-        <span className="mx-2 text-subtle">/</span>Connected
+        <Breadcrumb
+          items={[
+            { label: "Connections", href: "/dashboard" },
+            { label: connectionLabel, href: connectionHref },
+            { label: "Connected" },
+          ]}
+        />
       </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[760px]">
@@ -69,10 +69,14 @@ export default async function ConnectionCreated({
                     Copy this URL now
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    This is the only time you&apos;ll see the full URL. We
-                    store only a hashed digest; once you leave this page the
-                    plaintext is gone. Lost it? Revoke the token and mint a
-                    new one from the connection page.
+                    This is the{" "}
+                    <strong className="font-medium text-foreground">
+                      only time
+                    </strong>{" "}
+                    you&apos;ll see the full URL. We store only a hashed
+                    digest; once you leave this page the plaintext is gone.
+                    Lost it? Revoke the token and mint a new one from the
+                    connection page.
                   </p>
                 </div>
                 <ShowOnceUrl mcpUrl={mcpUrl} onMount={consumeShowOnceCookie} />
@@ -93,8 +97,11 @@ export default async function ConnectionCreated({
               </h2>
               <p className="text-xs text-muted-foreground">
                 The default token&apos;s URL was displayed once when this
-                connection was created. We don&apos;t persist the plaintext;
-                mint a new token from the connection page to set up an
+                connection was created. We{" "}
+                <strong className="font-medium text-foreground">
+                  don&apos;t persist the plaintext
+                </strong>
+                ; mint a new token from the connection page to set up an
                 additional agent.
               </p>
               <div className="pt-2">

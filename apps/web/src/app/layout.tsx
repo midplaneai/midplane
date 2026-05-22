@@ -53,17 +53,20 @@ export default function RootLayout({
     <ClerkProvider
       appearance={{
         variables: {
-          colorBackground: "#111111",
-          colorInputBackground: "#161616",
-          colorInputText: "#f5f5f5",
-          colorText: "#f5f5f5",
-          colorTextSecondary: "#b4b4b4",
-          colorPrimary: "#f5f5f5",
-          colorNeutral: "#f5f5f5",
+          // Clerk doesn't read CSS custom properties — these hex values must
+          // be kept in sync with the warm-dark tokens in globals.css. See
+          // DESIGN.md decision log (2026-05-22 re-skin).
+          colorBackground: "#1c1916",
+          colorInputBackground: "#221f1c",
+          colorInputText: "#f3efe7",
+          colorText: "#f3efe7",
+          colorTextSecondary: "#bdb4a6",
+          colorPrimary: "#f3efe7",
+          colorNeutral: "#f3efe7",
           colorDanger: "#c87070",
           colorSuccess: "#5a9c6e",
           colorWarning: "#d4a04c",
-          borderRadius: "0.5rem",
+          borderRadius: "0",
           fontFamily: "var(--font-geist), -apple-system, sans-serif",
         },
       }}

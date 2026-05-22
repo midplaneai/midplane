@@ -10,8 +10,8 @@ export function SidebarNav() {
   const pathname = usePathname() ?? "";
   return (
     <nav className="space-y-1 py-2" aria-label="Workspace">
-      <div className="px-[18px] pb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">
-        Workspace
+      <div className="px-[18px] pb-1 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
+        workspace
       </div>
       {NAV_ITEMS.map((item) => {
         const active = item.match(pathname);
@@ -22,9 +22,12 @@ export function SidebarNav() {
             href={item.href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "flex items-center gap-2.5 border-l-2 border-transparent px-[18px] py-[7px] text-sm transition-colors",
+              // Active selection = 3px inset left rail. Same spec-sheet mark
+              // used by selected radio cards and table rows. Box-shadow so it
+              // doesn't push content x-position relative to inactive items.
+              "flex items-center gap-2.5 px-[18px] py-[7px] text-sm transition-colors",
               active
-                ? "border-l-[hsl(var(--brand))] bg-popover text-foreground"
+                ? "bg-popover text-foreground shadow-[inset_3px_0_0_hsl(var(--brand))]"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >

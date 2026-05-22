@@ -8,6 +8,7 @@ import { StalenessSubtitle } from "@/components/audit/staleness-banner";
 import { policyReloadSummary, StatusBadge } from "@/components/audit/status-badge";
 import { VolumeSparkline } from "@/components/audit/volume-sparkline";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
@@ -86,8 +87,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   return (
     <>
       <Topbar>
-        <b className="font-medium text-foreground">{customer.email}</b>
-        <span className="mx-2 text-subtle">/</span>Audit log
+        <Breadcrumb items={[{ label: "Audit log" }]} />
       </Topbar>
       <PageContainer>
         <PageHeader title="Audit log" />
@@ -144,7 +144,15 @@ export default async function AuditListPage({ searchParams }: PageProps) {
                   data-status={r.status}
                   data-tenant-id={r.tenantId}
                   data-database={r.database}
-                  className="relative border-b border-card transition-colors hover:bg-card"
+                  className={cn(
+                    "relative border-b border-card transition-colors",
+                    // Deny rows carry a faint deny tint (mirrors the landing's
+                    // .at-table .tr.deny treatment) so policy failures stand
+                    // out at a glance.
+                    r.status === "DENIED"
+                      ? "bg-[hsl(var(--deny)/0.06)] hover:bg-[hsl(var(--deny)/0.1)]"
+                      : "hover:bg-card",
+                  )}
                 >
                   <Td className="whitespace-nowrap font-mono text-[11px] text-subtle">
                     <Link
@@ -279,7 +287,7 @@ function Th({
     <th
       style={width ? { width } : undefined}
       className={cn(
-        "border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.02em] text-subtle",
+        "border-b border-border px-3 py-2 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle",
         align === "right" ? "text-right" : "text-left",
       )}
     >

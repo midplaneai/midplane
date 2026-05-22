@@ -1,5 +1,4 @@
 import { auth } from "@clerk/nextjs/server";
-import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -11,6 +10,7 @@ import {
   type NewConnectionFormState,
 } from "@/components/connections/new-connection-form";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
 import { createConnection, isValidDsn } from "@/lib/connections";
@@ -33,16 +33,27 @@ export default async function NewConnection() {
   return (
     <>
       <Topbar>
-        <Link href="/dashboard">
-          <b className="font-medium text-foreground">Connections</b>
-        </Link>
-        <span className="mx-2 text-subtle">/</span>New
+        <Breadcrumb
+          items={[
+            { label: "Connections", href: "/dashboard" },
+            { label: "New" },
+          ]}
+        />
       </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[760px]">
           <PageHeader
             title="Connect Postgres"
-            subtitle="Paste a Postgres connection string. We encrypt it with your region's KMS key and never persist the plaintext."
+            subtitle={
+              <>
+                Paste a Postgres connection string. We encrypt it with your
+                region&apos;s KMS key and{" "}
+                <strong className="font-medium text-foreground">
+                  never persist the plaintext
+                </strong>
+                .
+              </>
+            }
           />
           <NewConnectionForm action={createAction} />
         </div>

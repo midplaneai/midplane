@@ -39,7 +39,8 @@ export function NewConnectionForm({
           disabled={pending}
         />
         <p className="text-xs text-muted-foreground">
-          A short label to tell this connection apart from others. Optional.
+          A short label to tell this connection apart from others.{" "}
+          <strong className="font-medium text-foreground">Optional.</strong>
         </p>
       </div>
       <div className="space-y-2">
@@ -56,12 +57,13 @@ export function NewConnectionForm({
           disabled={pending}
         />
         <p className="text-xs text-muted-foreground">
-          Best practice: a least-privilege role. Midplane enforces the access
-          level you pick below; defense-in-depth at the DB layer still matters.
+          <strong className="font-medium text-foreground">Best practice:</strong>{" "}
+          a least-privilege role. Midplane enforces the access level you pick
+          below; defense-in-depth at the DB layer still matters.
         </p>
       </div>
       <fieldset className="space-y-3" disabled={pending}>
-        <legend className="text-sm font-medium text-foreground">
+        <legend className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-foreground">
           Default agent access
         </legend>
         <p className="text-xs text-muted-foreground">
@@ -72,18 +74,42 @@ export function NewConnectionForm({
           <AccessRadio
             value="read"
             label="Read"
-            description="Agents can query any table. Writes always denied unless granted per-table. Recommended."
+            description={
+              <>
+                Agents can query any table. Writes always denied unless granted
+                per-table.{" "}
+                <strong className="font-medium text-foreground">
+                  Recommended.
+                </strong>
+              </>
+            }
             defaultChecked
           />
           <AccessRadio
             value="deny"
             label="Deny"
-            description="Agents have no access until you grant it explicitly. Strictest; useful when you want allowlisting from day one."
+            description={
+              <>
+                Agents have no access until you grant it explicitly.{" "}
+                <strong className="font-medium text-foreground">
+                  Strictest;
+                </strong>{" "}
+                useful when you want allowlisting from day one.
+              </>
+            }
           />
           <AccessRadio
             value="read_write"
             label="Read + write"
-            description="Agents can read and write any table. Not recommended outside one-shot migration tokens."
+            description={
+              <>
+                Agents can read and write any table.{" "}
+                <strong className="font-medium text-foreground">
+                  Not recommended
+                </strong>{" "}
+                outside one-shot migration tokens.
+              </>
+            }
           />
         </div>
       </fieldset>
@@ -96,7 +122,7 @@ export function NewConnectionForm({
           {state.error}
         </p>
       ) : null}
-      <Button type="submit" size="lg" disabled={pending}>
+      <Button type="submit" size="lg" arrow disabled={pending}>
         {pending ? "Creating…" : "Create connection"}
       </Button>
     </form>
