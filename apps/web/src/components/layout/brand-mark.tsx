@@ -1,36 +1,45 @@
+import Link from "next/link";
+
 import { cn } from "@/lib/utils";
 
-interface BrandMarkProps {
+// The wordmark *is* the mark on light/auth chrome. Renders as inline text so
+// it scales with the user's font size, supports selection, and announces as
+// "midplane" to screen readers (the colon is decorative).
+//
+// On dark surfaces, pass `onDark` so the letters invert to paper while the
+// colon stays blue. The colon color is driven by .mp-colon in globals.css.
+export function Wordmark({
+  className,
+  onDark,
+  href = "/",
+  size = "md",
+}: {
   className?: string;
-  size?: number;
-}
-
-export function BrandMark({ className, size = 18 }: BrandMarkProps) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "relative inline-block overflow-hidden bg-foreground",
-        className,
-      )}
-      style={{ width: size, height: size, borderRadius: 4 }}
-    >
-      <span className="absolute inset-x-0 top-1/2 h-px bg-background" />
-      <span className="absolute inset-y-0 left-1/2 w-px bg-background" />
-    </span>
-  );
-}
-
-export function BrandLockup({ className }: { className?: string }) {
-  return (
+  onDark?: boolean;
+  href?: string | null;
+  size?: "sm" | "md" | "lg";
+}) {
+  const sizeClass =
+    size === "lg" ? "text-2xl" : size === "sm" ? "text-sm" : "text-lg";
+  const body = (
     <span
       className={cn(
-        "inline-flex items-center gap-2 text-sm font-semibold tracking-[-0.01em] text-foreground",
+        "mp-wordmark inline-flex items-baseline",
+        sizeClass,
+        onDark && "mp-on-dark",
         className,
       )}
     >
-      <BrandMark />
-      midplane
+      mid<span className="mp-colon">:</span>plane
     </span>
   );
+  if (!href) return body;
+  return (
+    <Link href={href} aria-label="midplane" className="inline-flex">
+      {body}
+    </Link>
+  );
 }
+
+// Compatibility alias — used by sign-in / sign-up / region-picker chrome.
+export const BrandLockup = Wordmark;

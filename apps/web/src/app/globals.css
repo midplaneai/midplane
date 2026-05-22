@@ -75,6 +75,37 @@
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
   }
+  /* Wordmark utility. The colon is the brand — wrap it in <span class="mp-colon">
+   * so it picks up the accent regardless of surrounding color. On dark surfaces
+   * the .mp-on-dark modifier inverts the letters to paper while keeping the
+   * colon blue. Tracking and weight come from the brand spec; the letter color
+   * inherits via `color: inherit` so an outer text class still wins on light
+   * surfaces (.editorial-page sets --ink). */
+  .mp-wordmark {
+    font-family: var(--font-geist), -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.022em;
+    color: inherit;
+  }
+  .mp-wordmark .mp-colon {
+    color: hsl(var(--brand));
+    font-weight: 700;
+    padding: 0 0.04em;
+  }
+  .mp-on-dark.mp-wordmark,
+  .mp-on-dark .mp-wordmark {
+    color: var(--paper, #f3efe7);
+  }
+  .mp-on-dark.mp-wordmark .mp-colon,
+  .mp-on-dark .mp-wordmark .mp-colon {
+    color: #1d4eff;
+  }
+  /* On the editorial paper landing the accent is the literal brand blue
+   * (#1d4eff), not the lifted app variant. Override the colon for any
+   * wordmark nested under .editorial-page. */
+  .editorial-page .mp-wordmark .mp-colon {
+    color: var(--accent-blue);
+  }
   /* Tabular numerics on anything explicitly typographic-data. */
   .mono,
   .tabular {
@@ -139,10 +170,7 @@
 
 /* topbar */
 .editorial-page .topbar { display: flex; align-items: center; padding: 24px 0; border-bottom: 1px solid var(--line); }
-.editorial-page .brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
-.editorial-page .mark { width: 18px; height: 18px; background: var(--ink); border-radius: 4px; position: relative; overflow: hidden; }
-.editorial-page .mark::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--paper); }
-.editorial-page .mark::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--paper); }
+.editorial-page .brand { display: inline-flex; align-items: baseline; font-size: 18px; }
 .editorial-page .nav { display: flex; gap: 28px; margin-left: 48px; font-size: 14px; color: var(--ink-2); }
 .editorial-page .nav a:hover { color: var(--ink); }
 .editorial-page .topright { margin-left: auto; display: flex; align-items: center; gap: 16px; font-size: 14px; }
@@ -506,8 +534,6 @@
 .editorial-page footer.efoot a:hover { color: var(--paper); }
 .editorial-page footer.efoot .cop { font-family: var(--font-geist-mono); font-size: 12px; line-height: 1.6; max-width: 44ch; color: rgba(243, 239, 231, 0.5); margin-top: 14px; }
 .editorial-page footer.efoot .brand { color: var(--paper); }
-.editorial-page footer.efoot .brand .mark { background: var(--paper); }
-.editorial-page footer.efoot .brand .mark::before, .editorial-page footer.efoot .brand .mark::after { background: var(--ink); }
 
 /* responsive — collapse multi-column blocks under 960px */
 /* Touch targets: nav/topright/footer/anchor links need >= 44px on touch

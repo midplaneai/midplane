@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="midplane — safe Postgres for your team&#39;s AI agents">
+  <title>midplane · open graph card</title>
+  <desc>Template for 1200×630 social cards (Twitter, OpenGraph, GitHub social preview). Replace the headline copy as needed.</desc>
+
+  
+  <rect width="1200" height="630" fill="#161412"></rect>
+
+  
+  <line x1="0" y1="315" x2="1200" y2="315" stroke="#3a342d" stroke-width="1" stroke-dasharray="4 8" opacity="0.4"></line>
+
+  
+  <g transform="translate(80, 80)">
+    
+    <rect x="0" y="0" width="72" height="72" rx="10" fill="#f3efe7"></rect>
+    <circle cx="36" cy="23" r="9.5" fill="#1d4eff"></circle>
+    <circle cx="36" cy="49" r="9.5" fill="#1d4eff"></circle>
+    
+    <text x="92" y="51" font-family="Geist, &#39;Inter&#39;, system-ui, -apple-system, sans-serif" font-weight="600" font-size="44" letter-spacing="-1.6" fill="#f3efe7">mid<tspan fill="#1d4eff" font-weight="700">:</tspan>plane</text>
+  </g>
+
+  
+  <g transform="translate(1120, 116)" text-anchor="end" font-family="&#39;Geist Mono&#39;, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#a39a8c" letter-spacing="1.4">
+    <text x="0" y="0">v0.5 · EU + US</text>
+  </g>
+
+  
+  <g transform="translate(80, 360)" font-family="Geist, &#39;Inter&#39;, system-ui, -apple-system, sans-serif" font-weight="700" letter-spacing="-3.5" fill="#f3efe7">
+    <text font-size="84" y="0">Safe Postgres for your</text>
+    <text font-size="84" y="96">team&#39;s <tspan fill="#1d4eff">AI agents.</tspan></text>
+  </g>
+
+  
+  <g transform="translate(80, 570)" font-family="&#39;Geist Mono&#39;, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" fill="#a39a8c">
+    <text x="0" y="0" font-weight="500" fill="#f3efe7">mid<tspan fill="#1d4eff" font-weight="700">:</tspan>plane.ai</text>
+    <text x="1040" y="0" text-anchor="end" letter-spacing="1.6">read-only by default</text>
+  </g>
+</svg>

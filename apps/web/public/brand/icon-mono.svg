@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="midplane">
+  <title>midplane icon · monochrome</title>
+  <desc>Monochrome fallback: ink square, paper colon. Use where blue can&#39;t render (single-colour print, embroidery, fax).</desc>
+  <rect x="0" y="0" width="100" height="100" rx="14" fill="#161412"></rect>
+  <circle cx="50" cy="32" r="13" fill="#f3efe7"></circle>
+  <circle cx="50" cy="68" r="13" fill="#f3efe7"></circle>
+</svg>
