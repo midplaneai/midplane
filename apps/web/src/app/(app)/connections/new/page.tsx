@@ -5,19 +5,15 @@ import { redirect } from "next/navigation";
 import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
-import { AccessRadio } from "@/components/access-radio";
+import {
+  NewConnectionForm,
+  type NewConnectionFormState,
+} from "@/components/connections/new-connection-form";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
-import {
-  createConnection,
-  isValidDsn,
-  MAX_CONNECTION_NAME_LENGTH,
-} from "@/lib/connections";
+import { createConnection, isValidDsn } from "@/lib/connections";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
 // PR2 of mcp_url_auth_security: a fresh connection mints a default token
@@ -59,102 +55,23 @@ export default async function NewConnection() {
               </>
             }
           />
-
-          <form action={createAction} className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
-              <Input
-                id="name"
-                name="name"
-                type="text"
-                maxLength={MAX_CONNECTION_NAME_LENGTH}
-                placeholder="Production read-replica"
-              />
-              <p className="text-xs text-muted-foreground">
-                A short label to tell this connection apart from others.{" "}
-                <strong className="font-medium text-foreground">Optional.</strong>
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="dsn">DATABASE_URL</Label>
-              <Input
-                id="dsn"
-                name="dsn"
-                type="text"
-                required
-                placeholder="postgres://readonly_agent:pass@host:5432/db?sslmode=require"
-                className="font-mono"
-              />
-              <p className="text-xs text-muted-foreground">
-                <strong className="font-medium text-foreground">
-                  Best practice:
-                </strong>{" "}
-                a least-privilege role. Midplane enforces the access level you
-                pick below; defense-in-depth at the DB layer still matters.
-              </p>
-            </div>
-            <fieldset className="space-y-3">
-              <legend className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-foreground">
-                Default agent access
-              </legend>
-              <p className="text-xs text-muted-foreground">
-                Sets the baseline for any table the agent queries. Per-table
-                overrides can be added later from the connection page.
-              </p>
-              <div className="space-y-2">
-                <AccessRadio
-                  value="read"
-                  label="Read"
-                  description={
-                    <>
-                      Agents can query any table. Writes always denied unless
-                      granted per-table.{" "}
-                      <strong className="font-medium text-foreground">
-                        Recommended.
-                      </strong>
-                    </>
-                  }
-                  defaultChecked
-                />
-                <AccessRadio
-                  value="deny"
-                  label="Deny"
-                  description={
-                    <>
-                      Agents have no access until you grant it explicitly.{" "}
-                      <strong className="font-medium text-foreground">
-                        Strictest;
-                      </strong>{" "}
-                      useful when you want allowlisting from day one.
-                    </>
-                  }
-                />
-                <AccessRadio
-                  value="read_write"
-                  label="Read + write"
-                  description={
-                    <>
-                      Agents can read and write any table.{" "}
-                      <strong className="font-medium text-foreground">
-                        Not recommended
-                      </strong>{" "}
-                      outside one-shot migration tokens.
-                    </>
-                  }
-                />
-              </div>
-            </fieldset>
-            <Button type="submit" size="lg" arrow>
-              Create connection
-            </Button>
-          </form>
+          <NewConnectionForm action={createAction} />
         </div>
       </PageContainer>
     </>
   );
 }
 
-async function createAction(formData: FormData) {
+// Server action wired through useActionState in the client form. Validation
+// failures return a NewConnectionFormState so the form can render the message
+// inline; success calls redirect() which Next surfaces outside this channel.
+// (The old `throw new Error("DSN must be a postgres:// URL")` path produced
+// a runtime-error overlay instead of inline feedback — see the new form's
+// state.error render.)
+async function createAction(
+  _prev: NewConnectionFormState,
+  formData: FormData,
+): Promise<NewConnectionFormState> {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
@@ -163,7 +80,7 @@ async function createAction(formData: FormData) {
 
   const dsn = formData.get("dsn");
   if (!isValidDsn(dsn)) {
-    throw new Error("DSN must be a postgres:// URL");
+    return { error: "DSN must be a postgres:// or postgresql:// URL." };
   }
   const nameRaw = formData.get("name");
   const name = typeof nameRaw === "string" ? nameRaw : null;

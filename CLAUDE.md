@@ -37,6 +37,27 @@ imports, this is the cause.
 Server components, server actions, route handlers, and library code may
 import from the root entrypoint freely.
 
+## Server actions: return state, don't throw, for user input
+
+A server action reached by a direct `<form action={X}>` (no client
+wrapper) must return a state object for user-recoverable validation
+errors — not `throw`. A throw becomes the Next.js runtime-error
+overlay because there is no client `try/catch` between the action
+and the user. The new-connection form (`app/(app)/connections/new`)
+shows the pattern: `useActionState`, action signature
+`(prev, formData) => Promise<{ error? }>`, success still calls
+`redirect()` (Next handles `NEXT_REDIRECT` outside the state channel).
+
+Throws are still fine for tamper-only paths (e.g. a hidden `id` input
+that's never user-edited) — those aren't reachable through normal UI.
+The distinction is whether a non-adversarial user can trigger the
+throw by interacting with the form.
+
+If a server action sits behind a client component that already wraps
+the call in `try/catch` + `useTransition` (see `add-database-form.tsx`,
+`rotate-connection-form.tsx`), throwing is also fine — the client
+catches and renders inline.
+
 ## OSS image version pin sites
 
 The OSS engine image version (`midplane/midplane:X.Y.Z`) is pinned in
