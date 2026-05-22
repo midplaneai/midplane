@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 88" width="360" height="88" role="img" aria-label="midplane">
+  <title>midplane wordmark · monochrome fallback</title>
+  <desc>Single-colour fallback for embroidery, screen-print, fax. Uses currentColor so it inherits any single ink.</desc>
+  <text x="0" y="68" font-family="Geist, &#39;Inter&#39;, system-ui, -apple-system, sans-serif" font-weight="600" font-size="80" letter-spacing="-3" fill="currentColor">mid<tspan font-weight="700">:</tspan>plane</text>
+</svg>

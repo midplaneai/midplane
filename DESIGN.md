@@ -83,40 +83,38 @@ Each semantic color also has a paired `--{name}-bg` at ~8% alpha for badge/banne
 - **Honor `prefers-reduced-motion`** on every animated element.
 
 ## Brand Mark
-A 16–18px square with a 1px cross slit (window-mullion). 4px corner radius.
-Background uses `--foreground`; the two slits use `--background` so the mark
-reads as light-on-dark in the app and ink-on-paper on the editorial landing.
+**The wordmark is the mark.** Text-only, rendered inline as
+`mid<span class="mp-colon">:</span>plane`. The colon — Geist 700, blue
+`#1d4eff` — is the brand. The letters are Geist 600, letter-spacing
+`-0.022em`. On dark surfaces the letters flip to paper (`#f3efe7`) and the
+colon stays blue.
 
-CSS shape:
-```css
-.mark {
-  width: 18px; height: 18px;
-  background: var(--foreground);
-  border-radius: 4px;
-  position: relative;
-  overflow: hidden;
-}
-.mark::before { /* horizontal slit */
-  content: ""; position: absolute;
-  left: 0; right: 0; top: 50%; height: 1px;
-  background: var(--background);
-}
-.mark::after { /* vertical slit */
-  content: ""; position: absolute;
-  top: 0; bottom: 0; left: 50%; width: 1px;
-  background: var(--background);
-}
-```
+Always render the wordmark as inline text — never an `<img>` of `wordmark.svg`
+— so it scales with the user's font size, supports selection, and announces
+correctly. The screen reader text is "midplane" (no colon) via `aria-label`
+on the wrapping `<a>`/`<span>`.
 
-The React component (`apps/web/src/components/layout/brand-mark.tsx`) uses
-two child `<span>`s instead of pseudo-elements so the slit colors stay bound
-to the same `--foreground` / `--background` tokens that drive the rest of
-the design system. The landing renders the same mark via the `.editorial-page
-.mark` selector in `globals.css`, with `--ink` / `--paper` substituted for
-`--foreground` / `--background`.
+In plain-text contexts (`<title>`, `og:*`, URLs, CLI, env vars, filenames)
+write **Midplane** with no colon. The colon is a typesetting choice for the
+brand mark, not a renaming of the product.
 
-Renders inline next to the wordmark "midplane" (lowercase, Geist 600,
-`letter-spacing: -0.01em`).
+### Implementation
+- `Wordmark` (alias `BrandLockup`) in
+  `apps/web/src/components/layout/brand-mark.tsx` is the canonical React
+  primitive. Pass `onDark` for the inverted (paper letters) variant.
+- `.mp-wordmark` / `.mp-colon` utilities live in `globals.css`. The colon
+  picks up `hsl(var(--brand))` on the dark app and `var(--accent-blue)`
+  inside `.editorial-page`.
+
+### Icon system (square surfaces only)
+The square icon (`apps/web/public/brand/icon.svg` — ink square + blue colon,
+punched) is for favicon, app icon, OG card corner, Slack workspace, GitHub
+avatar. Do not place the square icon next to the wordmark in topbars or
+footers — the wordmark stands alone there. Inverted (`icon-inverted.svg`)
+and mono (`icon-mono.svg`) variants are available for dark close bands and
+single-colour print.
+
+The previous four-quadrant window-mullion `.mark` glyph has been retired.
 
 ## Component Conventions
 - **Buttons:** Primary = `bg-foreground text-background`. Secondary = `bg-secondary border-border`. Destructive uses `--deny`. No gradient buttons. No oversized primary CTAs.
@@ -142,3 +140,4 @@ Renders inline next to the wordmark "midplane" (lowercase, Geist 600,
 | 2026-04-30 | Adopted as canonical via /design-consultation; written into DESIGN.md | Existing tokens were already coherent and partially shipped (audit page). Goal: stop the design drift, propagate everywhere. |
 | 2026-04-30 | Split `text-1` (body) from `text-2` (tertiary): `--muted-foreground` is now `#b4b4b4`; new `--subtle` at `#707070` for labels/timestamps. Added lucide icons to sidebar. Added `:-webkit-autofill` rule to keep `Input` bg dark in Chrome. | First-pass review caught body copy at 4:1 contrast, sidebar reading as broken icons, password input rendering pale lavender on autofill. |
 | 2026-05-20 | Brand accent retuned: `--brand` / `--ring` moved from `#6cb6ff` (info-blue cyan) to `#4a78ff` (saturated blue, hue 225°). Brand mark redrawn as a window-mullion (square + 1px cross slits) matching the editorial landing. | Landing's `#1d4eff` and the app's `#6cb6ff` read as different brand colors. Unified the hue across both — landing keeps `#1d4eff` on paper; the app uses a 9-point-lighter cousin tone-mapped for AA contrast on `#0a0a0a`. Mark swap unifies the glyph between marketing and app surfaces. |
+| 2026-05-22 | Adopted the locked-in `midplane-brand` package (see `apps/web/public/brand/`). Wordmark becomes `mid:plane` with a blue colon — the wordmark is now the mark on light/auth chrome, no separate icon glyph beside it. Four-quadrant window-mullion `.mark` retired. Square `icon.svg` (ink + blue colon) reserved for favicon / OG / Slack / GitHub. Favicons + OG meta wired in `app/layout.tsx`. | Brand exploration converged on "the colon is the brand" — a single, distinctive typesetting move instead of a separate glyph that competes with the wordmark. Keeping the wordmark text-based (not an `<img>`) preserves font scaling, selection, and accessibility. |

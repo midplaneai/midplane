@@ -41,10 +41,9 @@ export default async function Landing() {
     <main className="editorial-page">
       <div className="page">
         <header className="topbar">
-          <div className="brand">
-            <span className="mark" aria-hidden />
-            <span>midplane</span>
-          </div>
+          <Link href="/" aria-label="midplane" className="brand mp-wordmark">
+            mid<span className="mp-colon">:</span>plane
+          </Link>
           <nav className="nav">
             <a href="#how">Product</a>
             <a href="#policy">Policy</a>
@@ -875,10 +874,12 @@ export default async function Landing() {
 
         <footer className="efoot">
           <div>
-            <div className="brand">
-              <span className="mark" aria-hidden />
-              <span>midplane</span>
-            </div>
+            <span
+              className="brand mp-wordmark mp-on-dark"
+              aria-label="midplane"
+            >
+              mid<span className="mp-colon">:</span>plane
+            </span>
             <p className="cop">
               A safety layer between AI coding agents and your Postgres
               database. MIT-licensed engine, hosted in EU + US.
