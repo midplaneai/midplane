@@ -473,6 +473,15 @@
 .editorial-page .close .inner { display: grid; grid-template-columns: 1fr auto; gap: 48px; align-items: end; max-width: 1344px; margin: 0 auto; }
 .editorial-page .close h2 { margin: 0; font-size: 96px; line-height: 0.95; letter-spacing: -0.035em; font-weight: 600; max-width: 14ch; color: var(--paper); }
 .editorial-page .close h2 em { font-style: normal; color: #f3a55b; }
+/* cycling agent name — see _landing/cycling-agent.tsx. Width-holder
+   keeps the headline from reflowing as the word changes. */
+.editorial-page .cycling-agent { position: relative; display: inline-block; vertical-align: baseline; }
+.editorial-page .cycling-agent-hold { visibility: hidden; white-space: nowrap; }
+.editorial-page .cycling-agent-shown { position: absolute; left: 0; top: 0; right: 0; transition: opacity 220ms ease-out; white-space: nowrap; }
+.editorial-page .cycling-agent-shown[data-visible="false"] { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .editorial-page .cycling-agent-shown { transition: none; }
+}
 .editorial-page .close .ctas { display: flex; flex-direction: column; gap: 14px; }
 .editorial-page .close .ebtn.fill { background: var(--paper); color: var(--ink); }
 .editorial-page .close .ebtn.outline { border-color: rgba(243, 239, 231, 0.4); color: var(--paper); }

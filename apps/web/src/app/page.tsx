@@ -25,6 +25,7 @@
 import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 
+import { CyclingAgent } from "./_landing/cycling-agent";
 import { HostedTabs } from "./_landing/hosted-tabs";
 import { QuickstartClients } from "./_landing/quickstart-clients";
 import { DemoChat } from "./demo/demo-chat";
@@ -855,7 +856,7 @@ export default async function Landing() {
         <section className="close">
           <div className="inner">
             <h2>
-              Let Claude query <em>your real database.</em>
+              Let <CyclingAgent /> query <em>your real database.</em>
             </h2>
             <div className="ctas">
               <Link className="ebtn fill" href="/sign-up">
