@@ -477,14 +477,17 @@
    fades them in and out at staggered intervals. The width-holder
    span sets the container width to the widest name so the headline
    doesn't reflow between swaps. */
-.editorial-page .cycling-agent { position: relative; display: inline-block; vertical-align: baseline; }
+.editorial-page .cycling-agent { position: relative; display: inline-block; vertical-align: baseline; color: #f3a55b; }
 .editorial-page .cycling-agent-hold { visibility: hidden; white-space: nowrap; }
 .editorial-page .cycling-agent-item { position: absolute; left: 0; top: 0; right: 0; white-space: nowrap; opacity: 0; animation-name: midplane-agent-cycle; animation-iteration-count: infinite; animation-timing-function: linear; }
+/* Visible window extends a hair past the next item's fade-in start so
+   the names crossfade instead of leaving a blank frame. Numbers are
+   percentages of the full 7200ms cycle (3 items × 2400ms). */
 @keyframes midplane-agent-cycle {
   0%    { opacity: 0; }
-  3%    { opacity: 1; }
-  30%   { opacity: 1; }
-  33%   { opacity: 0; }
+  3%    { opacity: 1; }   /* fade in (216ms) */
+  33%   { opacity: 1; }   /* hold until next item's fade-in begins */
+  36%   { opacity: 0; }   /* fade out (216ms), overlaps next item's fade-in */
   100%  { opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
