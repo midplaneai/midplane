@@ -472,14 +472,24 @@
 .editorial-page .close .inner { display: grid; grid-template-columns: 1fr auto; gap: 48px; align-items: end; max-width: 1344px; margin: 0 auto; }
 .editorial-page .close h2 { margin: 0; font-size: 96px; line-height: 0.95; letter-spacing: -0.035em; font-weight: 600; max-width: 14ch; color: var(--paper); }
 .editorial-page .close h2 em { font-style: normal; color: #f3a55b; }
-/* cycling agent name — see _landing/cycling-agent.tsx. Width-holder
-   keeps the headline from reflowing as the word changes. */
+/* cycling agent name — see _landing/cycling-agent.tsx. All three
+   names are stacked in the same position; the @keyframes cycle
+   fades them in and out at staggered intervals. The width-holder
+   span sets the container width to the widest name so the headline
+   doesn't reflow between swaps. */
 .editorial-page .cycling-agent { position: relative; display: inline-block; vertical-align: baseline; }
 .editorial-page .cycling-agent-hold { visibility: hidden; white-space: nowrap; }
-.editorial-page .cycling-agent-shown { position: absolute; left: 0; top: 0; right: 0; transition: opacity 220ms ease-out; white-space: nowrap; }
-.editorial-page .cycling-agent-shown[data-visible="false"] { opacity: 0; }
+.editorial-page .cycling-agent-item { position: absolute; left: 0; top: 0; right: 0; white-space: nowrap; opacity: 0; animation-name: midplane-agent-cycle; animation-iteration-count: infinite; animation-timing-function: linear; }
+@keyframes midplane-agent-cycle {
+  0%    { opacity: 0; }
+  3%    { opacity: 1; }
+  30%   { opacity: 1; }
+  33%   { opacity: 0; }
+  100%  { opacity: 0; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .editorial-page .cycling-agent-shown { transition: none; }
+  .editorial-page .cycling-agent-item { animation: none; }
+  .editorial-page .cycling-agent-item:first-of-type { opacity: 1; }
 }
 .editorial-page .close .ctas { display: flex; flex-direction: column; gap: 14px; }
 .editorial-page .close .ebtn.fill { background: var(--paper); color: var(--ink); }
