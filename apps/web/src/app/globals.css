@@ -370,11 +370,6 @@
 .editorial-page .iso .iso-copy { padding: 40px 36px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 18px; }
 .editorial-page .iso .iso-copy h3 { margin: 0; font-size: 28px; letter-spacing: -0.02em; line-height: 1.1; font-weight: 600; max-width: 18ch; }
 .editorial-page .iso .iso-copy p { margin: 0; font-size: 15px; color: var(--ink-2); line-height: 1.55; max-width: 44ch; }
-.editorial-page .iso .iso-copy ul { margin: 6px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-.editorial-page .iso .iso-copy ul li { padding: 12px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 20px 1fr; gap: 12px; font-size: 14px; color: var(--ink-2); }
-.editorial-page .iso .iso-copy ul li:last-child { border-bottom: 0; }
-.editorial-page .iso .iso-copy ul li::before { content: "→"; color: var(--ink-3); font-family: var(--font-geist-mono); }
-.editorial-page .iso .iso-copy ul li b { color: var(--ink); font-weight: 500; }
 .editorial-page .iso .iso-diagram { padding: 36px; display: flex; flex-direction: column; gap: 14px; background: repeating-linear-gradient(0deg, transparent 0 23px, var(--paper-3) 23px 24px), var(--paper-2); }
 .editorial-page .iso .iso-diagram .lane { display: grid; grid-template-columns: 140px 1fr; gap: 18px; align-items: center; }
 .editorial-page .iso .iso-diagram .lane .lbl { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }

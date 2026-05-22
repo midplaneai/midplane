@@ -560,31 +560,12 @@ export default async function Landing() {
           <div className="iso">
             <div className="iso-copy">
               <h3>What lives where.</h3>
-              <p>The data plane is your Postgres. We&apos;re a control plane in front of it.</p>
-              <ul>
-                <li>
-                  <span>
-                    <b>Query results pass through, unstored.</b> We see the SQL
-                    and the decision (allow / deny), we forward the rows. The
-                    rows themselves don&apos;t sit in our system.
-                  </span>
-                </li>
-                <li>
-                  <span>
-                    <b>Per-workspace encryption.</b> Connection credentials,
-                    policy, and audit log are envelope-encrypted with a KMS
-                    key bound to your workspace. We can&apos;t decrypt another
-                    workspace&apos;s data with yours.
-                  </span>
-                </li>
-                <li>
-                  <span>
-                    <b>Region-pinned.</b> Pick <span className="mono">eu</span>{" "}
-                    or <span className="mono">us</span> at signup; the control
-                    plane stays there.
-                  </span>
-                </li>
-              </ul>
+              <p>
+                The data plane is your Postgres. We&apos;re a control plane in
+                front of it — query results pass through unstored, the little
+                we do hold is envelope-encrypted per workspace, and the whole
+                control plane is pinned to the region you pick at signup.
+              </p>
             </div>
             <div className="iso-diagram">
               <div className="lane">
