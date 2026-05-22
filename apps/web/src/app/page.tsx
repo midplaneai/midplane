@@ -146,65 +146,6 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* Now you can — the enablement beat. What becomes possible once the
-            policy + audit + isolation story below is in place. */}
-        <section className="nyc-sec">
-          <div className="lbl">
-            <b>Now you can</b>safely
-          </div>
-          <div>
-            <p className="nyc-lede">
-              Let your engineers point Claude at your <em>real</em> production
-              database — for the work they couldn&apos;t trust an agent with
-              yesterday.
-            </p>
-            <div className="nyc-cards">
-              <article className="nyc-card">
-                <span className="kicker">Query prod in plain English.</span>
-                <p>
-                  Ask Claude how retention shifted last month. It runs the
-                  read, you see the answer — no SQL copy-paste, no DSN on
-                  anyone&apos;s laptop.
-                </p>
-                <pre className="snippet">
-                  <span className="you">you:</span> how many active users last
-                  week?{"\n"}
-                  <span className="ai">claude:</span> <b>1,402</b> active ·
-                  +18% wow
-                </pre>
-              </article>
-              <article className="nyc-card">
-                <span className="kicker">Build a one-off dashboard.</span>
-                <p>
-                  &ldquo;Chart signups by region for the last 30 days.&rdquo;
-                  The agent picks the right tables, queries, and hands you a
-                  chart in minutes.
-                </p>
-                <pre className="snippet">
-                  <span className="you">you:</span> signups by region, 30d
-                  {"\n"}
-                  <span className="ai">claude:</span> <b>chart ready</b> · eu
-                  612 · us 590 · other 200
-                </pre>
-              </article>
-              <article className="nyc-card">
-                <span className="kicker">Debug live without paging anyone.</span>
-                <p>
-                  Prod incident at 02:00 — your on-call asks Claude to poke
-                  around the rows through the MCP URL. Every query logged, no
-                  leaked credentials.
-                </p>
-                <pre className="snippet">
-                  <span className="you">you:</span> why are checkouts
-                  failing?{"\n"}
-                  <span className="ai">claude:</span> <b>session_token</b>{" "}
-                  null for 12% of rows since 02:14
-                </pre>
-              </article>
-            </div>
-          </div>
-        </section>
-
         {/* §01 — What changes. The same query an engineer's agent might
             run, with and without midplane. Was the hero; demoted to a
             section so the hero can lead on enablement. */}

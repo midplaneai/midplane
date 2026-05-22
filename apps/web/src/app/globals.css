@@ -209,21 +209,6 @@
 .editorial-page .hero-meta .row:last-child { border-bottom: 0; }
 .editorial-page .hero-meta b { color: var(--ink); font-weight: 500; text-align: right; }
 
-/* now-you-can — enablement beat right after the hero */
-.editorial-page .nyc-sec { padding: 64px 0 88px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 200px 1fr; gap: 48px; align-items: start; }
-.editorial-page .nyc-sec .lbl { font-family: var(--font-geist-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); padding-top: 8px; }
-.editorial-page .nyc-sec .lbl b { display: block; color: var(--ink); font-size: 24px; letter-spacing: -0.01em; text-transform: none; font-weight: 600; line-height: 1.1; margin-bottom: 8px; font-family: var(--font-geist); }
-.editorial-page .nyc-sec .nyc-lede { font-size: 22px; line-height: 1.35; color: var(--ink); margin: 0 0 28px; max-width: 50ch; font-weight: 500; letter-spacing: -0.01em; text-wrap: balance; }
-.editorial-page .nyc-sec .nyc-lede em { font-style: normal; color: var(--paper-allow); }
-.editorial-page .nyc-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.editorial-page .nyc-card { background: var(--paper-2); border: 1px solid var(--line); padding: 20px 22px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.editorial-page .nyc-card .kicker { font-size: 17px; line-height: 1.25; font-weight: 600; letter-spacing: -0.015em; color: var(--ink); margin: 0; max-width: 18ch; }
-.editorial-page .nyc-card p { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
-.editorial-page .nyc-card .snippet { margin: 6px 0 0; padding: 12px 14px; background: var(--paper); border: 1px solid var(--line); font-family: var(--font-geist-mono); font-size: 11.5px; line-height: 1.6; color: var(--ink-3); white-space: pre-wrap; overflow-wrap: anywhere; }
-.editorial-page .nyc-card .snippet b { color: var(--ink); font-weight: 500; }
-.editorial-page .nyc-card .snippet .you { color: var(--ink-2); }
-.editorial-page .nyc-card .snippet .ai { color: var(--paper-allow); font-weight: 500; }
-
 /* teams strip — compressed version (no big card) */
 .editorial-page .teams-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid var(--line); background: var(--paper-2); margin-top: 8px; }
 .editorial-page .teams-strip .item { padding: 22px 26px; border-right: 1px solid var(--line); font-size: 14px; color: var(--ink-2); line-height: 1.5; }
@@ -511,8 +496,6 @@
   .editorial-page .ba-foot { grid-template-columns: 1fr; gap: 32px; }
   .editorial-page .why-intro { grid-template-columns: 1fr; gap: 16px; padding: 48px 0 56px; }
   .editorial-page .why-intro blockquote { font-size: 44px; }
-  .editorial-page .nyc-sec { grid-template-columns: 1fr; gap: 16px; padding: 48px 0 56px; }
-  .editorial-page .nyc-cards { grid-template-columns: 1fr; }
   .editorial-page .teams-strip { grid-template-columns: 1fr; }
   .editorial-page .teams-strip .item { border-right: 0; border-bottom: 1px solid var(--line); }
   .editorial-page .teams-strip .item:last-child { border-bottom: 0; }
