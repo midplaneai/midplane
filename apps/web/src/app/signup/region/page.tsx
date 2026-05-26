@@ -2,6 +2,8 @@ import { auth } from "@clerk/nextjs/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { getPostHog } from "@/lib/posthog";
+
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { Button } from "@/components/ui/button";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
@@ -122,7 +124,26 @@ async function pickRegionAuthed(formData: FormData) {
         : "https://us.app.midplane.ai/signup/region";
     redirect(target);
   }
-  await upsertCustomerRegion(region);
+  const { userId } = await auth();
+  const customer = await upsertCustomerRegion(region);
+
+  const posthog = getPostHog();
+  if (posthog && userId) {
+    posthog.identify({
+      distinctId: userId,
+      properties: {
+        $set: { email: customer.email, region: customer.region },
+        $set_once: { signup_region: customer.region },
+      },
+    });
+    posthog.capture({
+      distinctId: userId,
+      event: "signup_completed",
+      properties: {
+        region: customer.region,
+      },
+    });
+  }
   redirect("/dashboard");
 }
 

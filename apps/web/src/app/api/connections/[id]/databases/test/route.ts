@@ -14,6 +14,7 @@
 // 404 on foreign-row, mirroring the rest of the connections API. Auth
 // failures still return 401 — same shape as the sibling routes.
 
+import { auth } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 
@@ -22,6 +23,7 @@ import { connections, getDb } from "@midplane-cloud/db";
 import { isValidDsn } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { pingDsn } from "@/lib/ping-dsn";
+import { getPostHog } from "@/lib/posthog";
 
 const TestBody = z.object({
   dsn: z.string().refine(isValidDsn, {
@@ -37,6 +39,7 @@ export async function POST(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  const { userId } = await auth();
   const { id } = await params;
 
   let raw: unknown;
@@ -67,5 +70,18 @@ export async function POST(
   }
 
   const result = await pingDsn(parsed.data.dsn);
+
+  if (userId) {
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "database_test_run",
+      properties: {
+        connection_id: id,
+        region: customer.region,
+        success: result.ok,
+      },
+    });
+  }
+
   return Response.json(result);
 }

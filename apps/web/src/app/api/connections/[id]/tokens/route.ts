@@ -18,6 +18,7 @@ import { z } from "zod";
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
 import { currentCustomer } from "@/lib/customer";
+import { getPostHog } from "@/lib/posthog";
 import { tokenEnvFromConfig } from "@/lib/token-env";
 import {
   DuplicateTokenName,
@@ -158,6 +159,19 @@ export async function POST(
   if (!result) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
+
+  getPostHog()?.capture({
+    distinctId: userId,
+    event: "token_created",
+    properties: {
+      token_id: result.id,
+      connection_id: id,
+      region: customer.region,
+      expires_in_days: parsed.data.expiresInDays,
+      source: "api",
+    },
+  });
+
   return Response.json(
     {
       id: result.id,
