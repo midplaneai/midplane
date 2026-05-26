@@ -52,6 +52,33 @@ Or use the convenience script (auto-detects `~/dev/midplane`, override with `OSS
 bun run dev:image
 ```
 
+### Neon (control-plane Postgres)
+
+Two Neon projects, one per region — physical isolation is what makes
+env-var locality meaningful. Create both before the Fly secrets block
+below:
+
+1. https://console.neon.tech → New Project, region **AWS eu-central-1**,
+   name `midplane-prod-eu`. Copy the **pooled** connection string (the
+   `-pooler` host) → `DATABASE_URL_EU`. `packages/db/src/index.ts`
+   passes `prepare: false` so pgbouncer-mode pooling works.
+2. Same flow in **AWS us-east-2**, name `midplane-prod-us` →
+   `DATABASE_URL_US`.
+
+Apply migrations against each project before first deploy.
+`migrate:eu` / `migrate:us` read from `.env.local`, so either set the
+prod URLs there temporarily or inline them:
+
+```bash
+DATABASE_URL_EU='postgres://...eu-central-1.aws.neon.tech/...' bun migrate:eu
+DATABASE_URL_US='postgres://...us-east-2.aws.neon.tech/...' bun migrate:us
+```
+
+Migration `0004_force_rls.sql` runs `FORCE ROW LEVEL SECURITY` on
+`audit_events_index` — Neon's project owner role would otherwise bypass
+the policy and silently cross customers. `e2e/audit-isolation.e2e.ts`
+guards against regressions.
+
 ## Deploy (control plane)
 
 The Next.js control plane (apps/web) runs on Fly so it shares the same
@@ -110,9 +137,16 @@ fly secrets set --app midplane-web-us \
 
 # 4. DNS + TLS. Fly matches certs by SNI, so the apex needs its own
 #    cert on the EU app (NOT covered by eu.app.midplane.ai's cert).
+#    Control-plane hostnames (Next.js dashboard + MCP proxy):
 fly certs add eu.app.midplane.ai  --app midplane-web
 fly certs add app.midplane.ai     --app midplane-web
 fly certs add us.app.midplane.ai  --app midplane-web-us
+
+#    Data-plane hostnames (MCP runtime — the URLs printed in customer
+#    `claude mcp add ... https://<region>.midplane.ai/mcp/<tok>` snippets,
+#    sourced from MIDPLANE_PUBLIC_HOST_{EU,US} on the control plane).
+fly certs add eu.midplane.ai      --app midplane-eu
+fly certs add us.midplane.ai      --app midplane-us
 
 # DNS records:
 #   eu.app.midplane.ai  CNAME midplane-web.fly.dev
@@ -120,6 +154,8 @@ fly certs add us.app.midplane.ai  --app midplane-web-us
 #   app.midplane.ai     CNAME eu.app.midplane.ai
 #                       (EU app handles apex; middleware redirects authed
 #                        users to their regional subdomain)
+#   eu.midplane.ai      CNAME midplane-eu.fly.dev
+#   us.midplane.ai      CNAME midplane-us.fly.dev
 ```
 
 ### KMS mode for production credential storage
@@ -163,10 +199,71 @@ fly secrets set --app midplane-web \
   MIDPLANE_KMS_KEY_EU='arn:aws:kms:eu-central-1:<acct>:key/<uuid>' \
   MIDPLANE_KMS_KEY_US='arn:aws:kms:us-east-2:<acct>:key/<uuid>'
 
-# 3. Provide AWS credentials to the Fly machine. Either set
-#    AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY via fly secrets, or wire
-#    Fly's OIDC provider to assume an IAM role.
+# 3. Provide AWS credentials to the Fly machine. One IAM principal per
+#    region, each authorized for ONE CMK only — cross-region isolation
+#    is enforced by IAM/key-policy here (not by env-var naming; see note
+#    below). The simplest production-safe path is one IAM user per region
+#    with an inline policy:
+
+# EU principal
+aws iam create-user --user-name midplane-web-eu
+aws iam put-user-policy --user-name midplane-web-eu \
+  --policy-name midplane-kms-eu \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+      "Resource": "arn:aws:kms:eu-central-1:<acct>:key/<eu-uuid>",
+      "Condition": {
+        "StringEquals": { "kms:EncryptionContext:region": "eu" }
+      }
+    }]
+  }'
+aws iam create-access-key --user-name midplane-web-eu
+# → copy AccessKeyId + SecretAccessKey into the EU app:
+fly secrets set --app midplane-web \
+  AWS_ACCESS_KEY_ID='AKIA...' \
+  AWS_SECRET_ACCESS_KEY='...'
+
+# US principal
+aws iam create-user --user-name midplane-web-us
+aws iam put-user-policy --user-name midplane-web-us \
+  --policy-name midplane-kms-us \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+      "Resource": "arn:aws:kms:us-east-2:<acct>:key/<us-uuid>",
+      "Condition": {
+        "StringEquals": { "kms:EncryptionContext:region": "us" }
+      }
+    }]
+  }'
+aws iam create-access-key --user-name midplane-web-us
+# → copy AccessKeyId + SecretAccessKey into the US app:
+fly secrets set --app midplane-web-us \
+  AWS_ACCESS_KEY_ID='AKIA...' \
+  AWS_SECRET_ACCESS_KEY='...'
+
+# Also update each CMK's key policy to grant its region's IAM user (or
+# the role you use under OIDC) — the sample at step 1 has Principal as
+# a placeholder role ARN; swap in `user/midplane-web-eu` etc.
+#
+# For production, prefer Fly's OIDC provider + sts:AssumeRoleWithWebIdentity
+# over long-lived access keys. The credential resolution is identical from
+# the SDK's perspective; only the secret-rotation story changes.
 ```
+
+> AWS credentials don't take a `_EU` / `_US` suffix the way our own
+> region-pinned vars do. The AWS SDK's credential provider reads
+> `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (and the OIDC variants)
+> by fixed name — renaming them would bypass the standard credential
+> chain. That's fine here: each Fly app already carries exactly one
+> region's IAM principal, and the cross-region failure mode is the CMK
+> key policy denying decryption under the wrong `EncryptionContext`, not
+> a missing env var.
 
 The `kmsKeyId` column on `connections` routes per row: existing rows with
 `env:eu` / `env:us` keep decrypting via the env-mode path; new rows written
