@@ -52,9 +52,6 @@ export default async function Landing() {
             <a href="#pricing">Pricing</a>
           </nav>
           <div className="topright">
-            <a href="#hosted" className="mono">
-              eu<span className="c">:</span>us ●
-            </a>
             <a href="https://github.com/midplaneai/midplane">GitHub</a>
             {isSignedIn ? (
               <a className="ebtn fill" href="/dashboard">
@@ -79,7 +76,17 @@ export default async function Landing() {
             <span className="dot" aria-hidden />
             <span>Access layer for your existing Postgres</span>
             <span className="sep" aria-hidden />
-            <span>v0.5.0 · eu<span className="c">:</span>us</span>
+            <a
+              className="yc-badge"
+              href="https://www.ycombinator.com/companies/midplane"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span className="yc-mark" aria-hidden>
+                Y
+              </span>
+              <span>Backed by Y Combinator</span>
+            </a>
           </div>
 
           <h1 className="pri-h1">
