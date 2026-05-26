@@ -1,3 +1,4 @@
+import { auth } from "@clerk/nextjs/server";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
@@ -34,6 +35,7 @@ import {
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { getPostHog } from "@/lib/posthog";
 
 // PR2 of mcp_url_auth_security: the dashboard no longer renders the
 // agent-facing URL because the plaintext token is not retrievable from
@@ -258,6 +260,7 @@ async function deleteAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/");
+  const { userId } = await auth();
 
   const id = formData.get("id");
   if (typeof id !== "string" || id.length === 0) {
@@ -269,6 +272,17 @@ async function deleteAction(formData: FormData) {
     await ctx.registry.invalidate(deleted.id).catch((err) => {
       console.error("[dashboard.deleteAction] registry.invalidate failed", err);
     });
+    if (userId) {
+      getPostHog()?.capture({
+        distinctId: userId,
+        event: "connection_deleted",
+        properties: {
+          connection_id: deleted.id,
+          region: customer.region,
+          source: "dashboard",
+        },
+      });
+    }
   }
   revalidatePath("/dashboard");
 }

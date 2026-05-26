@@ -78,6 +78,7 @@ export async function PATCH(
       properties: {
         connection_id: rotated.id,
         region: customer.region,
+        source: "api",
       },
     });
   }
