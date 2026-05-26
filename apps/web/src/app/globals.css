@@ -194,9 +194,12 @@
 .editorial-page .ebtn.outline:hover { background: var(--ink); color: var(--paper); }
 
 /* hero */
-.editorial-page .eyebrow { font-family: var(--font-geist-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-3); display: inline-flex; align-items: center; gap: 14px; }
+.editorial-page .eyebrow { font-family: var(--font-geist-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-3); display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap; row-gap: 8px; }
 .editorial-page .eyebrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--paper-allow); }
 .editorial-page .eyebrow .sep { width: 24px; height: 1px; background: var(--line-2); }
+.editorial-page .yc-badge { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-3); text-decoration: none; }
+.editorial-page .yc-badge:hover { color: var(--ink); }
+.editorial-page .yc-mark { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; background: #f26522; color: #fff; font-family: var(--font-geist-sans); font-size: 10px; font-weight: 700; letter-spacing: 0; border-radius: 2px; line-height: 1; }
 
 /* enablement hero — productivity-led, no BA pair (which now lives in §01) */
 .editorial-page .hero-pri { padding: 72px 0 56px; display: grid; gap: 48px; }
@@ -421,7 +424,6 @@
 .editorial-page .iso > *,
 .editorial-page .iso-diagram .lane > *,
 .editorial-page .iso-diagram .box { min-width: 0; }
-.editorial-page .iso-copy { overflow-wrap: anywhere; }
 .editorial-page .iso-diagram .box { flex-wrap: wrap; }
 .editorial-page .at-table .hd, .editorial-page .at-table .tr { display: grid; grid-template-columns: 100px 70px 1fr 160px 60px; align-items: center; padding: 14px 24px; gap: 14px; border-bottom: 1px solid var(--line); }
 .editorial-page .at-table .hd { color: var(--ink-3); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; background: var(--paper-3); }
@@ -434,10 +436,7 @@
 .editorial-page .at-table .dec-deny { color: var(--paper-deny); font-weight: 500; }
 
 /* isolation */
-.editorial-page .iso { display: grid; grid-template-columns: 1fr 1.1fr; gap: 0; border: 1px solid var(--line); background: var(--paper-2); }
-.editorial-page .iso .iso-copy { padding: 40px 36px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 18px; }
-.editorial-page .iso .iso-copy h3 { margin: 0; font-size: 28px; letter-spacing: -0.02em; line-height: 1.1; font-weight: 600; max-width: 18ch; }
-.editorial-page .iso .iso-copy p { margin: 0; font-size: 15px; color: var(--ink-2); line-height: 1.55; max-width: 44ch; }
+.editorial-page .iso { border: 1px solid var(--line); background: var(--paper-2); }
 .editorial-page .iso .iso-diagram { padding: 36px; display: flex; flex-direction: column; gap: 14px; background: repeating-linear-gradient(0deg, transparent 0 23px, var(--paper-3) 23px 24px), var(--paper-2); }
 .editorial-page .iso .iso-diagram .lane { display: grid; grid-template-columns: 140px 1fr; gap: 18px; align-items: center; }
 .editorial-page .iso .iso-diagram .lane .lbl { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
@@ -500,21 +499,6 @@
 .editorial-page .pricing-custom a { color: var(--ink); border-bottom: 1px solid var(--line-2); }
 .editorial-page .pricing-custom a:hover { border-bottom-color: var(--ink); }
 
-/* quickstart timeline */
-.editorial-page .timeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--line); background: var(--paper-2); margin-bottom: 32px; }
-.editorial-page .timeline .t-step { padding: 18px 18px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; position: relative; }
-.editorial-page .timeline .t-step:last-child { border-right: 0; }
-.editorial-page .timeline .t-time { font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.08em; color: var(--ink-3); text-transform: uppercase; }
-.editorial-page .timeline .t-act { font-size: 13.5px; line-height: 1.4; color: var(--ink); font-weight: 500; }
-.editorial-page .timeline .t-step.done { background: rgba(31, 111, 71, 0.06); }
-.editorial-page .timeline .t-step.done .t-time { color: var(--paper-allow); font-weight: 500; }
-
-/* qs-clients — one-line client list under the §08 timeline. The
-   per-client config tabs that lived here were dropped; the actual
-   command moved to the close-band one-liner. */
-.editorial-page .qs-clients { margin: 32px 0 0; font-size: 14px; color: var(--ink-2); line-height: 1.55; max-width: 60ch; }
-.editorial-page .qs-clients b { color: var(--ink); font-weight: 500; }
-
 /* close band */
 .editorial-page .close { padding: 120px 48px; border-top: 1px solid var(--line); background: var(--ink); color: var(--paper); margin: 0 -48px; }
 .editorial-page .close .inner { display: grid; grid-template-columns: 1fr auto; gap: 48px; align-items: end; max-width: 1344px; margin: 0 auto; }
@@ -552,7 +536,6 @@
 .editorial-page footer.efoot h5 { margin: 0 0 14px; font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(243, 239, 231, 0.4); font-weight: 500; }
 .editorial-page footer.efoot a { display: block; padding: 5px 0; color: rgba(243, 239, 231, 0.8); font-size: 14px; }
 .editorial-page footer.efoot a:hover { color: var(--paper); }
-.editorial-page footer.efoot .cop { font-family: var(--font-geist-mono); font-size: 12px; line-height: 1.6; max-width: 44ch; color: rgba(243, 239, 231, 0.5); margin-top: 14px; }
 .editorial-page footer.efoot .brand { color: var(--paper); }
 
 /* responsive — collapse multi-column blocks under 960px */
@@ -590,15 +573,11 @@
   .editorial-page .vs { grid-template-columns: 1fr; }
   .editorial-page .vs > .cell:nth-child(3n) { border-right: 1px solid var(--line); }
   .editorial-page .vs > .cell { border-right: 0; }
-  .editorial-page .iso { grid-template-columns: 1fr; }
-  .editorial-page .iso .iso-copy { border-right: 0; border-bottom: 1px solid var(--line); }
   .editorial-page .parity-panel { padding: 32px 24px; grid-template-columns: 1fr; gap: 24px; }
   .editorial-page .parity-panel-aside { padding-left: 0; border-left: 0; padding-top: 20px; border-top: 1px dashed var(--line-2); }
   .editorial-page .pricing { grid-template-columns: 1fr; }
   .editorial-page .tier + .tier { border-left: 0; border-top: 1px solid var(--line); }
   .editorial-page .tier.pro::before { top: auto; bottom: calc(100% - 32px); }
-  .editorial-page .timeline { grid-template-columns: 1fr; }
-  .editorial-page .timeline .t-step { border-right: 0; border-bottom: 1px solid var(--line); }
   .editorial-page .close { padding: 80px 24px; margin: 0 -24px; }
   .editorial-page .close .inner { grid-template-columns: 1fr; }
   .editorial-page .close h2 { font-size: 56px; }

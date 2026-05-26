@@ -45,16 +45,12 @@ export default async function Landing() {
             mid<span className="mp-colon">:</span>plane
           </Link>
           <nav className="nav">
-            <a href="#how">Product</a>
             <a href="#policy">Policy</a>
             <a href="#audit">Audit</a>
             <a href="#hosted">Hosted</a>
             <a href="#pricing">Pricing</a>
           </nav>
           <div className="topright">
-            <a href="#hosted" className="mono">
-              eu<span className="c">:</span>us ●
-            </a>
             <a href="https://github.com/midplaneai/midplane">GitHub</a>
             {isSignedIn ? (
               <a className="ebtn fill" href="/dashboard">
@@ -79,7 +75,17 @@ export default async function Landing() {
             <span className="dot" aria-hidden />
             <span>Access layer for your existing Postgres</span>
             <span className="sep" aria-hidden />
-            <span>v0.5.0 · eu<span className="c">:</span>us</span>
+            <a
+              className="yc-badge"
+              href="https://www.ycombinator.com/companies/midplane"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span className="yc-mark" aria-hidden>
+                Y
+              </span>
+              <span>Backed by Y Combinator</span>
+            </a>
           </div>
 
           <h1 className="pri-h1">
@@ -597,15 +603,6 @@ export default async function Landing() {
             </div>
           </div>
           <div className="iso">
-            <div className="iso-copy">
-              <h3>What lives where.</h3>
-              <p>
-                The data plane is your Postgres. We&apos;re a control plane in
-                front of it — query results pass through unstored, the little
-                we do hold is envelope-encrypted per workspace, and the whole
-                control plane is pinned to the region you pick at signup.
-              </p>
-            </div>
             <div className="iso-diagram">
               <div className="lane">
                 <div className="lbl">
@@ -820,52 +817,6 @@ export default async function Landing() {
           </p>
         </section>
 
-        {/* §08 — Quickstart. The per-client config tabs that used to live
-            here showed mostly equivalent code (JSON for Cursor, CLI for
-            Claude Code, UI path for Claude Desktop) and read as boilerplate.
-            Replaced with a one-line client list; the satisfying single
-            command moved to the close band below. */}
-        <section className="sec" id="quickstart">
-          <div className="sec-top">
-            <div className="sec-num">
-              <b>08</b>
-              <span className="c">:</span>start
-            </div>
-            <div>
-              <h2 className="sec-h">
-                From signup to first allowed query: <em>under a minute.</em>
-              </h2>
-              <p className="sec-sub">
-                Four steps, one MCP URL, the client you already use.
-              </p>
-            </div>
-          </div>
-
-          <div className="timeline">
-            <div className="t-step">
-              <span className="t-time">00:00</span>
-              <span className="t-act">Sign up</span>
-            </div>
-            <div className="t-step">
-              <span className="t-time">00:20</span>
-              <span className="t-act">Paste your DSN</span>
-            </div>
-            <div className="t-step">
-              <span className="t-time">00:40</span>
-              <span className="t-act">Drop the MCP URL into your client</span>
-            </div>
-            <div className="t-step done">
-              <span className="t-time">01:00</span>
-              <span className="t-act">First query, logged</span>
-            </div>
-          </div>
-
-          <p className="qs-clients">
-            Verified with <b>Cursor</b>, <b>Claude Code</b>, and{" "}
-            <b>Claude Desktop</b>. Works with any MCP-capable client.
-          </p>
-        </section>
-
         {/* close band — final CTA. Hero already framed the value and the
             pricing section above already showed tiers, so the band reduces
             to the headline + buttons. */}
@@ -890,10 +841,6 @@ export default async function Landing() {
             >
               mid<span className="mp-colon">:</span>plane
             </span>
-            <p className="cop">
-              A safety layer between AI coding agents and your Postgres
-              database. MIT-licensed engine, hosted in EU + US.
-            </p>
           </div>
           <div>
             <h5>Product</h5>
