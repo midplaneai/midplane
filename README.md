@@ -271,6 +271,31 @@ after the cutover store the CMK ARN and decrypt via KMS. No backfill is
 needed for the cutover itself — rotation of pre-existing env-mode rows is
 a separate operation.
 
+### Analytics (PostHog)
+
+Authenticated cloud-user events — `signup_completed`, `connection_*`,
+`token_*`, `database_test_run` — are captured server-side from the Next.js
+app via `posthog-node` (see `apps/web/src/lib/posthog.ts`). The client
+returns `null` when either env var is unset, so dev and CI no-op without
+any extra config.
+
+Set the secrets on both regional web apps:
+
+```bash
+fly secrets set --app midplane-web \
+  POSTHOG_API_KEY='phc_...' \
+  POSTHOG_HOST='https://us.i.posthog.com'
+fly secrets set --app midplane-web-us \
+  POSTHOG_API_KEY='phc_...' \
+  POSTHOG_HOST='https://us.i.posthog.com'
+```
+
+This is distinct from `infra/telemetry-proxy` (the `t.midplane.ai`
+Cloudflare Worker), which proxies anonymized `install_id` events from OSS
+engine installs. Same PostHog project, two sources — the `source` property
+on every cloud event (`"dashboard"` or `"api"`) lets the two be separated
+in funnels.
+
 Per-deploy:
 
 ```bash

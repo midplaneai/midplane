@@ -9,6 +9,7 @@ import {
   MAX_CONNECTION_NAME_LENGTH,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { getPostHog } from "@/lib/posthog";
 
 // POST /api/connections — JSON API (programmatic / non-browser callers).
 //
@@ -71,5 +72,17 @@ export async function POST(req: Request) {
     userId,
   );
   const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
+
+  getPostHog()?.capture({
+    distinctId: userId,
+    event: "connection_created",
+    properties: {
+      connection_id: id,
+      region: customer.region,
+      default_access: parsed.data.default_access ?? "read",
+      source: "api",
+    },
+  });
+
   return Response.json({ id, mcpUrl, region: customer.region }, { status: 201 });
 }

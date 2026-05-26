@@ -14,6 +14,7 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
 import { createConnection, isValidDsn } from "@/lib/connections";
+import { getPostHog } from "@/lib/posthog";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
 // PR2 of mcp_url_auth_security: a fresh connection mints a default token
@@ -103,6 +104,17 @@ async function createAction(
     userId,
   );
   const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
+
+  getPostHog()?.capture({
+    distinctId: userId,
+    event: "connection_created",
+    properties: {
+      connection_id: id,
+      region: customer.region,
+      default_access: defaultAccess,
+      source: "dashboard",
+    },
+  });
 
   // Stash the plaintext URL in an httpOnly cookie. The success page
   // reads + deletes it; a reload of the success page shows the

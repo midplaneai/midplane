@@ -1,3 +1,4 @@
+import { auth } from "@clerk/nextjs/server";
 import { notFound, redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -12,6 +13,7 @@ import {
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { getPostHog } from "@/lib/posthog";
 import { REGION_LABELS } from "@/lib/region";
 
 // Connection settings — small surface reached from the [⋯] menu on the
@@ -42,6 +44,7 @@ export default async function ConnectionSettings({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    const { userId } = await auth();
 
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
@@ -56,6 +59,17 @@ export default async function ConnectionSettings({
           err,
         );
       });
+      if (userId) {
+        getPostHog()?.capture({
+          distinctId: userId,
+          event: "connection_deleted",
+          properties: {
+            connection_id: deleted.id,
+            region: customer.region,
+            source: "dashboard",
+          },
+        });
+      }
     }
     redirect("/dashboard");
   }

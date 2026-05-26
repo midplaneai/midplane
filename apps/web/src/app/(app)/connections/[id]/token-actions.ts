@@ -16,6 +16,7 @@ import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { currentCustomer } from "@/lib/customer";
+import { getPostHog } from "@/lib/posthog";
 import { tokenEnvFromConfig } from "@/lib/token-env";
 import {
   DuplicateTokenName,
@@ -98,6 +99,19 @@ export async function createTokenAction(
     // server-rendered token list when the modal closes.
     const mcpUrl = mintMcpUrl(customer.region, result.plaintext, process.env);
     revalidatePath(`/connections/${connectionId}`);
+
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "token_created",
+      properties: {
+        token_id: result.id,
+        connection_id: connectionId,
+        region: customer.region,
+        expires_in_days: input.expiresInDays,
+        source: "dashboard",
+      },
+    });
+
     return { ok: true, mcpUrl, id: result.id, name: trimmed };
   } catch (err) {
     if (err instanceof DuplicateTokenName) {
@@ -132,6 +146,18 @@ export async function revokeTokenAction(
     });
     if (!result) return { ok: false, error: "not_found" };
     revalidatePath(`/connections/${connectionId}`);
+
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "token_revoked",
+      properties: {
+        token_id: result.id,
+        connection_id: connectionId,
+        region: customer.region,
+        source: "dashboard",
+      },
+    });
+
     return { ok: true, id: result.id };
   } catch (err) {
     console.error("[revokeTokenAction] unexpected failure", err);

@@ -14,6 +14,7 @@ import { auth } from "@clerk/nextjs/server";
 import { z } from "zod";
 
 import { currentCustomer } from "@/lib/customer";
+import { getPostHog } from "@/lib/posthog";
 import { revokeToken } from "@/lib/tokens";
 
 const Body = z
@@ -73,5 +74,18 @@ export async function DELETE(
   if (!result) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
+
+  getPostHog()?.capture({
+    distinctId: userId,
+    event: "token_revoked",
+    properties: {
+      token_id: result.id,
+      connection_id: id,
+      region: customer.region,
+      reason,
+      source: "api",
+    },
+  });
+
   return Response.json({ id: result.id });
 }

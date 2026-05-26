@@ -20,6 +20,7 @@
 // DSN rotation. Response carries only { id } (the connection id).
 // Token lifecycle (list / create / revoke) lives on PR3's surface.
 
+import { auth } from "@clerk/nextjs/server";
 import { z } from "zod";
 
 import {
@@ -29,6 +30,7 @@ import {
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { getPostHog } from "@/lib/posthog";
 
 const RotateBody = z.object({
   dsn: z.string().refine(isValidDsn, {
@@ -44,6 +46,7 @@ export async function PATCH(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  const { userId } = await auth();
   const { id } = await params;
 
   let raw: unknown;
@@ -67,6 +70,19 @@ export async function PATCH(
   if (!rotated) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
+
+  if (userId) {
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "connection_rotated",
+      properties: {
+        connection_id: rotated.id,
+        region: customer.region,
+        source: "api",
+      },
+    });
+  }
+
   return Response.json({ id: rotated.id });
 }
 
@@ -78,6 +94,7 @@ export async function DELETE(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  const { userId } = await auth();
   const { id } = await params;
   const deleted = await deleteConnection(customer, id);
   if (!deleted) {
@@ -87,5 +104,18 @@ export async function DELETE(
   await ctx.registry.invalidate(deleted.id).catch((err) => {
     console.error("[DELETE /api/connections] registry.invalidate failed", err);
   });
+
+  if (userId) {
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "connection_deleted",
+      properties: {
+        connection_id: deleted.id,
+        region: customer.region,
+        source: "api",
+      },
+    });
+  }
+
   return Response.json({ ok: true });
 }

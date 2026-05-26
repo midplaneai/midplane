@@ -22,6 +22,7 @@ import {
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { getPostHog } from "@/lib/posthog";
 
 // Per-DB detail page. The hierarchical dashboard owns the connection-level
 // surface (rename, delete, agent setup, MCP URL); this route is scoped to
@@ -51,6 +52,7 @@ export default async function DatabaseDetail({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    const { userId } = await auth();
 
     const dsn = formData.get("dsn");
     if (!isValidDsn(dsn)) {
@@ -61,6 +63,18 @@ export default async function DatabaseDetail({
     const rotated = await rotateConnection(customer, id, dsn, ctx, name);
     if (!rotated) notFound();
     revalidatePath(`/connections/${id}/databases/${name}`);
+
+    if (userId) {
+      getPostHog()?.capture({
+        distinctId: userId,
+        event: "connection_rotated",
+        properties: {
+          connection_id: rotated.id,
+          region: customer.region,
+          source: "dashboard",
+        },
+      });
+    }
   }
 
   async function policyAction(formData: FormData) {
