@@ -67,9 +67,9 @@ export default async function Landing() {
           </div>
         </header>
 
-        {/* Enablement hero — productivity promise. The BA pair (postmortem
-            story) was here; it's now §01 "What changes" as a demonstration
-            rather than the lead. */}
+        {/* Stakes hero — name the situation (Cursor on prod) and the fear
+            (postmortem). The §01 before/after sits directly below as the
+            resolution. */}
         <section className="hero-pri">
           <div className="eyebrow">
             <span className="dot" aria-hidden />
@@ -89,17 +89,15 @@ export default async function Landing() {
           </div>
 
           <h1 className="pri-h1">
-            Production Postgres access for <em>your AI agents.</em>
+            Let Cursor touch production. <em>Without the postmortem.</em>
           </h1>
 
           <div className="ba-foot">
             <div>
               <p className="lede">
-                Midplane sits in front of your existing Postgres and{" "}
-                <strong>bounds what each query can do</strong>. Your
-                engineers&apos; agents get to read prod safely, build
-                dashboards from chat, and debug live — work that
-                wasn&apos;t safe to give an agent yesterday.
+                Midplane sits in front of your Postgres and{" "}
+                <strong>decides what each query can do</strong> —
+                parser-level, audited, denied before it runs.
               </p>
               <div className="hero-ctas">
                 <Link className="ebtn fill" href="/sign-up">
@@ -116,8 +114,8 @@ export default async function Landing() {
                 <b>stays where it is</b>
               </div>
               <div className="row">
-                <span>Databases per instance</span>
-                <b>many · prod + staging + …</b>
+                <span>Engine</span>
+                <b>MIT · self-host or hosted</b>
               </div>
               <div className="row">
                 <span>Audit log</span>
@@ -127,32 +125,10 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* Embedded "try it" pane — live demo placed right after the
-            hero so the promise lands before the editorial unpacks it.
-            Intentionally unnumbered: the dark frame reads as a product
-            surface inside the light editorial flow, not as part of
-            the §01..§04 spine. */}
-        <section className="sec demo-sec" id="try">
-          <div className="sec-top">
-            <div className="sec-num">—&nbsp;try</div>
-            <div>
-              <h2 className="sec-h">
-                Ask the database. Watch the policy decide.
-              </h2>
-              <p className="sec-sub">
-                Pick an example. Flip a table&apos;s access level. Re-pick
-                to watch the decision change.
-              </p>
-            </div>
-          </div>
-          <div className="demo-pane">
-            <DemoChat />
-          </div>
-        </section>
-
-        {/* §01 — What changes. The same query an engineer's agent might
-            run, with and without midplane. Was the hero; demoted to a
-            section so the hero can lead on enablement. */}
+        {/* §01 — Stakes. The same query an engineer's agent might run,
+            with and without midplane. Placed directly under the hero
+            because the before/after is the page's strongest single
+            piece of evidence — the entire pitch in two cards. */}
         <section className="sec">
           <div className="sec-top">
             <div className="sec-num">
@@ -231,6 +207,29 @@ export default async function Landing() {
                 <span className="mono">SELECT</span>
               </div>
             </article>
+          </div>
+        </section>
+
+        {/* Embedded "try it" pane — live demo placed after the stakes
+            section so a reader who's already bought the before/after
+            story can prove it themselves. Intentionally unnumbered: the
+            dark frame reads as a product surface inside the light
+            editorial flow, not as part of the §01..§07 spine. */}
+        <section className="sec demo-sec" id="try">
+          <div className="sec-top">
+            <div className="sec-num">—&nbsp;try</div>
+            <div>
+              <h2 className="sec-h">
+                Ask the database. Watch the policy decide.
+              </h2>
+              <p className="sec-sub">
+                Pick an example. Flip a table&apos;s access level. Re-pick
+                to watch the decision change.
+              </p>
+            </div>
+          </div>
+          <div className="demo-pane">
+            <DemoChat />
           </div>
         </section>
 
