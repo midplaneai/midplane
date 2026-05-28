@@ -747,16 +747,15 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* close band — action-forward final CTA. The hero already
-            cycles through agent names; the close pivots to the doer's
-            move (ship + read the engine) to avoid echoing the hero
-            structure. */}
+        {/* close band — no headline. By section 9 the hero already did
+            the emotional work; a second swing here reads as the page
+            trying too hard. Just give them the buttons, with a small
+            mono line that reinforces the two delivery paths. */}
         <section className="close">
           <div className="inner">
-            <h2>
-              Ship the policy you{" "}
-              <em>couldn&apos;t ship yesterday.</em>
-            </h2>
+            <span className="close-meta">
+              mit-licensed · hosted in eu/us or self-hosted
+            </span>
             <div className="ctas">
               <Link className="ebtn fill" href="/sign-up">
                 Start free →
