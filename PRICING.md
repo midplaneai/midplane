@@ -17,7 +17,7 @@ Draft tier structure. Not yet implemented (no `plan` column, no Stripe wiring). 
 | Connections | 1 | 10 | unlimited |
 | MCP tokens | 1 | 10 | unlimited |
 | Seats | 1 | 10 | unlimited |
-| Audit retention | 7 days | 30 days | 180 days |
+| Audit retention | 7 days | 30 days | 30 days |
 | Policy engine (allow/deny/warn) | ✓ | ✓ | ✓ |
 | Custom policy rules (regex, time-of-day, per-actor) | ✓ | ✓ | ✓ |
 | SSO / SAML | — | — | ✓ |
@@ -28,7 +28,7 @@ Draft tier structure. Not yet implemented (no `plan` column, no Stripe wiring). 
 ## Upgrade triggers
 
 - **Free → Pro**: the second of anything — second app, second agent identity, second teammate. Or "I need to see last week's audit log."
-- **Pro → Team**: SSO ask from the security team, or longer retention for a compliance review.
+- **Pro → Team**: SSO ask from the security team, or outgrowing Pro's 10-unit caps on connections, tokens, or seats. Longer retention is an Enterprise ask.
 - **Team → custom**: BYOK requirement, dedicated region, SOC2/HIPAA artifact request, or any contract clause that doesn't fit the standard plan.
 
 The Pro → Team transition is intentionally a *compliance/team-process* moment, not a counter incrementing. SSO is the canonical trigger.
