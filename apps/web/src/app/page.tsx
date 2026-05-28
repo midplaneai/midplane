@@ -703,6 +703,52 @@ export default async function Landing() {
               </Link>
             </div>
           </div>
+          {/* Enterprise — full-width fourth option. The three-tier grid
+              above gates structural growth; this row is the path when
+              the matrix doesn't fit (BYOK, dedicated region, compliance
+              artifacts, SLA). No price — every Enterprise quote is
+              custom. */}
+          <div className="tier-enterprise">
+            <div className="tier-enterprise-card">
+              <span className="tier-name">Enterprise</span>
+              <span className="tier-enterprise-price">Custom</span>
+              <p className="tier-enterprise-sub">
+                When the matrix above doesn&apos;t fit your contract.
+              </p>
+              <a
+                className="ebtn fill tier-enterprise-cta"
+                href="mailto:info@midplane.ai?subject=Enterprise"
+              >
+                Talk to us →
+              </a>
+            </div>
+            <ul className="tier-enterprise-list">
+              <li>
+                <b>BYOK</b>
+                <span>bring your own KMS key</span>
+              </li>
+              <li>
+                <b>Dedicated region</b>
+                <span>active-active EU + US</span>
+              </li>
+              <li>
+                <b>SOC2 / HIPAA</b>
+                <span>artifacts on request</span>
+              </li>
+              <li>
+                <b>Custom retention</b>
+                <span>beyond 180 days</span>
+              </li>
+              <li>
+                <b>SLA</b>
+                <span>uptime commitments</span>
+              </li>
+              <li>
+                <b>Priority support</b>
+                <span>direct channel</span>
+              </li>
+            </ul>
+          </div>
         </section>
 
         {/* close band — action-forward final CTA. The hero already

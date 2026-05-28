@@ -187,9 +187,9 @@
 .editorial-page .topright { margin-left: auto; display: flex; align-items: center; gap: 16px; font-size: 14px; }
 .editorial-page .topright a:not(.ebtn) { color: var(--ink-2); }
 .editorial-page .topright a:not(.ebtn):hover { color: var(--ink); }
-.editorial-page .ebtn { display: inline-flex; align-items: center; gap: 10px; padding: 11px 18px; border-radius: 6px; font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer; font-family: inherit; }
+.editorial-page .ebtn { display: inline-flex; align-items: center; gap: 10px; padding: 11px 18px; border-radius: 6px; font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer; font-family: inherit; transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
 .editorial-page .ebtn.fill { background: var(--ink); color: var(--paper); }
-.editorial-page .ebtn.fill:hover { background: #000; }
+.editorial-page .ebtn.fill:hover { background: var(--accent-blue); color: var(--paper); }
 .editorial-page .ebtn.outline { background: transparent; color: var(--ink); border-color: var(--ink); }
 .editorial-page .ebtn.outline:hover { background: var(--ink); color: var(--paper); }
 
@@ -453,6 +453,16 @@
 .editorial-page .tier-rows li b.allow { color: var(--paper-allow); }
 .editorial-page .tier-cta { margin-top: auto; justify-content: center; }
 
+/* enterprise — full-width row beneath the three-tier grid */
+.editorial-page .tier-enterprise { margin-top: 14px; border: 1px solid var(--line); background: var(--paper-2); display: grid; grid-template-columns: 280px 1fr; gap: 36px; align-items: stretch; }
+.editorial-page .tier-enterprise-card { padding: 32px; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid var(--line); }
+.editorial-page .tier-enterprise-price { font-size: 32px; line-height: 1; letter-spacing: -0.02em; font-weight: 600; color: var(--ink); }
+.editorial-page .tier-enterprise-sub { margin: 0; font-size: 13px; color: var(--ink-3); line-height: 1.5; }
+.editorial-page .tier-enterprise-cta { margin-top: auto; justify-content: center; align-self: stretch; }
+.editorial-page .tier-enterprise-list { margin: 0; padding: 24px 32px; list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 32px; align-content: center; }
+.editorial-page .tier-enterprise-list li { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ink-3); }
+.editorial-page .tier-enterprise-list li b { color: var(--ink); font-weight: 500; font-size: 14px; }
+
 /* close band */
 .editorial-page .close { padding: 120px 48px; border-top: 1px solid var(--line); background: var(--ink); color: var(--paper); margin: 0 -48px; }
 .editorial-page .close .inner { display: grid; grid-template-columns: 1fr auto; gap: 48px; align-items: end; max-width: 1344px; margin: 0 auto; }
@@ -483,8 +493,9 @@
 }
 .editorial-page .close .ctas { display: flex; flex-direction: column; gap: 14px; }
 .editorial-page .close .ebtn.fill { background: var(--paper); color: var(--ink); }
+.editorial-page .close .ebtn.fill:hover { background: var(--accent-blue); color: var(--paper); }
 .editorial-page .close .ebtn.outline { border-color: rgba(243, 239, 231, 0.4); color: var(--paper); }
-.editorial-page .close .ebtn.outline:hover { background: var(--paper); color: var(--ink); }
+.editorial-page .close .ebtn.outline:hover { background: var(--paper); color: var(--ink); border-color: var(--paper); }
 
 /* footer */
 .editorial-page footer.efoot { padding: 48px; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 48px; background: var(--ink); color: rgba(243, 239, 231, 0.5); margin: 0 -48px; border-top: 1px solid rgba(243, 239, 231, 0.08); }
@@ -530,6 +541,9 @@
   .editorial-page .vs > .cell { border-right: 0; }
   .editorial-page .pricing { grid-template-columns: 1fr; }
   .editorial-page .tier + .tier { border-left: 0; border-top: 1px solid var(--line); }
+  .editorial-page .tier-enterprise { grid-template-columns: 1fr; }
+  .editorial-page .tier-enterprise-card { border-right: 0; border-bottom: 1px solid var(--line); }
+  .editorial-page .tier-enterprise-list { grid-template-columns: 1fr 1fr; gap: 14px 24px; }
   .editorial-page .tier.pro::before { top: auto; bottom: calc(100% - 32px); }
   .editorial-page .close { padding: 80px 24px; margin: 0 -24px; }
   .editorial-page .close .inner { grid-template-columns: 1fr; }
