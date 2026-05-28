@@ -26,7 +26,6 @@ import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 
 import { CyclingAgent } from "./_landing/cycling-agent";
-import { HostedTabs } from "./_landing/hosted-tabs";
 import { DemoChat } from "./demo/demo-chat";
 
 export default async function Landing() {
@@ -47,7 +46,6 @@ export default async function Landing() {
           <nav className="nav">
             <a href="#policy">Policy</a>
             <a href="#audit">Audit</a>
-            <a href="#hosted">Hosted</a>
             <a href="#pricing">Pricing</a>
           </nav>
           <div className="topright">
@@ -89,7 +87,8 @@ export default async function Landing() {
           </div>
 
           <h1 className="pri-h1">
-            Let Cursor touch production. <em>Without the postmortem.</em>
+            Let <CyclingAgent /> touch production.{" "}
+            <em>Without the postmortem.</em>
           </h1>
 
           <div className="ba-foot">
@@ -107,6 +106,13 @@ export default async function Landing() {
                   no credit card · <b>free for 1 connection · 1 seat</b>
                 </span>
               </div>
+              <p className="hero-talk">
+                Or{" "}
+                <a href="mailto:info@midplane.ai?subject=Design%20partner">
+                  talk to us
+                </a>{" "}
+                · design partner program →
+              </p>
             </div>
             <div className="hero-meta">
               <div className="row">
@@ -512,8 +518,8 @@ export default async function Landing() {
           </div>
           <div className="audit-card">
             <div className="head">
-              <h4>audit_log · last 6 events</h4>
-              <span className="meta">2 denied · region eu · acme/production</span>
+              <h4>audit_log · last 3 events</h4>
+              <span className="meta">1 denied · region eu · acme/production</span>
             </div>
             <div className="at-table">
               <div className="hd">
@@ -542,15 +548,6 @@ export default async function Landing() {
                 <span className="dur">1.6</span>
               </div>
               <div className="tr">
-                <span className="ts">14:02:14.802</span>
-                <span className="dec-allow">ALLOW</span>
-                <span className="sql">
-                  SELECT count(*) FROM users WHERE tenant_id = $1
-                </span>
-                <span>cursor · v0.45</span>
-                <span className="dur">2.3</span>
-              </div>
-              <div className="tr">
                 <span className="ts">14:02:18.555</span>
                 <span className="dec-allow">ALLOW</span>
                 <span className="sql">
@@ -559,122 +556,18 @@ export default async function Landing() {
                 <span>claude-code · 1.2</span>
                 <span className="dur">3.0</span>
               </div>
-              <div className="tr deny">
-                <span className="ts">14:02:22.013</span>
-                <span className="dec-deny">DENY</span>
-                <span className="sql">
-                  SELECT * FROM users — missing tenant_id
-                </span>
-                <span>claude-code · 1.2</span>
-                <span className="dur">0.8</span>
-              </div>
-              <div className="tr">
-                <span className="ts">14:02:25.144</span>
-                <span className="dec-allow">ALLOW</span>
-                <span className="sql">
-                  EXPLAIN ANALYZE SELECT * FROM jobs WHERE tenant…
-                </span>
-                <span>claude-desktop · 0.8</span>
-                <span className="dur">6.7</span>
-              </div>
             </div>
           </div>
         </section>
 
-        {/* §05 — Isolation */}
-        <section className="sec">
-          <div className="sec-top">
-            <div className="sec-num">
-              <b>05</b>
-              <span className="c">:</span>isolation
-            </div>
-            <div>
-              <h2 className="sec-h">
-                What we store. <em>What we don&apos;t.</em>
-              </h2>
-              <p className="sec-sub">
-                Midplane brokers the query and writes an audit row. The query
-                results forward straight to the agent — we don&apos;t inspect
-                them, we don&apos;t persist them. The little we do hold —
-                connection credentials, policy, audit log — is encrypted per
-                workspace and pinned to the region you pick at signup.
-              </p>
-            </div>
-          </div>
-          <div className="iso">
-            <div className="iso-diagram">
-              <div className="lane">
-                <div className="lbl">
-                  CLIENT
-                  <b>Cursor / Claude Code</b>
-                </div>
-                <div className="box">
-                  <span>agent</span>
-                  <span className="tag">MCP</span>
-                </div>
-              </div>
-              <div className="arrow">
-                <span>https · token-auth</span>
-              </div>
-              <div className="lane">
-                <div className="lbl">
-                  MIDPLANE
-                  <b>eu or us · your pick</b>
-                </div>
-                <div className="box midplane">
-                  <span>
-                    <b>policy</b> + <b>audit log</b>
-                  </span>
-                  <span className="tag">KMS · workspace-bound</span>
-                </div>
-              </div>
-              <div className="arrow">
-                <span>tls · your DSN</span>
-              </div>
-              <div className="lane">
-                <div className="lbl">
-                  YOUR INFRA
-                  <b>your VPC · your Postgres</b>
-                </div>
-                <div className="box your">
-                  <span>
-                    <b>your data</b> · query results forward through us
-                  </span>
-                  <span className="tag">unstored</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* §06 — Hosted / self-host */}
-        <section className="sec" id="hosted">
-          <div className="sec-top">
-            <div className="sec-num">
-              <b>06</b>
-              <span className="c">:</span>hosted
-            </div>
-            <div>
-              <h2 className="sec-h">
-                Same engine. <em>Two ways to run it.</em>
-              </h2>
-              <p className="sec-sub">
-                Midplane is MIT-licensed open source. Run it on our hosted
-                cloud or run the container yourself. The policy engine, audit
-                format, and configuration files are identical either way — you
-                can start hosted and move to self-host (or the reverse) without
-                rewriting anything.
-              </p>
-            </div>
-          </div>
-          <HostedTabs />
-        </section>
-
-        {/* §08 — Pricing */}
+        {/* §05 — Pricing. Hosted-vs-self-host is collapsed into the
+            sec-sub: at this point in the page a dev reader just needs to
+            know both paths exist; the comparison detail used to live in
+            its own section and was diluting the pricing read. */}
         <section className="sec" id="pricing">
           <div className="sec-top">
             <div className="sec-num">
-              <b>07</b>
+              <b>05</b>
               <span className="c">:</span>pricing
             </div>
             <div>
@@ -685,7 +578,8 @@ export default async function Landing() {
                 Policy enforcement, audit log, and tenant isolation are on
                 every tier. Tiers gate structural growth — more connections,
                 more seats, longer retention, enterprise SSO. Query volume is
-                never metered.
+                never metered. Hosted in EU or US, or self-host the
+                MIT-licensed engine — same engine and audit format either way.
               </p>
             </div>
           </div>
@@ -809,25 +703,28 @@ export default async function Landing() {
               </Link>
             </div>
           </div>
-          <p className="pricing-custom">
-            <b>Custom needs?</b> BYOK, dedicated region, SOC2 / HIPAA
-            artifacts, SAML below Team, custom retention, SLA —{" "}
-            <a href="mailto:info@midplane.ai">talk to us</a>.
-          </p>
         </section>
 
-        {/* close band — final CTA. Hero already framed the value and the
-            pricing section above already showed tiers, so the band reduces
-            to the headline + buttons. */}
+        {/* close band — action-forward final CTA. The hero already
+            cycles through agent names; the close pivots to the doer's
+            move (ship + read the engine) to avoid echoing the hero
+            structure. */}
         <section className="close">
           <div className="inner">
             <h2>
-              Let <CyclingAgent /> query <em>your real database.</em>
+              Ship the policy you{" "}
+              <em>couldn&apos;t ship yesterday.</em>
             </h2>
             <div className="ctas">
               <Link className="ebtn fill" href="/sign-up">
                 Start free →
               </Link>
+              <a
+                className="ebtn outline"
+                href="https://github.com/midplaneai/midplane"
+              >
+                Read the engine →
+              </a>
             </div>
           </div>
         </section>
@@ -843,7 +740,6 @@ export default async function Landing() {
           </div>
           <div>
             <h5>Product</h5>
-            <a href="#hosted">Hosted</a>
             <a href="#audit">Audit</a>
             <a href="#policy">Policy</a>
             <a href="#pricing">Pricing</a>
