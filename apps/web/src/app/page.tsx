@@ -732,10 +732,6 @@ export default async function Landing() {
                 <span>active-active EU + US</span>
               </li>
               <li>
-                <b>SOC2 / HIPAA</b>
-                <span>artifacts on request</span>
-              </li>
-              <li>
                 <b>Custom retention</b>
                 <span>beyond 180 days</span>
               </li>
