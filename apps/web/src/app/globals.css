@@ -464,9 +464,8 @@
 .editorial-page .tier-enterprise-list li b { color: var(--ink); font-weight: 500; font-size: 14px; }
 
 /* close band */
-.editorial-page .close { padding: 80px 48px; border-top: 1px solid var(--line); background: var(--ink); color: var(--paper); margin: 0 -48px; }
-.editorial-page .close .inner { display: flex; flex-direction: column; align-items: center; gap: 24px; max-width: 1344px; margin: 0 auto; }
-.editorial-page .close .close-meta { font-family: var(--font-geist-mono); font-size: 13px; color: rgba(243, 239, 231, 0.5); letter-spacing: 0.02em; }
+.editorial-page .close { padding: 64px 48px; border-top: 1px solid var(--line); background: var(--ink); color: var(--paper); margin: 0 -48px; }
+.editorial-page .close .inner { display: flex; flex-direction: column; align-items: center; max-width: 1344px; margin: 0 auto; }
 /* cycling agent name — see _landing/cycling-agent.tsx. All three
    names are stacked in the same position; the @keyframes cycle
    fades them in and out at staggered intervals. The width-holder

@@ -747,15 +747,11 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* close band — no headline. By section 9 the hero already did
-            the emotional work; a second swing here reads as the page
-            trying too hard. Just give them the buttons, with a small
-            mono line that reinforces the two delivery paths. */}
+        {/* close band — just the two CTAs centered. The hero already
+            did the emotional work and the page has multiple earlier
+            beats on self-host / MIT; one more would be one too many. */}
         <section className="close">
           <div className="inner">
-            <span className="close-meta">
-              mit-licensed · hosted in eu/us or self-hosted
-            </span>
             <div className="ctas">
               <Link className="ebtn fill" href="/sign-up">
                 Start free →
