@@ -687,7 +687,7 @@ export default async function Landing() {
                 </li>
                 <li>
                   <span>Audit retention</span>
-                  <b>180 days</b>
+                  <b>30 days</b>
                 </li>
                 <li>
                   <span>SSO / SAML</span>
@@ -733,7 +733,7 @@ export default async function Landing() {
               </li>
               <li>
                 <b>Custom retention</b>
-                <span>beyond 180 days</span>
+                <span>beyond 30 days</span>
               </li>
               <li>
                 <b>SLA</b>
