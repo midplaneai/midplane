@@ -134,12 +134,14 @@ test("create connection → mint second token → revoke default → list reflec
     /active|expiring|stale/,
   );
 
-  // Open the create-token modal, fill it, submit. The show-once URL
-  // surface should replace the form.
-  await page.getByRole("button", { name: /new token/i }).click();
+  // Open the connect-an-agent modal, fill it, submit. The show-once URL
+  // surface should replace the form. Anchor the trigger name so it
+  // doesn't also match the "how to connect an agent" disclosure summary
+  // rendered on the same (populated) page.
+  await page.getByRole("button", { name: /^connect an agent$/i }).click();
   await page.getByLabel(/name/i).fill("ci-bot");
   await page.getByLabel(/expiry/i).selectOption("30");
-  await page.getByRole("button", { name: /create token/i }).click();
+  await page.getByRole("button", { name: /^connect agent$/i }).click();
 
   const modalUrl = await page.getByTestId("show-once-url").last().inputValue();
   expect(modalUrl).toMatch(
