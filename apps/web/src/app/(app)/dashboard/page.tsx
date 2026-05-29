@@ -187,6 +187,11 @@ function ConnectionHeader({
           initialLastIndexedAt={initialLastIndexedAt}
           initialLastErrorAt={initialLastErrorAt}
         />
+        <Link href={`/connections/${id}`}>
+          <Button size="sm" variant="outline">
+            Connect
+          </Button>
+        </Link>
         <ConnectionRowMenu id={id} name={name} deleteAction={deleteAction} />
       </div>
     </div>

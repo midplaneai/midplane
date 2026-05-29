@@ -55,7 +55,7 @@ export function ConnectionRowMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem asChild>
-            <Link href={`/connections/${id}`}>Manage tokens</Link>
+            <Link href={`/connections/${id}`}>Connect an agent</Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
             <Link href={`/connections/${id}/settings`}>

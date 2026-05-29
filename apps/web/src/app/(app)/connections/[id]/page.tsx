@@ -53,7 +53,16 @@ export default async function ConnectionDetail({
         <div className="mx-auto max-w-[920px]">
           <PageHeader
             title={connectionLabel}
-            subtitle="Mint and revoke credentials for the agents pointed at this connection."
+            subtitle={
+              <>
+                This connection is a{" "}
+                <strong className="font-medium text-foreground">
+                  hosted MCP server
+                </strong>
+                . Each agent gets its own credentialed URL — paste it into
+                Cursor, Claude Code, or any MCP client.
+              </>
+            }
             actions={
               <Link
                 href={`/connections/${conn.id}/settings`}
@@ -65,6 +74,8 @@ export default async function ConnectionDetail({
           />
           <TokenList
             connectionId={conn.id}
+            connectionName={conn.name}
+            region={conn.region}
             tokens={tokens}
             createAction={createTokenAction}
             revokeAction={revokeTokenAction}
