@@ -33,6 +33,12 @@ jobs:
           context: .
           file: docker/Dockerfile
           platforms: linux/amd64,linux/arm64
+          # No attestation manifests in the index: buildx provenance/SBOM
+          # add `unknown/unknown` manifests to the OCI index that Fly's image
+          # resolver can't parse, making it fail to select linux/amd64 and
+          # report "found arm64". Keep the index to just the platform images.
+          provenance: false
+          sbom: false
           push: true
           tags: |
             midplane/midplane:${{ steps.version.outputs.tag }}
