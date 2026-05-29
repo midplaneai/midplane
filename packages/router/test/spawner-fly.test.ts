@@ -77,6 +77,11 @@ describe("FlyMachineSpawner", () => {
           { status: 200 },
         );
       }
+      // Readiness gate: once the VM is started, spawn() polls the engine's
+      // /health over 6PN before returning.
+      if (url === "http://[fdaa:0:1234::5]:8080/health") {
+        return new Response("ok", { status: 200 });
+      }
       throw new Error(`unexpected fetch: ${url}`);
     }) as unknown as typeof fetch;
 
@@ -152,6 +157,65 @@ describe("FlyMachineSpawner", () => {
 
     const destroyCall = calls.find((c) => c.startsWith("DELETE "));
     expect(destroyCall).toBeDefined();
+  });
+
+  it("destroys the machine if the VM starts but the engine never serves", async () => {
+    // Regression for the readiness race: the Fly VM reaches `started` but the
+    // OSS engine inside never binds :8080. spawn() must NOT hand back a dead
+    // container — it must time out on /health and destroy the machine, so the
+    // proxy reports a clean spawn failure instead of forwarding into a closed
+    // port.
+    const calls: string[] = [];
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (init?.method === "POST" && url.endsWith("/machines")) {
+        return new Response(
+          JSON.stringify({ id: "mach-3", private_ip: "fdaa:0:9::9", state: "starting" }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/machines/mach-3") && init?.method === "DELETE") {
+        return new Response("", { status: 200 });
+      }
+      if (url.endsWith("/machines/mach-3")) {
+        // VM is up right away...
+        return new Response(
+          JSON.stringify({ id: "mach-3", state: "started", private_ip: "fdaa:0:9::9" }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(":8080/health")) {
+        // ...but the engine never accepts connections.
+        throw new Error("connect ECONNREFUSED");
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const spawner = new FlyMachineSpawner({
+      apiToken: "fo-test",
+      regions,
+      bootTimeoutMs: 50,
+      fetch: fetchFn,
+    });
+
+    await expect(
+      spawner.spawn({
+        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        region: "eu",
+        databases: [
+          {
+            name: "main",
+            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            dsn: "postgres://x",
+            tableAccess: { default: "deny", tables: {} },
+            tenantScope: { column: null, overrides: {}, exempt: [] },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/did not become healthy/);
+
+    expect(calls.some((c) => c.startsWith("DELETE "))).toBe(true);
   });
 
   it("throws if apiToken missing", () => {
