@@ -81,8 +81,18 @@ export class FlyMachineSpawner implements Spawner {
     const app = regionCfg.flyApp;
 
     const created = await this.createMachine(app, regionCfg.flyRegion, opts);
+    // One boot budget spans both phases: the Fly VM reaching `started` AND
+    // the OSS engine inside binding :8080. `started` only means the VM
+    // booted — the engine needs a few more seconds to listen, and the proxy
+    // forwards the MCP handshake the instant spawn() returns. Returning on
+    // VM state alone races the engine: the first fetch hits a closed port,
+    // the proxy tears the machine down (registry.invalidate), and every
+    // retry cold-starts into the same race. DockerSpawner gates on /health
+    // for exactly this reason; the Fly backend must too.
+    const deadline = Date.now() + this.bootTimeoutMs;
     try {
-      await this.waitForStarted(app, created.id);
+      await this.waitForStarted(app, created.id, deadline);
+      await this.waitForHealth(created.private_ip, deadline);
     } catch (err) {
       await this.destroy(app, created.id).catch(() => undefined);
       throw err;
@@ -186,8 +196,11 @@ export class FlyMachineSpawner implements Spawner {
     return (await res.json()) as MachineCreateResponse;
   }
 
-  private async waitForStarted(app: string, id: string): Promise<void> {
-    const deadline = Date.now() + this.bootTimeoutMs;
+  private async waitForStarted(
+    app: string,
+    id: string,
+    deadline: number,
+  ): Promise<void> {
     while (Date.now() < deadline) {
       const res = await this.fetchFn(
         `${this.apiBase}/v1/apps/${app}/machines/${id}`,
@@ -204,6 +217,32 @@ export class FlyMachineSpawner implements Spawner {
     }
     throw new Error(
       `fly machine did not start within ${this.bootTimeoutMs}ms`,
+    );
+  }
+
+  // After the VM reports `started`, poll the engine's own /health over 6PN
+  // until it answers 2xx, so spawn() only hands back a container that's
+  // actually serving. The control plane reaches the machine by its private
+  // IPv6 (bracketed for the URL). Mirrors DockerSpawner.waitForHealth; shares
+  // the caller's boot deadline so total boot time stays bounded by
+  // bootTimeoutMs rather than doubling across the two phases.
+  private async waitForHealth(
+    privateIp: string,
+    deadline: number,
+  ): Promise<void> {
+    let lastErr: unknown;
+    while (Date.now() < deadline) {
+      try {
+        const res = await this.fetchFn(`http://[${privateIp}]:8080/health`);
+        if (res.ok) return;
+        lastErr = new Error(`health returned ${res.status}`);
+      } catch (err) {
+        lastErr = err;
+      }
+      await sleep(500);
+    }
+    throw new Error(
+      `OSS engine did not become healthy within ${this.bootTimeoutMs}ms: ${String(lastErr)}`,
     );
   }
 
