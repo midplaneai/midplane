@@ -1,9 +1,9 @@
 import "server-only";
 
 import { Badge } from "@/components/ui/badge";
+import { ConnectAgentGuide } from "@/components/connections/connect-agent-guide";
 import { CreateTokenModal } from "@/components/tokens/create-token-modal";
 import type { CreateTokenAction } from "@/components/tokens/create-token-modal";
-import { EmptyState } from "@/components/ui/empty-state";
 import {
   RevokeTokenButton,
   type RevokeTokenAction,
@@ -36,12 +36,16 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export async function TokenList({
   connectionId,
+  connectionName,
+  region,
   tokens,
   createAction,
   revokeAction,
   now = new Date(),
 }: {
   connectionId: string;
+  connectionName?: string | null;
+  region?: string | null;
   tokens: TokenSummary[];
   createAction: CreateTokenAction;
   revokeAction: RevokeTokenAction;
@@ -59,42 +63,93 @@ export async function TokenList({
   const creatorIds = Array.from(new Set(sorted.map((t) => t.createdByUserId)));
   const creators = await resolveClerkUsers(creatorIds);
 
+  // No agents yet → lead with the quickstart: teach that this connection is
+  // an MCP server, then a single prominent "Connect" CTA, with the setup
+  // card as a preview so they see what they're about to wire up.
+  if (sorted.length === 0) {
+    return (
+      <section
+        className="space-y-5 rounded-lg border border-border bg-card p-6"
+        data-testid="token-list"
+        data-state="empty"
+      >
+        <div className="space-y-1">
+          <h2 className="text-base font-medium text-foreground">
+            Connect your first agent
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Generate this connection&apos;s first{" "}
+            <strong className="font-medium text-foreground">
+              MCP server URL
+            </strong>{" "}
+            and paste it into your agent. Every query it runs is proxied
+            through your access policy.
+          </p>
+        </div>
+        <CreateTokenModal
+          connectionId={connectionId}
+          connectionName={connectionName}
+          region={region}
+          action={createAction}
+          triggerLabel="Connect an agent"
+        />
+        <ConnectAgentGuide connectionName={connectionName} region={region} />
+      </section>
+    );
+  }
+
   return (
     <section
       className="space-y-3 rounded-lg border border-border bg-card p-6"
       data-testid="token-list"
+      data-state="populated"
     >
       <header className="flex items-center justify-between gap-3">
         <div className="space-y-1">
-          <h2 className="text-base font-medium text-foreground">Tokens</h2>
+          <h2 className="text-base font-medium text-foreground">
+            MCP server endpoints
+          </h2>
           <p className="text-xs text-muted-foreground">
-            Each token is a credential for one agent. Revoke the moment a
+            Each row is a credentialed URL for one agent. Revoke the moment a
             laptop goes missing.
           </p>
         </div>
-        <CreateTokenModal connectionId={connectionId} action={createAction} />
+        <CreateTokenModal
+          connectionId={connectionId}
+          connectionName={connectionName}
+          region={region}
+          action={createAction}
+        />
       </header>
 
-      {sorted.length === 0 ? (
-        <EmptyState
-          title="No tokens yet"
-          description="Create one to give an agent access to this connection."
-        />
-      ) : (
-        <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-background">
-          {sorted.map((token) => (
-            <TokenRow
-              key={token.id}
-              connectionId={connectionId}
-              token={token}
-              creatorLabel={creators.get(token.createdByUserId)?.label ?? token.createdByUserId}
-              creatorResolved={creators.get(token.createdByUserId)?.resolved ?? false}
-              revokeAction={revokeAction}
-              now={now}
-            />
-          ))}
-        </ul>
-      )}
+      <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-background">
+        {sorted.map((token) => (
+          <TokenRow
+            key={token.id}
+            connectionId={connectionId}
+            token={token}
+            creatorLabel={creators.get(token.createdByUserId)?.label ?? token.createdByUserId}
+            creatorResolved={creators.get(token.createdByUserId)?.resolved ?? false}
+            revokeAction={revokeAction}
+            now={now}
+          />
+        ))}
+      </ul>
+
+      {/* Reference copy of the setup snippets. The live URL is show-once, so
+          this carries a <token> placeholder; a real URL only appears in the
+          connect modal's success panel. */}
+      <details className="group rounded-md border border-border bg-background">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle hover:text-foreground">
+          <span className="transition-transform group-open:rotate-90" aria-hidden>
+            ›
+          </span>
+          how to connect an agent
+        </summary>
+        <div className="px-4 pb-4">
+          <ConnectAgentGuide connectionName={connectionName} region={region} />
+        </div>
+      </details>
     </section>
   );
 }

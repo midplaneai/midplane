@@ -50,8 +50,8 @@ export function ShowOnceUrl({
         <CopyButton value={mcpUrl} />
       </div>
       <p className="text-xs text-muted-foreground">
-        Paste this into your MCP-compatible agent (Cursor, Claude Code,
-        Continue, etc.). The URL is a credential — treat it like a password.
+        Paste this into your MCP-compatible agent (Cursor, Claude Code, etc.).
+        The URL is a credential — treat it like a password.
       </p>
     </div>
   );

@@ -4,6 +4,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Plus, X } from "lucide-react";
 import { useId, useState, useTransition } from "react";
 
+import { ConnectAgentGuide } from "@/components/connections/connect-agent-guide";
 import { ShowOnceUrl } from "@/components/show-once-url";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +44,12 @@ export type CreateTokenAction = (
 interface CreateTokenModalProps {
   connectionId: string;
   action: CreateTokenAction;
+  /** Used to label the MCP server key in the setup snippets. */
+  connectionName?: string | null;
+  /** Region host for the setup snippets' example URL. */
+  region?: string | null;
+  /** Override the trigger button label (e.g. "Connect your first agent"). */
+  triggerLabel?: string;
 }
 
 const EXPIRY_OPTIONS = [
@@ -57,6 +64,9 @@ const DEFAULT_EXPIRY = "90";
 export function CreateTokenModal({
   connectionId,
   action,
+  connectionName,
+  region,
+  triggerLabel = "Connect an agent",
 }: CreateTokenModalProps) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -122,7 +132,7 @@ export function CreateTokenModal({
       <DialogPrimitive.Trigger asChild>
         <Button size="sm">
           <Plus className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-          New token
+          {triggerLabel}
         </Button>
       </DialogPrimitive.Trigger>
       <DialogPrimitive.Portal>
@@ -135,8 +145,9 @@ export function CreateTokenModal({
         />
         <DialogPrimitive.Content
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2",
-            "rounded-lg border border-border bg-card p-6 shadow-lg",
+            "fixed left-1/2 top-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2",
+            mcpUrl ? "max-w-xl" : "max-w-lg",
+            "max-h-[90vh] overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg",
             "motion-safe:duration-200 motion-safe:data-[state=open]:animate-in motion-safe:data-[state=closed]:animate-out",
             "motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=open]:fade-in-0",
           )}
@@ -150,18 +161,20 @@ export function CreateTokenModal({
           {mcpUrl ? (
             <SuccessPanel
               mcpUrl={mcpUrl}
+              connectionName={connectionName}
+              region={region}
               onClose={() => handleOpenChange(false)}
             />
           ) : (
             <form onSubmit={onSubmit} className="space-y-5">
               <div className="space-y-1">
                 <DialogPrimitive.Title className="text-base font-medium text-foreground">
-                  New token
+                  Connect an agent
                 </DialogPrimitive.Title>
                 <DialogPrimitive.Description className="text-xs text-muted-foreground">
-                  Mint a credential for one agent. Give it a label you&apos;ll
-                  recognize later — names are shown next to the last-used
-                  timestamp in the dashboard.
+                  We&apos;ll mint this agent its own MCP server URL. Name it for
+                  the laptop, CI job, or service it&apos;s for — the name shows
+                  next to the last-used timestamp here.
                 </DialogPrimitive.Description>
               </div>
               <div className="space-y-2">
@@ -220,7 +233,7 @@ export function CreateTokenModal({
                   Cancel
                 </Button>
                 <Button type="submit" size="sm" disabled={pending}>
-                  {pending ? "Creating…" : "Create token"}
+                  {pending ? "Connecting…" : "Connect agent"}
                 </Button>
               </div>
             </form>
@@ -233,22 +246,32 @@ export function CreateTokenModal({
 
 function SuccessPanel({
   mcpUrl,
+  connectionName,
+  region,
   onClose,
 }: {
   mcpUrl: string;
+  connectionName?: string | null;
+  region?: string | null;
   onClose: () => void;
 }) {
   return (
     <div className="space-y-4">
       <div className="space-y-1">
         <DialogPrimitive.Title className="text-base font-medium text-foreground">
-          Token created
+          Agent connected — copy your URL
         </DialogPrimitive.Title>
         <DialogPrimitive.Description className="text-xs text-[hsl(var(--warn))]">
-          Copy this URL now. It will not be shown again.
+          This is the only time you&apos;ll see the full URL. We store only a
+          hashed digest.
         </DialogPrimitive.Description>
       </div>
       <ShowOnceUrl mcpUrl={mcpUrl} />
+      <ConnectAgentGuide
+        connectionName={connectionName}
+        region={region}
+        mcpUrl={mcpUrl}
+      />
       <div className="flex items-center justify-end pt-2">
         <Button size="sm" onClick={onClose} data-testid="ive-saved-it">
           I&apos;ve saved it

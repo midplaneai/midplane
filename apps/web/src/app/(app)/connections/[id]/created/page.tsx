@@ -2,6 +2,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { ConnectAgentGuide } from "@/components/connections/connect-agent-guide";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { ShowOnceUrl } from "@/components/show-once-url";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -82,6 +83,12 @@ export default async function ConnectionCreated({
                 <ShowOnceUrl mcpUrl={mcpUrl} onMount={consumeShowOnceCookie} />
               </section>
 
+              <ConnectAgentGuide
+                connectionName={connection.name}
+                region={customer.region}
+                mcpUrl={mcpUrl}
+              />
+
               <WhatsNext connectionHref={connectionHref} />
 
               <div className="pt-2">
@@ -123,11 +130,8 @@ function WhatsNext({ connectionHref }: { connectionHref: string }) {
       <h2 className="text-sm font-medium text-foreground">What&apos;s next</h2>
       <ol className="space-y-2 text-xs text-muted-foreground">
         <li>
-          <span className="font-medium text-foreground">1. Add the URL to your agent.</span>{" "}
-          In Cursor, open <span className="font-mono text-foreground">Settings → MCP</span>{" "}
-          and paste the URL as a new server. In Claude Code, add it to{" "}
-          <span className="font-mono text-foreground">.claude/mcp.json</span>{" "}
-          under <span className="font-mono text-foreground">servers</span>.
+          <span className="font-medium text-foreground">1. Add the config above to your agent</span>{" "}
+          using the tab for your client, then reload it.
         </li>
         <li>
           <span className="font-medium text-foreground">2. Try a query.</span>{" "}
@@ -142,12 +146,12 @@ function WhatsNext({ connectionHref }: { connectionHref: string }) {
         </li>
       </ol>
       <p className="pt-1 text-[11px] text-subtle">
-        Need more tokens (separate laptops, CI, mobile)?{" "}
+        Need more agents (separate laptops, CI, mobile)?{" "}
         <Link
           href={connectionHref}
           className="text-[hsl(var(--brand))] underline underline-offset-2"
         >
-          Mint another from the connection page →
+          Connect another from the connection page →
         </Link>
       </p>
     </section>
