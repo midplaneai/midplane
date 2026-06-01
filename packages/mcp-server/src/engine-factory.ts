@@ -24,6 +24,7 @@ import {
   multiStatement,
   tableAccess,
   tenantScope,
+  getDialect,
   type AuditEvent,
   type AuditWriter,
   type CredentialStore,
@@ -137,6 +138,7 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
         {
           name: DEFAULT_DB_NAME,
           url: "",
+          dialect: "postgres",
           tenantScope: EMPTY_TENANT_SCOPE,
           hasTenantScope: false,
           tableAccess: null,
@@ -350,6 +352,11 @@ function makeEngineEntry(
     credentials,
     executor,
     databaseName: spec.name,
+    // Resolved per-DB from the YAML `dialect:` key (defaults to "postgres"
+    // when omitted). The engine routes parse() through this; rules and
+    // executor are still PG-shaped for 0.6.0 — new dialects unblock in
+    // Phase 1 of the multi-DB roadmap.
+    dialect: getDialect(spec.dialect),
   });
 
   // The rule now reads mappings from the holder (via getter), not from

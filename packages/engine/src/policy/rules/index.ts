@@ -3,8 +3,8 @@
 // during the walk (e.g. write-nodes seen, tables-without-scope) and emit
 // a single verdict at the end.
 
-import type { ParseResult } from "../../parser/parse.ts";
-import type { VisitorRule, VisitorScope } from "../visitor.ts";
+import type { ParseResult } from "../../dialects/postgres/parse.ts";
+import type { VisitorRule, VisitorScope } from "../../dialects/postgres/visitor.ts";
 
 export interface EngineContextLike {
   tenant_id: string;

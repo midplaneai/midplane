@@ -6,7 +6,7 @@
 //   - Empty input throws "Query cannot be empty"; bad SQL throws SqlError.
 
 import { loadModule, parseSync } from "libpg-query";
-import { ParserCrashedError } from "../errors.ts";
+import { ParserCrashedError } from "../../errors.ts";
 
 let warmupPromise: Promise<void> | null = null;
 

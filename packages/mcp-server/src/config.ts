@@ -61,12 +61,23 @@ const TableAccessSchema = z.object({
   tables: z.record(z.string(), TableAccessLevelSchema).default({}),
 });
 
+// Supported dialects. Locked to "postgres" in 0.6.0 — the seam exists but
+// adding a value requires a concrete `Dialect` implementation in the engine
+// package's `dialects/<name>/`. New dialect names land per Phase 1+ of the
+// multi-DB roadmap (MySQL, T-SQL, Snowflake, ...). zod rejects unknown
+// values at schema time so a typo in YAML fails loudly at boot.
+const DialectSchema = z.enum(["postgres"]);
+
 // Per-DB entry in `databases:`. Schema validation only — name regex,
 // reserved-name, dup-detect, and env interpolation are applied by the
 // loader after zod parses.
 const DatabaseEntrySchema = z.object({
   name: z.string().min(1).max(32),
   url: z.string().min(1),
+  // Omit ⇒ "postgres" (back-compat with pre-0.6.0 docs that predate the
+  // dialect concept). Multi-dialect users name the dialect explicitly per
+  // DB entry.
+  dialect: DialectSchema.default("postgres"),
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),
 });
@@ -83,6 +94,7 @@ const PolicyFileSchema = z.object({
 export type PolicyFile = z.infer<typeof PolicyFileSchema>;
 
 export type TableAccessLevel = z.infer<typeof TableAccessLevelSchema>;
+export type DialectName = z.infer<typeof DialectSchema>;
 
 // Resolved tenant_scope config the engine evaluates against. Always
 // well-formed; loader/resolver normalize every accepted YAML shape into
@@ -101,6 +113,9 @@ export interface TenantScopeSpec {
 export interface DatabaseSpec {
   name: string;
   url: string;
+  // Engine-side dialect identifier resolved from YAML (`dialect:`). Defaults
+  // to "postgres" when omitted — matches every pre-0.6.0 doc unchanged.
+  dialect: DialectName;
   tenantScope: TenantScopeSpec;
   hasTenantScope: boolean;
   tableAccess: {
@@ -220,6 +235,7 @@ export function parsePolicyYaml(
         {
           name: DEFAULT_DB_NAME,
           url: "",
+          dialect: "postgres",
           tenantScope: EMPTY_TENANT_SCOPE,
           hasTenantScope: false,
           tableAccess: null,
@@ -294,6 +310,7 @@ export function parsePolicyYaml(
       {
         name: DEFAULT_DB_NAME,
         url: "",
+        dialect: "postgres",
         tenantScope,
         hasTenantScope,
         tableAccess,
@@ -374,6 +391,7 @@ function resolveDatabaseEntry(
   return {
     name: entry.name,
     url,
+    dialect: entry.dialect,
     tenantScope,
     hasTenantScope,
     tableAccess,

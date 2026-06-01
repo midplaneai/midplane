@@ -1,8 +1,8 @@
 // Policy module — orchestrates the single-walk visitor + rule callbacks +
 // finalization.
 
-import type { ParseResult } from "../parser/parse.ts";
-import { walk } from "./visitor.ts";
+import type { ParseResult } from "../dialects/postgres/parse.ts";
+import { walk } from "../dialects/postgres/visitor.ts";
 import type { Rule, RuleEvalContext, RuleVerdict } from "./rules/index.ts";
 
 export type { Rule, RuleVerdict, RuleEvalContext } from "./rules/index.ts";

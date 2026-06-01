@@ -17,7 +17,8 @@ import type { CredentialStore } from "./crypto/credential-store.ts";
 import type { Executor, ExecutionResult } from "./executor.ts";
 import type { Rule } from "./policy/rules/index.ts";
 import { evaluate } from "./policy/index.ts";
-import { parse } from "./parser/parse.ts";
+import type { Dialect } from "./dialects/types.ts";
+import { postgresDialect } from "./dialects/postgres/index.ts";
 import { AuditEvent } from "./audit/types.ts";
 import { AuditUnavailableError } from "./errors.ts";
 
@@ -73,6 +74,11 @@ export interface EngineOptions {
   // to '__default__' for legacy single-DB callers and tests that don't
   // care to supply one.
   databaseName?: string;
+  // Dialect that owns parsing for this engine. Defaults to `postgresDialect`
+  // for back-compat with pre-0.6.0 callers (tests, embedders) that don't
+  // construct one. The factory in `@midplane/mcp-server` resolves the dialect
+  // from per-DB YAML (`dialect: postgres|...`) and passes it explicitly.
+  dialect?: Dialect;
   now?: () => number;
   idGen?: () => string;
 }
@@ -83,6 +89,7 @@ export class Engine {
   private readonly executor: Executor;
   private readonly credentials: CredentialStore;
   private readonly databaseName: string;
+  private readonly dialect: Dialect;
   private readonly now: () => number;
   private readonly idGen: () => string;
 
@@ -92,6 +99,7 @@ export class Engine {
     this.executor = opts.executor;
     this.credentials = opts.credentials;
     this.databaseName = opts.databaseName ?? "__default__";
+    this.dialect = opts.dialect ?? postgresDialect;
     this.now = opts.now ?? Date.now;
     this.idGen = opts.idGen ?? ulid;
   }
@@ -108,9 +116,9 @@ export class Engine {
     // ── 1. parse — never throws past here. A WASM crash converts to a
     //    synthetic parse-failure ParseResult so ATTEMPTED still records
     //    the agent's intent before any policy runs.
-    let parseResult: Awaited<ReturnType<typeof parse>>;
+    let parseResult: Awaited<ReturnType<Dialect["parse"]>>;
     try {
-      parseResult = await parse(input.sql);
+      parseResult = await this.dialect.parse(input.sql);
     } catch (err) {
       parseResult = {
         ok: false,
@@ -316,7 +324,7 @@ export class Engine {
 // for V1 — the moat (cross-customer fingerprint statistics) is a Phase 3
 // concern. We hash the parsed-stmts JSON when available, otherwise the raw
 // SQL. First 8 bytes of SHA-256 = 16 hex chars to match the zod regex.
-function computeFingerprint(sql: string, parseResult: Awaited<ReturnType<typeof parse>>): string {
+function computeFingerprint(sql: string, parseResult: Awaited<ReturnType<Dialect["parse"]>>): string {
   const input = parseResult.ok
     ? JSON.stringify(normalizeForFingerprint(parseResult.ast))
     : sql;

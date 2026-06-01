@@ -10,7 +10,7 @@
 // bare objects as virtual SelectStmt scopes so rules see them with the
 // correct `enclosingSelectStmt`.
 
-import type { PgParseTree } from "../parser/parse.ts";
+import type { PgParseTree } from "./parse.ts";
 
 export interface VisitorScope {
   depth: number;
