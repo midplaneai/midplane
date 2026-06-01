@@ -9,15 +9,18 @@
 // (`@midplane/engine`) can surface them unchanged from 0.5.x.
 
 import { parse, warmup } from "./parse.ts";
+import { normalize } from "./normalize.ts";
 import type { Dialect } from "../types.ts";
 
 export const postgresDialect: Dialect = {
   name: "postgres",
   parse,
   warmup,
+  normalize,
 };
 
 export { parse, warmup } from "./parse.ts";
+export { normalize } from "./normalize.ts";
 export type { ParseResult, PgParseTree } from "./parse.ts";
 export { walk, isStatementKind } from "./visitor.ts";
 export type { VisitorRule, VisitorScope } from "./visitor.ts";

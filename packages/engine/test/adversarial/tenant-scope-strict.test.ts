@@ -299,3 +299,79 @@ describe("adversarial/tenant-scope strict: empty/disabled config short-circuits"
     expect(invoicesBare.allowed).toBe(true);
   });
 });
+
+// ─── First-cause / recursion-order pins (flat-IR hardening) ─────────────────
+//
+// The IR surfaces the FIRST failing scope unit in recursion order, and the deny
+// message names that table. These pin the order BY NAME so a future reshuffle
+// of the adapter's scopeUnit emission (or the rule's iteration) is caught — not
+// just "some deny". Confirmed old==new by the IR-equivalence harness.
+
+describe("adversarial/tenant-scope strict: first-cause ordering (flat-IR pins)", () => {
+  // table_access default read_write so tenant_scope is the rule that surfaces
+  // on writes (a read-default would make table_access fire first and mask order).
+  function writeEngine(ts: Partial<TenantScopeConfig>) {
+    const engine = new Engine({
+      policy: {
+        rules: [
+          parseError(),
+          multiStatement(),
+          tableAccess({ default: "read_write", tables: {} }),
+          tenantScope({
+            defaultColumn: ts.defaultColumn ?? null,
+            overrides: ts.overrides ?? {},
+            exempt: ts.exempt ?? [],
+          }),
+        ],
+      },
+      audit: new MemoryAuditWriter(),
+      credentials: new StubCredentialStore(),
+      executor: new MockExecutor(),
+    });
+    return { engine };
+  }
+
+  async function expectDenyNaming(
+    engine: Engine,
+    ctx: EngineContext,
+    sql: string,
+    table: string,
+  ): Promise<void> {
+    const d = await engine.handle({ sql, ctx });
+    expect(d.allowed).toBe(false);
+    expect((d as { reason: string }).reason).toBe(TENANT);
+    expect((d as { message: string }).message).toContain(`table \`${table}\``);
+  }
+
+  test("two scoped tables fail at different scopes → names the FIRST (outer) one", async () => {
+    // aaa (outer FROM) is checked before bbb (subquery) in recursion order.
+    const { engine } = strictEngine({ defaultColumn: "tenant_id" });
+    await expectDenyNaming(
+      engine,
+      baseCtx,
+      "SELECT * FROM aaa WHERE id IN (SELECT id FROM bbb)",
+      "aaa",
+    );
+  });
+
+  test("UPDATE hidden in a CTE is the first tenant_scope failure → names the write target", async () => {
+    // overrides-only so the outer CTE ref `x` is NOT scoped; only `secrets` is.
+    const { engine } = writeEngine({ overrides: { secrets: "tenant_id" } });
+    await expectDenyNaming(
+      engine,
+      baseCtx,
+      "WITH x AS (UPDATE secrets SET v = 1 RETURNING id) SELECT * FROM x",
+      "secrets",
+    );
+  });
+
+  test("INSERT…SELECT into scoped target → names the INSERT target before the source scope", async () => {
+    const { engine } = writeEngine({ overrides: { dst: "tenant_id", src: "tenant_id" } });
+    await expectDenyNaming(
+      engine,
+      baseCtx,
+      "INSERT INTO dst (a) SELECT a FROM src",
+      "dst",
+    );
+  });
+});

@@ -11,6 +11,7 @@ import { tableAccess, type TableAccessConfig } from "../src/policy/rules/table-a
 import { multiStatement } from "../src/policy/rules/multi-statement.ts";
 import { tenantScope } from "../src/policy/rules/tenant-scope.ts";
 import { parseError } from "../src/policy/rules/parse-error.ts";
+import { recordDecided } from "./_verdict-recorder.ts";
 
 export class MemoryAuditWriter implements AuditWriter {
   events: AuditEvent[] = [];
@@ -21,6 +22,17 @@ export class MemoryAuditWriter implements AuditWriter {
       throw new Error(`forced failure on ${event.event_type}`);
     }
     this.events.push(event);
+    // Verdict-baseline oracle: on every DECIDED, pair it with the matching
+    // ATTEMPTED's sql (same query_id, this writer) and record the verdict.
+    // The whole engine corpus funnels through here. See _verdict-recorder.ts.
+    if (event.event_type === "DECIDED") {
+      const attempted = this.events.find(
+        (e) => e.event_type === "ATTEMPTED" && e.query_id === event.query_id,
+      );
+      const sql =
+        (attempted?.payload as { sql_raw?: string } | undefined)?.sql_raw ?? "";
+      recordDecided(event, sql);
+    }
   }
 
   async close(): Promise<void> {}

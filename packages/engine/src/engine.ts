@@ -158,6 +158,7 @@ export class Engine {
         parse: parseResult,
         ctx: input.ctx,
         rules: this.rules,
+        dialect: this.dialect,
       });
     } catch (err) {
       console.error("[engine] policy evaluation threw:", err);

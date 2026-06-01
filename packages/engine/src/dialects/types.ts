@@ -15,6 +15,7 @@
 // routes through `this.dialect.parse`) is what Phase 1 will exploit.
 
 import type { ParseResult } from "./postgres/parse.ts";
+import type { NormalizedProgram } from "../ir/types.ts";
 
 export type DialectName = "postgres";
 
@@ -22,4 +23,10 @@ export interface Dialect {
   readonly name: DialectName;
   parse(sql: string): Promise<ParseResult>;
   warmup(): Promise<void>;
+  // Project a successfully-parsed native AST into the dialect-agnostic IR the
+  // policy rules consume. Kept separate from parse() so the engine can still
+  // fingerprint the native AST (computeFingerprint) unchanged. Must NEVER throw
+  // on parsed-but-weird input — classify anything it can't model as
+  // `unsupported` (fail-closed) instead.
+  normalize(ast: unknown): NormalizedProgram;
 }

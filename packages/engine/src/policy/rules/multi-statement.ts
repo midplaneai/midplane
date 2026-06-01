@@ -8,27 +8,29 @@
 // tree.stmts.length (not semicolons in the raw text).
 
 import type { Rule, RuleEvalContext, RuleVerdict } from "./index.ts";
+import type { NormalizedProgram } from "../../ir/types.ts";
 import { PolicyRule } from "../../audit/types.ts";
+
+function denyFor(n: number): RuleVerdict {
+  return {
+    decision: "DENY",
+    reason: PolicyRule.MULTI_STATEMENT,
+    message:
+      `Midplane denied this query because it contains ${n} statements ` +
+      `separated by semicolons. Send each statement as a separate ` +
+      `query (multi-statement input is the canonical SQL-injection ` +
+      `vector and is denied unconditionally).`,
+  };
+}
 
 export function multiStatement(): Rule {
   return {
     name: PolicyRule.MULTI_STATEMENT,
-    reset() {},
-    finalize(rctx: RuleEvalContext): RuleVerdict {
+    evaluateIR(program: NormalizedProgram, rctx: RuleEvalContext): RuleVerdict {
       if (!rctx.parse.ok) return { decision: "ALLOW" }; // parse_error owns this case
-      const n = rctx.parse.ast.stmts.length;
-      if (n > 1) {
-        return {
-          decision: "DENY",
-          reason: PolicyRule.MULTI_STATEMENT,
-          message:
-            `Midplane denied this query because it contains ${n} statements ` +
-            `separated by semicolons. Send each statement as a separate ` +
-            `query (multi-statement input is the canonical SQL-injection ` +
-            `vector and is denied unconditionally).`,
-        };
-      }
-      return { decision: "ALLOW" };
+      return program.statementCount > 1
+        ? denyFor(program.statementCount)
+        : { decision: "ALLOW" };
     },
   };
 }

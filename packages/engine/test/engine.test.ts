@@ -167,8 +167,7 @@ describe("Engine.handle — robustness against misbehaving rules", () => {
     const credentials = new StubCredentialStore();
     const throwingRule = {
       name: "throwing_rule",
-      reset() {},
-      finalize() {
+      evaluateIR() {
         throw new Error("kaboom");
       },
     };
@@ -196,26 +195,28 @@ describe("Engine.handle — robustness against misbehaving rules", () => {
     });
   });
 
-  test("rule that throws inside visit() (during walk) still produces ATTEMPTED + DECIDED", async () => {
+  test("dialect whose normalize() throws still produces ATTEMPTED + DECIDED (internal_error)", async () => {
+    // IR-era analog of the old "throw during the walk" case: normalization is
+    // the only walk now, and it runs inside evaluate() under engine.handle's
+    // policy try/catch, so a throw there must still audit + deny, not vanish.
     const audit = new MemoryAuditWriter();
     const executor = new MockExecutor();
     const credentials = new StubCredentialStore();
-    const throwingRule = {
-      name: "throwing_visit_rule",
-      reset() {},
-      visit() {
-        throw new Error("walk explosion");
-      },
-      finalize(): { decision: "ALLOW" } {
-        return { decision: "ALLOW" };
+    const throwingDialect = {
+      name: "postgres" as const,
+      parse: async () => ({ ok: true as const, ast: { version: 0, stmts: [] } }),
+      warmup: async () => {},
+      normalize() {
+        throw new Error("normalize explosion");
       },
     };
     let counter = 0;
     const engine = new Engine({
-      policy: { rules: [throwingRule] },
+      policy: { rules: [parseError(), tableAccess()] },
       audit,
       executor,
       credentials,
+      dialect: throwingDialect,
       now: () => 1_700_000_000_000,
       idGen: () => `01TESTID${(counter++).toString().padStart(18, "0")}`,
     });
@@ -223,6 +224,7 @@ describe("Engine.handle — robustness against misbehaving rules", () => {
     const d = await engine.handle({ sql: "SELECT 1", ctx: baseCtx });
 
     expect(d.allowed).toBe(false);
+    expect((d as { reason: string }).reason).toBe("internal_error");
     expect(audit.byType("ATTEMPTED").length).toBe(1);
     expect(audit.byType("DECIDED").length).toBe(1);
     expect(executor.calls.length).toBe(0);

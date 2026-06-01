@@ -7,20 +7,22 @@
 import type { Rule, RuleEvalContext, RuleVerdict } from "./index.ts";
 import { PolicyRule } from "../../audit/types.ts";
 
+function verdict(rctx: RuleEvalContext): RuleVerdict {
+  if (rctx.parse.ok) return { decision: "ALLOW" };
+  return {
+    decision: "DENY",
+    reason: PolicyRule.PARSE_ERROR,
+    message:
+      `Midplane denied this query because it could not be parsed as ` +
+      `Postgres SQL (${rctx.parse.error}). Anything Midplane can't ` +
+      `parse is denied — it can't enforce policy on text it can't read.`,
+  };
+}
+
 export function parseError(): Rule {
   return {
     name: PolicyRule.PARSE_ERROR,
-    reset() {},
-    finalize(rctx: RuleEvalContext): RuleVerdict {
-      if (rctx.parse.ok) return { decision: "ALLOW" };
-      return {
-        decision: "DENY",
-        reason: PolicyRule.PARSE_ERROR,
-        message:
-          `Midplane denied this query because it could not be parsed as ` +
-          `Postgres SQL (${rctx.parse.error}). Anything Midplane can't ` +
-          `parse is denied — it can't enforce policy on text it can't read.`,
-      };
-    },
+    // parse_error owns the ok:false case and ignores the program entirely.
+    evaluateIR: (_program, rctx) => verdict(rctx),
   };
 }
