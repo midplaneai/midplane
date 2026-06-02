@@ -10,6 +10,7 @@
 
 import { parse, warmup } from "./parse.ts";
 import { normalize } from "./normalize.ts";
+import { listTablesSql, describeTableSql } from "./metadata.ts";
 import type { Dialect } from "../types.ts";
 
 export const postgresDialect: Dialect = {
@@ -17,6 +18,9 @@ export const postgresDialect: Dialect = {
   parse,
   warmup,
   normalize,
+  listTablesSql,
+  describeTableSql,
+  defaultMetadataSchema: "public",
 };
 
 export { parse, warmup } from "./parse.ts";

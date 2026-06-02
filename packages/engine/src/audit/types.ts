@@ -50,11 +50,19 @@ export const AttemptedPayload = z.object({
 export type AttemptedPayload = z.infer<typeof AttemptedPayload>;
 
 // DECIDED — policy decision. Always written. Captures *why* on DENY.
+//
+// `dialect` (0.7.0, multi-dialect): the dialect the query was parsed under
+// (engine.dialect.name — "postgres" | "mysql" | …). Additive + OPTIONAL under
+// schema_version 3 (NO bump): legacy single-dialect rows simply omit it, and
+// the hosted indexer adds a dimension on it without a migration. A free-form
+// string (not the engine's DialectName union) so the audit schema stays
+// decoupled from the dialect registry.
 export const DecidedPayload = z.discriminatedUnion("decision", [
   z.object({
     decision: z.literal("ALLOW"),
     statement_type: z.string(),                            // SELECT, INSERT, UPDATE, etc.
     tables_touched: z.array(z.string()).max(64),           // schema-qualified, deduped
+    dialect: z.string().max(32).optional(),
   }),
   z.object({
     decision: z.literal("DENY"),
@@ -62,6 +70,7 @@ export const DecidedPayload = z.discriminatedUnion("decision", [
     reason: z.string(),                                    // human-readable, surfaced to agent
     statement_type: z.string().optional(),                 // present when parse succeeded
     tables_touched: z.array(z.string()).max(64).optional(),
+    dialect: z.string().max(32).optional(),
   }),
 ]);
 export type DecidedPayload = z.infer<typeof DecidedPayload>;

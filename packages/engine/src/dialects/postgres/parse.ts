@@ -23,7 +23,25 @@ export function warmup(): Promise<void> {
 
 // Parse-result discriminated union. Engine treats `ok: false` as a
 // policy_rule=parse_error denial (not an exception).
+//
+// `ast` is `unknown` at this seam: it is the type the `Dialect` interface,
+// the policy layer (RuleEvalContext.parse), and the public API surface. Once
+// a second dialect (MySQL) lands, `ast` is no longer always a `PgParseTree`
+// — each dialect carries its own native AST, which only that dialect's
+// `normalize()` knows how to read. The engine never inspects `ast` directly;
+// it hands it to `dialect.normalize()` (rules) and `normalizeForFingerprint`
+// (fingerprint), both of which take `unknown`. The Postgres `parse()` function
+// below still returns the *concrete* `PgParseTree` shape (see PgParseResult) so
+// direct callers of the public `parse` export and the PG normalize adapter keep
+// their precise types.
 export type ParseResult =
+  | { ok: true;  ast: unknown }
+  | { ok: false; error: string };
+
+// Concrete result the Postgres `parse()` function returns. Assignable to
+// `ParseResult` (PgParseTree → unknown), so postgresDialect.parse satisfies the
+// Dialect interface, while `parse("…").ast` stays typed as PgParseTree.
+export type PgParseResult =
   | { ok: true;  ast: PgParseTree }
   | { ok: false; error: string };
 
@@ -37,7 +55,7 @@ export interface PgParseTree {
 
 const MAX_SQL_BYTES = 1_048_576; // 1 MiB cap — matches AttemptedPayload.sql_raw schema cap
 
-export async function parse(sql: string): Promise<ParseResult> {
+export async function parse(sql: string): Promise<PgParseResult> {
   await warmup();
 
   if (sql.length > MAX_SQL_BYTES) {

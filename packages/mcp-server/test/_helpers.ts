@@ -7,6 +7,7 @@ import type { EngineContext, TableAccessConfig } from "@midplane/engine";
 import {
   Engine,
   EnvCredentialStore,
+  postgresDialect,
   type AuditEvent,
   type AuditWriter,
   type Executor,
@@ -18,6 +19,13 @@ import {
   tenantScope,
 } from "@midplane/engine";
 import type { EngineHandle, EngineRegistry } from "../src/engine-factory.ts";
+
+// The dialect-provided metadata SQL builders the list_tables / describe_table
+// tools now require. Tests simulate a Postgres DB, so they pass the real
+// Postgres dialect's builders (information_schema SQL). `!` — postgresDialect
+// always defines them.
+export const listTablesSql = postgresDialect.listTablesSql!;
+export const describeTableSql = postgresDialect.describeTableSql!;
 
 export class MemoryAuditWriter implements AuditWriter {
   events: AuditEvent[] = [];
@@ -107,6 +115,9 @@ export function makeTestHandle(opts: {
     },
     executor: { execute: async () => ({ rows: [], rowCount: 0 }) } as Executor,
     url: "postgres://stub",
+    listTablesSql,
+    describeTableSql,
+    defaultSchema: "public",
   };
   const memoryAudit = opts.audit;
   const registry: EngineRegistry = {

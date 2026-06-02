@@ -25,15 +25,19 @@ import {
   tableAccess,
   tenantScope,
   getDialect,
+  createMysqlDialect,
   type AuditEvent,
   type AuditWriter,
   type CredentialStore,
+  type Dialect,
   type EngineContext,
   type Executor,
   type TableAccessConfig,
   type TenantScopeConfig,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
+import { MysqlPoolExecutor } from "./executor/mysql-pool.ts";
+import type { DialectName } from "./config.ts";
 import {
   DEFAULT_DB_NAME,
   EMPTY_TENANT_SCOPE,
@@ -72,6 +76,18 @@ interface EngineEntry {
   // The DSN this engine is bound to. Used by the hot-reload path to detect
   // url changes (which require a pool rebuild) versus pure policy edits.
   url: string;
+  // The dialect's metadata SQL builders, surfaced here so the list_tables /
+  // describe_table tool handlers can build dialect-correct discovery SQL.
+  // Engine.dialect is private, so the tools can't reach the dialect directly;
+  // this is the clean seam. Postgres + MySQL emit identical information_schema
+  // SQL today, but routing through the dialect keeps the tools dialect-agnostic
+  // (a future dialect without information_schema, e.g. SQLite, overrides these).
+  listTablesSql: (schema: string) => string;
+  describeTableSql: (schema: string, table: string) => string;
+  // Schema the metadata tools use when the caller omits `schema`. Postgres →
+  // "public"; MySQL → the connected database (information_schema.table_schema is
+  // the database name there). Resolved from the dialect, "public" fallback.
+  defaultSchema: string;
 }
 
 export interface EngineRegistry {
@@ -330,11 +346,15 @@ function makeEngineEntry(
     tenantScope: cloneTenantScope(spec.tenantScope),
   };
 
+  // Resolve the dialect for this DB. Postgres is a stateless singleton; MySQL
+  // is bound to the DSN's database name (its cross-DB guard needs it). One
+  // instance is shared by the engine (parse/normalize) AND the metadata SQL
+  // builders exposed on the EngineEntry.
+  const dialect = createDialectFor(spec.dialect, spec.url);
+
   // Tests inject one shared executor across DBs (for back-compat with
-  // single-engine tests). Production gets one pool per DB.
-  const executor =
-    opts.executor ??
-    new PgPoolExecutor({ databaseUrl: spec.url });
+  // single-engine tests). Production gets one pool per DB, built per dialect.
+  const executor = opts.executor ?? createExecutor(spec.dialect, spec.url);
 
   const engine = new Engine({
     policy: {
@@ -353,11 +373,22 @@ function makeEngineEntry(
     executor,
     databaseName: spec.name,
     // Resolved per-DB from the YAML `dialect:` key (defaults to "postgres"
-    // when omitted). The engine routes parse() through this; rules and
-    // executor are still PG-shaped for 0.6.0 — new dialects unblock in
-    // Phase 1 of the multi-DB roadmap.
-    dialect: getDialect(spec.dialect),
+    // when omitted). The engine routes parse() + normalize() through this;
+    // the same instance backs the metadata SQL on the EngineEntry.
+    dialect,
   });
+
+  // Every registered dialect provides metadata SQL builders (postgres + mysql
+  // do). The guard is defensive — a dialect added without them would fail
+  // loudly at boot rather than silently breaking schema discovery.
+  if (!dialect.listTablesSql || !dialect.describeTableSql) {
+    throw new Error(
+      `Dialect "${spec.dialect}" does not provide list_tables/describe_table SQL builders.`,
+    );
+  }
+  const listTablesSql = dialect.listTablesSql.bind(dialect);
+  const describeTableSql = dialect.describeTableSql.bind(dialect);
+  const defaultSchema = dialect.defaultMetadataSchema ?? "public";
 
   // The rule now reads mappings from the holder (via getter), not from
   // ctx. Keep ctxBase free of `tenant_scope` so there's a single source of
@@ -382,7 +413,45 @@ function makeEngineEntry(
     holder,
     executor,
     url: spec.url,
+    listTablesSql,
+    describeTableSql,
+    defaultSchema,
   };
+}
+
+// Build the per-DB Dialect. Postgres is the stateless registry singleton; MySQL
+// is bound to the DSN's database so its cross-DB guard can tell an own-database
+// qualifier (allowed) from a foreign one (denied). A DSN that doesn't name a
+// database yields a strict MySQL dialect (database unknown → every explicit
+// non-information_schema db qualifier is rejected; bare names still resolve at
+// the connection's default schema).
+function createDialectFor(dialect: DialectName, url: string): Dialect {
+  if (dialect === "mysql") {
+    return createMysqlDialect({ database: mysqlDatabaseFromDsn(url) });
+  }
+  return getDialect(dialect);
+}
+
+// One Executor per DB, per dialect. Both implement the engine's `Executor`
+// interface and expose `close()` (duck-typed by the registry's drain loop).
+function createExecutor(dialect: DialectName, url: string, max?: number): Executor {
+  if (dialect === "mysql") {
+    return new MysqlPoolExecutor({ databaseUrl: url, max });
+  }
+  return new PgPoolExecutor({ databaseUrl: url, max });
+}
+
+// Extract the database name from a MySQL DSN (`mysql://user:pass@host:3306/db`).
+// Returns null when absent or unparseable — the MySQL dialect then runs in its
+// strict fallback (no own-database qualifier is recognized). Special characters
+// in the password can make `new URL` throw; null is the safe answer there too.
+function mysqlDatabaseFromDsn(url: string): string | null {
+  try {
+    const path = new URL(url).pathname.replace(/^\/+/, "");
+    return path.length > 0 ? decodeURIComponent(path) : null;
+  } catch {
+    return null;
+  }
 }
 
 // Multi-DB hot-swap. Reconciles the current entries against the new spec:

@@ -133,7 +133,15 @@ function humanStatement(kind: string): string {
   }
 }
 
-function collectCteNames(node: Record<string, unknown>): Set<string> | null {
+// A WITH scope: the CTE names it defines + whether it's RECURSIVE. `recursive`
+// decides whether a CTE's own name binds inside its own body (it does for
+// RECURSIVE — that's the recursion; it does NOT for a plain WITH).
+interface CteScope {
+  names: Set<string>;
+  recursive: boolean;
+}
+
+function collectCteNames(node: Record<string, unknown>): CteScope | null {
   const wc = node.withClause as Record<string, unknown> | undefined;
   const ctes = wc?.ctes;
   if (!Array.isArray(ctes)) return null;
@@ -145,7 +153,7 @@ function collectCteNames(node: Record<string, unknown>): Set<string> | null {
     const name = cte?.ctename;
     if (typeof name === "string" && name.length > 0) names.add(name);
   }
-  return names.size > 0 ? names : null;
+  return names.size > 0 ? { names, recursive: wc?.recursive === true } : null;
 }
 
 function extractWriteTargets(kind: string, node: Record<string, unknown>): BareRef[] {
@@ -228,10 +236,17 @@ function collectAccessChecks(
   stmts: Array<{ stmt: Record<string, unknown> }>,
 ): AccessCheck[] {
   const checks: AccessCheck[] = [];
-  const cteScopes: Set<string>[] = [];
+  const cteScopes: CteScope[] = [];
+  // Names of CTEs whose own body we are currently inside (non-recursive only).
+  // A plain CTE's name does NOT bind in its own definition, so a body reference
+  // to a real table that happens to share the CTE name is a REAL read and must
+  // be checked — not silently skipped as a CTE reference (the self-shadow
+  // bypass). Recursive CTEs keep their name bound in the body (the recursion).
+  const definingStack: string[] = [];
   const isCteReference = (ref: BareRef): boolean => {
     if (ref.schema !== null) return false;
-    for (const scope of cteScopes) if (scope.has(ref.relname)) return true;
+    if (definingStack.includes(ref.relname)) return false;
+    for (const scope of cteScopes) if (scope.names.has(ref.relname)) return true;
     return false;
   };
 
@@ -262,6 +277,29 @@ function collectAccessChecks(
             checks.push({ kind: "read", ref: bareToTableRef(ref) });
           }
           return; // RangeVar leaves have no nested tables of interest
+        }
+        if (kind === "CommonTableExpr") {
+          // Walk the CTE body with its own name excluded from the CTE-reference
+          // set (non-recursive scoping) so a real-table read inside it isn't
+          // mistaken for the CTE itself. The enclosing WITH scope is the top of
+          // cteScopes (just pushed by the parent stmt); RECURSIVE leaves the
+          // exclusion off so a self-reference stays a CTE ref (the recursion).
+          // Walk order is otherwise unchanged — only the ctequery sub-walk is
+          // wrapped — so non-shadowing cases keep identical check sequences.
+          const ctename =
+            typeof innerObj.ctename === "string" ? (innerObj.ctename as string) : null;
+          const enclosing = cteScopes[cteScopes.length - 1];
+          const excludeSelf = ctename !== null && enclosing !== undefined && !enclosing.recursive;
+          for (const k of Object.keys(innerObj)) {
+            if (k === "ctequery" && excludeSelf) {
+              definingStack.push(ctename!);
+              walk(innerObj[k]);
+              definingStack.pop();
+            } else {
+              walk(innerObj[k]);
+            }
+          }
+          return;
         }
         const cteNames = collectCteNames(innerObj);
         if (cteNames) cteScopes.push(cteNames);

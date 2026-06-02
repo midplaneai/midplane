@@ -1,6 +1,6 @@
 {
   "name": "@midplane/mcp-server",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Midplane MCP server. Wraps @midplane/engine with stdio + Streamable HTTP transports.",
   "license": "MIT",
@@ -14,6 +14,7 @@
     "@midplane/engine": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "js-yaml": "^4.1.0",
+    "mysql2": "3.22.4",
     "pg": "^8.13.0",
     "pino": "^9.5.0",
     "ulid": "^2.3.0",

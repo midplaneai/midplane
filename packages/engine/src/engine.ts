@@ -193,6 +193,7 @@ export class Engine {
               decision: "ALLOW",
               statement_type: evalResult.statementType ?? "UNKNOWN",
               tables_touched: evalResult.tablesTouched,
+              dialect: this.dialect.name,
             },
           }
         : {
@@ -216,6 +217,7 @@ export class Engine {
                 evalResult.tablesTouched.length > 0
                   ? evalResult.tablesTouched
                   : undefined,
+              dialect: this.dialect.name,
             },
           };
     await this.writeOrThrow(decidedEvent);

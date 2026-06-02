@@ -41,9 +41,16 @@ export async function handleDescribeTable(input: {
   engine: Engine;
   ctx: EngineContext;
   args: DescribeTableArgs;
+  // Dialect-specific discovery SQL, supplied by the registry's EngineEntry
+  // (Engine.dialect is private). Postgres + MySQL both emit the SQL-standard
+  // information_schema.columns query.
+  describeTableSql: (schema: string, table: string) => string;
+  // Schema to use when the caller omits `schema`. Postgres → "public"; MySQL →
+  // the connected database. Optional; falls back to "public".
+  defaultSchema?: string;
 }): Promise<ToolResult> {
   const table = input.args.table;
-  const schema = input.args.schema ?? "public";
+  const schema = input.args.schema ?? input.defaultSchema ?? "public";
 
   if (!IDENT.test(table)) {
     throw new Error(`Invalid table identifier: ${table}`);
@@ -52,12 +59,9 @@ export async function handleDescribeTable(input: {
     throw new Error(`Invalid schema identifier: ${schema}`);
   }
 
-  // Embedded literals are safe: both have passed strict identifier regex.
-  const sql =
-    `SELECT column_name, data_type, is_nullable, column_default ` +
-    `FROM information_schema.columns ` +
-    `WHERE table_schema = '${schema}' AND table_name = '${table}' ` +
-    `ORDER BY ordinal_position`;
+  // Built by the dialect; embedding `schema`/`table` is safe — both passed the
+  // strict identifier regex above (the dialect builder's documented contract).
+  const sql = input.describeTableSql(schema, table);
 
   const decision = await input.engine.handle({
     sql,

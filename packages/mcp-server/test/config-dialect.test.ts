@@ -2,10 +2,10 @@
 //
 // Pins the contracts the engine-factory relies on:
 //   1. `dialect:` omitted ⇒ DatabaseSpec.dialect === "postgres".
-//   2. `dialect: postgres` parses cleanly.
+//   2. `dialect: postgres` / `dialect: mysql` parse cleanly (0.7.0 unlocks mysql).
 //   3. Unknown dialect names are rejected at YAML load (zod enum lock) —
-//      important because if it silently ignored, a Phase-1+ user would
-//      write `dialect: mysql` and get Postgres parsing without warning.
+//      important because if it silently ignored, a user would write
+//      `dialect: sqlite` and get Postgres parsing without warning.
 //   4. Synthetic legacy entries (no policy file, empty YAML, legacy single-
 //      DB shape) all carry `dialect: "postgres"` so engine-factory's
 //      `getDialect(spec.dialect)` lookup never sees undefined.
@@ -37,16 +37,25 @@ describe("config: dialect on databases[] entries", () => {
     expect(loaded.databases[0]!.dialect).toBe("postgres");
   });
 
+  test("explicit `dialect: mysql` accepted (0.7.0)", () => {
+    const yaml = `databases:
+  - name: prod
+    url: mysql://u:p@host:3306/app
+    dialect: mysql
+`;
+    const loaded = parsePolicyYaml(yaml, "test");
+    expect(loaded.databases[0]!.dialect).toBe("mysql");
+  });
+
   test("unknown dialect name is rejected by zod", () => {
     const yaml = `databases:
   - name: prod
     url: postgres://x
-    dialect: mysql
+    dialect: sqlite
 `;
-    // 0.6.0 ships PG-only; the zod enum is the boundary that stops a doc
-    // from compiling with an unsupported value. When MySQL lands, this
-    // assertion gets updated to allow it. Until then the lock matters —
-    // silent acceptance would mean PG parsing on a MySQL-marked DB.
+    // The zod enum is the boundary that stops a doc from compiling with an
+    // unsupported value (sqlite is Phase 1.5). Silent acceptance would mean
+    // PG parsing on a differently-marked DB — a silent-bypass vector.
     expect(() => parsePolicyYaml(yaml, "test")).toThrow(/dialect/);
   });
 

@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { handleDescribeTable } from "../../src/tools/describe-table.ts";
-import { makeTestEngine, baseCtx } from "../_helpers.ts";
+import { makeTestEngine, baseCtx, describeTableSql } from "../_helpers.ts";
 
 describe("describe_table tool", () => {
   test("returns columns from canned information_schema.columns query", async () => {
@@ -20,6 +20,7 @@ describe("describe_table tool", () => {
       engine,
       ctx: baseCtx,
       args: { table: "users" },
+      describeTableSql,
     });
 
     expect(out.isError).toBeFalsy();
@@ -45,6 +46,7 @@ describe("describe_table tool", () => {
         engine,
         ctx: baseCtx,
         args: { table: "users; DROP TABLE users" },
+        describeTableSql,
       }),
     ).rejects.toThrow();
     // Engine never invoked: no audit events, no executor calls.
@@ -55,14 +57,14 @@ describe("describe_table tool", () => {
   test("rejects table name with quote", async () => {
     const { engine } = makeTestEngine();
     await expect(
-      handleDescribeTable({ engine, ctx: baseCtx, args: { table: "users'--" } }),
+      handleDescribeTable({ engine, ctx: baseCtx, args: { table: "users'--" }, describeTableSql }),
     ).rejects.toThrow();
   });
 
   test("rejects empty table name", async () => {
     const { engine } = makeTestEngine();
     await expect(
-      handleDescribeTable({ engine, ctx: baseCtx, args: { table: "" } }),
+      handleDescribeTable({ engine, ctx: baseCtx, args: { table: "" }, describeTableSql }),
     ).rejects.toThrow();
   });
 
@@ -73,6 +75,7 @@ describe("describe_table tool", () => {
         engine,
         ctx: baseCtx,
         args: { table: "users", schema: "public; --" },
+        describeTableSql,
       }),
     ).rejects.toThrow();
     expect(executor.calls.length).toBe(0);

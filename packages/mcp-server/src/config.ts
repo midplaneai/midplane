@@ -61,12 +61,12 @@ const TableAccessSchema = z.object({
   tables: z.record(z.string(), TableAccessLevelSchema).default({}),
 });
 
-// Supported dialects. Locked to "postgres" in 0.6.0 — the seam exists but
-// adding a value requires a concrete `Dialect` implementation in the engine
-// package's `dialects/<name>/`. New dialect names land per Phase 1+ of the
-// multi-DB roadmap (MySQL, T-SQL, Snowflake, ...). zod rejects unknown
-// values at schema time so a typo in YAML fails loudly at boot.
-const DialectSchema = z.enum(["postgres"]);
+// Supported dialects. 0.7.0 adds "mysql" (Phase 1 PR2). Each value requires a
+// concrete `Dialect` implementation in the engine package's `dialects/<name>/`.
+// Further dialects land per the multi-DB roadmap (SQLite → Phase 1.5, T-SQL /
+// Snowflake → Phase 2). zod rejects unknown values at schema time so a typo in
+// YAML fails loudly at boot.
+const DialectSchema = z.enum(["postgres", "mysql"]);
 
 // Per-DB entry in `databases:`. Schema validation only — name regex,
 // reserved-name, dup-detect, and env interpolation are applied by the

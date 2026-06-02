@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { handleListTables } from "../../src/tools/list-tables.ts";
-import { makeTestEngine, baseCtx } from "../_helpers.ts";
+import { makeTestEngine, baseCtx, listTablesSql } from "../_helpers.ts";
 
 describe("list_tables tool", () => {
   test("calls executor with information_schema query and returns rows", async () => {
@@ -16,7 +16,7 @@ describe("list_tables tool", () => {
       rowCount: 2,
     };
 
-    const out = await handleListTables({ engine, ctx: baseCtx, args: {} });
+    const out = await handleListTables({ engine, ctx: baseCtx, args: {}, listTablesSql });
 
     expect(out.isError).toBeFalsy();
     const payload = JSON.parse((out.content[0] as { text: string }).text);
@@ -39,14 +39,19 @@ describe("list_tables tool", () => {
   test("schema arg defaults to 'public' and is embedded after regex check", async () => {
     const { engine, executor } = makeTestEngine();
     executor.result = { rows: [], rowCount: 0 };
-    await handleListTables({ engine, ctx: baseCtx, args: {} });
+    await handleListTables({ engine, ctx: baseCtx, args: {}, listTablesSql });
     expect(executor.calls[0]?.sql).toMatch(/'public'/);
   });
 
   test("schema with shell metachars is rejected before engine sees it", async () => {
     const { engine, executor } = makeTestEngine();
     await expect(
-      handleListTables({ engine, ctx: baseCtx, args: { schema: "public; DROP TABLE users" } }),
+      handleListTables({
+        engine,
+        ctx: baseCtx,
+        args: { schema: "public; DROP TABLE users" },
+        listTablesSql,
+      }),
     ).rejects.toThrow();
     expect(executor.calls.length).toBe(0);
   });

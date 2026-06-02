@@ -75,7 +75,7 @@ const NOOP_TELEMETRY: TelemetryHandle = {
 export function buildServer(opts: BuildServerOptions): McpServer {
   const server = new McpServer({
     name: "midplane-mcp-server",
-    version: "0.6.0",
+    version: "0.7.0",
   });
 
   const telemetry = opts.telemetry ?? NOOP_TELEMETRY;
@@ -165,6 +165,8 @@ export function buildServer(opts: BuildServerOptions): McpServer {
             engine: entry.engine,
             ctx: ctxFor(onlyDb),
             args,
+            listTablesSql: entry.listTablesSql,
+            defaultSchema: entry.defaultSchema,
           });
           allowed = !result.isError;
           return result;
@@ -190,6 +192,8 @@ export function buildServer(opts: BuildServerOptions): McpServer {
             engine: entry.engine,
             ctx: ctxFor(onlyDb),
             args,
+            describeTableSql: entry.describeTableSql,
+            defaultSchema: entry.defaultSchema,
           });
           allowed = !result.isError;
           return result;
@@ -257,6 +261,8 @@ export function buildServer(opts: BuildServerOptions): McpServer {
             engine: entry.engine,
             ctx: ctxFor(dbName),
             args: { schema: args.schema },
+            listTablesSql: entry.listTablesSql,
+            defaultSchema: entry.defaultSchema,
           });
           allowed = !result.isError;
           return result;
@@ -300,6 +306,8 @@ export function buildServer(opts: BuildServerOptions): McpServer {
           engine: entry.engine,
           ctx: ctxFor(dbName),
           args: { table: args.table, schema: args.schema },
+          describeTableSql: entry.describeTableSql,
+          defaultSchema: entry.defaultSchema,
         });
         allowed = !result.isError;
         return result;

@@ -40,14 +40,22 @@ export async function handleListTables(input: {
   engine: Engine;
   ctx: EngineContext;
   args: ListTablesArgs;
+  // Dialect-specific discovery SQL, supplied by the registry's EngineEntry
+  // (Engine.dialect is private, so the tool can't reach the dialect directly).
+  // Postgres + MySQL both emit the SQL-standard information_schema query.
+  listTablesSql: (schema: string) => string;
+  // Schema to use when the caller omits `schema`. Postgres → "public"; MySQL →
+  // the connected database. Optional; falls back to "public".
+  defaultSchema?: string;
 }): Promise<ToolResult> {
-  const schema = input.args.schema ?? "public";
+  const schema = input.args.schema ?? input.defaultSchema ?? "public";
   if (!IDENT.test(schema)) {
     throw new Error(`Invalid schema identifier: ${schema}`);
   }
 
-  // Embedded literal is safe: schema has passed strict identifier regex.
-  const sql = `SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = '${schema}' ORDER BY table_name`;
+  // Built by the dialect; embedding `schema` is safe — it passed the strict
+  // identifier regex above (the dialect builder's documented contract).
+  const sql = input.listTablesSql(schema);
 
   const decision = await input.engine.handle({
     sql,
@@ -95,9 +103,12 @@ export async function handleListTablesAcrossAll(input: {
   args: { schema?: string };
   recordToolCall?: (db: string, allowed: boolean) => void;
 }): Promise<ToolResult> {
-  const schema = input.args.schema ?? "public";
-  if (!IDENT.test(schema)) {
-    throw new Error(`Invalid schema identifier: ${schema}`);
+  // Validate an explicitly-supplied schema once, up front. When omitted, each DB
+  // falls back to its OWN default schema (Postgres "public", MySQL the connected
+  // database) — so a fan-out across mixed dialects lists the right schema per DB
+  // instead of forcing every DB to "public".
+  if (input.args.schema !== undefined && !IDENT.test(input.args.schema)) {
+    throw new Error(`Invalid schema identifier: ${input.args.schema}`);
   }
   const names = input.registry.names();
 
@@ -109,7 +120,9 @@ export async function handleListTablesAcrossAll(input: {
         const result = await handleListTables({
           engine: entry.engine,
           ctx: input.ctxFor(db),
-          args: { schema },
+          args: { schema: input.args.schema },
+          listTablesSql: entry.listTablesSql,
+          defaultSchema: entry.defaultSchema,
         });
         const data = JSON.parse(result.content[0]!.text) as
           | { allowed: true; tables: Array<{ schema: string; name: string }>; auditId: string }
