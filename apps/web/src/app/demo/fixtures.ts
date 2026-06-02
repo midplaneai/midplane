@@ -71,38 +71,28 @@ export interface DemoExample {
   sql: string;
 }
 
-// Six worked examples. Order matters: the first three should land
-// green under the starting policy so the visitor sees the happy path
-// before the rejections. The last three are the demo's payoff — an
-// LLM does its job, midplane refuses to forward what would be unsafe.
+// Six worked examples. Order matters in two ways: the DemoChat
+// auto-runs EXAMPLES[0] on mount, and the chips render left-to-right
+// in this order. We open on a deny and alternate deny/allow down the
+// row, so midplane's value — a blocked unsafe action — is the first
+// thing on screen, and the chip strip never reads as "all allow, then
+// all deny." Each allow proves it isn't just a wall; each deny is the
+// payoff (an LLM does its job, midplane refuses to forward the unsafe
+// statement).
 export const EXAMPLES: DemoExample[] = [
-  {
-    label: "Recent paid orders",
-    prompt: "Show me the five most recent paid orders.",
-    hint: "Read on a table marked read.",
-    intent: "Fetch the five most recent paid orders.",
-    sql: "SELECT id, customer, total_usd, status, placed_at FROM orders WHERE status = 'paid' ORDER BY placed_at DESC LIMIT 5;",
-  },
-  {
-    label: "Find a customer by email",
-    prompt: "What plan is ada@acme.io on?",
-    hint: "Read on a table marked read.",
-    intent: "Look up ada@acme.io's plan.",
-    sql: "SELECT id, email, plan FROM customers WHERE email = 'ada@acme.io';",
-  },
-  {
-    label: "Close a support ticket",
-    prompt: "Close support ticket tkt_44.",
-    hint: "Write on a table marked read_write.",
-    intent: "Mark support ticket tkt_44 as closed.",
-    sql: "UPDATE support_tickets SET status = 'closed' WHERE id = 'tkt_44';",
-  },
   {
     label: "Dump API keys",
     prompt: "List every API key in the database.",
     hint: "Read on a table not in the allowlist — denied.",
     intent: "List every API key.",
     sql: "SELECT id, customer, prefix, last_used_at FROM api_keys;",
+  },
+  {
+    label: "Recent paid orders",
+    prompt: "Show me the five most recent paid orders.",
+    hint: "Read on a table marked read.",
+    intent: "Fetch the five most recent paid orders.",
+    sql: "SELECT id, customer, total_usd, status, placed_at FROM orders WHERE status = 'paid' ORDER BY placed_at DESC LIMIT 5;",
   },
   {
     label: "Refund every order",
@@ -112,10 +102,24 @@ export const EXAMPLES: DemoExample[] = [
     sql: "UPDATE orders SET status = 'refunded';",
   },
   {
+    label: "Find a customer by email",
+    prompt: "What plan is ada@acme.io on?",
+    hint: "Read on a table marked read.",
+    intent: "Look up ada@acme.io's plan.",
+    sql: "SELECT id, email, plan FROM customers WHERE email = 'ada@acme.io';",
+  },
+  {
     label: "Drop the audit log",
     prompt: "Drop the audit_log table.",
     hint: "DDL is denied outright, regardless of policy.",
     intent: "Drop the audit_log table.",
     sql: "DROP TABLE audit_log;",
+  },
+  {
+    label: "Close a support ticket",
+    prompt: "Close support ticket tkt_44.",
+    hint: "Write on a table marked read_write.",
+    intent: "Mark support ticket tkt_44 as closed.",
+    sql: "UPDATE support_tickets SET status = 'closed' WHERE id = 'tkt_44';",
   },
 ];
