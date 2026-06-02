@@ -27,6 +27,15 @@ describe("FlyMachineSpawner", () => {
         expect(env.MIDPLANE_POLICY_FILE).toBe("/etc/midplane/policy.yaml");
         expect(body.region).toBe("fra");
 
+        // Guest size is pinned explicitly — API-created machines don't
+        // inherit fly-eu.toml's [[vm]], so without this the engine would
+        // run at whatever Fly defaults to rather than a chosen size.
+        expect(config.guest).toEqual({
+          cpu_kind: "shared",
+          cpus: 1,
+          memory_mb: 256,
+        });
+
         // No Fly volume mount: /data lives on the machine's rootfs so each
         // spawn gets a fresh filesystem. A volume here would either single-
         // attach-block the next concurrent spawn or leak the previous

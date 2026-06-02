@@ -148,6 +148,19 @@ export class FlyMachineSpawner implements Spawner {
         region: flyRegion,
         config: {
           image: this.image,
+          // Pin the VM size explicitly. Machines created through the Machines
+          // API do NOT inherit fly-eu.toml's [[vm]] block — that only governs
+          // `fly deploy`. Without this the engine silently falls to the API
+          // default (shared-cpu-1x / 256 MB), so the size is whatever Fly
+          // happens to default to rather than a decision. 256 MB / 1 shared
+          // CPU is the floor and fits the proxy plus its SQLite audit buffer.
+          // If the engine starts OOM-killing under load, bump here AND in
+          // fly-eu.toml together.
+          guest: {
+            cpu_kind: "shared",
+            cpus: 1,
+            memory_mb: 256,
+          },
           env: {
             ...dsnEnv,
             PORT: "8080",
