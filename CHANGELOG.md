@@ -4,6 +4,14 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- **`midplane policy` CLI — author, trust, and dry-run a `MIDPLANE_POLICY_FILE` without hand-editing YAML blind.** Closes the "self-host is just hand-written YAML" gap; four subcommands on the existing `midplane` binary:
+  - `midplane policy init [--url $DATABASE_URL] [--tenant-column <col>] [-o <file>]` — scaffold a commented policy file. With `--url`, it connects, lists every table in the `public` schema (the same `information_schema` query the `list_tables` tool runs, read-only), and emits each under `table_access` with `default: read` and a flip-to-`read_write` hint. With `--tenant-column`, it emits a strict `tenant_scope` block on that column (`exempt: [audit_log]`). The DSN is never printed or written into the file.
+  - `midplane policy validate <file>` — parse the YAML and check it against the *same* zod schema the server boots with. Prints `OK`, or `INVALID` + each error (zod path + message). Exit nonzero on invalid. Offline: an unset `${VAR}` in a `databases[].url` doesn't fail a structural check.
+  - `midplane policy lint <file>` — security-posture findings beyond schema validity: `default: read_write`, tables granted writes, missing/disabled `tenant_scope`, audit-style tables left scoped, policies that restrict nothing. `[ERROR]` findings exit nonzero (CI gate); warnings exit 0.
+  - `midplane policy test <file> --sql "<query>" [--tenant-id <id>] [--db <name>] [--json]` — run a query through the engine's real `evaluate()` against the file's policy (no DB connection) and print the decision, the rule, and the exact agent-facing message a denial would return. The dry-run authors use to answer "would this pass, and what would the agent see?"
+
 ## [0.7.0] — 2026-06-01
 
 ### Added

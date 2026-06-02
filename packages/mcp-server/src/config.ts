@@ -82,7 +82,9 @@ const DatabaseEntrySchema = z.object({
   table_access: TableAccessSchema.optional(),
 });
 
-const PolicyFileSchema = z.object({
+// Exported so `midplane policy validate` can check a candidate file against
+// the exact same schema the server boots with — no second copy to drift.
+export const PolicyFileSchema = z.object({
   // Legacy single-DB shape (still the documented common case).
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),

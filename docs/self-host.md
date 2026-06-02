@@ -93,6 +93,35 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 | `MIDPLANE_DENY_WEBHOOK_RULES` | (all rules) | Comma-separated allowlist of policy rule names that trigger the webhook. |
 | `INDEXER_TOKEN` | (none) | Bearer token for the audit pull endpoints. Unset → endpoints return 404. See [Shipping audit to your own collector](#shipping-audit-to-your-own-collector). |
 
+## Authoring the policy file
+
+`MIDPLANE_POLICY_FILE` is a YAML file, but you don't have to write it blind. The same `midplane` binary ships a `policy` CLI that scaffolds, validates, lints, and dry-runs a policy.
+
+```bash
+# Scaffold from a live database: lists every table in the `public` schema and
+# emits each under table_access (default: read). --tenant-column turns on strict
+# tenant scoping. The DSN is never written into the file, so redirect stdout.
+# Note the container shell (sh -lc): DATABASE_URL must expand INSIDE the
+# container, not on your host — the redirect stays on the host.
+docker exec midplane sh -lc 'midplane policy init --url "$DATABASE_URL" --tenant-column tenant_id' > policy.yaml
+
+# No --url? Emit a static starter template to edit by hand.
+docker exec midplane midplane policy init > policy.yaml
+
+# Schema-check it against the exact schema the server boots with.
+midplane policy validate policy.yaml
+
+# Security-posture review: read_write defaults, ungated tables, missing
+# tenant_scope, audit tables left scoped. Exits nonzero on any [ERROR].
+midplane policy lint policy.yaml
+
+# Dry-run a query against the policy — no DB connection. Prints ALLOW/DENY,
+# the rule, and the exact message the agent would see on a denial.
+midplane policy test policy.yaml --sql "DELETE FROM users WHERE tenant_id = 'acme'" --tenant-id acme
+```
+
+`validate` and `lint` are good CI gates — both exit nonzero on a bad/dangerous policy. Run `midplane policy help` for the full reference.
+
 ## Reading the audit log
 
 The container ships a `midplane audit` CLI that wraps the local SQLite log. No SQL required.

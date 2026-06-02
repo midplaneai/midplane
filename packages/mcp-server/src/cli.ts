@@ -5,6 +5,8 @@
 //   server (default)   Run the MCP server (stdio or HTTP). Same code path as
 //                      the legacy `midplane-mcp-server` bin.
 //   audit              Read the local audit log (tail | stats | since).
+//   policy             Author/validate/lint/dry-run a MIDPLANE_POLICY_FILE
+//                      (init | validate | lint | test).
 //   version            Print the package version.
 //   help               Show usage.
 //
@@ -13,6 +15,7 @@
 // whole point.
 
 import { runAudit, printAuditHelp } from "./audit-cli.ts";
+import { runPolicy, printPolicyHelp } from "./policy-cli.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
 async function main(): Promise<void> {
@@ -28,6 +31,9 @@ async function main(): Promise<void> {
     case "audit":
       await runAudit(rest);
       return;
+    case "policy":
+      await runPolicy(rest);
+      return;
     case "--version":
     case "-v":
     case "version":
@@ -38,6 +44,10 @@ async function main(): Promise<void> {
     case "help":
       if (rest[0] === "audit") {
         printAuditHelp();
+        return;
+      }
+      if (rest[0] === "policy") {
+        printPolicyHelp();
         return;
       }
       printHelp();
@@ -55,10 +65,13 @@ function printHelp(stream: NodeJS.WriteStream = process.stdout): void {
 Usage:
   midplane [server]   Run the MCP server (default subcommand)
   midplane audit ...  Read the local audit log (tail | stats | since)
+  midplane policy ... Author/validate/lint/dry-run a policy file
+                      (init | validate | lint | test)
   midplane version    Print version
   midplane help       Show this message
 
 Run 'midplane audit help' for audit subcommands.
+Run 'midplane policy help' for policy subcommands.
 `);
 }
 
