@@ -36,7 +36,11 @@ primary_region = "fra"
   method = "GET"
   path = "/health"
 
+# NOTE: this [[vm]] only applies to `fly deploy`. The customer-serving
+# machines are created on demand via the Machines API by FlyMachineSpawner,
+# which pins its own guest (shared-cpu-1x / 256 MB). Keep this in sync with
+# the `guest` block in packages/router/src/spawner-fly.ts.
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 512
+  memory_mb = 256
