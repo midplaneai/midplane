@@ -19,7 +19,7 @@ Draft tier structure. Not yet implemented (no `plan` column, no Stripe wiring). 
 | Seats | 1 | 10 | unlimited |
 | Audit retention | 7 days | 30 days | 30 days |
 | Policy engine (allow/deny/warn) | ✓ | ✓ | ✓ |
-| Custom policy rules (regex, time-of-day, per-actor) | ✓ | ✓ | ✓ |
+| Per-table access + tenant scope (parser-level) | ✓ | ✓ | ✓ |
 | SSO / SAML | — | — | ✓ |
 | Support | community | email | priority email |
 
