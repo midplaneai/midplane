@@ -39,6 +39,7 @@ export type CreateTokenAction = (
         | "expiry_in_past"
         | "internal";
     }
+  | { ok: false; error: "plan_limit"; limit: number; upgradeUrl: string }
 >;
 
 interface CreateTokenModalProps {
@@ -73,6 +74,10 @@ export function CreateTokenModal({
   const [expiry, setExpiry] = useState<string>(DEFAULT_EXPIRY);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Set alongside `error` only when the failure is a plan cap, so the form
+  // can render an upgrade link next to the message (a dead-end "limit
+  // reached" with no action would be a UX trap).
+  const [upgradeUrl, setUpgradeUrl] = useState<string | null>(null);
   const [mcpUrl, setMcpUrl] = useState<string | null>(null);
   const nameId = useId();
   const expiryId = useId();
@@ -81,6 +86,7 @@ export function CreateTokenModal({
     setName("");
     setExpiry(DEFAULT_EXPIRY);
     setError(null);
+    setUpgradeUrl(null);
     setMcpUrl(null);
   }
 
@@ -98,6 +104,7 @@ export function CreateTokenModal({
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
+    setUpgradeUrl(null);
 
     const trimmed = name.trim();
     if (trimmed.length === 0) {
@@ -121,6 +128,13 @@ export function CreateTokenModal({
       });
       if (result.ok) {
         setMcpUrl(result.mcpUrl);
+        return;
+      }
+      if (result.error === "plan_limit") {
+        setError(
+          `You've reached your plan's token limit (${result.limit}).`,
+        );
+        setUpgradeUrl(result.upgradeUrl);
         return;
       }
       setError(messageForError(result.error));
@@ -220,6 +234,18 @@ export function CreateTokenModal({
                   data-testid="create-token-error"
                 >
                   {error}
+                  {upgradeUrl ? (
+                    <>
+                      {" "}
+                      <a
+                        href={upgradeUrl}
+                        className="font-medium text-foreground underline underline-offset-2"
+                      >
+                        Upgrade your plan
+                      </a>
+                      .
+                    </>
+                  ) : null}
                 </p>
               ) : null}
               <div className="flex items-center justify-end gap-2 pt-2">

@@ -16,6 +16,7 @@ import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { currentCustomer } from "@/lib/customer";
+import { PlanLimitError, resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 import { tokenEnvFromConfig } from "@/lib/token-env";
 import {
@@ -33,7 +34,8 @@ const MAX_TOKEN_NAME_LENGTH = 64;
  *  render directly. */
 export type CreateTokenResult =
   | { ok: true; mcpUrl: string; id: string; name: string }
-  | { ok: false; error: "name_required" | "name_too_long" | "name_taken" | "not_found" | "expiry_in_past" | "internal" };
+  | { ok: false; error: "name_required" | "name_too_long" | "name_taken" | "not_found" | "expiry_in_past" | "internal" }
+  | { ok: false; error: "plan_limit"; limit: number; upgradeUrl: string };
 
 const VALID_EXPIRY_DAYS = new Set([30, 90, 365]);
 
@@ -79,6 +81,8 @@ export async function createTokenAction(
   }
   const pepperBuf = peppers.get(firstKid)!;
 
+  const { plan, caps } = await resolvePlan();
+
   try {
     const result = await createToken(
       customer,
@@ -88,6 +92,7 @@ export async function createTokenAction(
         expiresAt,
         actorClerkUserId: userId,
         env: tokenEnvFromConfig(process.env),
+        planLimit: { tokenCap: caps.tokens, plan },
       },
       { kid: firstKid, pepper: pepperBuf },
     );
@@ -119,6 +124,9 @@ export async function createTokenAction(
     }
     if (err instanceof ExpiryInThePast) {
       return { ok: false, error: "expiry_in_past" };
+    }
+    if (err instanceof PlanLimitError) {
+      return { ok: false, error: "plan_limit", limit: err.limit, upgradeUrl: UPGRADE_URL };
     }
     console.error("[createTokenAction] unexpected failure", err);
     return { ok: false, error: "internal" };

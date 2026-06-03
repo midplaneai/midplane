@@ -18,7 +18,7 @@
       "name": "@midplane-cloud/web",
       "version": "0.0.0",
       "dependencies": {
-        "@clerk/nextjs": "^6.10.0",
+        "@clerk/nextjs": "6.39.3",
         "@midplane-cloud/db": "workspace:*",
         "@midplane-cloud/kms": "workspace:*",
         "@midplane-cloud/router": "workspace:*",

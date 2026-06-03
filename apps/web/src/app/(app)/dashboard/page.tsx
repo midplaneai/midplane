@@ -34,6 +34,7 @@ import {
   renameDatabase,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { resolvePlan } from "@/lib/plan";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
 
@@ -57,7 +58,11 @@ export default async function Dashboard({
   // the stale param if a bookmarked URL still carries it.
   void searchParams;
 
-  const rows = await listDashboardConnections(customer);
+  const { caps } = await resolvePlan();
+  const rows = await listDashboardConnections(
+    customer,
+    caps.auditRetentionDays,
+  );
 
   return (
     <>

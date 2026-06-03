@@ -373,6 +373,55 @@ describe("deleteConnection", () => {
   });
 });
 
+describe("createConnection plan caps", () => {
+  // DSN encryption is mocked (see the @midplane-cloud/kms mock above), so
+  // encryptDsn succeeds before the txn. The cap checks throw INSIDE the txn,
+  // before the post-commit default-token mint — so these tests never reach
+  // the pepper/createToken path and don't have to stage it.
+  const DSN = "postgres://u:p@host:5432/db";
+  const ACTOR = "user_clerk-actor";
+
+  it("throws PlanLimitError('connections') when already at the connection cap", async () => {
+    const { createConnection } = await import("../src/lib/connections.ts");
+    const { PlanLimitError, CAPS } = await import("../src/lib/plan.ts");
+    // Free allows 1 connection. Stage the customers FOR UPDATE select, then
+    // the connection-count select returning one existing row → 1 >= 1.
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "conn-existing" }]); // connection count
+    const err = await createConnection(customer, DSN, null, "read", ACTOR, {
+      plan: "free",
+      caps: CAPS.free,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err.resource).toBe("connections");
+    expect(err.limit).toBe(1);
+  });
+
+  it("throws PlanLimitError('tokens') when under the connection cap but out of token room (D8)", async () => {
+    const { createConnection } = await import("../src/lib/connections.ts");
+    const { PlanLimitError } = await import("../src/lib/plan.ts");
+    // connections under cap (1 < 5) but the to-be-minted default has no room
+    // (1 usable token >= tokens cap of 1).
+    const caps = {
+      connections: 5,
+      tokens: 1,
+      auditRetentionDays: 30,
+      sso: false,
+    };
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "c1" }]); // connection count → 1 < 5 ✓
+    handle.queueSelect([{ id: "c1" }]); // countUsableTokens: connection ids
+    handle.queueSelect([{ count: 1 }]); // countUsableTokens: usable count → 1 >= 1
+    const err = await createConnection(customer, DSN, null, "read", ACTOR, {
+      plan: "pro",
+      caps,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err.resource).toBe("tokens");
+    expect(err.limit).toBe(1);
+  });
+});
+
 interface CacheSpy {
   invalidate: ReturnType<typeof vi.fn>;
 }

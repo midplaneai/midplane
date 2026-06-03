@@ -12,6 +12,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import { getAuditEvent, getRelatedEvents } from "@/lib/audit";
 import { currentCustomer } from "@/lib/customer";
+import { resolvePlan } from "@/lib/plan";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -22,7 +23,15 @@ export default async function AuditDetailPage({ params }: PageProps) {
   if (!customer) redirect("/signup/region");
 
   const { id } = await params;
-  const event = await getAuditEvent(customer.region, customer.id, id);
+  // Clamp the deep-link read to the plan's retention window — an out-of-window
+  // id returns null and renders the "outside your retention window" state.
+  const { caps } = await resolvePlan();
+  const event = await getAuditEvent(
+    customer.region,
+    customer.id,
+    id,
+    caps.auditRetentionDays,
+  );
 
   if (!event) {
     return (

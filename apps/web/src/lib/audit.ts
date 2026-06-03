@@ -29,7 +29,7 @@
 // computed terminal status. The lifecycle stages are still individually
 // queryable (getRelatedEvents) for the detail page.
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gte, sql } from "drizzle-orm";
 
 import {
   auditEventsIndex,
@@ -40,6 +40,44 @@ import {
 } from "@midplane-cloud/db";
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// --- audit retention window -------------------------------------------------
+//
+// Pricing gates how far back a customer can READ their audit log (Free 7d,
+// Pro/Team 30d). This is a query-time visibility clamp, NOT storage deletion
+// — old rows persist in audit_events_index; reads hide them. A storage-
+// pruning job is a separate follow-up (see TODOS.md).
+//
+// retentionDays is OPTIONAL on every read helper: when omitted, no clamp is
+// applied (preserves the pre-pricing behavior and the existing test shape).
+// EVERY real caller (the /audit pages, the dashboard freshness reads) MUST
+// pass caps.auditRetentionDays from resolvePlan() — a forgotten clamp is a
+// privacy leak, which the audit-retention e2e is the backstop against.
+
+/** Lower bound of the retention window as a Date, or null when no window is
+ *  enforced. Used by the Drizzle-builder reads (gte()). */
+export function retentionSince(
+  retentionDays: number | undefined,
+  now: Date = new Date(),
+): Date | null {
+  if (retentionDays === undefined || !Number.isFinite(retentionDays)) {
+    return null;
+  }
+  return new Date(now.getTime() - retentionDays * MS_PER_DAY);
+}
+
+/** retentionSince as an ISO string for the raw-SQL reads. postgres-js's
+ *  raw-unsafe param path (tx.execute on a sql template) won't serialize a
+ *  Date — same reason as the stuck-cutoff / since casts in this file — so
+ *  these callers bind text + ::timestamptz. */
+function retentionSinceIso(
+  retentionDays: number | undefined,
+  now: Date,
+): string | null {
+  return retentionSince(retentionDays, now)?.toISOString() ?? null;
+}
 
 // Lifecycle event types — still emitted per-row by the OSS engine and
 // rendered individually on the audit detail page. The list page no longer
@@ -139,6 +177,9 @@ export interface ListAuditOpts {
   pageSize?: number;
   /** Injected for tests so STUCK detection is deterministic. */
   now?: () => Date;
+  /** Plan retention window in days. When set, rows older than this are
+   *  excluded. Omitted = no clamp. */
+  retentionDays?: number;
 }
 
 export interface ListAuditResult {
@@ -159,6 +200,12 @@ export async function listAuditQueries(
   // not auto-serialize Date, so binding a Date here throws
   // "argument must be string or Buffer". Same pattern as eventVolumeByHour.
   const stuckCutoffIso = new Date(nowMs - STUCK_THRESHOLD_MS).toISOString();
+  // Retention clamp. Applied to the aggregation, the search subquery, and the
+  // policy-events branch so an out-of-window row can't surface via any path.
+  // Lifecycle rows of one query land within seconds of each other, so a
+  // days-wide window keeps each query whole — no split lifecycles.
+  const retIso = retentionSinceIso(opts.retentionDays, new Date(nowMs));
+  const retentionClause = retIso ? sql`AND ts >= ${retIso}::timestamptz` : sql``;
 
   return withCustomerScope(opts.region, customerId, async (tx) => {
     // Inner WHERE narrows the rows that participate in aggregation. Search
@@ -188,6 +235,7 @@ export async function listAuditQueries(
           SELECT query_id FROM audit_events_index
           WHERE customer_id = ${customerId}
             AND region = ${opts.region}
+            ${retentionClause}
             AND (
               payload ->> 'sql_raw' ILIKE ${pattern}
               OR payload ->> 'sql_fingerprint' ILIKE ${pattern}
@@ -246,6 +294,7 @@ export async function listAuditQueries(
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
           AND event_type IN ('ATTEMPTED', 'DECIDED', 'EXECUTED', 'FAILED')
+          ${retentionClause}
           ${tenantClause}
           ${databaseClause}
           ${searchClause}
@@ -303,6 +352,7 @@ export async function listAuditQueries(
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
           AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
+          ${retentionClause}
           ${tenantClause}
           ${databaseClause}
           ${policySearchClause}
@@ -383,7 +433,9 @@ function parsePolicyPayload(v: unknown): Record<string, unknown> | null {
 export async function listTenantIds(
   customerId: string,
   region: Region,
+  retentionDays?: number,
 ): Promise<string[]> {
+  const since = retentionSince(retentionDays);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ tenantId: auditEventsIndex.tenantId })
@@ -392,6 +444,9 @@ export async function listTenantIds(
         and(
           eq(auditEventsIndex.customerId, customerId),
           eq(auditEventsIndex.region, region),
+          // Clamp so the filter chips don't surface tenant names whose only
+          // rows are outside the retention window.
+          since ? gte(auditEventsIndex.ts, since) : undefined,
         ),
       )
       .orderBy(asc(auditEventsIndex.tenantId))
@@ -408,7 +463,9 @@ export async function listTenantIds(
 export async function listDatabases(
   customerId: string,
   region: Region,
+  retentionDays?: number,
 ): Promise<string[]> {
+  const since = retentionSince(retentionDays);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ database: auditEventsIndex.database })
@@ -417,6 +474,7 @@ export async function listDatabases(
         and(
           eq(auditEventsIndex.customerId, customerId),
           eq(auditEventsIndex.region, region),
+          since ? gte(auditEventsIndex.ts, since) : undefined,
         ),
       )
       .orderBy(asc(auditEventsIndex.database))
@@ -465,7 +523,8 @@ export interface VolumeFilters {
 export async function eventVolumeByHour(
   customerId: string,
   region: Region,
-  opts: { hours?: number; now?: () => Date } & VolumeFilters = {},
+  opts: { hours?: number; now?: () => Date; retentionDays?: number } &
+    VolumeFilters = {},
 ): Promise<VolumeBucket[]> {
   const hours = opts.hours ?? 24;
   const now = (opts.now ?? (() => new Date()))();
@@ -473,13 +532,19 @@ export async function eventVolumeByHour(
   const endHour = new Date(now);
   endHour.setUTCMinutes(0, 0, 0);
   const since = new Date(endHour.getTime() - (hours - 1) * 3_600_000);
+  // Clamp the query's lower bound to the retention window when it would reach
+  // further back than the plan allows. Bucket construction below still spans
+  // the requested window; out-of-retention hours simply render empty.
+  const retSince = retentionSince(opts.retentionDays, now);
+  const queryStart =
+    retSince && retSince.getTime() > since.getTime() ? retSince : since;
 
   // Boundary is sent as ISO text + cast to timestamptz on the server side.
   // postgres-js's raw-unsafe parameter path (used by Drizzle for tx.execute
   // on a sql template) does not auto-serialize Date — passing a Date directly
   // throws "argument must be string or Buffer". String + ::timestamptz is
   // the same wire format the tagged-template path produces.
-  const sinceIso = since.toISOString();
+  const sinceIso = queryStart.toISOString();
 
   // Filter fragments composed onto the inner query so the chart honors
   // exactly the same chips the audit table does. Without this, filtering
@@ -590,6 +655,7 @@ export async function countByStatus(
   customerId: string,
   region: Region,
   now: () => Date = () => new Date(),
+  retentionDays?: number,
 ): Promise<Record<QueryStatus, number>> {
   const result: Record<QueryStatus, number> = {
     ALLOWED: 0,
@@ -601,9 +667,14 @@ export async function countByStatus(
   };
   // ISO text + ::timestamptz cast: see listAuditQueries above for the
   // postgres-js raw-unsafe Date-codec rationale. Same fix applies here.
+  const nowDate = now();
   const stuckCutoffIso = new Date(
-    now().getTime() - STUCK_THRESHOLD_MS,
+    nowDate.getTime() - STUCK_THRESHOLD_MS,
   ).toISOString();
+  // Retention clamp, applied to both the query aggregation and the policy
+  // count so the badge totals match what the list actually shows.
+  const retIso = retentionSinceIso(retentionDays, nowDate);
+  const retentionClause = retIso ? sql`AND ts >= ${retIso}::timestamptz` : sql``;
   return withCustomerScope(region, customerId, async (tx) => {
     // Single statement: query lifecycles classified by status, plus a
     // POLICY_RELOAD bucket so operators can see at a glance how many
@@ -621,6 +692,7 @@ export async function countByStatus(
         WHERE customer_id = ${customerId}
           AND region = ${region}
           AND event_type IN ('ATTEMPTED', 'DECIDED', 'EXECUTED', 'FAILED')
+          ${retentionClause}
         GROUP BY query_id
       )
       SELECT
@@ -642,6 +714,7 @@ export async function countByStatus(
       WHERE customer_id = ${customerId}
         AND region = ${region}
         AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
+        ${retentionClause}
     `;
     const raw = await tx.execute(stmt);
     const rows = ((raw as unknown as { rows?: unknown[] }).rows ??
@@ -663,7 +736,9 @@ export async function getAuditEvent(
   region: Region,
   customerId: string,
   id: string,
+  retentionDays?: number,
 ): Promise<AuditEvent | null> {
+  const since = retentionSince(retentionDays);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .select()
@@ -672,6 +747,13 @@ export async function getAuditEvent(
         and(
           eq(auditEventsIndex.customerId, customerId),
           eq(auditEventsIndex.id, id),
+          // Clamp the single-row read so a deep link to an out-of-window
+          // event returns null — the detail page then renders its "no longer
+          // exists or is outside your retention window" empty state.
+          // getRelatedEvents (below) is intentionally NOT clamped: it's only
+          // reached after this returns a non-null in-window event, and it
+          // must return the FULL lifecycle (anchor-aware, codex #7).
+          since ? gte(auditEventsIndex.ts, since) : undefined,
         ),
       )
       .limit(1);
