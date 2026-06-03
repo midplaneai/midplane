@@ -40,14 +40,24 @@ export const CAPS: Record<Plan, PlanCaps> = {
   },
 };
 
-// Clerk plan slugs that map to each paid tier. Kept as sets so adding an
-// annual / grandfathered SKU later (e.g. "pro_annual") is a one-line change
-// here — NOT a schema migration. IMPORTANT: every paid Clerk plan slug must
-// appear in exactly one of these sets, or resolvePlan() will silently treat
-// a paying org as Free. When you add a plan in the Clerk dashboard, add its
-// slug here (same discipline as the OSS image pin sites in CLAUDE.md).
-const TEAM_SLUGS = ["team"] as const;
-const PRO_SLUGS = ["pro"] as const;
+// Clerk plan slugs that map to each paid tier, ORG-SCOPED.
+//
+// The `org:` prefix binds the entitlement to the ACTIVE ORGANIZATION. Without
+// it, has({ plan: 'pro' }) matches a user-scoped OR org-scoped plan with that
+// slug (Clerk merges both scopes — see @clerk/shared authorization.ts
+// checkForFeatureOrPlan): a member who personally subscribed to a 'pro' plan
+// would wrongly unlock Pro caps for whatever org they have active. `org:pro`
+// checks only the org's subscription. The dashboard plan slug stays `pro`;
+// `org:` is the scope, parsed off before the lookup.
+//
+// Kept as sets so adding an annual / grandfathered SKU later (e.g.
+// "org:pro_annual") is a one-line change here — NOT a schema migration.
+// IMPORTANT: every paid Clerk plan slug must appear (org-scoped) in exactly
+// one set, or resolvePlan() silently treats a paying org as Free. When you
+// add an org plan in the Clerk dashboard, add `org:<slug>` here (same
+// discipline as the OSS image pin sites in CLAUDE.md).
+const TEAM_SLUGS = ["org:team"] as const;
+const PRO_SLUGS = ["org:pro"] as const;
 
 /** Thrown by createConnection / createToken when a plan cap is hit. Caught
  *  at the call sites and translated to a 402 (JSON API) or inline upgrade

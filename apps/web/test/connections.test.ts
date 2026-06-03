@@ -375,11 +375,19 @@ describe("deleteConnection", () => {
 
 describe("createConnection plan caps", () => {
   // DSN encryption is mocked (see the @midplane-cloud/kms mock above), so
-  // encryptDsn succeeds before the txn. The cap checks throw INSIDE the txn,
-  // before the post-commit default-token mint — so these tests never reach
-  // the pepper/createToken path and don't have to stage it.
+  // encryptDsn succeeds. The pepper is loaded (real, env mode) BEFORE the
+  // txn — set the env so that load succeeds; the default token is inserted
+  // inside the txn AFTER the cap check, so these cap-throw tests throw before
+  // reaching the insert and don't stage it.
   const DSN = "postgres://u:p@host:5432/db";
   const ACTOR = "user_clerk-actor";
+
+  beforeEach(() => {
+    process.env.MIDPLANE_KMS_MODE = "env";
+    process.env.MIDPLANE_TOKEN_PEPPER_EU_V1 = Buffer.alloc(32, 7).toString(
+      "base64",
+    );
+  });
 
   it("throws PlanLimitError('connections') when already at the connection cap", async () => {
     const { createConnection } = await import("../src/lib/connections.ts");
@@ -419,6 +427,33 @@ describe("createConnection plan caps", () => {
     expect(err).toBeInstanceOf(PlanLimitError);
     expect(err.resource).toBe("tokens");
     expect(err.limit).toBe(1);
+  });
+
+  it("inserts the default token INSIDE the connection txn, not in a later one (atomic with the cap check)", async () => {
+    const { createConnection } = await import("../src/lib/connections.ts");
+    const { CAPS } = await import("../src/lib/plan.ts");
+    const { mcpTokens, connections: connectionsTable } = await import(
+      "@midplane-cloud/db"
+    );
+    // Under cap: 0 existing connections, 0 usable tokens (Free 1/1).
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([]); // connection count → 0 < 1 ✓
+    handle.queueSelect([]); // countUsableTokens: connection ids → none → 0 < 1 ✓
+    const result = await createConnection(customer, DSN, null, "read", ACTOR, {
+      plan: "free",
+      caps: CAPS.free,
+    });
+    expect(result.defaultTokenPlaintext).toMatch(
+      /^mp_(live|test)_[0-9a-f]{32}_/,
+    );
+    // The default token row was inserted as part of createConnection — proving
+    // the auto-mint moved into the connection txn (no separate post-commit
+    // mint that could race past the cap). It lands after the connection insert.
+    const inserts = handle.calls.filter((c) => c.op === "insert");
+    const connIdx = inserts.findIndex((c) => c.table === connectionsTable);
+    const tokenIdx = inserts.findIndex((c) => c.table === mcpTokens);
+    expect(connIdx, "connection must be inserted").toBeGreaterThanOrEqual(0);
+    expect(tokenIdx, "default token must be inserted").toBeGreaterThan(connIdx);
   });
 });
 

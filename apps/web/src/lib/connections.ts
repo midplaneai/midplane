@@ -27,7 +27,11 @@ import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 import { normalizeName } from "./connection-name.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
-import { countUsableTokens, createToken } from "./tokens.ts";
+import {
+  countUsableTokens,
+  emitTokenAuditRow,
+  insertTokenRow,
+} from "./tokens.ts";
 
 export {
   MAX_CONNECTION_NAME_LENGTH,
@@ -175,12 +179,31 @@ export async function createConnection(
   };
 
   const childId = ulid();
+  const defaultTokenId = ulid();
   const { caps, plan } = entitlement;
+
+  // Load the pepper BEFORE the transaction so the connection txn never holds
+  // a row lock during a KMS round-trip. The default token is then inserted
+  // INSIDE the txn (below) — atomically with the cap check — so a concurrent
+  // manual mint can't slip between "count under the cap" and "insert the
+  // default" and push the org over its token cap. (The map is cached after
+  // the first load per region; rotation adds kids and we pick the first as
+  // the active write-side kid.)
+  const peppers = await loadPepperFromKms(customer.region, process.env);
+  const firstPepperKid = peppers.keys().next().value as string | undefined;
+  if (!firstPepperKid) {
+    throw new Error(
+      `no pepper available for region '${customer.region}' — token mint cannot proceed`,
+    );
+  }
+  const pepperBuf = peppers.get(firstPepperKid)!;
+  const expiresAt = new Date(Date.now() + NINETY_DAYS_MS);
+
   const db = getDb(customer.region);
-  await db.transaction(async (tx) => {
+  const defaultTokenPlaintext = await db.transaction(async (tx) => {
     // Plan caps (decisions D4/D8). Lock the customers row first so concurrent
     // creates for this org serialize and the counts can't drift before the
-    // insert. Infinity caps (Team) short-circuit each check — we never scan
+    // inserts. Infinity caps (Team) short-circuit each check — we never scan
     // an unlimited customer's connection/token set.
     if (Number.isFinite(caps.connections) || Number.isFinite(caps.tokens)) {
       await tx
@@ -200,9 +223,9 @@ export async function createConnection(
       }
     }
     if (Number.isFinite(caps.tokens)) {
-      // This connection auto-mints a default token below. Reserve its slot
-      // now so total usable tokens can never exceed the cap; the default
-      // mint itself is then NOT re-checked (it passes no planLimit).
+      // The default token inserted below consumes a token slot. Count usable
+      // tokens under the lock and block if there's no room, so total usable
+      // tokens can never exceed the cap.
       const usedTokens = await countUsableTokens(tx, customer.id);
       if (usedTokens >= caps.tokens) {
         throw new PlanLimitError("tokens", caps.tokens, plan);
@@ -222,50 +245,45 @@ export async function createConnection(
       kmsKeyId,
       tableAccess,
     });
+    // Default token, ATOMIC with the cap check + connection insert (closes
+    // the over-cap race). The connection is brand-new so the "default" name
+    // can't collide; ownership is guaranteed (we just inserted it), so no
+    // pre-check is needed.
+    const minted = await insertTokenRow(
+      tx,
+      {
+        id: defaultTokenId,
+        connectionId: id,
+        name: "default",
+        createdByUserId: actorClerkUserId,
+        expiresAt,
+        env: tokenEnvFromConfig(process.env),
+      },
+      { kid: firstPepperKid, pepper: pepperBuf },
+    );
+    return minted.plaintext;
   });
 
-  // Mint the default token outside the connection-insert transaction so
-  // a KMS / pepper hiccup at token-mint time doesn't roll back the
-  // already-encrypted DSN. If mint fails, the connection exists without
-  // any usable token — the operator is alerted; the user can create one
-  // from the dashboard in PR3 (and meanwhile the show-once path is the
-  // only delivery channel for plaintext, so a retry is safe to compose
-  // out of band).
-  //
-  // Pepper is loaded once per call. V1 has exactly one pepper kid per
-  // region; rotation introduces additional kids and createToken picks
-  // the first map entry — that's the active write-side kid.
-  const peppers = await loadPepperFromKms(customer.region, process.env);
-  const firstPepperKid = peppers.keys().next().value as string | undefined;
-  if (!firstPepperKid) {
-    throw new Error(
-      `no pepper available for region '${customer.region}' — token mint cannot proceed`,
-    );
-  }
-  const pepperBuf = peppers.get(firstPepperKid)!;
-  const expiresAt = new Date(Date.now() + NINETY_DAYS_MS);
-  const minted = await createToken(
-    customer,
-    id,
-    {
-      name: "default",
-      expiresAt,
+  // Best-effort TOKEN_CREATED audit, post-commit (matches createToken's
+  // fail-soft posture — an audit hiccup must not undo the durable mint).
+  try {
+    await emitTokenAuditRow(customer, {
+      connectionId: id,
+      mcpTokenId: defaultTokenId,
+      eventType: "TOKEN_CREATED",
+      payload: {
+        connection_id: id,
+        token_id: defaultTokenId,
+        token_name: "default",
+        expires_at: expiresAt.toISOString(),
+      },
       actorClerkUserId,
-      env: tokenEnvFromConfig(process.env),
-    },
-    { kid: firstPepperKid, pepper: pepperBuf },
-  );
-  if (!minted) {
-    // The connection row was just inserted with this customer's id; the
-    // mint's ownership check should pass. If it didn't, something is
-    // wrong with the bind / RLS — surface loudly so the operator can
-    // catch a misconfig before a customer hits it.
-    throw new Error(
-      "createConnection: token mint returned null for just-created connection (RLS or ownership misconfig)",
-    );
+    });
+  } catch (err) {
+    console.error("[createConnection] default TOKEN_CREATED audit failed", err);
   }
 
-  return { id, defaultTokenPlaintext: minted.plaintext };
+  return { id, defaultTokenPlaintext };
 }
 
 export function isValidDsn(s: unknown): s is string {

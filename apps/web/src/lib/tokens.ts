@@ -39,8 +39,13 @@ import { hashToken } from "@midplane-cloud/kms/pepper";
 import { PlanLimitError, type Plan } from "./plan.ts";
 
 // Minimal structural type for a Drizzle transaction handle — enough for the
-// read helpers below without importing the full driver-specific tx type.
-type TxLike = { select: (fields?: unknown) => any }; // eslint-disable-line @typescript-eslint/no-explicit-any
+// read/insert helpers below without importing the full driver-specific tx type.
+type TxLike = {
+  select: (fields?: unknown) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  insert: (table: typeof mcpTokens) => {
+    values: (row: typeof mcpTokens.$inferInsert) => Promise<unknown>;
+  };
+};
 
 /** Count the customer's USABLE MCP tokens across every connection they own.
  *  "Usable" matches the runtime resolver (lookupByPlaintext): status='active'
@@ -74,6 +79,44 @@ export async function countUsableTokens(
       ),
     )) as Array<{ count: number }>;
   return Number(rows[0]?.count ?? 0);
+}
+
+/** Build + insert a token row inside an EXISTING transaction. The caller owns
+ *  the txn and any locking, and is responsible for the TOKEN_CREATED audit
+ *  after commit (best-effort — see emitTokenAuditRow).
+ *
+ *  This exists so createConnection can mint a connection's default token
+ *  ATOMICALLY with the connection insert AND the plan-cap check — all under
+ *  the same customers-row lock. Minting the default in a separate post-commit
+ *  transaction (as createToken does) let a concurrent manual mint slip in
+ *  between the cap check and the default insert, pushing the org one token
+ *  over its cap. Returns the new id + the show-once plaintext. */
+export async function insertTokenRow(
+  tx: TxLike,
+  row: {
+    id: string;
+    connectionId: string;
+    name: string;
+    createdByUserId: string;
+    expiresAt: Date | null;
+    env: "live" | "test";
+  },
+  pepper: { kid: string; pepper: Buffer },
+): Promise<{ id: string; plaintext: string }> {
+  const generated = generateToken(row.env);
+  const tokenHash = hashToken(pepper.pepper, generated.plaintext);
+  await tx.insert(mcpTokens).values({
+    id: row.id,
+    connectionId: row.connectionId,
+    name: row.name,
+    prefix: generated.prefix,
+    last4: generated.last4,
+    tokenHash,
+    pepperKid: pepper.kid,
+    createdByUserId: row.createdByUserId,
+    expiresAt: row.expiresAt,
+  });
+  return { id: row.id, plaintext: generated.plaintext };
 }
 
 const CUSTOMER_ID_ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -468,7 +511,7 @@ export async function lookupByPlaintext(
 
 // --- internals --------------------------------------------------------------
 
-async function emitTokenAuditRow(
+export async function emitTokenAuditRow(
   customer: Customer,
   row: {
     connectionId: string;

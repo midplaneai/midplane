@@ -26,10 +26,11 @@ export default async function BillingPage() {
 
   const { plan } = await resolvePlan();
   const { has } = await auth();
-  // Server-side entitlement check — the row reflects the real subscription,
-  // not a client guess. (Clerk's <Show> would do this in v7; we're on v6, so
-  // has() + a conditional is the equivalent.)
-  const hasSso = has({ feature: "sso" });
+  // Server-side entitlement check, ORG-SCOPED. `org:sso` binds to the active
+  // organization's subscription — an unscoped `sso` would also match a
+  // user-scoped feature with that slug (Clerk merges both scopes), wrongly
+  // showing the org as SSO-entitled. The dashboard feature slug stays `sso`.
+  const hasSso = has({ feature: "org:sso" });
 
   return (
     <>

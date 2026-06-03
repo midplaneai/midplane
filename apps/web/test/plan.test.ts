@@ -8,8 +8,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // has() is reassigned per-test; the mock reads through the getter so each
-// test can stage a different active-plan answer.
-let hasMock: (param: { plan: string }) => boolean;
+// test can stage a different active-plan answer. Every has() param is
+// recorded so a test can assert the checks are ORG-SCOPED (org:pro etc.).
+let hasPredicate: (param: { plan: string }) => boolean;
+let hasCalls: Array<{ plan?: string; feature?: string }>;
+
+const hasMock = (param: { plan: string }): boolean => {
+  hasCalls.push(param);
+  return hasPredicate(param);
+};
 
 vi.mock("@clerk/nextjs/server", () => ({
   get auth() {
@@ -18,14 +25,16 @@ vi.mock("@clerk/nextjs/server", () => ({
 }));
 
 beforeEach(() => {
-  hasMock = () => false; // default: no paid plan → Free
+  hasPredicate = () => false; // default: no paid plan → Free
+  hasCalls = [];
 });
 
 afterEach(() => {
   vi.resetModules();
 });
 
-/** Build a has() that returns true only for the given plan slugs. */
+/** Build a has() predicate that returns true only for the given (already
+ *  org-scoped) plan slugs, e.g. hasPlans("org:pro"). */
 function hasPlans(...slugs: string[]): (p: { plan: string }) => boolean {
   const set = new Set(slugs);
   return ({ plan }) => set.has(plan);
@@ -62,24 +71,24 @@ describe("CAPS", () => {
 });
 
 describe("resolvePlan", () => {
-  it("returns team when the team slug is active", async () => {
-    hasMock = hasPlans("team");
+  it("returns team when the org team plan is active", async () => {
+    hasPredicate = hasPlans("org:team");
     const { resolvePlan, CAPS } = await import("../src/lib/plan.ts");
     const { plan, caps } = await resolvePlan();
     expect(plan).toBe("team");
     expect(caps).toEqual(CAPS.team);
   });
 
-  it("returns pro when the pro slug is active", async () => {
-    hasMock = hasPlans("pro");
+  it("returns pro when the org pro plan is active", async () => {
+    hasPredicate = hasPlans("org:pro");
     const { resolvePlan, CAPS } = await import("../src/lib/plan.ts");
     const { plan, caps } = await resolvePlan();
     expect(plan).toBe("pro");
     expect(caps).toEqual(CAPS.pro);
   });
 
-  it("falls back to free when no paid slug matches", async () => {
-    hasMock = hasPlans(); // nothing active
+  it("falls back to free when no paid org plan matches", async () => {
+    hasPredicate = hasPlans(); // nothing active
     const { resolvePlan, CAPS } = await import("../src/lib/plan.ts");
     const { plan, caps } = await resolvePlan();
     expect(plan).toBe("free");
@@ -87,17 +96,41 @@ describe("resolvePlan", () => {
   });
 
   it("prefers team over pro when (somehow) both are reported active", async () => {
-    hasMock = hasPlans("team", "pro");
+    hasPredicate = hasPlans("org:team", "org:pro");
     const { resolvePlan } = await import("../src/lib/plan.ts");
     const { plan } = await resolvePlan();
     expect(plan).toBe("team");
   });
 
-  it("treats an unrecognized paid slug as free (documents the slug-set risk)", async () => {
-    // A Clerk plan whose slug isn't in PRO_SLUGS/TEAM_SLUGS resolves to free.
-    // This is the codex #10 footgun: adding a plan in Clerk requires adding
-    // its slug to lib/plan.ts. The test pins the current behavior.
-    hasMock = hasPlans("pro_annual");
+  it("checks ORG-SCOPED plan slugs (binds entitlement to the active org)", async () => {
+    // Regression for the unscoped-entitlement bug: resolvePlan must ask Clerk
+    // for `org:pro` / `org:team`, NOT bare `pro` / `team`. A bare slug would
+    // also match a user-scoped plan (Clerk merges scopes), letting a member's
+    // personal subscription unlock caps for whatever org they have active.
+    hasPredicate = hasPlans(); // free; we only care about WHAT was asked
+    const { resolvePlan } = await import("../src/lib/plan.ts");
+    await resolvePlan();
+    const planChecks = hasCalls.map((c) => c.plan);
+    expect(planChecks).toContain("org:team");
+    expect(planChecks).toContain("org:pro");
+    // Never asks an unscoped slug (that would leak user-scoped entitlements).
+    expect(planChecks).not.toContain("pro");
+    expect(planChecks).not.toContain("team");
+  });
+
+  it("does NOT grant Pro for a user-scoped 'pro' plan (org scope required)", async () => {
+    // A member with a personal 'pro' subscription but whose active org is on
+    // Free: has({plan:'pro'}) would be true, but has({plan:'org:pro'}) is not.
+    hasPredicate = hasPlans("pro"); // user-scoped only
+    const { resolvePlan } = await import("../src/lib/plan.ts");
+    const { plan } = await resolvePlan();
+    expect(plan).toBe("free");
+  });
+
+  it("treats an unrecognized paid org slug as free (documents the slug-set risk)", async () => {
+    // A Clerk org plan whose slug isn't in PRO_SLUGS/TEAM_SLUGS resolves to
+    // free. Adding a plan in Clerk requires adding `org:<slug>` to lib/plan.ts.
+    hasPredicate = hasPlans("org:pro_annual");
     const { resolvePlan } = await import("../src/lib/plan.ts");
     const { plan } = await resolvePlan();
     expect(plan).toBe("free");
