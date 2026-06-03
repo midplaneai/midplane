@@ -15,10 +15,11 @@ packages/router       Hosted MCP request handler — token → connection → Fl
 fly-web-eu.toml       EU control-plane Fly app (also serves apex app.midplane.ai)
 fly-web-us.toml       US control-plane Fly app
 fly-eu.toml           EU regional MCP runtime app (pinned to Frankfurt)
+fly-us.toml           US regional MCP runtime app (pinned to Ashburn)
 scripts/bootstrap.sh  One-shot dev setup
 ```
 
-Multi-region is V1, not V1.5. Schema and URL format are multi-region from day one. Bootstrap deploys `eu` (Frankfurt, eu-central-1) only; `us` (Dulles, us-east-2) is provisioned in the V1 launch session as pure deploy work — no migration. Customer-facing names track the jurisdiction (`eu.midplane.com`, `us.midplane.com`); the underlying Fly DC is configurable per region so EU can move to ams later without renaming anything else.
+Multi-region is V1, not V1.5. Schema and URL format are multi-region from day one. Bootstrap deploys `eu` (Frankfurt, eu-central-1) only; `us` (Dulles, us-east-2) is provisioned in the V1 launch session as pure deploy work — no migration. Customer-facing names track the jurisdiction (`eu.midplane.ai`, `us.midplane.ai`); the underlying Fly DC is configurable per region so EU can move to ams later without renaming anything else.
 
 ## Quick start
 
