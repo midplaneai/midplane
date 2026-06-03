@@ -21,7 +21,9 @@ export function MobileNav({ region }: { region: Region }) {
         />
         <div className="ml-auto flex items-center gap-3">
           <RegionBadge region={region} />
-          <UserButton afterSignOutUrl="/" />
+          {/* afterSignOutUrl moved to <ClerkProvider> in app/layout.tsx —
+              the per-button prop was removed in Clerk Core 3 (v7). */}
+          <UserButton />
         </div>
       </div>
       <nav
