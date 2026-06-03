@@ -23,6 +23,7 @@ import {
   type QueryStatus,
 } from "@/lib/audit";
 import { currentCustomer } from "@/lib/customer";
+import { resolvePlan } from "@/lib/plan";
 
 const PAGE_SIZE = 50;
 
@@ -39,6 +40,11 @@ interface PageProps {
 export default async function AuditListPage({ searchParams }: PageProps) {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
+
+  // Plan retention window (Free 7d, Pro/Team 30d). Threaded into every audit
+  // read so the list, chips, counts, and chart all honor the same horizon.
+  const { caps } = await resolvePlan();
+  const retentionDays = caps.auditRetentionDays;
 
   const params = await searchParams;
   const selectedStatuses = parseStatuses(params.status);
@@ -57,14 +63,16 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         search,
         cursor,
         pageSize: PAGE_SIZE,
+        retentionDays,
       }),
-      listTenantIds(customer.id, customer.region),
-      listDatabases(customer.id, customer.region),
-      countByStatus(customer.id, customer.region),
+      listTenantIds(customer.id, customer.region, retentionDays),
+      listDatabases(customer.id, customer.region, retentionDays),
+      countByStatus(customer.id, customer.region, undefined, retentionDays),
       eventVolumeByHour(customer.id, customer.region, {
         tenantId: selectedTenant ?? undefined,
         database: selectedDatabase ?? undefined,
         search,
+        retentionDays,
       }),
       readStaleness(customer.id, customer.region),
     ]);

@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@clerk/nextjs": "^6.10.0",
+    "@clerk/nextjs": "7.4.2",
     "@midplane-cloud/db": "workspace:*",
     "@midplane-cloud/kms": "workspace:*",
     "@midplane-cloud/router": "workspace:*",

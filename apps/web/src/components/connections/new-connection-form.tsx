@@ -12,7 +12,11 @@ import { MAX_CONNECTION_NAME_LENGTH } from "@/lib/connection-name";
 // action returns `{ error }` and the form renders it inline. On success
 // the action calls redirect(), which Next handles outside this state
 // channel — so a successful submit never resolves to a state object.
-export type NewConnectionFormState = { error?: string };
+//
+// `upgradeUrl` is set when the failure is a plan cap (not a validation
+// error): the form renders an upgrade link alongside the message so a
+// capped user has a one-click path to /billing.
+export type NewConnectionFormState = { error?: string; upgradeUrl?: string };
 
 const initialState: NewConnectionFormState = {};
 
@@ -120,6 +124,18 @@ export function NewConnectionForm({
           className="text-sm text-destructive"
         >
           {state.error}
+          {state.upgradeUrl ? (
+            <>
+              {" "}
+              <a
+                href={state.upgradeUrl}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                Upgrade your plan
+              </a>
+              .
+            </>
+          ) : null}
         </p>
       ) : null}
       <Button type="submit" size="lg" arrow disabled={pending}>

@@ -51,6 +51,10 @@ export default function RootLayout({
 }) {
   return (
     <ClerkProvider
+      // Global sign-out redirect. Core 3 (v7) removed the per-button
+      // afterSignOutUrl on <UserButton>; setting it here covers every
+      // sign-out surface.
+      afterSignOutUrl="/"
       appearance={{
         variables: {
           // Clerk doesn't read CSS custom properties — these hex values must

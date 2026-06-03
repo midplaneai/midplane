@@ -1,4 +1,9 @@
-import { Database, ScrollText, type LucideIcon } from "lucide-react";
+import {
+  CreditCard,
+  Database,
+  ScrollText,
+  type LucideIcon,
+} from "lucide-react";
 
 export interface NavItem {
   href: string;
@@ -22,5 +27,11 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Audit log",
     icon: ScrollText,
     match: (p) => p.startsWith("/audit"),
+  },
+  {
+    href: "/billing",
+    label: "Billing",
+    icon: CreditCard,
+    match: (p) => p.startsWith("/billing"),
   },
 ];

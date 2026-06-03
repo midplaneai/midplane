@@ -252,6 +252,60 @@ describe("createToken", () => {
     expect(selects[1]?.forUpdate).toBe(false);
   });
 
+  it("throws PlanLimitError('tokens') when planLimit is set and usable tokens are at the cap", async () => {
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "conn-1" }]); // countUsableTokens: connection ids
+    handle.queueSelect([{ count: 1 }]); // usable token count → 1 >= cap 1
+    const { createToken } = await import("../src/lib/tokens.ts");
+    const { PlanLimitError } = await import("../src/lib/plan.ts");
+    const err = await createToken(
+      customer,
+      "conn-1",
+      {
+        name: "x",
+        expiresAt: null,
+        actorClerkUserId: "user_clerk_1",
+        env: "test",
+        planLimit: { tokenCap: 1, plan: "free" },
+      },
+      pepper,
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err.resource).toBe("tokens");
+    expect(err.limit).toBe(1);
+  });
+
+  it("locks the customers row BEFORE the connection when enforcing the token cap", async () => {
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "conn-1" }]); // countUsableTokens: connection ids
+    handle.queueSelect([{ count: 0 }]); // usable token count → 0 < cap 5 ✓
+    handle.queueSelect([{ id: "conn-1" }]); // parent connection FOR UPDATE
+    handle.queueSelect([]); // name collision pre-check (none)
+    const { customers, connections } = await import("@midplane-cloud/db");
+    const { createToken } = await import("../src/lib/tokens.ts");
+    const result = await createToken(
+      customer,
+      "conn-1",
+      {
+        name: "ok",
+        expiresAt: null,
+        actorClerkUserId: "user_clerk_1",
+        env: "test",
+        planLimit: { tokenCap: 5, plan: "pro" },
+      },
+      pepper,
+    );
+    expect(result).not.toBeNull();
+    const selects = handle.calls.filter((c) => c.op === "select");
+    // First lock is the customers row (cap serialization), and it precedes
+    // the connection lock — consistent lock order with createConnection.
+    expect(selects[0]?.table).toBe(customers);
+    expect(selects[0]?.forUpdate).toBe(true);
+    expect(selects.some((s) => s.table === connections && s.forUpdate)).toBe(
+      true,
+    );
+  });
+
   it("throws DuplicateTokenName when the pre-check finds a sibling with the same name", async () => {
     handle.queueSelect([{ id: "conn-1" }]); // parent ok
     handle.queueSelect([{ id: "existing-token" }]); // collision
@@ -521,5 +575,30 @@ describe("lookupByPlaintext", () => {
       new Map([["v1-eu", otherPepper]]),
     );
     expect(result).toBeNull();
+  });
+});
+
+describe("countUsableTokens", () => {
+  it("returns 0 without a count query when the customer has no connections", async () => {
+    handle.queueSelect([]); // connection ids → none
+    const { countUsableTokens } = await import("../src/lib/tokens.ts");
+    const n = await countUsableTokens(
+      handle.db as unknown as Parameters<typeof countUsableTokens>[0],
+      customer.id,
+    );
+    expect(n).toBe(0);
+    // Only the connection-ids select ran; no token count for an empty set.
+    expect(handle.calls.filter((c) => c.op === "select")).toHaveLength(1);
+  });
+
+  it("sums the usable-token count across the customer's connections", async () => {
+    handle.queueSelect([{ id: "c1" }, { id: "c2" }]); // connection ids
+    handle.queueSelect([{ count: 3 }]); // usable count
+    const { countUsableTokens } = await import("../src/lib/tokens.ts");
+    const n = await countUsableTokens(
+      handle.db as unknown as Parameters<typeof countUsableTokens>[0],
+      customer.id,
+    );
+    expect(n).toBe(3);
   });
 });

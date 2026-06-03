@@ -18,6 +18,7 @@ import { z } from "zod";
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
 import { currentCustomer } from "@/lib/customer";
+import { PlanLimitError, planLimitBody, resolvePlan } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 import { tokenEnvFromConfig } from "@/lib/token-env";
 import {
@@ -124,6 +125,8 @@ export async function POST(
   }
   const pepperBuf = peppers.get(firstKid)!;
 
+  const { plan, caps } = await resolvePlan();
+
   let result;
   try {
     result = await createToken(
@@ -134,6 +137,7 @@ export async function POST(
         expiresAt,
         actorClerkUserId: userId,
         env: tokenEnvFromConfig(process.env),
+        planLimit: { tokenCap: caps.tokens, plan },
       },
       { kid: firstKid, pepper: pepperBuf },
     );
@@ -143,6 +147,9 @@ export async function POST(
         { error: "name_taken", takenName: err.takenName },
         { status: 409 },
       );
+    }
+    if (err instanceof PlanLimitError) {
+      return Response.json(planLimitBody(err), { status: 402 });
     }
     if (err instanceof ExpiryInThePast) {
       // Should never reach here from this surface (we compute

@@ -693,6 +693,58 @@ describe("readStaleness", () => {
   });
 });
 
+describe("audit retention clamp", () => {
+  // Matches both the raw-SQL form (`ts >= $n::timestamptz`) and the Drizzle
+  // builder form (`"audit_events_index"."ts" >= $n`).
+  const TS_LOWER_BOUND = /ts"?\s*>=/i;
+
+  it("listAuditQueries adds a ts lower bound when retentionDays is set", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu", retentionDays: 7 });
+    expect(lastSelect(handle.queries).sql).toMatch(TS_LOWER_BOUND);
+  });
+
+  it("listAuditQueries adds NO ts lower bound when retentionDays is omitted", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    // Only `last_ts < stuckCutoff` (a `<`, not `>=`) should be present.
+    expect(lastSelect(handle.queries).sql).not.toMatch(TS_LOWER_BOUND);
+  });
+
+  it("countByStatus clamps both the query agg and the policy count", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    await countByStatus(VALID_CUSTOMER_ID, "eu", undefined, 30);
+    expect(lastSelect(handle.queries).sql).toMatch(TS_LOWER_BOUND);
+  });
+
+  it("getAuditEvent clamps the single-row deep-link read", async () => {
+    handle.setNextResult([]);
+    const { getAuditEvent } = await import("../src/lib/audit.ts");
+    await getAuditEvent("eu", VALID_CUSTOMER_ID, "01ARZ3NDEKTSV4RRFFQ69G5FCC", 7);
+    expect(lastSelect(handle.queries).sql).toMatch(TS_LOWER_BOUND);
+  });
+
+  it("getAuditEvent does NOT clamp when retentionDays is omitted", async () => {
+    handle.setNextResult([]);
+    const { getAuditEvent } = await import("../src/lib/audit.ts");
+    await getAuditEvent("eu", VALID_CUSTOMER_ID, "01ARZ3NDEKTSV4RRFFQ69G5FCC");
+    expect(lastSelect(handle.queries).sql).not.toMatch(TS_LOWER_BOUND);
+  });
+
+  it("listTenantIds and listDatabases clamp the chip lists", async () => {
+    const { listTenantIds, listDatabases } = await import("../src/lib/audit.ts");
+    handle.setNextResult([]);
+    await listTenantIds(VALID_CUSTOMER_ID, "eu", 7);
+    expect(lastSelect(handle.queries).sql).toMatch(TS_LOWER_BOUND);
+    handle.setNextResult([]);
+    await listDatabases(VALID_CUSTOMER_ID, "eu", 7);
+    expect(lastSelect(handle.queries).sql).toMatch(TS_LOWER_BOUND);
+  });
+});
+
 function lastSelect(queries: RecordedQuery[]): RecordedQuery {
   // Skip the SET LOCAL bind; return the actual data query.
   const data = queries.filter((q) => !q.sql.includes("SET LOCAL"));

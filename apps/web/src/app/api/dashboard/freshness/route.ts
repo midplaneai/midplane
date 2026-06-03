@@ -14,6 +14,7 @@
 
 import { getDashboardFreshness } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { resolvePlan } from "@/lib/plan";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,8 @@ export async function GET() {
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const snapshot = await getDashboardFreshness(customer);
+  const { caps } = await resolvePlan();
+  const snapshot = await getDashboardFreshness(customer, caps.auditRetentionDays);
   return Response.json(snapshot, {
     headers: { "cache-control": "no-store" },
   });

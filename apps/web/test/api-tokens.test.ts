@@ -21,7 +21,7 @@ const customer = {
 };
 
 let currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-let authMock = vi.fn(async () => ({ userId: "user_clerk_1" }) as { userId: string | null });
+let authMock = vi.fn(async () => ({ userId: "user_clerk_1", has: () => false }) as { userId: string | null; has: (p: { plan: string }) => boolean });
 let createTokenMock = vi.fn();
 let listTokensMock = vi.fn();
 let revokeTokenMock = vi.fn();
@@ -58,7 +58,9 @@ vi.mock("@/lib/tokens", async () => {
 
 beforeEach(() => {
   currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-  authMock = vi.fn(async () => ({ userId: "user_clerk_1" }) as { userId: string | null });
+  // has() is read by resolvePlan() in the POST route — default to "no paid
+  // plan" so the route resolves Free and proceeds to the (mocked) createToken.
+  authMock = vi.fn(async () => ({ userId: "user_clerk_1", has: () => false }) as { userId: string | null; has: (p: { plan: string }) => boolean });
   createTokenMock = vi.fn();
   listTokensMock = vi.fn();
   revokeTokenMock = vi.fn();

@@ -18,12 +18,13 @@
 //   - Best-effort audit emission separate from the durable mutation:
 //     audit writes can fail without rolling back the mint/revoke.
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
   connections,
+  customers,
   generateToken,
   getDb,
   mcpTokens,
@@ -34,6 +35,89 @@ import {
   type Region,
 } from "@midplane-cloud/db";
 import { hashToken } from "@midplane-cloud/kms/pepper";
+
+import { PlanLimitError, type Plan } from "./plan.ts";
+
+// Minimal structural type for a Drizzle transaction handle — enough for the
+// read/insert helpers below without importing the full driver-specific tx type.
+type TxLike = {
+  select: (fields?: unknown) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  insert: (table: typeof mcpTokens) => {
+    values: (row: typeof mcpTokens.$inferInsert) => Promise<unknown>;
+  };
+};
+
+/** Count the customer's USABLE MCP tokens across every connection they own.
+ *  "Usable" matches the runtime resolver (lookupByPlaintext): status='active'
+ *  AND (expires_at IS NULL OR expires_at > NOW()). status='active' alone
+ *  over-counts — the expiry sweeper lags (it exists for dashboard
+ *  truthfulness, not enforcement), so an expired-but-unswept row is still
+ *  'active' in the table yet rejected at use time and must NOT consume a
+ *  plan slot. Two queries (ids, then count) rather than a join so the same
+ *  helper works under both unit-test fakes.
+ *
+ *  Runs inside the caller's txn — call it AFTER locking the customers row so
+ *  the count can't drift between read and insert. */
+export async function countUsableTokens(
+  tx: TxLike,
+  customerId: string,
+): Promise<number> {
+  const connRows = (await tx
+    .select({ id: connections.id })
+    .from(connections)
+    .where(eq(connections.customerId, customerId))) as Array<{ id: string }>;
+  const ids = connRows.map((r) => r.id);
+  if (ids.length === 0) return 0;
+  const rows = (await tx
+    .select({ count: sql<number>`count(*)::int` })
+    .from(mcpTokens)
+    .where(
+      and(
+        inArray(mcpTokens.connectionId, ids),
+        eq(mcpTokens.status, "active"),
+        sql`(${mcpTokens.expiresAt} IS NULL OR ${mcpTokens.expiresAt} > NOW())`,
+      ),
+    )) as Array<{ count: number }>;
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** Build + insert a token row inside an EXISTING transaction. The caller owns
+ *  the txn and any locking, and is responsible for the TOKEN_CREATED audit
+ *  after commit (best-effort — see emitTokenAuditRow).
+ *
+ *  This exists so createConnection can mint a connection's default token
+ *  ATOMICALLY with the connection insert AND the plan-cap check — all under
+ *  the same customers-row lock. Minting the default in a separate post-commit
+ *  transaction (as createToken does) let a concurrent manual mint slip in
+ *  between the cap check and the default insert, pushing the org one token
+ *  over its cap. Returns the new id + the show-once plaintext. */
+export async function insertTokenRow(
+  tx: TxLike,
+  row: {
+    id: string;
+    connectionId: string;
+    name: string;
+    createdByUserId: string;
+    expiresAt: Date | null;
+    env: "live" | "test";
+  },
+  pepper: { kid: string; pepper: Buffer },
+): Promise<{ id: string; plaintext: string }> {
+  const generated = generateToken(row.env);
+  const tokenHash = hashToken(pepper.pepper, generated.plaintext);
+  await tx.insert(mcpTokens).values({
+    id: row.id,
+    connectionId: row.connectionId,
+    name: row.name,
+    prefix: generated.prefix,
+    last4: generated.last4,
+    tokenHash,
+    pepperKid: pepper.kid,
+    createdByUserId: row.createdByUserId,
+    expiresAt: row.expiresAt,
+  });
+  return { id: row.id, plaintext: generated.plaintext };
+}
 
 const CUSTOMER_ID_ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
@@ -109,6 +193,12 @@ export async function createToken(
     expiresAt: Date | null;
     actorClerkUserId: string;
     env: "live" | "test";
+    /** Manual mints pass the resolved token cap so the per-customer plan
+     *  limit is enforced. The auto-minted default token (createConnection)
+     *  passes nothing — its room was already reserved at connection-create
+     *  time (decision D8), and re-checking here would block the default on
+     *  a connection that was just allowed. Infinity cap (Team) is a no-op. */
+    planLimit?: { tokenCap: number; plan: Plan };
   },
   pepper: { kid: string; pepper: Buffer },
 ): Promise<{ id: string; plaintext: string } | null> {
@@ -128,6 +218,30 @@ export async function createToken(
   let result;
   try {
     result = await db.transaction(async (tx) => {
+      // Plan cap (manual mints only — `planLimit` is absent on the
+      // auto-minted default). Lock the customers row FIRST so concurrent
+      // mints for this org serialize and the usable-token count can't drift
+      // between read and insert (decision D4). customers-before-connection
+      // lock order is consistent with createConnection (which locks only
+      // customers), so no deadlock cycle. Infinity cap (Team) short-circuits
+      // — never scan a large token set for an unlimited customer.
+      if (args.planLimit && Number.isFinite(args.planLimit.tokenCap)) {
+        await tx
+          .select({ id: customers.id })
+          .from(customers)
+          .where(eq(customers.id, customer.id))
+          .for("update")
+          .limit(1);
+        const used = await countUsableTokens(tx, customer.id);
+        if (used >= args.planLimit.tokenCap) {
+          throw new PlanLimitError(
+            "tokens",
+            args.planLimit.tokenCap,
+            args.planLimit.plan,
+          );
+        }
+      }
+
       // Ownership-gated parent read + lock — same posture as
       // addDatabase/removeDatabase in connections.ts. Without the lock,
       // two parallel creates with the same name could each pass the
@@ -397,7 +511,7 @@ export async function lookupByPlaintext(
 
 // --- internals --------------------------------------------------------------
 
-async function emitTokenAuditRow(
+export async function emitTokenAuditRow(
   customer: Customer,
   row: {
     connectionId: string;

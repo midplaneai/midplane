@@ -373,6 +373,90 @@ describe("deleteConnection", () => {
   });
 });
 
+describe("createConnection plan caps", () => {
+  // DSN encryption is mocked (see the @midplane-cloud/kms mock above), so
+  // encryptDsn succeeds. The pepper is loaded (real, env mode) BEFORE the
+  // txn — set the env so that load succeeds; the default token is inserted
+  // inside the txn AFTER the cap check, so these cap-throw tests throw before
+  // reaching the insert and don't stage it.
+  const DSN = "postgres://u:p@host:5432/db";
+  const ACTOR = "user_clerk-actor";
+
+  beforeEach(() => {
+    process.env.MIDPLANE_KMS_MODE = "env";
+    process.env.MIDPLANE_TOKEN_PEPPER_EU_V1 = Buffer.alloc(32, 7).toString(
+      "base64",
+    );
+  });
+
+  it("throws PlanLimitError('connections') when already at the connection cap", async () => {
+    const { createConnection } = await import("../src/lib/connections.ts");
+    const { PlanLimitError, CAPS } = await import("../src/lib/plan.ts");
+    // Free allows 1 connection. Stage the customers FOR UPDATE select, then
+    // the connection-count select returning one existing row → 1 >= 1.
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "conn-existing" }]); // connection count
+    const err = await createConnection(customer, DSN, null, "read", ACTOR, {
+      plan: "free",
+      caps: CAPS.free,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err.resource).toBe("connections");
+    expect(err.limit).toBe(1);
+  });
+
+  it("throws PlanLimitError('tokens') when under the connection cap but out of token room (D8)", async () => {
+    const { createConnection } = await import("../src/lib/connections.ts");
+    const { PlanLimitError } = await import("../src/lib/plan.ts");
+    // connections under cap (1 < 5) but the to-be-minted default has no room
+    // (1 usable token >= tokens cap of 1).
+    const caps = {
+      connections: 5,
+      tokens: 1,
+      auditRetentionDays: 30,
+      sso: false,
+    };
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "c1" }]); // connection count → 1 < 5 ✓
+    handle.queueSelect([{ id: "c1" }]); // countUsableTokens: connection ids
+    handle.queueSelect([{ count: 1 }]); // countUsableTokens: usable count → 1 >= 1
+    const err = await createConnection(customer, DSN, null, "read", ACTOR, {
+      plan: "pro",
+      caps,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err.resource).toBe("tokens");
+    expect(err.limit).toBe(1);
+  });
+
+  it("inserts the default token INSIDE the connection txn, not in a later one (atomic with the cap check)", async () => {
+    const { createConnection } = await import("../src/lib/connections.ts");
+    const { CAPS } = await import("../src/lib/plan.ts");
+    const { mcpTokens, connections: connectionsTable } = await import(
+      "@midplane-cloud/db"
+    );
+    // Under cap: 0 existing connections, 0 usable tokens (Free 1/1).
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([]); // connection count → 0 < 1 ✓
+    handle.queueSelect([]); // countUsableTokens: connection ids → none → 0 < 1 ✓
+    const result = await createConnection(customer, DSN, null, "read", ACTOR, {
+      plan: "free",
+      caps: CAPS.free,
+    });
+    expect(result.defaultTokenPlaintext).toMatch(
+      /^mp_(live|test)_[0-9a-f]{32}_/,
+    );
+    // The default token row was inserted as part of createConnection — proving
+    // the auto-mint moved into the connection txn (no separate post-commit
+    // mint that could race past the cap). It lands after the connection insert.
+    const inserts = handle.calls.filter((c) => c.op === "insert");
+    const connIdx = inserts.findIndex((c) => c.table === connectionsTable);
+    const tokenIdx = inserts.findIndex((c) => c.table === mcpTokens);
+    expect(connIdx, "connection must be inserted").toBeGreaterThanOrEqual(0);
+    expect(tokenIdx, "default token must be inserted").toBeGreaterThan(connIdx);
+  });
+});
+
 interface CacheSpy {
   invalidate: ReturnType<typeof vi.fn>;
 }

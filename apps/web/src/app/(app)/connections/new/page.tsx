@@ -14,6 +14,7 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
 import { createConnection, isValidDsn } from "@/lib/connections";
+import { PlanLimitError, resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
@@ -96,13 +97,30 @@ async function createAction(
       ? (accessRaw as AccessLevel)
       : "read";
 
-  const { id, defaultTokenPlaintext } = await createConnection(
-    customer,
-    dsn,
-    name,
-    defaultAccess,
-    userId,
-  );
+  const entitlement = await resolvePlan();
+  let id: string;
+  let defaultTokenPlaintext: string;
+  try {
+    ({ id, defaultTokenPlaintext } = await createConnection(
+      customer,
+      dsn,
+      name,
+      defaultAccess,
+      userId,
+      entitlement,
+    ));
+  } catch (err) {
+    if (err instanceof PlanLimitError) {
+      // Return state (don't throw) so the form renders an inline upgrade
+      // CTA instead of the Next runtime-error overlay — see CLAUDE.md
+      // "Server actions: return state, don't throw, for user input."
+      return {
+        error: `You've reached your plan's connection limit (${err.limit}).`,
+        upgradeUrl: UPGRADE_URL,
+      };
+    }
+    throw err;
+  }
   const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
 
   getPostHog()?.capture({

@@ -9,6 +9,7 @@ import {
   MAX_CONNECTION_NAME_LENGTH,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { PlanLimitError, planLimitBody, resolvePlan } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 
 // POST /api/connections — JSON API (programmatic / non-browser callers).
@@ -64,13 +65,24 @@ export async function POST(req: Request) {
     );
   }
 
-  const { id, defaultTokenPlaintext } = await createConnection(
-    customer,
-    parsed.data.dsn,
-    parsed.data.name ?? null,
-    parsed.data.default_access ?? "read",
-    userId,
-  );
+  const entitlement = await resolvePlan();
+  let id: string;
+  let defaultTokenPlaintext: string;
+  try {
+    ({ id, defaultTokenPlaintext } = await createConnection(
+      customer,
+      parsed.data.dsn,
+      parsed.data.name ?? null,
+      parsed.data.default_access ?? "read",
+      userId,
+      entitlement,
+    ));
+  } catch (err) {
+    if (err instanceof PlanLimitError) {
+      return Response.json(planLimitBody(err), { status: 402 });
+    }
+    throw err;
+  }
   const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
 
   getPostHog()?.capture({
