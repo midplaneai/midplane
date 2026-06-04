@@ -7,7 +7,7 @@
 set -euo pipefail
 
 OSS_REPO="${OSS_REPO:-/Users/dustinlange/dev/midplane}"
-IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.6.0}"
+IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.7.0}"
 
 if [[ ! -d "$OSS_REPO" ]]; then
   echo "OSS repo not found at $OSS_REPO"
