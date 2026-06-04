@@ -1,6 +1,6 @@
 import { OrganizationSwitcher } from "@clerk/nextjs";
-import Link from "next/link";
 
+import { LegalMenu } from "@/components/layout/legal-menu";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { UserMenuButton } from "@/components/layout/user-menu-button";
@@ -59,36 +59,20 @@ export function AppShell({ region, children }: AppShellProps) {
         <div className="px-[18px] py-[7px]">
           <RegionBadge region={region} />
         </div>
-        <div className="mt-auto border-t border-border px-[18px] py-[7px]">
-          <UserMenuButton />
+        <div className="mt-auto flex items-center gap-2 border-t border-border px-[18px] py-[7px]">
+          <div className="min-w-0 flex-1">
+            <UserMenuButton />
+          </div>
+          {/* Imprint / Privacy / Terms tucked behind a [⋯] menu — keeps the
+              § 5 TMG Imprint reachable in-app without spending a footer row. */}
+          <LegalMenu />
         </div>
       </aside>
-      <main className="flex min-w-0 flex-col">
+      <main className="min-w-0">
         <MobileNav region={region} />
-        <div className="flex-1">{children}</div>
-        <AppLegalFooter />
+        {children}
       </main>
     </div>
-  );
-}
-
-// Persistent legal links, reachable from every authenticated page on both
-// desktop and mobile. Required so the § 5 TMG Imprint stays reachable inside
-// the app, not just from the marketing footer. Lowercase mono is the product
-// chrome voice (see DESIGN.md).
-function AppLegalFooter() {
-  return (
-    <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-6 py-4 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
-      <Link href="/imprint" className="transition-colors hover:text-foreground">
-        imprint
-      </Link>
-      <Link href="/privacy" className="transition-colors hover:text-foreground">
-        privacy
-      </Link>
-      <Link href="/terms" className="transition-colors hover:text-foreground">
-        terms
-      </Link>
-    </footer>
   );
 }
 
