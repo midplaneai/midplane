@@ -66,6 +66,10 @@ export default function RootLayout({
           colorText: "#f3efe7",
           colorTextSecondary: "#bdb4a6",
           colorPrimary: "#f3efe7",
+          // Text on primary-filled controls (e.g. PricingTable's "Subscribe").
+          // colorPrimary is the cream paper, so the label must be the dark ink
+          // (--primary-foreground) or it renders cream-on-cream and vanishes.
+          colorPrimaryForeground: "#161412",
           colorNeutral: "#f3efe7",
           colorDanger: "#c87070",
           colorSuccess: "#5a9c6e",
