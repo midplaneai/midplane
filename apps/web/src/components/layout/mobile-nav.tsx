@@ -4,6 +4,7 @@ import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { LegalMenu } from "@/components/layout/legal-menu";
 import { NAV_ITEMS } from "@/components/layout/nav-items";
 import { RegionBadge } from "@/components/ui/region-badge";
 import { cn } from "@/lib/utils";
@@ -24,6 +25,7 @@ export function MobileNav({ region }: { region: Region }) {
           {/* afterSignOutUrl moved to <ClerkProvider> in app/layout.tsx —
               the per-button prop was removed in Clerk Core 3 (v7). */}
           <UserButton />
+          <LegalMenu />
         </div>
       </div>
       <nav

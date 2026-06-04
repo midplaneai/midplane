@@ -1,5 +1,6 @@
 import { OrganizationSwitcher } from "@clerk/nextjs";
 
+import { LegalMenu } from "@/components/layout/legal-menu";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { UserMenuButton } from "@/components/layout/user-menu-button";
@@ -58,8 +59,13 @@ export function AppShell({ region, children }: AppShellProps) {
         <div className="px-[18px] py-[7px]">
           <RegionBadge region={region} />
         </div>
-        <div className="mt-auto border-t border-border px-[18px] py-[7px]">
-          <UserMenuButton />
+        <div className="mt-auto flex items-center gap-2 border-t border-border px-[18px] py-[7px]">
+          <div className="min-w-0 flex-1">
+            <UserMenuButton />
+          </div>
+          {/* Imprint / Privacy / Terms tucked behind a [⋯] menu — keeps the
+              § 5 TMG Imprint reachable in-app without spending a footer row. */}
+          <LegalMenu />
         </div>
       </aside>
       <main className="min-w-0">
