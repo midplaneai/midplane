@@ -8,30 +8,33 @@
 #     2. Deploys the web app with a health-gated `--strategy bluegreen` cutover
 #        so the new secret + image go live only if /api/health passes
 #        (Fly auto-rolls-back if the green machines never become healthy).
-#     3. Deploys the regional ENGINE app pinned to the same tag, so its release
-#        image stays in sync with what newly-spawned customer machines run.
-#     4. (opt-in) Drains running customer engine machines so customers move onto
-#        the new image now instead of "eventually" (on suspend/expire/respawn).
+#     3. (opt-in) Drains running customer engine machines so customers move onto
+#        the new image now instead of "eventually" (on idle-cycle respawn).
 #
 #   It does NOT build or publish midplane/midplane — that image is produced by
 #   the separate midplaneai/midplane repo's `v*`-tag CI. This workflow only
 #   CONSUMES an already-published tag.
 #
-# WHY THE SECRET MATTERS MORE THAN THE ENGINE `fly deploy`
-#   Live customer traffic runs on machines created on demand via the Fly
-#   Machines API by FlyMachineSpawner (packages/router/src/spawner-fly.ts),
-#   using the MIDPLANE_OSS_IMAGE secret set on the WEB app. So the engine
-#   version customers actually get is governed by that secret, not by
-#   `fly deploy` of the engine toml (that deploy is mostly ceremonial — it
-#   keeps the engine app's release image consistent). Updating the secret only
-#   affects NEWLY spawned machines; already-running ones keep the old image
-#   until they respawn — hence the optional drain step.
+# WHY THERE IS NO `fly deploy` OF THE ENGINE APPS (midplane-eu / midplane-us)
+#   Those apps never run a `fly deploy` release machine. Live customer traffic
+#   runs on machines created on demand via the Fly Machines API by
+#   FlyMachineSpawner (packages/router/src/spawner-fly.ts), each with a per-
+#   machine DATABASE_URL + policy file, using the MIDPLANE_OSS_IMAGE secret set
+#   on the WEB app. So the engine version customers get is governed entirely by
+#   that secret. A `fly deploy` of an engine toml would only launch a release
+#   machine with NO DATABASE_URL/policy (the toml omits them by design), so it
+#   can never pass /health — and it would reconcile against the live on-demand
+#   machines sharing the app. We therefore touch the engine apps ONLY for the
+#   optional drain. Updating the secret affects NEWLY spawned machines; already-
+#   running ones keep the old image until they respawn — hence the drain step.
 #
 # REQUIRED GitHub configuration (none of these values live in this repo)
 #   Secrets — repo-level OR on the "production" Environment:
 #     FLY_API_TOKEN
-#       Fly deploy token with access to all four apps (midplane-web,
-#       midplane-web-us, midplane-eu, midplane-us). flyctl reads it from env.
+#       Fly token that can deploy the web apps (midplane-web, midplane-web-us)
+#       and, for the optional drain, list/destroy machines on the engine apps
+#       (midplane-eu, midplane-us). An org-scoped token covers all four.
+#       flyctl reads it from env.
 #   Variables (vars) — repo-level OR on the "production" Environment:
 #     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 #       Clerk PUBLISHABLE key (pk_live_... / pk_test_...). Public by design:
@@ -172,18 +175,18 @@ jobs:
             echo "- **Region input:** \`$REGION_INPUT\` (order: $REGIONS)"
             echo "- **Drain engines:** \`$DRAIN\`"
             echo ""
-            echo "| Region | Web app | Engine app | Engine image | Drained |"
-            echo "| --- | --- | --- | --- | --- |"
+            echo "| Region | Web app | Engine drain |"
+            echo "| --- | --- | --- |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           for region in $REGIONS; do
             case "$region" in
               eu)
                 WEB_APP="midplane-web";    WEB_CONFIG="fly-web-eu.toml"
-                ENGINE_APP="midplane-eu";  ENGINE_CONFIG="fly-eu.toml" ;;
+                ENGINE_APP="midplane-eu" ;;
               us)
                 WEB_APP="midplane-web-us"; WEB_CONFIG="fly-web-us.toml"
-                ENGINE_APP="midplane-us";  ENGINE_CONFIG="fly-us.toml" ;;
+                ENGINE_APP="midplane-us" ;;
             esac
 
             echo "::group::[$region] Stage MIDPLANE_OSS_IMAGE=$IMAGE_REF on $WEB_APP"
@@ -206,16 +209,13 @@ jobs:
               --build-arg "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$CLERK_PUBLISHABLE_KEY"
             echo "::endgroup::"
 
-            echo "::group::[$region] Deploy engine app $ENGINE_APP @ $IMAGE_REF"
-            # Pin --image to the tag being rolled out so the engine app's release
-            # image matches the secret regardless of what fly-*.toml currently
-            # pins in [build]. Default (rolling) strategy is fine — this deploy
-            # is ceremonial; customer traffic runs on Machines-API machines.
-            flyctl deploy \
-              --config "$ENGINE_CONFIG" \
-              --app "$ENGINE_APP" \
-              --image "$IMAGE_REF"
-            echo "::endgroup::"
+            # NOTE: we deliberately do NOT `fly deploy` the engine app
+            # ($ENGINE_APP). It runs no release machine — a deploy would
+            # launch one with no DATABASE_URL/policy that can never
+            # pass /health, and would reconcile against the live on-demand
+            # machines sharing the app. The engine version is governed by the
+            # MIDPLANE_OSS_IMAGE secret staged above; the only legitimate
+            # engine-app action is the optional drain below.
 
             drained="no"
             if [ "$DRAIN" = "true" ]; then
@@ -235,8 +235,8 @@ jobs:
               # gone, so a spec-compliant client must re-initialize. Idle
               # connections already cycle on their own 30-min idle timer — this
               # is the blunt "force a continuously-busy connection now" path.
-              # We touch ONLY mcp-* machines, never the engine app's own
-              # release machine.
+              # We touch ONLY mcp-* machines (the spawned customer engines),
+              # never any other machine that might exist in the app.
               flyctl machine list --app "$ENGINE_APP" --json > "/tmp/machines-$region.json"
               IDS="$(jq -r '.[] | select(.name != null and (.name | startswith("mcp-"))) | .id' "/tmp/machines-$region.json")"
               if [ -z "$IDS" ]; then
@@ -254,7 +254,7 @@ jobs:
               echo "::endgroup::"
             fi
 
-            echo "| $region | $WEB_APP (bluegreen) | $ENGINE_APP (rolling) | \`$IMAGE_TAG\` | $drained |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| $region | $WEB_APP (bluegreen) | $drained |" >> "$GITHUB_STEP_SUMMARY"
             echo "[$region] done."
           done
 
