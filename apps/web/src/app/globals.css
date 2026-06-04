@@ -507,11 +507,28 @@
 .editorial-page .close .ebtn.outline:hover { background: var(--paper); color: var(--ink); border-color: var(--paper); }
 
 /* footer */
-.editorial-page footer.efoot { padding: 48px; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 48px; background: var(--ink); color: rgba(243, 239, 231, 0.5); margin: 0 -48px; border-top: 1px solid rgba(243, 239, 231, 0.08); }
+.editorial-page footer.efoot { padding: 48px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 48px; background: var(--ink); color: rgba(243, 239, 231, 0.5); margin: 0 -48px; border-top: 1px solid rgba(243, 239, 231, 0.08); }
 .editorial-page footer.efoot h5 { margin: 0 0 14px; font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(243, 239, 231, 0.4); font-weight: 500; }
 .editorial-page footer.efoot a { display: block; padding: 5px 0; color: rgba(243, 239, 231, 0.8); font-size: 14px; }
 .editorial-page footer.efoot a:hover { color: var(--paper); }
 .editorial-page footer.efoot .brand { color: var(--paper); }
+
+/* legal pages (privacy / terms) — long-form prose rendered from static HTML.
+ * Typographic styles only; colors/spacing reuse the editorial tokens above. */
+.editorial-page .legal { max-width: 820px; margin: 0 auto; padding: 72px 0 96px; }
+.editorial-page .legal h1 { font-size: 42px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 600; margin: 0 0 10px; }
+.editorial-page .legal h1 + p { font-family: var(--font-geist-mono); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 40px; }
+.editorial-page .legal h2 { font-size: 24px; line-height: 1.2; letter-spacing: -0.02em; font-weight: 600; margin: 56px 0 14px; padding-top: 28px; border-top: 1px solid var(--line); }
+.editorial-page .legal h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 36px 0 10px; }
+.editorial-page .legal h4 { font-size: 15px; font-weight: 600; margin: 26px 0 8px; }
+.editorial-page .legal p { color: var(--ink-2); font-size: 15px; line-height: 1.7; margin: 0 0 14px; }
+.editorial-page .legal ul { margin: 0 0 16px; padding-left: 22px; }
+.editorial-page .legal li { color: var(--ink-2); font-size: 15px; line-height: 1.7; margin: 0 0 8px; }
+.editorial-page .legal li > p { margin: 0 0 8px; }
+.editorial-page .legal li ul { margin: 8px 0 4px; }
+.editorial-page .legal strong { color: var(--ink); font-weight: 600; }
+.editorial-page .legal a { color: var(--accent-blue); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+.editorial-page .legal a:hover { text-decoration-thickness: 2px; }
 
 /* responsive — collapse multi-column blocks under 960px */
 /* Touch targets: nav/topright/footer/anchor links need >= 44px on touch
@@ -556,6 +573,9 @@
   .editorial-page .tier.pro::before { top: auto; bottom: calc(100% - 32px); }
   .editorial-page .close { padding: 80px 24px; margin: 0 -24px; }
   .editorial-page footer.efoot { grid-template-columns: 1fr 1fr; padding: 32px 24px; margin: 0 -24px; gap: 32px; }
+  .editorial-page .legal { padding: 48px 0 72px; }
+  .editorial-page .legal h1 { font-size: 34px; }
+  .editorial-page .legal h2 { font-size: 21px; }
   .editorial-page .teamcard .member { grid-template-columns: 1fr; gap: 4px; }
   .editorial-page .teamcard .member .qs { text-align: left; }
 }

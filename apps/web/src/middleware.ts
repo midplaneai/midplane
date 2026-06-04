@@ -1,8 +1,9 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
-// Public routes: landing + Clerk's hosted-component routes + the agent-facing
-// MCP endpoint (which authenticates by token, not by Clerk session) +
+// Public routes: landing + legal pages (/privacy, /terms, /imprint) + Clerk's hosted-
+// component routes + the agent-facing MCP endpoint (which authenticates by
+// token, not by Clerk session) +
 // /api/health (Fly http_service.checks polls this without any session).
 // /signup/region is reachable unauthenticated on the apex so a brand-new
 // visitor sees the region picker; the page server-renders the picker for
@@ -12,6 +13,9 @@ import { NextResponse } from "next/server";
 const isPublic = createRouteMatcher([
   "/",
   "/demo",
+  "/privacy",
+  "/terms",
+  "/imprint",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/mcp/(.*)",

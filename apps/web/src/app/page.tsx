@@ -22,48 +22,25 @@
 //     shipped (MCP tokens are per-customer, not per-engineer). The page
 //     no longer claims it. If multi-token-per-connection ships, swap §04
 //     back to a member-with-tokens table.
-import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
+
+import {
+  EditorialFooter,
+  EditorialTopbar,
+} from "@/components/layout/editorial-chrome";
 
 import { CyclingAgent } from "./_landing/cycling-agent";
 import { DemoChat } from "./demo/demo-chat";
 
 export default async function Landing() {
   // Signed-in users still see the landing — they may be sharing it with
-  // teammates, revisiting the pricing page, or comparing tier limits.
-  // Topbar swaps the Sign in / Start free pair for a Dashboard link so
-  // they have a one-click way into the app from here.
-  const { userId } = await auth();
-  const isSignedIn = !!userId;
-
+  // teammates, revisiting the pricing page, or comparing tier limits. The
+  // topbar (EditorialTopbar) handles the Dashboard vs Sign in / Start free
+  // swap based on auth state.
   return (
     <main className="editorial-page">
       <div className="page">
-        <header className="topbar">
-          <Link href="/" aria-label="midplane" className="brand mp-wordmark">
-            mid<span className="mp-colon">:</span>plane
-          </Link>
-          <nav className="nav">
-            <a href="#policy">Policy</a>
-            <a href="#audit">Audit</a>
-            <a href="#pricing">Pricing</a>
-          </nav>
-          <div className="topright">
-            <a href="https://github.com/midplaneai/midplane">GitHub</a>
-            {isSignedIn ? (
-              <a className="ebtn fill" href="/dashboard">
-                Dashboard →
-              </a>
-            ) : (
-              <>
-                <Link href="/sign-in">Sign in</Link>
-                <Link className="ebtn fill" href="/sign-up">
-                  Start free
-                </Link>
-              </>
-            )}
-          </div>
-        </header>
+        <EditorialTopbar />
 
         {/* Stakes hero — name the situation (Cursor on prod) and the fear
             (postmortem). The §01 before/after sits directly below as the
@@ -856,28 +833,7 @@ export default async function Landing() {
           </div>
         </section>
 
-        <footer className="efoot">
-          <div>
-            <span
-              className="brand mp-wordmark mp-on-dark"
-              aria-label="midplane"
-            >
-              mid<span className="mp-colon">:</span>plane
-            </span>
-          </div>
-          <div>
-            <h5>Product</h5>
-            <a href="#audit">Audit</a>
-            <a href="#policy">Policy</a>
-            <a href="#pricing">Pricing</a>
-          </div>
-          <div>
-            <h5>Open</h5>
-            <a href="https://github.com/midplaneai/midplane">
-              github.com/midplaneai/midplane
-            </a>
-          </div>
-        </footer>
+        <EditorialFooter />
       </div>
     </main>
   );
