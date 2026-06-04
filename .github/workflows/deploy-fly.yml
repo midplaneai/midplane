@@ -1,0 +1,261 @@
+# Deploy midplane-cloud to Fly — manual rollout of an OSS engine image.
+#
+# WHAT THIS DOES
+#   Rolls out a single, already-published OSS engine image tag
+#   (midplane/midplane:<image_tag>) across the EU and/or US regions in one
+#   reviewed, logged run. Per region, in order, it:
+#     1. Stages the MIDPLANE_OSS_IMAGE secret on the control-plane (web) app.
+#     2. Deploys the web app with a health-gated `--strategy bluegreen` cutover
+#        so the new secret + image go live only if /api/health passes
+#        (Fly auto-rolls-back if the green machines never become healthy).
+#     3. Deploys the regional ENGINE app pinned to the same tag, so its release
+#        image stays in sync with what newly-spawned customer machines run.
+#     4. (opt-in) Drains running customer engine machines so customers move onto
+#        the new image now instead of "eventually" (on suspend/expire/respawn).
+#
+#   It does NOT build or publish midplane/midplane — that image is produced by
+#   the separate midplaneai/midplane repo's `v*`-tag CI. This workflow only
+#   CONSUMES an already-published tag.
+#
+# WHY THE SECRET MATTERS MORE THAN THE ENGINE `fly deploy`
+#   Live customer traffic runs on machines created on demand via the Fly
+#   Machines API by FlyMachineSpawner (packages/router/src/spawner-fly.ts),
+#   using the MIDPLANE_OSS_IMAGE secret set on the WEB app. So the engine
+#   version customers actually get is governed by that secret, not by
+#   `fly deploy` of the engine toml (that deploy is mostly ceremonial — it
+#   keeps the engine app's release image consistent). Updating the secret only
+#   affects NEWLY spawned machines; already-running ones keep the old image
+#   until they respawn — hence the optional drain step.
+#
+# REQUIRED GitHub configuration (none of these values live in this repo)
+#   Secrets — repo-level OR on the "production" Environment:
+#     FLY_API_TOKEN
+#       Fly deploy token with access to all four apps (midplane-web,
+#       midplane-web-us, midplane-eu, midplane-us). flyctl reads it from env.
+#   Variables (vars) — repo-level OR on the "production" Environment:
+#     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+#       Clerk PUBLISHABLE key (pk_live_... / pk_test_...). Public by design:
+#       it is baked into the web client bundle at build time (apps/web/Dockerfile
+#       ARG), so it lives in `vars`, not `secrets`. Both regional web apps share
+#       one Clerk instance, so one value covers both.
+#
+# This is workflow_dispatch ONLY — there is intentionally no push/merge trigger.
+# The web app is built from whatever ref you dispatch from (default branch HEAD
+# by default), so dispatch from the commit you want live.
+name: Deploy to Fly
+
+run-name: "Deploy midplane/midplane:${{ inputs.image_tag }} → ${{ inputs.region }} (drain=${{ inputs.drain_engines }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "OSS engine image tag to roll out, i.e. the X.Y.Z in midplane/midplane:X.Y.Z."
+        type: string
+        required: true
+        # Keep in sync with the pinned version across the repo (fly-*.toml,
+        # the spawner fallbacks, .env.example, README). Consolidating that pin
+        # to a single source is a noted follow-up — see the PR description.
+        default: "0.7.0"
+      region:
+        description: "Region(s) to roll out. With 'both', eu rolls fully before us (staged blast radius)."
+        type: choice
+        required: true
+        default: both
+        options:
+          - both
+          - eu
+          - us
+      drain_engines:
+        description: "Force running customer engine machines off the old image NOW by destroying them (router respawns on the new image) instead of waiting for their idle cycle. NOT seamless: in-flight MCP calls are dropped, the first request per connection may 502, and active sessions must re-initialize. Leave OFF unless a continuously-busy connection must move immediately."
+        type: boolean
+        required: true
+        default: false
+
+concurrency:
+  # One Fly rollout at a time. Do NOT cancel an in-flight deploy mid-bluegreen —
+  # a second dispatch queues behind the first instead.
+  group: deploy-fly
+  cancel-in-progress: false
+
+jobs:
+  # Fail fast on a typo'd tag BEFORE the (optionally reviewer-gated) deploy job
+  # is created — so a bad tag never bothers a human approver. Needs no secrets,
+  # so it runs outside the production Environment.
+  preflight:
+    name: Verify image exists (multi-arch)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect midplane/midplane:${{ inputs.image_tag }} on Docker Hub
+        run: |
+          set -euo pipefail
+          REF="midplane/midplane:${{ inputs.image_tag }}"
+          echo "Inspecting $REF ..."
+          if ! RAW="$(docker buildx imagetools inspect "$REF" --raw 2>/dev/null)"; then
+            echo "::error::$REF not found on Docker Hub. Check the tag — the image is published by the midplaneai/midplane v*-tag CI, not by this repo."
+            exit 1
+          fi
+          MEDIA="$(echo "$RAW" | jq -r '.mediaType')"
+          echo "Top-level mediaType: $MEDIA"
+          # Must be a manifest list / OCI index (multi-arch), not a single image.
+          # A plain local build yields a single-arch / attestation-only image
+          # that Fly rejects, so we gate on this explicitly.
+          case "$MEDIA" in
+            *manifest.list*|*image.index*) ;;
+            *)
+              echo "::error::$REF is not a multi-arch manifest list (got mediaType=$MEDIA). Re-publish via the v*-tag CI (provenance:false)."
+              exit 1
+              ;;
+          esac
+          PLATFORMS="$(echo "$RAW" | jq -r '.manifests[]? | select(.platform.os != null and .platform.os != "unknown") | "\(.platform.os)/\(.platform.architecture)"' | sort -u)"
+          echo "Platforms in manifest:"
+          echo "$PLATFORMS" | sed 's/^/  - /'
+          if ! echo "$PLATFORMS" | grep -qx "linux/amd64"; then
+            echo "::error::$REF has no linux/amd64 image (arm64-only?). Fly runs amd64 — this tag would not boot."
+            exit 1
+          fi
+          echo "OK: $REF is a multi-arch manifest list with linux/amd64."
+
+  deploy:
+    name: Roll out
+    needs: preflight
+    runs-on: ubuntu-latest
+    # Gate the rollout behind the "production" Environment so a required
+    # reviewer can be added later (Settings -> Environments -> production).
+    # Until a reviewer is configured this still runs straight through.
+    environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      IMAGE_REF: "midplane/midplane:${{ inputs.image_tag }}"
+      CLERK_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+      REGION_INPUT: ${{ inputs.region }}
+      DRAIN: ${{ inputs.drain_engines }}
+    steps:
+      - name: Checkout (fly-*.toml configs + apps/web Dockerfile build context)
+        uses: actions/checkout@v4
+
+      - name: Preconditions
+        run: |
+          set -euo pipefail
+          if [ -z "${FLY_API_TOKEN:-}" ]; then
+            echo "::error::FLY_API_TOKEN is not set. Add it as a repo or 'production' Environment secret."
+            exit 1
+          fi
+          if [ -z "${CLERK_PUBLISHABLE_KEY:-}" ]; then
+            echo "::error::vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is empty. Set it as a repo or 'production' Environment variable — it is baked into the web client bundle at build time, so an empty value silently breaks Clerk in the browser."
+            exit 1
+          fi
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Roll out ${{ env.IMAGE_REF }} to ${{ inputs.region }}
+        run: |
+          set -euo pipefail
+
+          # Ordered region list — eu always rolls before us so the blast radius
+          # is staged. A failure in eu aborts the run (set -e) before us starts.
+          case "$REGION_INPUT" in
+            eu)   REGIONS="eu" ;;
+            us)   REGIONS="us" ;;
+            both) REGIONS="eu us" ;;
+            *) echo "::error::unknown region '$REGION_INPUT'"; exit 1 ;;
+          esac
+
+          # Start the run summary (appended per-region as each completes, so a
+          # mid-run failure still shows what got through).
+          {
+            echo "## Fly rollout"
+            echo ""
+            echo "- **Image:** \`$IMAGE_REF\`"
+            echo "- **Region input:** \`$REGION_INPUT\` (order: $REGIONS)"
+            echo "- **Drain engines:** \`$DRAIN\`"
+            echo ""
+            echo "| Region | Web app | Engine app | Engine image | Drained |"
+            echo "| --- | --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for region in $REGIONS; do
+            case "$region" in
+              eu)
+                WEB_APP="midplane-web";    WEB_CONFIG="fly-web-eu.toml"
+                ENGINE_APP="midplane-eu";  ENGINE_CONFIG="fly-eu.toml" ;;
+              us)
+                WEB_APP="midplane-web-us"; WEB_CONFIG="fly-web-us.toml"
+                ENGINE_APP="midplane-us";  ENGINE_CONFIG="fly-us.toml" ;;
+            esac
+
+            echo "::group::[$region] Stage MIDPLANE_OSS_IMAGE=$IMAGE_REF on $WEB_APP"
+            # --stage defers application to the bluegreen deploy below, so the
+            # secret goes live through the health-gated cutover rather than via
+            # the immediate (ungated) restart that a plain `secrets set` triggers.
+            flyctl secrets set --app "$WEB_APP" --stage \
+              "MIDPLANE_OSS_IMAGE=$IMAGE_REF"
+            echo "::endgroup::"
+
+            echo "::group::[$region] Deploy web app $WEB_APP (bluegreen, health-gated)"
+            # Builds apps/web/Dockerfile from the checked-out ref; the staged
+            # secret is applied to the green machines and only cut over if
+            # /api/health passes. NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is a public
+            # build arg (baked into the client bundle), sourced from vars.
+            flyctl deploy \
+              --config "$WEB_CONFIG" \
+              --app "$WEB_APP" \
+              --strategy bluegreen \
+              --build-arg "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$CLERK_PUBLISHABLE_KEY"
+            echo "::endgroup::"
+
+            echo "::group::[$region] Deploy engine app $ENGINE_APP @ $IMAGE_REF"
+            # Pin --image to the tag being rolled out so the engine app's release
+            # image matches the secret regardless of what fly-*.toml currently
+            # pins in [build]. Default (rolling) strategy is fine — this deploy
+            # is ceremonial; customer traffic runs on Machines-API machines.
+            flyctl deploy \
+              --config "$ENGINE_CONFIG" \
+              --app "$ENGINE_APP" \
+              --image "$IMAGE_REF"
+            echo "::endgroup::"
+
+            drained="no"
+            if [ "$DRAIN" = "true" ]; then
+              echo "::group::[$region] Drain customer machines in $ENGINE_APP"
+              # Customer-serving machines are spawned via the Machines API by
+              # FlyMachineSpawner and named mcp-<connectionId>. A `machine
+              # restart` would NOT change their image (it reuses the stored
+              # config) — only destroying them does.
+              #
+              # This is NOT seamless. The control-plane registry caches each
+              # machine's 6PN IP and is not notified of an out-of-band destroy,
+              # so after we kill a machine: any in-flight MCP call is dropped;
+              # the FIRST request for that connection 502s (upstream_disconnected)
+              # because the registry still points at the dead IP, which then
+              # invalidates the entry; the NEXT request respawns a fresh machine
+              # on the new MIDPLANE_OSS_IMAGE; and the agent's MCP session is
+              # gone, so a spec-compliant client must re-initialize. Idle
+              # connections already cycle on their own 30-min idle timer — this
+              # is the blunt "force a continuously-busy connection now" path.
+              # We touch ONLY mcp-* machines, never the engine app's own
+              # release machine.
+              flyctl machine list --app "$ENGINE_APP" --json > "/tmp/machines-$region.json"
+              IDS="$(jq -r '.[] | select(.name != null and (.name | startswith("mcp-"))) | .id' "/tmp/machines-$region.json")"
+              if [ -z "$IDS" ]; then
+                echo "No customer (mcp-*) machines in $ENGINE_APP — nothing to drain."
+              else
+                COUNT=0
+                for id in $IDS; do
+                  echo "Destroying $id (router respawns on the new image on next request)"
+                  flyctl machine destroy "$id" --app "$ENGINE_APP" --force
+                  COUNT=$((COUNT+1))
+                done
+                echo "Drained $COUNT customer machine(s) from $ENGINE_APP."
+              fi
+              drained="yes"
+              echo "::endgroup::"
+            fi
+
+            echo "| $region | $WEB_APP (bluegreen) | $ENGINE_APP (rolling) | \`$IMAGE_TAG\` | $drained |" >> "$GITHUB_STEP_SUMMARY"
+            echo "[$region] done."
+          done
+
+          echo "Rollout of $IMAGE_REF to [$REGIONS] complete."
