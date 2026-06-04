@@ -13,7 +13,7 @@ app = "midplane-us"
 primary_region = "iad"
 
 [build]
-  image = "midplane/midplane:0.6.0"
+  image = "midplane/midplane:0.7.0"
 
 [env]
   PORT = "8080"
