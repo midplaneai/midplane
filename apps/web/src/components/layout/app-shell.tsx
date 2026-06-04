@@ -1,4 +1,5 @@
 import { OrganizationSwitcher } from "@clerk/nextjs";
+import Link from "next/link";
 
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
@@ -62,11 +63,32 @@ export function AppShell({ region, children }: AppShellProps) {
           <UserMenuButton />
         </div>
       </aside>
-      <main className="min-w-0">
+      <main className="flex min-w-0 flex-col">
         <MobileNav region={region} />
-        {children}
+        <div className="flex-1">{children}</div>
+        <AppLegalFooter />
       </main>
     </div>
+  );
+}
+
+// Persistent legal links, reachable from every authenticated page on both
+// desktop and mobile. Required so the § 5 TMG Imprint stays reachable inside
+// the app, not just from the marketing footer. Lowercase mono is the product
+// chrome voice (see DESIGN.md).
+function AppLegalFooter() {
+  return (
+    <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-6 py-4 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
+      <Link href="/imprint" className="transition-colors hover:text-foreground">
+        imprint
+      </Link>
+      <Link href="/privacy" className="transition-colors hover:text-foreground">
+        privacy
+      </Link>
+      <Link href="/terms" className="transition-colors hover:text-foreground">
+        terms
+      </Link>
+    </footer>
   );
 }
 

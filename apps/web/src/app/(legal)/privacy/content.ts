@@ -500,4 +500,5 @@ For the purposes of the GDPR, Service Providers are considered Data Processors.<
 <ul>
 <li>By email: info@midplane.ai</li>
 </ul>
+<p>Our full company details, including Our registered address and the Data Controller, are available in our <a href="/imprint">Imprint</a>. The terms governing use of the Service are set out in our <a href="/terms">Terms and Conditions</a>.</p>
 `;
