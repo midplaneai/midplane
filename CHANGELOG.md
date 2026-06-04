@@ -12,42 +12,9 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
   - `midplane policy lint <file>` — security-posture findings beyond schema validity: `default: read_write`, tables granted writes, missing/disabled `tenant_scope`, audit-style tables left scoped, policies that restrict nothing. `[ERROR]` findings exit nonzero (CI gate); warnings exit 0.
   - `midplane policy test <file> --sql "<query>" [--tenant-id <id>] [--db <name>] [--json]` — run a query through the engine's real `evaluate()` against the file's policy (no DB connection) and print the decision, the rule, and the exact agent-facing message a denial would return. The dry-run authors use to answer "would this pass, and what would the agent see?"
 
-## [0.7.0] — 2026-06-01
+### Security
 
-### Added
-
-- **MySQL dialect (Phase 1 PR2 of the multi-DB roadmap).** A database configured with `dialect: mysql` now runs end-to-end — parse → normalized IR → the *same, unchanged* policy rules → `mysql2` → audit. Set it per DB in the policy YAML:
-
-  ```yaml
-  databases:
-    - name: warehouse
-      url: mysql://app:secret@db:3306/app_db   # the DSN MUST name the database
-      dialect: mysql
-      table_access: { default: read, tables: { users: read_write } }
-      tenant_scope: { column: org_id, exempt: [regions] }
-  ```
-
-  The dialect uses [`node-sql-parser`](https://www.npmjs.com/package/node-sql-parser) (MySQL mode, pinned to an exact version — a parser-fidelity regression on a minor bump is a silent-bypass vector for a security tool) and emits the identical `NormalizedProgram` the Postgres adapter does, so `table_access`, `tenant_scope`, `multi_statement`, and `parse_error` produce byte-identical verdicts across dialects. The shipped PG verdict baseline is unchanged; `packages/engine/src/policy/` is byte-unchanged — a new dialect adds an adapter, not rule edits.
-
-- **MySQL bare-name soundness (the analog of the PG `search_path` pin).** The MySQL `Executor` (`mysql2/promise`, `multipleStatements: false`) relies on the DSN-pinned database, and the adapter enforces the parser-side half, fail-closed:
-  - `USE <db>` is denied (`unsupported` → `table_access` no-target), independent of the `multipleStatements` guard — a standalone `USE` is denied.
-  - Any `db.table` / `db.table.col` reference whose database is neither the connected database nor the `information_schema` discovery carve-out is denied (a cross-database reference is a tenant bypass even with the database pin). Caught even when the foreign qualifier appears only in a `WHERE` column reference.
-  - `INSERT … ON DUPLICATE KEY UPDATE` and `REPLACE` take the upsert deny path on tenant-scoped tables (a unique-key collision can clobber another tenant's row). `MERGE` is rejected at parse (`node-sql-parser` does not accept it in MySQL mode) → `parse_error` deny.
-  - A CTE named after a table that its own body reads is **not** mistaken for a CTE reference: a non-recursive CTE's name does not bind in its own body, so `WITH audit_log AS (SELECT * FROM audit_log) SELECT * FROM audit_log` reads the real `audit_log` and is policy-checked (previously the body read was silently skipped). This also fixes the identical pre-existing bug in the **Postgres** adapter (present since the normalized-IR refactor in #26); recursive CTEs keep their self-reference bound. Legitimate shadowing (a CTE whose body reads nothing real) still allows.
-  - Anything the parser can't faithfully model is `unsupported` → denied. We accept false denials to never accept a false allow.
-
-- **`dialect` on DECIDED audit rows.** Every `DECIDED` audit payload now carries the dialect the query was parsed under (`"postgres"` | `"mysql"`). Additive + optional under `audit.schema_version: 3` (no bump) — same pattern as the `database` (0.2.0) and `mcp_token_id` (0.6.0) columns.
-
-- **`dialect: mysql` unlocked in policy YAML.** `DatabaseEntrySchema.dialect` accepts `postgres | mysql`; unknown values (e.g. `sqlite`, Phase 1.5) still fail loudly at boot via the zod enum.
-
-### Changed
-
-- **Metadata tools route through the dialect.** `list_tables` / `describe_table` build their `information_schema` discovery SQL from the dialect's `listTablesSql` / `describeTableSql` (surfaced through the engine registry's `EngineEntry`, since `Engine.dialect` is private) instead of hardcoding it. Postgres and MySQL emit identical `information_schema` SQL; the seam exists so a future dialect without `information_schema` can override it. An omitted `schema` now defaults per dialect: Postgres → `public`, MySQL → the connected database (`information_schema.table_schema` is the database name in MySQL, so the old `public` default returned zero rows). A fan-out `list_tables` across mixed dialects uses each DB's own default.
-- `ParseResult.ast` is now `unknown` at the `Dialect` / policy / public-API seam — each dialect's native AST is private to its own `normalize()`. The Postgres `parse()` export still returns the concrete `PgParseTree` shape, so direct callers are unaffected. The engine fingerprints the AST through `normalizeForFingerprint(node: unknown)` unchanged.
-
-### Why
-
-Single-DB framing caps the product; the cross-backend audit schema + the one adversarial corpus that pins every dialect at once is the compounding moat. MySQL is the forcing function that proves the normalized-IR seam (shipped PG-only in 0.6.x) is genuinely dialect-agnostic: the rules didn't change, yet a MySQL DB gets the identical decision for the identical query. node-sql-parser runs in-process (no sidecar) per the roadmap's Phase-1 scope; the higher-fidelity sqlglot sidecar (Phase 2) becomes a pure parse/normalize adapter swap — the rules never change. SQLite is deferred to Phase 1.5.
+- **CTE self-shadow read bypass (`table_access`).** A non-recursive CTE's name does not bind inside its own body, so `WITH audit_log AS (SELECT * FROM audit_log) SELECT * FROM audit_log` reads the **real** `audit_log` in its body — which must be policy-checked. Previously the body read was mistaken for a reference to the CTE itself and silently skipped, allowing a read of a denied table. Now fixed: a CTE's own name is excluded while walking its body (recursive CTEs keep their self-reference bound, since that's the recursion); legitimate shadowing — a CTE whose body reads nothing real, e.g. `WITH audit_log AS (SELECT 1) SELECT * FROM audit_log` — still allows. Present since the normalized-IR refactor in 0.6.x; only the `table_access` read path was affected (`tenant_scope` emits a scope unit per CTE body, so it was never bypassed).
 
 ## [0.6.0] — 2026-05-20
 

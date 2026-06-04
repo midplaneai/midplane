@@ -5,7 +5,7 @@
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20Streamable%20HTTP-blueviolet)](https://modelcontextprotocol.io/)
 [![Verified](https://img.shields.io/badge/verified-Cursor%20%7C%20Claude%20Code%20%7C%20Claude%20Desktop-2ea44f)](./docs/agent-setup.md)
 
-A safety layer between AI coding agents (Cursor, Claude Code, Claude Desktop) and your Postgres or MySQL database. Parse, policy, audit. Read-only by default. Per-table read/write policy via YAML.
+A safety layer between AI coding agents (Cursor, Claude Code, Claude Desktop) and your Postgres database. Parse, policy, audit. Read-only by default. Per-table read/write policy via YAML.
 
 ```bash
 curl -O https://raw.githubusercontent.com/midplaneai/midplane/main/.env.example
@@ -126,32 +126,11 @@ When N ≥ 2, `query` and `describe_table` require a `database` arg, `list_table
 
 When `databases:` is absent, the `DATABASE_URL` env var + top-level `table_access` / `tenant_scope` shape from 0.1.x keeps working byte-for-byte.
 
-## Dialects (0.7.0)
-
-Each DB declares a `dialect:` (default `postgres`). The same policy rules and the same audit schema apply to every dialect — a query gets the identical decision whichever backend it targets.
-
-| Dialect | Parser | Executor | Bare-name soundness | Status |
-|---|---|---|---|---|
-| `postgres` | libpg_query (the real PG parser) | `pg` pool, `SET LOCAL search_path` pin | search_path pinned per transaction | ✓ since 0.1.x |
-| `mysql` | [node-sql-parser](https://www.npmjs.com/package/node-sql-parser) (MySQL mode) | `mysql2` pool, `multipleStatements: false` | DSN-pinned database + `USE` denied + cross-DB refs denied | ✓ **0.7.0** |
-| `sqlite` | — | — | — | Phase 1.5 |
-
-```yaml
-databases:
-  - name: warehouse
-    url: mysql://app:secret@db:3306/app_db   # the DSN MUST name the database
-    dialect: mysql
-    table_access: { default: read, tables: { users: read_write } }
-    tenant_scope: { column: org_id, exempt: [regions] }
-```
-
-**MySQL safety notes.** The DSN must name the database — bare table names (`FROM users`) resolve against it, the way PG bare names resolve against the pinned `search_path`. `USE <db>` is denied, and any cross-database reference (`otherdb.users`, even hidden in a `WHERE` qualifier) is denied — a cross-DB ref is a tenant bypass even with the database pin. node-sql-parser is a good-enough in-process parser, **not** a security oracle: anything it can't faithfully model is denied (fail-closed). We accept false denials to never accept a false allow; the higher-fidelity sqlglot sidecar (Phase 2) is a pure parser swap that reclaims the false denials without touching the rules. MySQL conflates schema and database, so `list_tables` / `describe_table` default to the connected database when you omit `schema` (`information_schema.table_schema` is the database name in MySQL).
-
 ## How it works
 
 1. Agent sends a SQL query via MCP.
-2. Midplane parses it with the DB's dialect parser — [libpg_query](https://github.com/launchql/libpg-query-node) (the actual Postgres parser) for `postgres`, [node-sql-parser](https://www.npmjs.com/package/node-sql-parser) for `mysql`.
-3. Projects the parse tree into a dialect-agnostic IR; the policy rules evaluate that IR (they never see an AST, so a query gets the same verdict on any dialect).
+2. Midplane parses it with [libpg_query](https://github.com/launchql/libpg-query-node) — the actual Postgres parser, not a regex blocklist.
+3. Projects the parse tree into a normalized IR; the policy rules evaluate that IR (they never read raw AST nodes).
 4. Writes audit event (durable, **before** execution).
 5. Executes against your DB, audits the result, returns it.
 

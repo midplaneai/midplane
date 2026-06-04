@@ -719,6 +719,24 @@ describe("adversarial/table-access: CTE-name shadowing", () => {
     );
   });
 
+  test("self-shadow: CTE named after a denied table reads the REAL table → deny", async () => {
+    // The self-shadow read bypass. A non-recursive CTE's name does NOT bind in
+    // its own body, so `WITH audit_log AS (SELECT * FROM audit_log) ...` reads
+    // the REAL audit_log (deny) in the body — it must NOT be mistaken for a
+    // self-reference and skipped. (Regression: this slipped through as an ALLOW
+    // until the definingStack fix in the normalized-IR adapter.) The legitimate
+    // shadow case above — body reads nothing real — still allows, proving the
+    // fix doesn't over-correct.
+    const cfg: TableAccessConfig = { default: "read", tables: { audit_log: "deny" } };
+    const { engine } = makeEngine({ tableAccess: cfg });
+    await expectDeny(
+      engine,
+      baseCtx,
+      "WITH audit_log AS (SELECT * FROM audit_log) SELECT * FROM audit_log",
+      TABLE_ACCESS,
+    );
+  });
+
   test("CTE write at depth on real `read` table still denies", async () => {
     const cfg: TableAccessConfig = { default: "deny", tables: { real: "read" } };
     const { engine } = makeEngine({ tableAccess: cfg });

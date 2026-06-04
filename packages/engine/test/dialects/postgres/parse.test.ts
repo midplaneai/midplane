@@ -3,9 +3,8 @@
 // These tests target behavior that is *unique* to the Postgres dialect's
 // libpg_query wrapper (AST shape, PG-specific syntax, error semantics).
 // They sit beside `dialects/registry.test.ts` (which pins the dialect-
-// neutral seam) and form the template a future MySQL dialect will mirror
-// under `dialects/mysql/parse.test.ts` with its own dialect-specific
-// expectations.
+// neutral seam) and form the template a future dialect would mirror under
+// `dialects/<name>/parse.test.ts` with its own dialect-specific expectations.
 //
 // What's intentionally NOT here:
 //   - Policy outcomes (those live in `adversarial/` and `policy/`).

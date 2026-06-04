@@ -39,12 +39,10 @@ export { parse, warmup } from "./dialects/postgres/index.ts";
 export type { ParseResult, PgParseTree } from "./dialects/postgres/index.ts";
 export {
   postgresDialect,
-  mysqlDialect,
-  createMysqlDialect,
   getDialect,
   DIALECTS,
 } from "./dialects/index.ts";
-export type { Dialect, DialectName, MysqlDialectOptions } from "./dialects/index.ts";
+export type { Dialect, DialectName } from "./dialects/index.ts";
 
 export {
   AuditUnavailableError,

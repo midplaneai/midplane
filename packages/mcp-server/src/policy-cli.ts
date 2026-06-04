@@ -29,7 +29,6 @@ import {
   tenantScope,
   postgresDialect,
   getDialect,
-  createMysqlDialect,
   type Rule,
   type Dialect,
   type EngineContext,
@@ -558,23 +557,8 @@ function pickDatabase(databases: DatabaseSpec[], db: string | undefined): Databa
 }
 
 function dialectFor(spec: DatabaseSpec): Dialect {
-  if (spec.dialect === "mysql") {
-    // Pure policy eval needs no live connection, but the MySQL dialect's
-    // cross-DB guard wants the database name from the DSN. offlineEnv() may
-    // have stubbed the url; an unknown database yields the strict dialect
-    // (every explicit foreign-db qualifier denied), which is the safe default.
-    return createMysqlDialect({ database: mysqlDatabaseFromDsn(spec.url) });
-  }
+  // Postgres-only public build; the seam resolves the one registered dialect.
   return getDialect(spec.dialect);
-}
-
-function mysqlDatabaseFromDsn(url: string): string | null {
-  try {
-    const path = new URL(url).pathname.replace(/^\/+/, "");
-    return path.length > 0 ? decodeURIComponent(path) : null;
-  } catch {
-    return null;
-  }
 }
 
 // ── shared helpers ───────────────────────────────────────────────────────────

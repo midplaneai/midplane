@@ -13,7 +13,6 @@ import {
   DIALECTS,
   getDialect,
   postgresDialect,
-  mysqlDialect,
 } from "../../src/dialects/index.ts";
 import { parse } from "../../src/dialects/postgres/parse.ts";
 import { Engine } from "../../src/engine.ts";
@@ -29,22 +28,21 @@ describe("dialects/registry: getDialect()", () => {
     expect(getDialect("postgres")).toBe(postgresDialect);
   });
 
-  test("'mysql' returns the mysql dialect singleton (0.7.0)", () => {
-    expect(getDialect("mysql")).toBe(mysqlDialect);
-  });
-
-  test("DIALECTS map exposes 'postgres' and 'mysql'", () => {
-    expect(Object.keys(DIALECTS)).toContain("postgres");
-    expect(Object.keys(DIALECTS)).toContain("mysql");
+  test("DIALECTS map exposes only 'postgres' (public build)", () => {
+    expect(Object.keys(DIALECTS)).toEqual(["postgres"]);
     expect(DIALECTS.postgres).toBe(postgresDialect);
-    expect(DIALECTS.mysql).toBe(mysqlDialect);
   });
 
   test("unknown dialect name throws with a helpful message", () => {
     // Cast through unknown to bypass the TS type-level guard — the runtime
-    // check is what protects against a future config-loader bug that lets
-    // an unvalidated string reach the registry. Uses dialect names not yet
-    // implemented (sqlite is Phase 1.5).
+    // check is what protects against a future config-loader bug that lets an
+    // unvalidated string reach the registry. `mysql` is implemented on a branch
+    // but deliberately not registered on the public build, so it's an unknown
+    // here just like `sqlite` (not yet implemented) — both must throw, never
+    // silently fall through to Postgres parsing.
+    expect(() => getDialect("mysql" as unknown as "postgres")).toThrow(
+      /Unknown dialect/,
+    );
     expect(() => getDialect("sqlite" as unknown as "postgres")).toThrow(
       /Unknown dialect/,
     );

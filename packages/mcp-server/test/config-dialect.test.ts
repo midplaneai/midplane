@@ -2,10 +2,11 @@
 //
 // Pins the contracts the engine-factory relies on:
 //   1. `dialect:` omitted ⇒ DatabaseSpec.dialect === "postgres".
-//   2. `dialect: postgres` / `dialect: mysql` parse cleanly (0.7.0 unlocks mysql).
-//   3. Unknown dialect names are rejected at YAML load (zod enum lock) —
-//      important because if it silently ignored, a user would write
-//      `dialect: sqlite` and get Postgres parsing without warning.
+//   2. `dialect: postgres` parses cleanly (the only public dialect).
+//   3. Every other dialect name — including `mysql` (implemented on a branch but
+//      held off the public build) and `sqlite` (not implemented) — is rejected
+//      at YAML load (zod enum lock). Important: silent acceptance would mean
+//      Postgres parsing on a differently-marked DB, a silent-bypass vector.
 //   4. Synthetic legacy entries (no policy file, empty YAML, legacy single-
 //      DB shape) all carry `dialect: "postgres"` so engine-factory's
 //      `getDialect(spec.dialect)` lookup never sees undefined.
@@ -37,14 +38,16 @@ describe("config: dialect on databases[] entries", () => {
     expect(loaded.databases[0]!.dialect).toBe("postgres");
   });
 
-  test("explicit `dialect: mysql` accepted (0.7.0)", () => {
+  test("`dialect: mysql` is rejected — held off the public build", () => {
     const yaml = `databases:
   - name: prod
     url: mysql://u:p@host:3306/app
     dialect: mysql
 `;
-    const loaded = parsePolicyYaml(yaml, "test");
-    expect(loaded.databases[0]!.dialect).toBe("mysql");
+    // MySQL is implemented + tested on a branch but deliberately not in the
+    // public dialect enum. A user who writes `dialect: mysql` must fail loudly
+    // at boot, never silently get Postgres parsing against a MySQL DSN.
+    expect(() => parsePolicyYaml(yaml, "test")).toThrow(/dialect/);
   });
 
   test("unknown dialect name is rejected by zod", () => {
@@ -54,8 +57,8 @@ describe("config: dialect on databases[] entries", () => {
     dialect: sqlite
 `;
     // The zod enum is the boundary that stops a doc from compiling with an
-    // unsupported value (sqlite is Phase 1.5). Silent acceptance would mean
-    // PG parsing on a differently-marked DB — a silent-bypass vector.
+    // unsupported value (sqlite is not implemented). Silent acceptance would
+    // mean PG parsing on a differently-marked DB — a silent-bypass vector.
     expect(() => parsePolicyYaml(yaml, "test")).toThrow(/dialect/);
   });
 

@@ -2,7 +2,7 @@
   "name": "@midplane/engine",
   "version": "0.7.0",
   "private": true,
-  "description": "Midplane engine: parse, policy, audit. Postgres + MySQL.",
+  "description": "Midplane engine: parse, policy, audit. Postgres.",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "libpg-query": "^16.7.0",
-    "node-sql-parser": "5.4.0",
     "pg": "^8.13.0",
     "ulid": "^2.3.0",
     "zod": "^4.0.0"
