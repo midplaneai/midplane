@@ -164,6 +164,15 @@ export class FlyMachineSpawner implements Spawner {
           env: {
             ...dsnEnv,
             PORT: "8080",
+            // Bind the engine's HTTP server to :: (dual-stack) so the control
+            // plane can reach it over Fly's IPv6-only 6PN network at
+            // [private_ip]:8080. The engine's default bind is 0.0.0.0 (IPv4),
+            // which is unreachable over 6PN — every waitForHealth probe fails
+            // and the spawn 502s. Honored by engine images that read
+            // MIDPLANE_HOST (>= 0.7.1); older images ignore the unknown var, so
+            // this is safe to ship ahead of the image republish + pin bump
+            // (inert until then).
+            MIDPLANE_HOST: "::",
             DB_PATH: "/data/audit.db",
             MIDPLANE_POLICY_FILE: POLICY_FILE_GUEST_PATH,
             ...(this.indexerToken
