@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { FlyMachineSpawner } from "../src/spawner-fly.ts";
 
 const regions = {
-  eu: { publicHost: "eu.midplane.com", flyApp: "midplane-eu", flyRegion: "fra" },
-  us: { publicHost: "us.midplane.com", flyApp: "midplane-us", flyRegion: "iad" },
+  eu: { publicHost: "eu.midplane.ai", flyApp: "midplane-eu", flyRegion: "fra" },
+  us: { publicHost: "us.midplane.ai", flyApp: "midplane-us", flyRegion: "iad" },
 };
 
 describe("FlyMachineSpawner", () => {
@@ -24,6 +24,9 @@ describe("FlyMachineSpawner", () => {
         );
         expect(env.DATABASE_URL).toBeUndefined();
         expect(env.PORT).toBe("8080");
+        // Dual-stack bind so the control plane can reach the engine over the
+        // IPv6-only 6PN network (the engine's 0.0.0.0 default is IPv4-only).
+        expect(env.MIDPLANE_HOST).toBe("::");
         expect(env.MIDPLANE_POLICY_FILE).toBe("/etc/midplane/policy.yaml");
         expect(body.region).toBe("fra");
 

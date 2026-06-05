@@ -41,10 +41,10 @@ bun run test:e2e             # Playwright smoke (E2E_LIVE=1 for live)
 
 ## OSS image dependency
 
-The router spawns `midplane/midplane:0.7.0` (published on Docker Hub). For local dev against an unreleased OSS branch, override the tag and build from source:
+The router spawns `midplane/midplane:0.7.1` (published on Docker Hub). For local dev against an unreleased OSS branch, override the tag and build from source:
 
 ```bash
-docker build -t midplane/midplane:0.7.0 /path/to/midplaneai/midplane
+docker build -t midplane/midplane:0.7.1 /path/to/midplaneai/midplane
 ```
 
 Or use the convenience script (auto-detects `~/dev/midplane`, override with `OSS_REPO=...`):
@@ -114,7 +114,7 @@ fly secrets set --app midplane-web \
   FLY_APP_EU='midplane-eu' \
   FLY_REGION_EU='fra' \
   MIDPLANE_PUBLIC_HOST_EU='eu.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.7.0' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.7.1' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
   MIDPLANE_STAFF_USER_IDS='user_...'
 
@@ -132,7 +132,7 @@ fly secrets set --app midplane-web-us \
   FLY_APP_US='midplane-us' \
   FLY_REGION_US='iad' \
   MIDPLANE_PUBLIC_HOST_US='us.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.7.0' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.7.1' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
   MIDPLANE_STAFF_USER_IDS='user_...'
 
@@ -143,11 +143,16 @@ fly certs add eu.app.midplane.ai  --app midplane-web
 fly certs add app.midplane.ai     --app midplane-web
 fly certs add us.app.midplane.ai  --app midplane-web-us
 
-#    Data-plane hostnames (MCP runtime — the URLs printed in customer
-#    `claude mcp add ... https://<region>.midplane.ai/mcp/<tok>` snippets,
-#    sourced from MIDPLANE_PUBLIC_HOST_{EU,US} on the control plane).
-fly certs add eu.midplane.ai      --app midplane-eu
-fly certs add us.midplane.ai      --app midplane-us
+#    Customer-facing MCP host (the URLs printed in `claude mcp add ...
+#    https://<region>.midplane.ai/mcp/<tok>` snippets, from
+#    MIDPLANE_PUBLIC_HOST_{EU,US}). These point at the WEB apps, NOT the engine
+#    apps: /mcp/<token> is served by the web app's proxyMcp, which resolves the
+#    token (cloud DB), decrypts the DSN (KMS), spawns/reuses the OSS container,
+#    and proxies to it over the private 6PN network. The engine apps
+#    (midplane-eu/us) only HOST those private containers — they take no public
+#    MCP traffic and need no public IP or cert of their own.
+fly certs add eu.midplane.ai      --app midplane-web
+fly certs add us.midplane.ai      --app midplane-web-us
 
 # DNS records:
 #   eu.app.midplane.ai  CNAME midplane-web.fly.dev
@@ -155,8 +160,8 @@ fly certs add us.midplane.ai      --app midplane-us
 #   app.midplane.ai     CNAME eu.app.midplane.ai
 #                       (EU app handles apex; middleware redirects authed
 #                        users to their regional subdomain)
-#   eu.midplane.ai      CNAME midplane-eu.fly.dev
-#   us.midplane.ai      CNAME midplane-us.fly.dev
+#   eu.midplane.ai      CNAME midplane-web.fly.dev     (web app serves /mcp)
+#   us.midplane.ai      CNAME midplane-web-us.fly.dev
 ```
 
 ### KMS mode for production credential storage

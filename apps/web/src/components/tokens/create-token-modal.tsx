@@ -9,6 +9,7 @@ import { ShowOnceUrl } from "@/components/show-once-url";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useUnlockCountdown } from "@/hooks/use-unlock-countdown";
 import { cn } from "@/lib/utils";
 
 // Create-token modal. Triggered by the [+ New token] button in the
@@ -81,6 +82,15 @@ export function CreateTokenModal({
   const [mcpUrl, setMcpUrl] = useState<string | null>(null);
   const nameId = useId();
   const expiryId = useId();
+
+  // Once the URL is on screen the modal becomes un-dismissable by accident:
+  // outside-click and Escape are swallowed (see the Content handlers) and the
+  // close affordances are gated behind a short countdown, so the plaintext
+  // can't be clicked through before it has been copied. The form state (no
+  // URL yet) stays freely dismissable — there's nothing to lose there.
+  const reveal = mcpUrl !== null;
+  const remaining = useUnlockCountdown(reveal, 3);
+  const locked = reveal && remaining > 0;
 
   function reset() {
     setName("");
@@ -158,6 +168,16 @@ export function CreateTokenModal({
           )}
         />
         <DialogPrimitive.Content
+          // While the URL is revealed, swallow outside-click and Escape so
+          // the modal can't be dismissed (and the plaintext silently lost)
+          // by accident. The form state has nothing to lose, so it closes
+          // normally.
+          onInteractOutside={(e) => {
+            if (reveal) e.preventDefault();
+          }}
+          onEscapeKeyDown={(e) => {
+            if (reveal) e.preventDefault();
+          }}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2",
             mcpUrl ? "max-w-xl" : "max-w-lg",
@@ -167,7 +187,11 @@ export function CreateTokenModal({
           )}
         >
           <DialogPrimitive.Close
-            className="absolute right-4 top-4 rounded-sm text-subtle transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
+            disabled={locked}
+            className={cn(
+              "absolute right-4 top-4 rounded-sm text-subtle transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+              locked && "pointer-events-none opacity-40",
+            )}
             aria-label="Close"
           >
             <X className="h-4 w-4" strokeWidth={1.5} />
@@ -177,6 +201,8 @@ export function CreateTokenModal({
               mcpUrl={mcpUrl}
               connectionName={connectionName}
               region={region}
+              locked={locked}
+              remaining={remaining}
               onClose={() => handleOpenChange(false)}
             />
           ) : (
@@ -274,11 +300,17 @@ function SuccessPanel({
   mcpUrl,
   connectionName,
   region,
+  locked,
+  remaining,
   onClose,
 }: {
   mcpUrl: string;
   connectionName?: string | null;
   region?: string | null;
+  /** True while the dismiss countdown is still running. */
+  locked: boolean;
+  /** Seconds left on that countdown (for the button label). */
+  remaining: number;
   onClose: () => void;
 }) {
   return (
@@ -289,7 +321,7 @@ function SuccessPanel({
         </DialogPrimitive.Title>
         <DialogPrimitive.Description className="text-xs text-[hsl(var(--warn))]">
           This is the only time you&apos;ll see the full URL. We store only a
-          hashed digest.
+          hashed digest. Copy it before you close this.
         </DialogPrimitive.Description>
       </div>
       <ShowOnceUrl mcpUrl={mcpUrl} />
@@ -299,8 +331,13 @@ function SuccessPanel({
         mcpUrl={mcpUrl}
       />
       <div className="flex items-center justify-end pt-2">
-        <Button size="sm" onClick={onClose} data-testid="ive-saved-it">
-          I&apos;ve saved it
+        <Button
+          size="sm"
+          onClick={onClose}
+          disabled={locked}
+          data-testid="ive-saved-it"
+        >
+          {locked ? `I've saved it (${remaining})` : "I've saved it"}
         </Button>
       </div>
     </div>

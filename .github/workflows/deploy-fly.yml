@@ -59,7 +59,7 @@ on:
         # Keep in sync with the pinned version across the repo (fly-*.toml,
         # the spawner fallbacks, .env.example, README). Consolidating that pin
         # to a single source is a noted follow-up — see the PR description.
-        default: "0.7.0"
+        default: "0.7.1"
       region:
         description: "Region(s) to roll out. With 'both', eu rolls fully before us (staged blast radius)."
         type: choice

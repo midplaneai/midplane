@@ -51,7 +51,7 @@ export function ConnectAgentGuide({
 
   const serverKey = slugify(connectionName);
   const hasUrl = Boolean(mcpUrl);
-  const url = mcpUrl ?? `https://${region ?? "<region>"}.midplane.com/mcp/<token>`;
+  const url = mcpUrl ?? `https://${region ?? "<region>"}.midplane.ai/mcp/<token>`;
 
   const cursorJson = `{
   "mcpServers": {

@@ -119,9 +119,11 @@ test("create connection → mint second token → revoke default → list reflec
     /^https?:\/\/.+\/mcp\/mp_(live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6}$/,
   );
 
-  // Navigate to the connection detail page. The default token (named
-  // "default" by createConnection) must appear in the list.
-  await page.getByRole("link", { name: /done.*manage tokens/i }).click();
+  // Navigate to the connection detail page. The "I've saved it" button is
+  // gated by a short countdown (it stays disabled for a few seconds);
+  // Playwright's click auto-waits for it to become enabled. The default
+  // token (named "default" by createConnection) must appear in the list.
+  await page.getByTestId("saved-it").click();
   await page.waitForURL(`**/connections/${connectionId}`, { timeout: 10_000 });
   const list = page.getByTestId("token-list");
   await expect(list).toBeVisible();

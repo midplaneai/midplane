@@ -98,7 +98,7 @@ export async function createTokenAction(
     );
     if (!result) return { ok: false, error: "not_found" };
     // mintMcpUrl turns the bare plaintext (mp_live_…/mp_test_…) into the
-    // full https://<region>.midplane.com/mcp/<plaintext> URL the agent
+    // full https://<region>.midplane.ai/mcp/<plaintext> URL the agent
     // pastes into Cursor. Returning the full URL keeps the client modal
     // off the URL-composition path; revalidatePath() refreshes the
     // server-rendered token list when the modal closes.

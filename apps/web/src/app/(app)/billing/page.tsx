@@ -18,7 +18,7 @@ import { resolvePlan } from "@/lib/plan";
 // Server component: <PricingTable> is a Clerk client island; everything else
 // (plan resolution, feature gate) resolves server-side from the session.
 
-const SALES_EMAIL = "sales@midplane.com";
+const SALES_EMAIL = "sales@midplane.ai";
 
 export default async function BillingPage() {
   const customer = await currentCustomer();

@@ -1,10 +1,13 @@
 # EU regional MCP runtime app (currently pinned to Frankfurt).
 #
-# This Fly app receives /mcp/<token> traffic for eu-region customers. The
-# router's spawn-or-reuse logic (PR #2+) creates Fly machines on demand from
-# this image with DATABASE_URL set to the customer's decrypted DSN. fly-replay
-# session affinity (cache_key=<mcp-session-id>) is emitted by the OSS
-# transport — Fly handles routing.
+# This Fly app HOSTS the per-customer OSS containers; it takes NO public MCP
+# traffic. The public /mcp/<token> ingress is the web app's proxyMcp, which
+# resolves the token, decrypts the DSN, and spawns a machine here on demand
+# (PR #2+) via the Machines API with DATABASE_URL set to the customer's
+# decrypted DSN, then proxies to it over private 6PN. So this app needs no
+# public IP or cert, and the customer-facing eu.midplane.ai host points at the
+# web app, not here. fly-replay session affinity (cache_key=<mcp-session-id>)
+# emitted by the OSS transport keeps a session pinned to its machine.
 #
 # Adding us in the V1 launch session is a copy of this file with primary_region
 # = "iad" and app = "midplane-us". Same image, same env shape.
@@ -13,7 +16,7 @@ app = "midplane-eu"
 primary_region = "fra"
 
 [build]
-  image = "midplane/midplane:0.7.0"
+  image = "midplane/midplane:0.7.1"
 
 [env]
   PORT = "8080"
