@@ -4,7 +4,7 @@
 import type { Region } from "@midplane-cloud/kms";
 
 export interface RegionConfig {
-  publicHost: string; // <region>.midplane.com
+  publicHost: string; // <region>.midplane.ai
   flyApp: string; // midplane-eu | midplane-us
   // Fly Machines API region code (airport-code, e.g. "fra"/"iad"). Required
   // when creating a machine — Fly rejects our jurisdiction codes. Configurable
@@ -29,7 +29,7 @@ export function loadRegions(env: NodeJS.ProcessEnv): Record<Region, RegionConfig
 
 export function mintMcpUrl(region: Region, token: string, env: NodeJS.ProcessEnv): string {
   const host = loadRegions(env)[region].publicHost;
-  // Hosted shape: https://<region>.midplane.com/mcp/<token>. In dev the
+  // Hosted shape: https://<region>.midplane.ai/mcp/<token>. In dev the
   // default host is localhost:3000 (Next.js handles /mcp/<token> directly
   // until the Fly proxy lands).
   const scheme = host.startsWith("localhost") || host.endsWith(".local") ? "http" : "https";

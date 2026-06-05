@@ -11,10 +11,10 @@ describe("loadRegions", () => {
 
   it("respects env overrides", () => {
     const r = loadRegions({
-      MIDPLANE_PUBLIC_HOST_EU: "eu.midplane.com",
+      MIDPLANE_PUBLIC_HOST_EU: "eu.midplane.ai",
       FLY_APP_EU: "midplane-eu-prod",
     } as NodeJS.ProcessEnv);
-    expect(r.eu.publicHost).toBe("eu.midplane.com");
+    expect(r.eu.publicHost).toBe("eu.midplane.ai");
     expect(r.eu.flyApp).toBe("midplane-eu-prod");
   });
 
@@ -31,11 +31,11 @@ describe("loadRegions", () => {
 });
 
 describe("mintMcpUrl", () => {
-  it("produces https://<region>.midplane.com/mcp/<token> in prod-shaped envs", () => {
+  it("produces https://<region>.midplane.ai/mcp/<token> in prod-shaped envs", () => {
     const url = mintMcpUrl("eu", "tok_abc", {
-      MIDPLANE_PUBLIC_HOST_EU: "eu.midplane.com",
+      MIDPLANE_PUBLIC_HOST_EU: "eu.midplane.ai",
     } as NodeJS.ProcessEnv);
-    expect(url).toBe("https://eu.midplane.com/mcp/tok_abc");
+    expect(url).toBe("https://eu.midplane.ai/mcp/tok_abc");
   });
 
   it("produces http://localhost:3000 in dev", () => {

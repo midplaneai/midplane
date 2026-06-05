@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { FlyMachineSpawner } from "../src/spawner-fly.ts";
 
 const regions = {
-  eu: { publicHost: "eu.midplane.com", flyApp: "midplane-eu", flyRegion: "fra" },
-  us: { publicHost: "us.midplane.com", flyApp: "midplane-us", flyRegion: "iad" },
+  eu: { publicHost: "eu.midplane.ai", flyApp: "midplane-eu", flyRegion: "fra" },
+  us: { publicHost: "us.midplane.ai", flyApp: "midplane-us", flyRegion: "iad" },
 };
 
 describe("FlyMachineSpawner", () => {

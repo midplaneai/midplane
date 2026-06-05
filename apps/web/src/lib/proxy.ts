@@ -90,7 +90,7 @@ export async function proxyMcp(
 ): Promise<Response> {
   // proxyMcp on the control-plane web app is only hit in local dev / E2E —
   // production /mcp/<token> traffic goes to the regional data-plane apps
-  // (eu.midplane.com / us.midplane.com). Use the boot region so the local
+  // (eu.midplane.ai / us.midplane.ai). Use the boot region so the local
   // dev path resolves against the single configured DB.
   const region = bootRegion();
   let peppers: Map<string, Buffer>;

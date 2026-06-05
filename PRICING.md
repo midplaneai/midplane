@@ -72,4 +72,4 @@ To prevent a single free customer from driving infrastructure cost, the free tie
 - Enforcement points: connection creation (count check), MCP token mint (count check), org seat invite (count check), audit log query (retention window).
 - Clerk Billing (already partially wired per `apps/web/src/lib/customer.ts`) handles the payment surface. Map Stripe products → `plan` enum on webhook.
 - Retention enforcement: `audit_events_index` query helpers must accept and clamp a `since` argument to the customer's tier window. Storage retention (vs. query-time clamping) is a separate decision — clamp at query first, prune later.
-- "Talk to us" footer link: `mailto:sales@midplane.com` or a Cal.com link, not a TypeForm.
+- "Talk to us" footer link: `mailto:sales@midplane.ai` or a Cal.com link, not a TypeForm.
