@@ -149,6 +149,18 @@ fly certs add us.app.midplane.ai  --app midplane-web-us
 fly certs add eu.midplane.ai      --app midplane-eu
 fly certs add us.midplane.ai      --app midplane-us
 
+#    Engine apps are never `fly deploy`'d (deploy-fly.yml / PR #63), so —
+#    unlike the web apps, which get IPs for free at deploy — they have NO
+#    public IP until you allocate one. Without it midplane-eu.fly.dev has no
+#    A/AAAA, eu.midplane.ai won't resolve ("site can't be reached"), and the
+#    cert above stays "Not verified". Allocate explicitly (both free; HTTPS
+#    is SNI-routed so shared v4 is fine):
+fly ips allocate-v6 --app midplane-eu
+fly ips allocate-v4 --shared --app midplane-eu
+fly ips allocate-v6 --app midplane-us
+fly ips allocate-v4 --shared --app midplane-us
+#    Then re-check: `fly certs check eu.midplane.ai --app midplane-eu` → Ready.
+
 # DNS records:
 #   eu.app.midplane.ai  CNAME midplane-web.fly.dev
 #   us.app.midplane.ai  CNAME midplane-web-us.fly.dev
