@@ -88,10 +88,12 @@ export async function proxyMcp(
   req: Request,
   token: string,
 ): Promise<Response> {
-  // proxyMcp on the control-plane web app is only hit in local dev / E2E —
-  // production /mcp/<token> traffic goes to the regional data-plane apps
-  // (eu.midplane.ai / us.midplane.ai). Use the boot region so the local
-  // dev path resolves against the single configured DB.
+  // proxyMcp IS the production MCP ingress. Customer /mcp/<token> traffic
+  // hits the web app here (eu/us.midplane.ai → midplane-web{,-us}); we
+  // resolve the token, decrypt the DSN, spawn/reuse the OSS container, and
+  // proxy to it over private 6PN. The engine apps (midplane-eu/us) only host
+  // those private containers — they take no public MCP traffic. bootRegion()
+  // pins this app's single region so the lookup hits the right (only) DB.
   const region = bootRegion();
   let peppers: Map<string, Buffer>;
   try {

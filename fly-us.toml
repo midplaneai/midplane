@@ -1,10 +1,13 @@
 # US regional MCP runtime app (pinned to Ashburn).
 #
-# This Fly app receives /mcp/<token> traffic for us-region customers. The
-# router's spawn-or-reuse logic creates Fly machines on demand from this
-# image with DATABASE_URL set to the customer's decrypted DSN. fly-replay
-# session affinity (cache_key=<mcp-session-id>) is emitted by the OSS
-# transport — Fly handles routing.
+# This Fly app HOSTS the per-customer OSS containers; it takes NO public MCP
+# traffic. The public /mcp/<token> ingress is the web app's proxyMcp, which
+# resolves the token, decrypts the DSN, and spawns a machine here on demand
+# via the Machines API with DATABASE_URL set to the customer's decrypted DSN,
+# then proxies to it over private 6PN. So this app needs no public IP or cert,
+# and the customer-facing us.midplane.ai host points at the web app, not here.
+# fly-replay session affinity (cache_key=<mcp-session-id>) emitted by the OSS
+# transport keeps a session pinned to its machine.
 #
 # Sibling fly-eu.toml is the EU runtime (midplane-eu in fra). Same image,
 # same env shape; the two are distinguished only by app name and region.

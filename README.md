@@ -143,23 +143,16 @@ fly certs add eu.app.midplane.ai  --app midplane-web
 fly certs add app.midplane.ai     --app midplane-web
 fly certs add us.app.midplane.ai  --app midplane-web-us
 
-#    Data-plane hostnames (MCP runtime — the URLs printed in customer
-#    `claude mcp add ... https://<region>.midplane.ai/mcp/<tok>` snippets,
-#    sourced from MIDPLANE_PUBLIC_HOST_{EU,US} on the control plane).
-fly certs add eu.midplane.ai      --app midplane-eu
-fly certs add us.midplane.ai      --app midplane-us
-
-#    Engine apps are never `fly deploy`'d (deploy-fly.yml / PR #63), so —
-#    unlike the web apps, which get IPs for free at deploy — they have NO
-#    public IP until you allocate one. Without it midplane-eu.fly.dev has no
-#    A/AAAA, eu.midplane.ai won't resolve ("site can't be reached"), and the
-#    cert above stays "Not verified". Allocate explicitly (both free; HTTPS
-#    is SNI-routed so shared v4 is fine):
-fly ips allocate-v6 --app midplane-eu
-fly ips allocate-v4 --shared --app midplane-eu
-fly ips allocate-v6 --app midplane-us
-fly ips allocate-v4 --shared --app midplane-us
-#    Then re-check: `fly certs check eu.midplane.ai --app midplane-eu` → Ready.
+#    Customer-facing MCP host (the URLs printed in `claude mcp add ...
+#    https://<region>.midplane.ai/mcp/<tok>` snippets, from
+#    MIDPLANE_PUBLIC_HOST_{EU,US}). These point at the WEB apps, NOT the engine
+#    apps: /mcp/<token> is served by the web app's proxyMcp, which resolves the
+#    token (cloud DB), decrypts the DSN (KMS), spawns/reuses the OSS container,
+#    and proxies to it over the private 6PN network. The engine apps
+#    (midplane-eu/us) only HOST those private containers — they take no public
+#    MCP traffic and need no public IP or cert of their own.
+fly certs add eu.midplane.ai      --app midplane-web
+fly certs add us.midplane.ai      --app midplane-web-us
 
 # DNS records:
 #   eu.app.midplane.ai  CNAME midplane-web.fly.dev
@@ -167,8 +160,8 @@ fly ips allocate-v4 --shared --app midplane-us
 #   app.midplane.ai     CNAME eu.app.midplane.ai
 #                       (EU app handles apex; middleware redirects authed
 #                        users to their regional subdomain)
-#   eu.midplane.ai      CNAME midplane-eu.fly.dev
-#   us.midplane.ai      CNAME midplane-us.fly.dev
+#   eu.midplane.ai      CNAME midplane-web.fly.dev     (web app serves /mcp)
+#   us.midplane.ai      CNAME midplane-web-us.fly.dev
 ```
 
 ### KMS mode for production credential storage
