@@ -6,9 +6,13 @@
 // notifications work without buffering.
 //
 // fly-replay note: the OSS transport sets `fly-replay: cache_key=<session>`
-// on its responses. We pass that header through unchanged. Off-Fly the
-// header is inert; on Fly the edge uses it to pin subsequent requests in
-// the same session to the same machine.
+// on its responses for Fly's anycast session affinity. We proxy DIRECTLY to
+// the per-token machine (registry → 6PN IP), so we don't need it — and we
+// must STRIP it on the way out. Leaking it past the public Fly edge in front
+// of THIS web app makes fly-proxy try to replay the client's request, loop,
+// and bail with [PA02] "'fly-replay' response header was returned too many
+// times" → 502. Session affinity is preserved by the registry, not the
+// header. See STRIP_RESPONSE_HEADERS below.
 //
 // Multi-DB rollout (0008): one OSS container fronts N DBs. The proxy
 // resolves the parent connection + its children, decrypts each DSN
@@ -48,6 +52,26 @@ const HOP_BY_HOP = new Set([
   "host",
   "content-length",
 ]);
+
+// Engine response headers that must NOT reach the public Fly edge. fly-replay
+// (+ fly-replay-src) are the engine app's internal anycast routing signals;
+// the edge fronting this web app would act on them, loop, and return [PA02].
+// We already hit the right machine directly, so they carry no value here.
+const STRIP_RESPONSE_HEADERS = new Set(["fly-replay", "fly-replay-src"]);
+
+// Build the client-facing headers from the engine's response: drop hop-by-hop
+// headers and the Fly routing-control headers (see above), keep everything else
+// (notably mcp-session-id and content-type for SSE). Exported so the stripping
+// has a regression test without standing up the full proxy.
+export function filterUpstreamResponseHeaders(src: Headers): Headers {
+  const out = new Headers();
+  for (const [k, v] of src) {
+    const lower = k.toLowerCase();
+    if (HOP_BY_HOP.has(lower) || STRIP_RESPONSE_HEADERS.has(lower)) continue;
+    out.set(k, v);
+  }
+  return out;
+}
 
 // Pepper map is loaded once per process and reused across requests. The
 // kid → buffer table is required by resolveByToken (HMAC-SHA256 lookup
@@ -246,13 +270,9 @@ export async function proxyMcp(
     );
   }
 
-  const outHeaders = new Headers();
-  for (const [k, v] of res.headers) {
-    if (!HOP_BY_HOP.has(k.toLowerCase())) outHeaders.set(k, v);
-  }
   return new Response(res.body, {
     status: res.status,
     statusText: res.statusText,
-    headers: outHeaders,
+    headers: filterUpstreamResponseHeaders(res.headers),
   });
 }
