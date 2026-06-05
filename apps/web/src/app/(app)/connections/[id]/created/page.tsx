@@ -12,19 +12,22 @@ import { currentCustomer } from "@/lib/customer";
 import { getConnectionWithMainDatabase } from "@/lib/connections";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
-import { consumeShowOnceCookie } from "./consume-action";
+import { SavedItButton } from "./saved-it-button";
 
 // Post-create success page. The default token's plaintext URL arrives
 // via an httpOnly cookie set by the /connections/new server action
 // (cookie crosses the redirect boundary; the React state in the calling
-// component is gone by the time we render). The ShowOnceUrl client
-// island fires a Server Action on mount to delete the cookie — Server
-// Components can read but not mutate cookies in Next 15.
+// component is gone by the time we render).
 //
-// On reload (or any second render) the cookie is gone, so we render the
-// "already shown" fallback that explains the URL is no longer
-// retrievable and points back to the connection page where the token
-// list lives.
+// The cookie is NOT cleared on render — that would mean an accidental
+// reload or back-nav drops the user straight to "already shown" with the
+// URL gone (the bug this page used to have). Instead the SavedItButton
+// clears it explicitly, gated behind a short countdown, only once the
+// user acknowledges they've copied it. So a reload keeps showing the URL
+// until acknowledged; the cookie's 5-minute TTL still bounds exposure.
+// After acknowledgment (or once the TTL lapses) the cookie is gone and we
+// render the "already shown" fallback pointing back to the connection
+// page where the token list lives.
 
 export default async function ConnectionCreated({
   params,
@@ -74,13 +77,17 @@ export default async function ConnectionCreated({
                     <strong className="font-medium text-foreground">
                       only time
                     </strong>{" "}
-                    you&apos;ll see the full URL. We store only a hashed
-                    digest; once you leave this page the plaintext is gone.
-                    Lost it? Revoke the token and mint a new one from the
-                    connection page.
+                    you&apos;ll see the full URL — we store only a hashed
+                    digest. Copy it, then click{" "}
+                    <strong className="font-medium text-foreground">
+                      I&apos;ve saved it
+                    </strong>{" "}
+                    below; after that the plaintext is gone for good and
+                    you&apos;d need to revoke the token and mint a new one
+                    from the connection page.
                   </p>
                 </div>
-                <ShowOnceUrl mcpUrl={mcpUrl} onMount={consumeShowOnceCookie} />
+                <ShowOnceUrl mcpUrl={mcpUrl} />
               </section>
 
               <ConnectAgentGuide
@@ -92,9 +99,7 @@ export default async function ConnectionCreated({
               <WhatsNext connectionHref={connectionHref} />
 
               <div className="pt-2">
-                <Link href={connectionHref}>
-                  <Button size="sm">Done — manage tokens</Button>
-                </Link>
+                <SavedItButton connectionHref={connectionHref} />
               </div>
             </div>
           ) : (
