@@ -24,6 +24,7 @@ describe("loadConfig", () => {
     const cfg = loadConfig({ DATABASE_URL: "postgres://x" });
     expect(cfg.databaseUrl).toBe("postgres://x");
     expect(cfg.port).toBe(8080);
+    expect(cfg.host).toBe("0.0.0.0");
     expect(cfg.dbPath).toBe("/data/audit.db");
     expect(cfg.tenantId).toBe("__self_host__");
     expect(cfg.transport).toBe("http");
@@ -72,6 +73,15 @@ describe("loadConfig", () => {
     expect(cfg.dbPath).toBe("/tmp/audit.db");
     expect(cfg.port).toBe(9000);
     expect(cfg.policyFile).toBe("/etc/midplane/policy.yaml");
+  });
+
+  test("MIDPLANE_HOST defaults to 0.0.0.0 and passes through when set", () => {
+    expect(loadConfig({ DATABASE_URL: "postgres://x" }).host).toBe("0.0.0.0");
+    // The cloud sets :: for dual-stack so the engine is reachable over Fly 6PN
+    // (IPv6-only). bindv6only=0 on Linux means this also serves IPv4.
+    expect(
+      loadConfig({ DATABASE_URL: "postgres://x", MIDPLANE_HOST: "::" }).host,
+    ).toBe("::");
   });
 
   test("INDEXER_TOKEN is undefined by default and passes through when set", () => {

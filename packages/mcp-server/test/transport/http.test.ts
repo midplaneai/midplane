@@ -112,6 +112,38 @@ describe("http transport", () => {
     }
   });
 
+  test("IPv6 host yields a bracketed, parseable HttpHandle.url", async () => {
+    const harness = makeTestEngine();
+    const handle = makeTestHandle({ engine: harness.engine, audit: harness.audit });
+
+    let h: HttpHandle;
+    try {
+      h = await startHttp(() => buildServer({ handle }), { port: 0, host: "::1" });
+    } catch (err) {
+      // Some sandboxes have no IPv6 loopback — skip rather than fail there.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT") {
+        console.warn(`skipping IPv6 URL test: ::1 loopback unavailable (${code})`);
+        return;
+      }
+      throw err;
+    }
+
+    try {
+      // Bracketed literal — NOT the unparseable `http://:::<port>/mcp`.
+      expect(h.url).toBe(`http://[::1]:${h.port}/mcp`);
+      // Parseable as a URL (this throws on the malformed form).
+      const parsed = new URL(h.url);
+      expect(parsed.protocol).toBe("http:");
+      expect(parsed.port).toBe(String(h.port));
+      // And it actually serves over IPv6.
+      const res = await fetch(`http://[::1]:${h.port}/health`);
+      expect(res.status).toBe(200);
+    } finally {
+      await h.close();
+    }
+  });
+
   test("audit pull routes 404 when INDEXER_TOKEN is unset", async () => {
     // The default httpHandle in this describe block was started without
     // `indexer`, simulating a self-host with no token configured.

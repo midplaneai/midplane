@@ -86,6 +86,7 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 |---------|---------|-------------|
 | `DATABASE_URL` | (required for single-DB; ignored when YAML `databases:` is set) | Your Postgres connection string. Best practice: a scoped role with least privilege. |
 | `PORT` | `8080` | HTTP port for the MCP endpoint. |
+| `MIDPLANE_HOST` | `0.0.0.0` | HTTP bind address. The default (`0.0.0.0`) serves IPv4. Set to `::` for dual-stack (IPv6 + IPv4 on Linux, where `bindv6only=0`) — required when the server must be reachable over an IPv6-only network. |
 | `DB_PATH` | `/data/audit.db` | Path to the local SQLite audit log. |
 | `MIDPLANE_TENANT_ID` | (none) | Used by the `tenant_scope` policy rule. See [policy-rules.md](./policy-rules.md). |
 | `MIDPLANE_POLICY_FILE` | (none) | Path to a YAML policy override file. Defaults apply if unset. **0.2.0:** may carry a top-level `databases:` block for serving multiple Postgres DBs through one MCP endpoint — see the README's "Multiple databases" section. |

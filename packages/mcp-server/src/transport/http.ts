@@ -107,7 +107,7 @@ export async function startHttp(
 
   const addr = httpServer.address();
   const boundPort = addr && typeof addr === "object" ? addr.port : opts.port;
-  const url = `http://${opts.host ?? "0.0.0.0"}:${boundPort}/mcp`;
+  const url = `http://${hostForUrl(opts.host ?? "0.0.0.0")}:${boundPort}/mcp`;
   logger.info({ port: boundPort, url }, "http transport listening");
 
   return {
@@ -363,6 +363,16 @@ async function readText(req: IncomingMessage): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+// Bracket an IPv6 literal for use in a URL authority: `::` → `[::]`, so the
+// composed URL is `http://[::]:8080/mcp` rather than the unparseable
+// `http://:::8080/mcp`. IPv6 literals are the only hosts that contain a colon
+// (IPv4 and hostnames don't), so a colon is a sufficient discriminator;
+// already-bracketed input passes through untouched.
+function hostForUrl(host: string): string {
+  if (host.includes(":") && !host.startsWith("[")) return `[${host}]`;
+  return host;
 }
 
 function clampLimit(raw: string | null): number {

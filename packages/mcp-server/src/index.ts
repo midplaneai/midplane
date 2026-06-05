@@ -87,6 +87,7 @@ export async function runServer(): Promise<void> {
         buildServer({ handle, telemetry, sessionContext }),
       {
         port: cfg.port,
+        host: cfg.host,
         indexer: { audit: handle.registry.audit, token: cfg.indexerToken },
         admin: { setPolicy: (yaml) => handle.registry.setPolicy(yaml) },
       },

@@ -2,6 +2,12 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-06-05
+
+### Fixed
+
+- **HTTP transport can now bind IPv6 — `MIDPLANE_HOST` env var.** The Streamable HTTP transport hard-bound `0.0.0.0` (IPv4 only); the bind host was never configurable. In the hosted control plane each connection's engine runs as a Fly machine reached over Fly's private network (6PN), which is **IPv6-only** — so every hosted health probe and MCP request to the IPv4-only listener failed and the spawn 502'd. (Self-host/local was unaffected: Docker publishes container `8080` to an IPv4 host port, which masked the gap.) `MIDPLANE_HOST` now flows through config into the listener and **defaults to `0.0.0.0`**, so self-host/local boot is unchanged. The cloud sets `MIDPLANE_HOST=::` for dual-stack (serves IPv6 + IPv4 on Linux, where `bindv6only=0`). The default stays `0.0.0.0` rather than `::` globally so a self-host on an IPv6-disabled host can't fail to boot.
+
 ## [0.7.0] — 2026-06-04
 
 ### Added

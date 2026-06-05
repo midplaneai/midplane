@@ -1,6 +1,6 @@
 // Env-var → typed Config. Schema-validated via zod; refuse to boot on invalid.
 //
-// Honored: DATABASE_URL, PORT, DB_PATH, MIDPLANE_TENANT_ID,
+// Honored: DATABASE_URL, PORT, MIDPLANE_HOST, DB_PATH, MIDPLANE_TENANT_ID,
 // MIDPLANE_POLICY_FILE, MIDPLANE_TRANSPORT, INDEXER_TOKEN.
 //
 // loadPolicyFile reads + parses a YAML override file. The MCP server
@@ -27,6 +27,12 @@ export const ConfigSchema = z.object({
   // DATABASE_URL or `databases:` is present at boot.
   databaseUrl: z.string().min(1).optional(),
   port: z.coerce.number().int().min(1).max(65535).default(8080),
+  // HTTP bind host. Defaults to 0.0.0.0 (IPv4 any) so self-host/local boots
+  // unchanged. The hosted control plane reaches each engine over Fly's 6PN
+  // private network (IPv6-only) and sets MIDPLANE_HOST=:: for dual-stack
+  // (serves IPv6 + IPv4 on Linux where bindv6only=0). Kept as 0.0.0.0 globally
+  // so a self-host on an IPv6-disabled host can't fail to boot.
+  host: z.string().default("0.0.0.0"),
   dbPath: z.string().default("/data/audit.db"),
   tenantId: z.string().default("__self_host__"),
   policyFile: z.string().optional(),
@@ -186,6 +192,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const raw = {
     databaseUrl: env.DATABASE_URL,
     port: env.PORT,
+    host: env.MIDPLANE_HOST,
     dbPath: env.DB_PATH,
     tenantId: env.MIDPLANE_TENANT_ID,
     policyFile: env.MIDPLANE_POLICY_FILE,
