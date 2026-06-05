@@ -4,17 +4,16 @@ import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
 import { bootRegion } from "@/lib/region-context";
 
-// GET /mcp/<token>/health — bootstrap health probe.
-//
-// In production this URL resolves to a regional Fly app (midplane-eu,
-// midplane-us) which spawns the OSS image. For local dev / Playwright
-// E2E we serve it directly from Next.js so the contract surface is the
-// same: token resolves → 200; token unknown → 404.
+// GET /mcp/<token>/health — bootstrap health probe, served by the web app
+// (the same ingress as /mcp/<token> itself). It resolves the token against
+// the regional cloud DB and returns: token resolves → 200 {ok, region};
+// token unknown → 404. Unlike the proxy path it does NOT spawn a container —
+// a cheap "is this token live?" check.
 //
 // PR2 of mcp_url_auth_security: resolveByToken takes (db, plaintext,
 // region, peppers). We load the regional pepper here once per request;
 // production deploys can cache at a higher layer if probe traffic gets
-// loud, but in dev/E2E one decrypt per probe is fine.
+// loud, but one decrypt per probe is otherwise fine.
 
 let pepperPromise: Promise<Map<string, Buffer>> | null = null;
 function getPeppers(): Promise<Map<string, Buffer>> {
