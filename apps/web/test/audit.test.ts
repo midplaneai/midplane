@@ -790,6 +790,124 @@ describe("audit retention clamp", () => {
   });
 });
 
+describe("audit time window", () => {
+  it("parseAuditWindow coerces unknown values to 24h", async () => {
+    const { parseAuditWindow } = await import("../src/lib/audit.ts");
+    expect(parseAuditWindow("7d")).toBe("7d");
+    expect(parseAuditWindow("30d")).toBe("30d");
+    expect(parseAuditWindow(undefined)).toBe("24h");
+    expect(parseAuditWindow("bogus")).toBe("24h");
+  });
+
+  it("resolveAuditWindow leaves 24h alone and clamps long windows to retention", async () => {
+    const { resolveAuditWindow } = await import("../src/lib/audit.ts");
+    expect(resolveAuditWindow("24h", 7)).toEqual({
+      key: "24h",
+      hours: 24,
+      bucket: "hour",
+      bucketCount: 24,
+    });
+    // 30d on a 7d plan → capped to 168h, daily buckets shrink to 7.
+    expect(resolveAuditWindow("30d", 7)).toEqual({
+      key: "30d",
+      hours: 168,
+      bucket: "day",
+      bucketCount: 7,
+    });
+    // 7d on a 30d plan → unclamped.
+    expect(resolveAuditWindow("7d", 30)).toEqual({
+      key: "7d",
+      hours: 168,
+      bucket: "day",
+      bucketCount: 7,
+    });
+  });
+
+  it("listAuditQueries adds a ts lower bound when windowHours is set (no retention)", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu", windowHours: 24 });
+    expect(lastSelect(handle.queries).sql).toMatch(/ts"?\s*>=/i);
+  });
+
+  it("listAuditQueries filters by agent_name and mcp_token_id when set", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "eu",
+      agentName: "claude-code",
+      tokenId: "tok_42",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("agent_name =");
+    expect(sel.params).toContain("claude-code");
+    expect(sel.sql).toContain("mcp_token_id =");
+    expect(sel.params).toContain("tok_42");
+  });
+});
+
+describe("listAgents", () => {
+  it("selects distinct non-null agent_name under RLS bind", async () => {
+    handle.setNextResult([["claude-code"], ["cursor"]]);
+    const { listAgents } = await import("../src/lib/audit.ts");
+    const result = await listAgents(VALID_CUSTOMER_ID, "eu");
+    expect(result).toEqual(["claude-code", "cursor"]);
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql.toLowerCase()).toContain("distinct");
+    expect(sel.sql).toContain("agent_name");
+    expect(sel.sql.toLowerCase()).toContain("not null");
+    expect(sel.inTransaction).toBe(true);
+  });
+});
+
+describe("listTokenOptions", () => {
+  it("joins mcp_tokens for the label and falls back to a short id", async () => {
+    handle.setNextResult([
+      { id: "tok_1", name: "ci-runner", last4: "ab12" },
+      { id: "tok_longidxxxxxx", name: null, last4: null },
+    ]);
+    const { listTokenOptions } = await import("../src/lib/audit.ts");
+    const result = await listTokenOptions(VALID_CUSTOMER_ID, "eu");
+    expect(result[0]).toEqual({ id: "tok_1", label: "ci-runner ·ab12" });
+    expect(result[1]!.id).toBe("tok_longidxxxxxx");
+    expect(result[1]!.label).toMatch(/^token …/);
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql.toLowerCase()).toContain("left join mcp_tokens");
+    expect(sel.sql).toContain("mcp_token_id IS NOT NULL");
+  });
+});
+
+describe("eventVolumeByHour daily bucketing", () => {
+  it("returns N day-aligned buckets and date_truncs by day", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:34:56Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
+      bucket: "day",
+      bucketCount: 7,
+      now,
+    });
+    expect(buckets).toHaveLength(7);
+    expect(buckets[6]!.ts.toISOString()).toBe("2026-04-30T00:00:00.000Z");
+    expect(buckets[0]!.ts.toISOString()).toBe("2026-04-24T00:00:00.000Z");
+    expect(lastSelect(handle.queries).sql).toContain("date_trunc('day', ts)");
+  });
+
+  it("threads agent / token filters into the chart query", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
+      agentName: "claude-code",
+      tokenId: "tok_42",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("agent_name =");
+    expect(sel.params).toContain("claude-code");
+    expect(sel.sql).toContain("mcp_token_id =");
+    expect(sel.params).toContain("tok_42");
+  });
+});
+
 function lastSelect(queries: RecordedQuery[]): RecordedQuery {
   // Skip the SET LOCAL bind; return the actual data query.
   const data = queries.filter((q) => !q.sql.includes("SET LOCAL"));

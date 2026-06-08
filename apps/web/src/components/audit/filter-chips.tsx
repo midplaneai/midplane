@@ -4,23 +4,36 @@ import { cn } from "@/lib/utils";
 import {
   EVENT_STATUSES,
   QUERY_OUTCOME_STATUSES,
+  type AuditWindowKey,
   type QueryStatus,
+  type TokenOption,
 } from "@/lib/audit";
+
+interface BuildUrlOverrides {
+  status?: readonly QueryStatus[];
+  tenantId?: string | null;
+  database?: string | null;
+  agentName?: string | null;
+  tokenId?: string | null;
+  cursor?: string | null;
+}
 
 interface FilterChipsProps {
   selectedStatuses: readonly QueryStatus[];
   selectedTenant: string | null;
   selectedDatabase: string | null;
+  selectedAgent: string | null;
+  selectedToken: string | null;
   tenants: readonly string[];
   databases: readonly string[];
+  agents: readonly string[];
+  tokens: readonly TokenOption[];
   counts: Record<QueryStatus, number>;
   search: string;
-  buildUrl: (overrides: {
-    status?: readonly QueryStatus[];
-    tenantId?: string | null;
-    database?: string | null;
-    cursor?: string | null;
-  }) => string;
+  /** Preserved across the search-form submit via hidden inputs. */
+  windowKey: AuditWindowKey;
+  timeFormat: "rel" | "abs";
+  buildUrl: (overrides: BuildUrlOverrides) => string;
 }
 
 const CHIP_BASE =
@@ -50,10 +63,16 @@ export function FilterChips({
   selectedStatuses,
   selectedTenant,
   selectedDatabase,
+  selectedAgent,
+  selectedToken,
   tenants,
   databases,
+  agents,
+  tokens,
   counts,
   search,
+  windowKey,
+  timeFormat,
   buildUrl,
 }: FilterChipsProps) {
   const allStatusesActive = selectedStatuses.length === 0;
@@ -138,6 +157,56 @@ export function FilterChips({
         </>
       )}
 
+      {agents.length > 0 && (
+        <>
+          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Agent</span>
+          <Chip
+            href={buildUrl({ agentName: null, cursor: null })}
+            active={selectedAgent === null}
+          >
+            <b className="font-medium">All</b>
+            <Count active={selectedAgent === null}>{agents.length}</Count>
+          </Chip>
+          {agents.map((a) => (
+            <Chip
+              key={a}
+              href={buildUrl({
+                agentName: selectedAgent === a ? null : a,
+                cursor: null,
+              })}
+              active={selectedAgent === a}
+            >
+              <b className="font-mono font-medium">{truncate(a, 18)}</b>
+            </Chip>
+          ))}
+        </>
+      )}
+
+      {tokens.length > 0 && (
+        <>
+          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Token</span>
+          <Chip
+            href={buildUrl({ tokenId: null, cursor: null })}
+            active={selectedToken === null}
+          >
+            <b className="font-medium">All</b>
+            <Count active={selectedToken === null}>{tokens.length}</Count>
+          </Chip>
+          {tokens.map((t) => (
+            <Chip
+              key={t.id}
+              href={buildUrl({
+                tokenId: selectedToken === t.id ? null : t.id,
+                cursor: null,
+              })}
+              active={selectedToken === t.id}
+            >
+              <b className="font-mono font-medium">{truncate(t.label, 22)}</b>
+            </Chip>
+          ))}
+        </>
+      )}
+
       <form action="/audit" method="get" className="ml-auto">
         {selectedStatuses.length > 0 && (
           <input
@@ -151,6 +220,16 @@ export function FilterChips({
         )}
         {selectedDatabase && (
           <input type="hidden" name="database" value={selectedDatabase} />
+        )}
+        {selectedAgent && (
+          <input type="hidden" name="agent" value={selectedAgent} />
+        )}
+        {selectedToken && (
+          <input type="hidden" name="token" value={selectedToken} />
+        )}
+        <input type="hidden" name="window" value={windowKey} />
+        {timeFormat === "abs" && (
+          <input type="hidden" name="t" value="abs" />
         )}
         <input
           name="q"
