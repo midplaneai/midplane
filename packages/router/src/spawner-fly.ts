@@ -79,8 +79,31 @@ export class FlyMachineSpawner implements Spawner {
     const regionCfg = this.regions[opts.region];
     if (!regionCfg) throw new Error(`unknown region: ${opts.region}`);
     const app = regionCfg.flyApp;
+    const name = this.machineName(opts.connectionId);
 
-    const created = await this.createMachine(app, regionCfg.flyRegion, opts);
+    // Create the machine, or ADOPT an existing one of the same name. The
+    // machine name is the connection's stable identity in Fly, but the
+    // ContainerRegistry that decides spawn-vs-reuse is in-memory — a web-app
+    // redeploy (bluegreen wipes the process) or a second web instance loses
+    // that entry, so we'd blind-create and Fly would 409 "already_exists".
+    // Adopting the live machine makes spawn idempotent against both.
+    let machine = await this.createMachine(app, regionCfg.flyRegion, opts);
+    const created = machine !== null;
+    if (!machine) {
+      machine = await this.getMachineByName(app, name);
+      if (!machine) {
+        throw new Error(
+          `fly machine ${name} reported existing on create but absent on lookup`,
+        );
+      }
+      // Idle machines auto_stop=suspend. We reach the engine directly over
+      // 6PN, which does NOT trip Fly's auto_start (that's edge-traffic only),
+      // so an adopted-but-suspended machine must be woken before /health.
+      if (machine.state !== "started") {
+        await this.startMachine(app, machine.id);
+      }
+    }
+
     // One boot budget spans both phases: the Fly VM reaching `started` AND
     // the OSS engine inside binding :8080. `started` only means the VM
     // booted — the engine needs a few more seconds to listen, and the proxy
@@ -91,33 +114,79 @@ export class FlyMachineSpawner implements Spawner {
     // for exactly this reason; the Fly backend must too.
     const deadline = Date.now() + this.bootTimeoutMs;
     try {
-      await this.waitForStarted(app, created.id, deadline);
-      await this.waitForHealth(created.private_ip, deadline);
+      await this.waitForStarted(app, machine.id, deadline);
+      await this.waitForHealth(machine.private_ip, deadline);
     } catch (err) {
-      await this.destroy(app, created.id).catch(() => undefined);
+      // Only tear down a machine WE created. An adopted machine may be live
+      // for another instance/session — destroying it on a transient health
+      // blip would kill a working engine. A genuinely broken adopted machine
+      // idle-suspends and gets recreated on a later request.
+      if (created) await this.destroy(app, machine.id).catch(() => undefined);
       throw err;
     }
 
     const fetchFn = this.fetchFn;
     const apiBase = this.apiBase;
     const token = this.token;
+    const machineId = machine.id;
+    const privateIp = machine.private_ip;
     return {
       // IPv6 literal must be bracketed for HTTP URLs.
-      host: `[${created.private_ip}]`,
+      host: `[${privateIp}]`,
       port: 8080,
       async stop() {
-        await destroyMachine(fetchFn, apiBase, token, app, created.id).catch(
+        await destroyMachine(fetchFn, apiBase, token, app, machineId).catch(
           () => undefined,
         );
       },
     };
   }
 
+  // Stable per-connection machine name. Fly enforces uniqueness on it, which
+  // is exactly what lets a second web instance / a post-redeploy request find
+  // the connection's existing engine instead of double-spawning.
+  private machineName(connectionId: string): string {
+    return `mcp-${connectionId.slice(0, 16).toLowerCase()}`;
+  }
+
+  private async getMachineByName(
+    app: string,
+    name: string,
+  ): Promise<MachineGetResponse | null> {
+    const res = await this.fetchFn(`${this.apiBase}/v1/apps/${app}/machines`, {
+      headers: { authorization: `Bearer ${this.token}` },
+    });
+    if (!res.ok) {
+      throw new Error(
+        `fly machine list failed: ${res.status} ${await res.text()}`,
+      );
+    }
+    const machines = (await res.json()) as Array<MachineGetResponse & {
+      name?: string;
+    }>;
+    const m = machines.find((x) => x.name === name);
+    return m
+      ? { id: m.id, state: m.state, private_ip: m.private_ip }
+      : null;
+  }
+
+  // Wake a suspended/stopped machine. Best-effort: the real readiness gate is
+  // waitForStarted + waitForHealth below, which fails cleanly if it never
+  // comes up — so a non-2xx here (e.g. "already started") is not fatal.
+  private async startMachine(app: string, id: string): Promise<void> {
+    await this.fetchFn(
+      `${this.apiBase}/v1/apps/${app}/machines/${id}/start`,
+      { method: "POST", headers: { authorization: `Bearer ${this.token}` } },
+    ).catch(() => undefined);
+  }
+
+  // Returns the created machine, or null when Fly reports the name is already
+  // taken (409 already_exists) — the caller then adopts the live machine.
   private async createMachine(
     app: string,
     flyRegion: string,
     opts: SpawnOptions,
-  ): Promise<MachineCreateResponse> {
+  ): Promise<MachineCreateResponse | null> {
     // Per-DB DSN env vars. Names match OSS env-interpolation regex; the
     // YAML's `databases[].url` references each via ${...}. DSNs surface
     // here only — never in the YAML file content.
@@ -142,9 +211,10 @@ export class FlyMachineSpawner implements Spawner {
       body: JSON.stringify({
         // Machine name derived from the connection ULID, lowercased to
         // match Fly's naming rules. Stable for the connection's lifetime;
-        // siblings tokens on the same connection share one machine. The
-        // plaintext token never reaches the Fly API surface.
-        name: `mcp-${opts.connectionId.slice(0, 16).toLowerCase()}`,
+        // sibling tokens on the same connection share one machine, and a
+        // post-redeploy request adopts it by this name. The plaintext token
+        // never reaches the Fly API surface.
+        name: this.machineName(opts.connectionId),
         region: flyRegion,
         config: {
           image: this.image,
@@ -211,9 +281,12 @@ export class FlyMachineSpawner implements Spawner {
       }),
     });
     if (!res.ok) {
-      throw new Error(
-        `fly machine create failed: ${res.status} ${await res.text()}`,
-      );
+      const text = await res.text();
+      // Name collision: a machine for this connection already exists (our
+      // in-memory registry was lost to a redeploy, or another web instance
+      // owns it). Signal the caller to adopt it rather than failing the spawn.
+      if (res.status === 409 || text.includes("already_exists")) return null;
+      throw new Error(`fly machine create failed: ${res.status} ${text}`);
     }
     return (await res.json()) as MachineCreateResponse;
   }

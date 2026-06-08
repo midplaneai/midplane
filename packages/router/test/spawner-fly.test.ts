@@ -230,6 +230,83 @@ describe("FlyMachineSpawner", () => {
     expect(calls.some((c) => c.startsWith("DELETE "))).toBe(true);
   });
 
+  it("adopts the existing machine on a create 409 instead of failing", async () => {
+    // Registry is in-memory, so a web redeploy or a second web instance loses
+    // the spawn entry and blind-creates → Fly 409 "already_exists". The
+    // spawner must look the machine up by name, wake it if suspended, and
+    // reuse it — NOT 502 and NOT destroy it (another instance may be using it).
+    const calls: string[] = [];
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url}`);
+      if (method === "POST" && url.endsWith("/machines")) {
+        return new Response(
+          JSON.stringify({
+            error:
+              'already_exists: unique machine name violation, machine ID mach-x already exists with name "mcp-01hxyzconnabcdef"',
+          }),
+          { status: 409 },
+        );
+      }
+      if (method === "GET" && url.endsWith("/machines")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "mach-x",
+              name: "mcp-01hxyzconnabcdef",
+              state: "suspended",
+              private_ip: "fdaa:0:7::7",
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (method === "POST" && url.endsWith("/machines/mach-x/start")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/machines/mach-x")) {
+        return new Response(
+          JSON.stringify({ id: "mach-x", state: "started", private_ip: "fdaa:0:7::7" }),
+          { status: 200 },
+        );
+      }
+      if (url === "http://[fdaa:0:7::7]:8080/health") {
+        return new Response("ok", { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const spawner = new FlyMachineSpawner({
+      apiToken: "fo-test",
+      regions,
+      bootTimeoutMs: 5000,
+      fetch: fetchFn,
+    });
+
+    const c = await spawner.spawn({
+      connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      region: "eu",
+      databases: [
+        {
+          name: "main",
+          connectionDatabaseId: "01HXYZMAIN0000000000000000",
+          dsn: "postgres://x",
+          tableAccess: { default: "read", tables: {} },
+          tenantScope: { column: null, overrides: {}, exempt: [] },
+        },
+      ],
+    });
+
+    expect(c.host).toBe("[fdaa:0:7::7]");
+    expect(c.port).toBe(8080);
+    // It woke the suspended machine and never tore it down.
+    expect(
+      calls.some((s) => s === "POST https://api.machines.dev/v1/apps/midplane-eu/machines/mach-x/start"),
+    ).toBe(true);
+    expect(calls.some((s) => s.startsWith("DELETE "))).toBe(false);
+  });
+
   it("throws if apiToken missing", () => {
     expect(
       () =>
