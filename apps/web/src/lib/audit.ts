@@ -29,7 +29,7 @@
 // computed terminal status. The lifecycle stages are still individually
 // queryable (getRelatedEvents) for the detail page.
 
-import { and, asc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, sql } from "drizzle-orm";
 
 import {
   auditEventsIndex,
@@ -68,15 +68,123 @@ export function retentionSince(
   return new Date(now.getTime() - retentionDays * MS_PER_DAY);
 }
 
-/** retentionSince as an ISO string for the raw-SQL reads. postgres-js's
- *  raw-unsafe param path (tx.execute on a sql template) won't serialize a
- *  Date — same reason as the stuck-cutoff / since casts in this file — so
- *  these callers bind text + ::timestamptz. */
-function retentionSinceIso(
+// --- audit time window ------------------------------------------------------
+//
+// The window is the user-chosen lookback the page filters to (default 24h),
+// SEPARATE from retention (the plan's hard horizon). The window is always
+// clamped to retention — a Free customer who picks 30d still only sees 7d.
+//
+// The window's lower bound is a SINGLE bucket-aligned instant
+// (auditWindowSince): the start of the chart's first bar. The list, counts,
+// chips, export, AND the chart all filter from that exact instant, so the
+// sparkline total and the table can never disagree. Aligning to the bucket
+// boundary (top of hour for 24h, midnight UTC for 7d/30d) is what makes the
+// daily bars line up with the rows the table shows — a rolling `now - hours`
+// lower bound would slice the first partial day off the chart but keep it in
+// the table. Reads combine this instant with retention (the LATER of the two);
+// the aligned window start is always within retention, so retention is the
+// floor and the window is the active bound.
+
+export const AUDIT_WINDOWS = ["24h", "7d", "30d"] as const;
+export type AuditWindowKey = (typeof AUDIT_WINDOWS)[number];
+
+export interface AuditWindow {
+  key: AuditWindowKey;
+  /** Lookback in hours, after clamping to retention. */
+  hours: number;
+  /** Chart bucket granularity. Hourly stays legible up to ~48h; longer
+   *  windows switch to daily so the sparkline isn't hundreds of slivers. */
+  bucket: "hour" | "day";
+  /** Number of chart buckets to render. */
+  bucketCount: number;
+}
+
+const WINDOW_DEFS: Record<AuditWindowKey, AuditWindow> = {
+  "24h": { key: "24h", hours: 24, bucket: "hour", bucketCount: 24 },
+  "7d": { key: "7d", hours: 24 * 7, bucket: "day", bucketCount: 7 },
+  "30d": { key: "30d", hours: 24 * 30, bucket: "day", bucketCount: 30 },
+};
+
+/** Coerce an arbitrary string (URL param) to a valid window key. */
+export function parseAuditWindow(raw: string | undefined): AuditWindowKey {
+  return (AUDIT_WINDOWS as readonly string[]).includes(raw ?? "")
+    ? (raw as AuditWindowKey)
+    : "24h";
+}
+
+/** Resolve the requested window, clamped to the plan retention horizon.
+ *  When the request reaches past retention, hours are capped and the chart
+ *  bucket count shrinks to match (so 30d on a 7d plan renders 7 daily bars,
+ *  not 30 with 23 always-empty). */
+export function resolveAuditWindow(
+  key: AuditWindowKey | undefined,
   retentionDays: number | undefined,
+): AuditWindow {
+  const base = WINDOW_DEFS[key ?? "24h"] ?? WINDOW_DEFS["24h"];
+  if (retentionDays === undefined || !Number.isFinite(retentionDays)) {
+    return base;
+  }
+  const retHours = retentionDays * 24;
+  if (base.hours <= retHours) return base;
+  const hours = retHours;
+  const bucketCount =
+    base.bucket === "day"
+      ? Math.max(1, Math.ceil(hours / 24))
+      : Math.max(1, Math.ceil(hours));
+  return { ...base, hours, bucketCount };
+}
+
+// Start of the first chart bucket for a given granularity + count, aligned
+// DOWN to the bucket boundary (top of hour / midnight UTC). This is the one
+// definition of "where the window begins" the whole page shares.
+function windowStart(
+  now: Date,
+  bucket: "hour" | "day",
+  count: number,
+): Date {
+  const stepMs = bucket === "day" ? 86_400_000 : 3_600_000;
+  const end = new Date(now);
+  if (bucket === "day") {
+    end.setUTCHours(0, 0, 0, 0);
+  } else {
+    end.setUTCMinutes(0, 0, 0);
+  }
+  return new Date(end.getTime() - (count - 1) * stepMs);
+}
+
+/** The aligned lower-bound instant for a resolved window — the start of the
+ *  chart's first bucket. Pass this same instant to every list/count/chip/
+ *  export read so they filter the identical range the chart renders. */
+export function auditWindowSince(
+  window: AuditWindow,
+  now: Date = new Date(),
+): Date {
+  return windowStart(now, window.bucket, window.bucketCount);
+}
+
+/** Combined ts lower bound (the later of the retention floor and the window
+ *  start) as a Date, or null when neither is set. Used by the Drizzle-builder
+ *  chip-list reads. */
+function lowerBoundSince(
+  retentionDays: number | undefined,
+  windowSince: Date | undefined,
+  now: Date = new Date(),
+): Date | null {
+  const bounds: number[] = [];
+  const ret = retentionSince(retentionDays, now);
+  if (ret) bounds.push(ret.getTime());
+  if (windowSince) bounds.push(windowSince.getTime());
+  if (bounds.length === 0) return null;
+  return new Date(Math.max(...bounds));
+}
+
+/** lowerBoundSince as an ISO string for the raw-SQL reads. */
+function lowerBoundIso(
+  retentionDays: number | undefined,
+  windowSince: Date | undefined,
   now: Date,
 ): string | null {
-  return retentionSince(retentionDays, now)?.toISOString() ?? null;
+  return lowerBoundSince(retentionDays, windowSince, now)?.toISOString() ?? null;
 }
 
 // Lifecycle event types — still emitted per-row by the OSS engine and
@@ -94,11 +202,15 @@ export type EventType = (typeof EVENT_TYPES)[number];
 // set of stage rows in the DB, not stored. Order here is the order chips
 // appear in the filter strip.
 //
-// POLICY_RELOAD is a non-query event (the OSS engine emits POLICY_RELOADED
-// rows on a successful /admin/policy hot-swap). It rides in the same list
-// because operators need a single place to verify when a policy change
-// took effect. It always carries a NULL query_id and shows alongside the
-// query rows; the status pill marks it visually distinct.
+// The last three are NON-QUERY events that ride in the same list because a
+// reviewer needs one place to see everything that touched the boundary:
+//   - POLICY_RELOAD   — config change (the engine's POLICY_RELOADED on a
+//                       hot-swap, plus the cloud's actor-stamped
+//                       POLICY_CHANGED / TENANT_SCOPE_CHANGED / REGION_CHANGED)
+//   - TOKEN_CREATED   — an MCP credential was minted
+//   - TOKEN_REVOKED   — an MCP credential was killed (a security event)
+// They carry a NULL query_id and no SQL; the status pill marks each
+// distinct and the list renders an event summary in the SQL column.
 export const QUERY_STATUSES = [
   "ALLOWED",
   "DENIED",
@@ -106,8 +218,33 @@ export const QUERY_STATUSES = [
   "STUCK",
   "PENDING",
   "POLICY_RELOAD",
+  "TOKEN_CREATED",
+  "TOKEN_REVOKED",
 ] as const;
 export type QueryStatus = (typeof QUERY_STATUSES)[number];
+
+// Query-outcome statuses vs. non-query event statuses. The filter strip
+// groups them under separate labels ("Status" vs "Events") and the list
+// renderer switches on isEventStatus() to decide between SQL and an event
+// summary. Keep these two arrays a partition of QUERY_STATUSES.
+export const QUERY_OUTCOME_STATUSES = [
+  "ALLOWED",
+  "DENIED",
+  "FAILED",
+  "STUCK",
+  "PENDING",
+] as const satisfies readonly QueryStatus[];
+export const EVENT_STATUSES = [
+  "POLICY_RELOAD",
+  "TOKEN_CREATED",
+  "TOKEN_REVOKED",
+] as const satisfies readonly QueryStatus[];
+
+/** True for the non-query rows (config + credential events) that ride in
+ *  the audit list. They have no query_id and no SQL. */
+export function isEventStatus(status: QueryStatus): boolean {
+  return (EVENT_STATUSES as readonly string[]).includes(status);
+}
 
 // A query is STUCK when it reached ATTEMPTED (or DECIDED) but no terminal
 // stage (EXECUTED/FAILED/DENIED) arrived after this many milliseconds of
@@ -145,12 +282,13 @@ export interface AuditQueryListRow {
   decisionReason: string | null;
   execMs: number | null;
   status: QueryStatus;
-  /** Full payload of the underlying POLICY_RELOADED event for
-   *  POLICY_RELOAD list rows. Null on every query row. OSS 0.4.0 emits
-   *  `sections_changed` / `databases_changed` / `diffs` here so the list
-   *  view can render "tenant_scope updated on main" instead of a bare
-   *  pill; older rows (pre-0.4.0) still resolve to a generic label via
-   *  policyReloadSummary's fallback. */
+  /** Full payload of the underlying non-query event — POLICY_RELOAD rows
+   *  carry the engine/config payload (OSS 0.4.0+ emits `sections_changed`
+   *  / `databases_changed` / `diffs` so the list renders "tenant_scope
+   *  updated on main"; older rows fall back to a generic label), and
+   *  TOKEN_CREATED / TOKEN_REVOKED rows carry the credential payload
+   *  (token_name / prefix / last4 / reason) the list summarizes. Null on
+   *  every query row. */
   policyPayload: Record<string, unknown> | null;
 }
 
@@ -164,6 +302,15 @@ export interface ListAuditOpts {
    *  on a connection (the per-DB row in `connection_databases`), not a
    *  per-client connection. Hits audit_customer_region_database_ts_idx. */
   database?: string;
+  /** Empty/undefined = all agents. Matches audit_events_index.agent_name
+   *  (e.g. "claude-code"). Hits audit_customer_region_agent_ts_idx. Excludes
+   *  non-query events (they carry no agent_name). */
+  agentName?: string;
+  /** Empty/undefined = all tokens. Matches audit_events_index.mcp_token_id
+   *  — every audit row from a token's session carries it. Hits
+   *  audit_customer_region_token_ts_idx. Answers "everything this credential
+   *  did". Excludes config events (they carry no token id). */
+  tokenId?: string;
   /** Substring match against payload->>'sql_raw',
    *  payload->>'sql_fingerprint', and query_id. Matches if ANY event for
    *  the query matches — so a search hit on the ATTEMPTED row's SQL
@@ -180,6 +327,11 @@ export interface ListAuditOpts {
   /** Plan retention window in days. When set, rows older than this are
    *  excluded. Omitted = no clamp. */
   retentionDays?: number;
+  /** Bucket-aligned start of the selected time window (auditWindowSince).
+   *  Combined with retentionDays into a single ts lower bound. Pass the same
+   *  instant the chart uses so the two never disagree. Omitted = no window
+   *  clamp. */
+  windowSince?: Date;
 }
 
 export interface ListAuditResult {
@@ -200,11 +352,16 @@ export async function listAuditQueries(
   // not auto-serialize Date, so binding a Date here throws
   // "argument must be string or Buffer". Same pattern as eventVolumeByHour.
   const stuckCutoffIso = new Date(nowMs - STUCK_THRESHOLD_MS).toISOString();
-  // Retention clamp. Applied to the aggregation, the search subquery, and the
-  // policy-events branch so an out-of-window row can't surface via any path.
-  // Lifecycle rows of one query land within seconds of each other, so a
-  // days-wide window keeps each query whole — no split lifecycles.
-  const retIso = retentionSinceIso(opts.retentionDays, new Date(nowMs));
+  // Lower-bound clamp (retention ∧ window). Applied to the aggregation, the
+  // search subquery, and the policy-events branch so an out-of-window row
+  // can't surface via any path. Lifecycle rows of one query land within
+  // seconds of each other, so a hours/days-wide window keeps each query
+  // whole — no split lifecycles.
+  const retIso = lowerBoundIso(
+    opts.retentionDays,
+    opts.windowSince,
+    new Date(nowMs),
+  );
   const retentionClause = retIso ? sql`AND ts >= ${retIso}::timestamptz` : sql``;
 
   return withCustomerScope(opts.region, customerId, async (tx) => {
@@ -219,6 +376,15 @@ export async function listAuditQueries(
       : sql``;
     const databaseClause = opts.database
       ? sql`AND database = ${opts.database}`
+      : sql``;
+    // agent_name / mcp_token_id filter the raw rows directly (identical
+    // across a query's lifecycle). Both naturally exclude the non-query
+    // event rows — config events carry neither, token events carry no agent.
+    const agentClause = opts.agentName
+      ? sql`AND agent_name = ${opts.agentName}`
+      : sql``;
+    const tokenClause = opts.tokenId
+      ? sql`AND mcp_token_id = ${opts.tokenId}`
       : sql``;
     const cursorClause = opts.cursor
       ? sql`AND attempted_event_id < ${opts.cursor}`
@@ -262,11 +428,14 @@ export async function listAuditQueries(
     // decision (the OSS engine never emits EXECUTED without DECIDED+allow);
     // we trust that invariant rather than re-checking.
     //
-    // policy_events is unioned in alongside the query aggregation so
-    // POLICY_RELOADED rows (singletons, no lifecycle) keep showing up in
-    // the audit log — operators rely on this list to verify a hot-swap
-    // landed. Both CTEs project the same column shape with explicit
-    // NULL casts; UNION ALL needs matching types on each branch.
+    // policy_events is unioned in alongside the query aggregation so the
+    // non-query singletons (no lifecycle) keep showing up in the audit
+    // log: config changes (POLICY_RELOADED + the cloud's actor-stamped
+    // POLICY_CHANGED / TENANT_SCOPE_CHANGED / REGION_CHANGED) and
+    // credential events (TOKEN_CREATED / TOKEN_REVOKED). Operators rely on
+    // this list to verify a hot-swap landed and to see who minted/killed a
+    // token. Both CTEs project the same column shape with explicit NULL
+    // casts; UNION ALL needs matching types on each branch.
     const stmt = sql`
       WITH agg AS (
         SELECT
@@ -297,6 +466,8 @@ export async function listAuditQueries(
           ${retentionClause}
           ${tenantClause}
           ${databaseClause}
+          ${agentClause}
+          ${tokenClause}
           ${searchClause}
         GROUP BY query_id
       ),
@@ -347,14 +518,20 @@ export async function listAuditQueries(
           NULL::text AS decision_reason,
           NULL::numeric AS exec_ms,
           payload AS policy_payload,
-          'POLICY_RELOAD' AS status
+          CASE event_type
+            WHEN 'TOKEN_CREATED' THEN 'TOKEN_CREATED'
+            WHEN 'TOKEN_REVOKED' THEN 'TOKEN_REVOKED'
+            ELSE 'POLICY_RELOAD'
+          END AS status
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
-          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
+          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED')
           ${retentionClause}
           ${tenantClause}
           ${databaseClause}
+          ${agentClause}
+          ${tokenClause}
           ${policySearchClause}
       )
       SELECT * FROM (
@@ -434,8 +611,9 @@ export async function listTenantIds(
   customerId: string,
   region: Region,
   retentionDays?: number,
+  windowSince?: Date,
 ): Promise<string[]> {
-  const since = retentionSince(retentionDays);
+  const since = lowerBoundSince(retentionDays, windowSince);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ tenantId: auditEventsIndex.tenantId })
@@ -445,7 +623,7 @@ export async function listTenantIds(
           eq(auditEventsIndex.customerId, customerId),
           eq(auditEventsIndex.region, region),
           // Clamp so the filter chips don't surface tenant names whose only
-          // rows are outside the retention window.
+          // rows are outside the retention window / selected time window.
           since ? gte(auditEventsIndex.ts, since) : undefined,
         ),
       )
@@ -464,8 +642,9 @@ export async function listDatabases(
   customerId: string,
   region: Region,
   retentionDays?: number,
+  windowSince?: Date,
 ): Promise<string[]> {
-  const since = retentionSince(retentionDays);
+  const since = lowerBoundSince(retentionDays, windowSince);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ database: auditEventsIndex.database })
@@ -483,11 +662,94 @@ export async function listDatabases(
   });
 }
 
+/** Distinct agent names (audit_events_index.agent_name) the customer has
+ *  rows for, for the agent filter chip. NULL agents (non-query events) are
+ *  excluded. Same ORDER BY before LIMIT determinism contract as the other
+ *  chip lists. Hits audit_customer_region_agent_ts_idx. */
+export async function listAgents(
+  customerId: string,
+  region: Region,
+  retentionDays?: number,
+  windowSince?: Date,
+): Promise<string[]> {
+  const since = lowerBoundSince(retentionDays, windowSince);
+  return withCustomerScope(region, customerId, async (tx) => {
+    const rows = await tx
+      .selectDistinct({ agentName: auditEventsIndex.agentName })
+      .from(auditEventsIndex)
+      .where(
+        and(
+          eq(auditEventsIndex.customerId, customerId),
+          eq(auditEventsIndex.region, region),
+          isNotNull(auditEventsIndex.agentName),
+          since ? gte(auditEventsIndex.ts, since) : undefined,
+        ),
+      )
+      .orderBy(asc(auditEventsIndex.agentName))
+      .limit(50);
+    return rows.map((r) => r.agentName).filter((n): n is string => n != null);
+  });
+}
+
+export interface TokenOption {
+  /** mcp_token_id — the filter value. */
+  id: string;
+  /** Human label for the chip: token name (· last4) when the token row is
+   *  still resolvable, else a short id suffix. */
+  label: string;
+}
+
+/** Tokens that appear in the customer's audit rows, for the token filter
+ *  chip. The id set comes from the (already RLS-scoped) audit rows; the
+ *  LEFT JOIN to mcp_tokens only enriches the label, so a deleted token
+ *  still lists (falling back to a short id). */
+export async function listTokenOptions(
+  customerId: string,
+  region: Region,
+  retentionDays?: number,
+  windowSince?: Date,
+): Promise<TokenOption[]> {
+  const sinceIso = lowerBoundIso(retentionDays, windowSince, new Date());
+  const windowClause = sinceIso
+    ? sql`AND a.ts >= ${sinceIso}::timestamptz`
+    : sql``;
+  return withCustomerScope(region, customerId, async (tx) => {
+    const stmt = sql`
+      SELECT a.mcp_token_id AS id,
+             MAX(t.name) AS name,
+             MAX(t.last4) AS last4
+      FROM audit_events_index a
+      LEFT JOIN mcp_tokens t ON t.id = a.mcp_token_id
+      WHERE a.customer_id = ${customerId}
+        AND a.region = ${region}
+        AND a.mcp_token_id IS NOT NULL
+        ${windowClause}
+      GROUP BY a.mcp_token_id
+      ORDER BY MAX(t.name) ASC NULLS LAST, a.mcp_token_id ASC
+      LIMIT 50
+    `;
+    const raw = await tx.execute(stmt);
+    const rows = ((raw as unknown as { rows?: unknown[] }).rows ??
+      (raw as unknown as unknown[])) as Record<string, unknown>[];
+    return rows.map((r) => {
+      const id = String(r.id);
+      const name = typeof r.name === "string" && r.name ? r.name : null;
+      const last4 = typeof r.last4 === "string" && r.last4 ? r.last4 : null;
+      const label = name
+        ? last4
+          ? `${name} ·${last4}`
+          : name
+        : `token …${id.slice(-6)}`;
+      return { id, label };
+    });
+  });
+}
+
 export const TERMINAL_STATUSES = ["executed", "denied", "failed"] as const;
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
 
 export interface VolumeBucket {
-  /** Bucket start, hour-aligned UTC. */
+  /** Bucket start, period-aligned UTC (top of hour, or midnight for daily). */
   ts: Date;
   /** Per-terminal-status query counts; missing keys = 0. */
   counts: Partial<Record<TerminalStatus, number>>;
@@ -513,6 +775,10 @@ export interface VolumeFilters {
   tenantId?: string;
   /** Empty/undefined = all databases. */
   database?: string;
+  /** Empty/undefined = all agents. */
+  agentName?: string;
+  /** Empty/undefined = all tokens. */
+  tokenId?: string;
   /** Substring against query_id, payload->>'sql_raw', or
    *  payload->>'sql_fingerprint'. Restricts which queries contribute via a
    *  query_id IN (...) subquery so the chart matches what the table below
@@ -523,21 +789,40 @@ export interface VolumeFilters {
 export async function eventVolumeByHour(
   customerId: string,
   region: Region,
-  opts: { hours?: number; now?: () => Date; retentionDays?: number } &
-    VolumeFilters = {},
+  opts: {
+    /** Bucket span. `hours` (legacy) sets an hourly bucket count when
+     *  bucketCount is omitted. */
+    hours?: number;
+    /** Bucket granularity — hourly for short windows, daily for long ones
+     *  so the sparkline stays legible. Default "hour". */
+    bucket?: "hour" | "day";
+    /** Number of buckets to render. Default = hours ?? 24. */
+    bucketCount?: number;
+    /** Bucket-aligned window start (auditWindowSince). When the page passes
+     *  it, the chart filters + buckets from the EXACT instant the list uses,
+     *  so the two never disagree. Omitted = compute it from now + bucket. */
+    windowSince?: Date;
+    now?: () => Date;
+    retentionDays?: number;
+  } & VolumeFilters = {},
 ): Promise<VolumeBucket[]> {
-  const hours = opts.hours ?? 24;
+  const bucketUnit = opts.bucket ?? "hour";
+  const stepMs = bucketUnit === "day" ? 86_400_000 : 3_600_000;
+  const count = opts.bucketCount ?? opts.hours ?? 24;
   const now = (opts.now ?? (() => new Date()))();
-  // Align to the top of the current hour so buckets land on clean boundaries.
-  const endHour = new Date(now);
-  endHour.setUTCMinutes(0, 0, 0);
-  const since = new Date(endHour.getTime() - (hours - 1) * 3_600_000);
+  // The window start is the shared aligned instant — passed in by the page so
+  // the chart and the table filter the identical range, or computed here from
+  // `now` for standalone callers. windowStart aligns to the bucket boundary
+  // (top of hour / midnight UTC).
+  const since = opts.windowSince ?? windowStart(now, bucketUnit, count);
   // Clamp the query's lower bound to the retention window when it would reach
   // further back than the plan allows. Bucket construction below still spans
-  // the requested window; out-of-retention hours simply render empty.
+  // the requested window; out-of-retention buckets simply render empty.
   const retSince = retentionSince(opts.retentionDays, now);
   const queryStart =
     retSince && retSince.getTime() > since.getTime() ? retSince : since;
+  // date_trunc unit comes from a strict allowlist above — safe to inline.
+  const truncExpr = sql.raw(`date_trunc('${bucketUnit}', ts)`);
 
   // Boundary is sent as ISO text + cast to timestamptz on the server side.
   // postgres-js's raw-unsafe parameter path (used by Drizzle for tx.execute
@@ -555,6 +840,12 @@ export async function eventVolumeByHour(
     : sql``;
   const databaseClause = opts.database
     ? sql`AND database = ${opts.database}`
+    : sql``;
+  const agentClause = opts.agentName
+    ? sql`AND agent_name = ${opts.agentName}`
+    : sql``;
+  const tokenClause = opts.tokenId
+    ? sql`AND mcp_token_id = ${opts.tokenId}`
     : sql``;
   const searchClause =
     opts.search && opts.search.trim().length > 0
@@ -588,7 +879,7 @@ export async function eventVolumeByHour(
       count: number;
     }>`
       SELECT
-        date_trunc('hour', ts) AS bucket,
+        ${truncExpr} AS bucket,
         terminal,
         count(*)::int AS count
       FROM (
@@ -610,6 +901,8 @@ export async function eventVolumeByHour(
           )
           ${tenantClause}
           ${databaseClause}
+          ${agentClause}
+          ${tokenClause}
           ${searchClause}
         ORDER BY
           query_id,
@@ -631,8 +924,8 @@ export async function eventVolumeByHour(
 
   const buckets: VolumeBucket[] = [];
   const byKey = new Map<number, VolumeBucket>();
-  for (let i = 0; i < hours; i++) {
-    const ts = new Date(since.getTime() + i * 3_600_000);
+  for (let i = 0; i < count; i++) {
+    const ts = new Date(since.getTime() + i * stepMs);
     const b: VolumeBucket = { ts, counts: {} };
     buckets.push(b);
     byKey.set(ts.getTime(), b);
@@ -656,6 +949,7 @@ export async function countByStatus(
   region: Region,
   now: () => Date = () => new Date(),
   retentionDays?: number,
+  windowSince?: Date,
 ): Promise<Record<QueryStatus, number>> {
   const result: Record<QueryStatus, number> = {
     ALLOWED: 0,
@@ -664,6 +958,8 @@ export async function countByStatus(
     STUCK: 0,
     PENDING: 0,
     POLICY_RELOAD: 0,
+    TOKEN_CREATED: 0,
+    TOKEN_REVOKED: 0,
   };
   // ISO text + ::timestamptz cast: see listAuditQueries above for the
   // postgres-js raw-unsafe Date-codec rationale. Same fix applies here.
@@ -671,9 +967,10 @@ export async function countByStatus(
   const stuckCutoffIso = new Date(
     nowDate.getTime() - STUCK_THRESHOLD_MS,
   ).toISOString();
-  // Retention clamp, applied to both the query aggregation and the policy
-  // count so the badge totals match what the list actually shows.
-  const retIso = retentionSinceIso(retentionDays, nowDate);
+  // Lower-bound clamp (retention ∧ window), applied to both the query
+  // aggregation and the event count so the badge totals match what the list
+  // actually shows for the selected window.
+  const retIso = lowerBoundIso(retentionDays, windowSince, nowDate);
   const retentionClause = retIso ? sql`AND ts >= ${retIso}::timestamptz` : sql``;
   return withCustomerScope(region, customerId, async (tx) => {
     // Single statement: query lifecycles classified by status, plus a
@@ -708,13 +1005,18 @@ export async function countByStatus(
       GROUP BY 1
       UNION ALL
       SELECT
-        'POLICY_RELOAD' AS status,
+        CASE event_type
+          WHEN 'TOKEN_CREATED' THEN 'TOKEN_CREATED'
+          WHEN 'TOKEN_REVOKED' THEN 'TOKEN_REVOKED'
+          ELSE 'POLICY_RELOAD'
+        END AS status,
         count(*)::int AS count
       FROM audit_events_index
       WHERE customer_id = ${customerId}
         AND region = ${region}
-        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
+        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED')
         ${retentionClause}
+      GROUP BY 1
     `;
     const raw = await tx.execute(stmt);
     const rows = ((raw as unknown as { rows?: unknown[] }).rows ??

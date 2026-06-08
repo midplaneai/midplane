@@ -215,6 +215,21 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql).toContain("'TENANT_SCOPE_CHANGED'");
   });
 
+  it("admits credential events (TOKEN_CREATED / TOKEN_REVOKED) and classifies them by type", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    const sel = lastSelect(handle.queries);
+    // Token mint/revoke are written to audit_events_index but were invisible
+    // in /audit before this — they must ride in the event CTE so the audit
+    // log can answer "who minted/killed a credential?".
+    expect(sel.sql).toContain("'TOKEN_CREATED'");
+    expect(sel.sql).toContain("'TOKEN_REVOKED'");
+    // Classified per-type, not collapsed into POLICY_RELOAD.
+    expect(sel.sql).toContain("WHEN 'TOKEN_CREATED' THEN 'TOKEN_CREATED'");
+    expect(sel.sql).toContain("WHEN 'TOKEN_REVOKED' THEN 'TOKEN_REVOKED'");
+  });
+
   it("excludes policy events when search is active (no SQL to match against)", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
@@ -502,6 +517,36 @@ describe("listAuditQueries query shape", () => {
   });
 });
 
+describe("countByStatus", () => {
+  it("counts credential + config events per type so the chips show real totals", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    await countByStatus(VALID_CUSTOMER_ID, "eu");
+    const sel = lastSelect(handle.queries);
+    // The event branch GROUP BYs a CASE so POLICY_RELOAD / TOKEN_CREATED /
+    // TOKEN_REVOKED each get their own count, not one lumped total.
+    expect(sel.sql).toContain("'TOKEN_CREATED'");
+    expect(sel.sql).toContain("'TOKEN_REVOKED'");
+    expect(sel.sql.toLowerCase()).toContain("group by 1");
+  });
+
+  it("returns a zeroed record with every status key present", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    const result = await countByStatus(VALID_CUSTOMER_ID, "eu");
+    expect(result).toEqual({
+      ALLOWED: 0,
+      DENIED: 0,
+      FAILED: 0,
+      STUCK: 0,
+      PENDING: 0,
+      POLICY_RELOAD: 0,
+      TOKEN_CREATED: 0,
+      TOKEN_REVOKED: 0,
+    });
+  });
+});
+
 describe("listDatabases", () => {
   it("selects distinct database under RLS bind", async () => {
     handle.setNextResult([["analytics"], ["main"]]);
@@ -742,6 +787,179 @@ describe("audit retention clamp", () => {
     handle.setNextResult([]);
     await listDatabases(VALID_CUSTOMER_ID, "eu", 7);
     expect(lastSelect(handle.queries).sql).toMatch(TS_LOWER_BOUND);
+  });
+});
+
+describe("audit time window", () => {
+  it("parseAuditWindow coerces unknown values to 24h", async () => {
+    const { parseAuditWindow } = await import("../src/lib/audit.ts");
+    expect(parseAuditWindow("7d")).toBe("7d");
+    expect(parseAuditWindow("30d")).toBe("30d");
+    expect(parseAuditWindow(undefined)).toBe("24h");
+    expect(parseAuditWindow("bogus")).toBe("24h");
+  });
+
+  it("resolveAuditWindow leaves 24h alone and clamps long windows to retention", async () => {
+    const { resolveAuditWindow } = await import("../src/lib/audit.ts");
+    expect(resolveAuditWindow("24h", 7)).toEqual({
+      key: "24h",
+      hours: 24,
+      bucket: "hour",
+      bucketCount: 24,
+    });
+    // 30d on a 7d plan → capped to 168h, daily buckets shrink to 7.
+    expect(resolveAuditWindow("30d", 7)).toEqual({
+      key: "30d",
+      hours: 168,
+      bucket: "day",
+      bucketCount: 7,
+    });
+    // 7d on a 30d plan → unclamped.
+    expect(resolveAuditWindow("7d", 30)).toEqual({
+      key: "7d",
+      hours: 168,
+      bucket: "day",
+      bucketCount: 7,
+    });
+  });
+
+  it("listAuditQueries adds a ts lower bound when windowSince is set (no retention)", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "eu",
+      windowSince: new Date("2026-04-29T00:00:00Z"),
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toMatch(/ts"?\s*>=/i);
+    expect(sel.params).toContain("2026-04-29T00:00:00.000Z");
+  });
+
+  it("auditWindowSince aligns to the bucket boundary (the chart's first bucket start)", async () => {
+    const { auditWindowSince, resolveAuditWindow } = await import(
+      "../src/lib/audit.ts"
+    );
+    const now = new Date("2026-04-30T12:34:56Z");
+    // 7d → daily buckets aligned to midnight UTC, 6 days back.
+    expect(
+      auditWindowSince(resolveAuditWindow("7d", 30), now).toISOString(),
+    ).toBe("2026-04-24T00:00:00.000Z");
+    // 24h → hourly buckets aligned to the top of the hour, 23h back.
+    expect(
+      auditWindowSince(resolveAuditWindow("24h", 30), now).toISOString(),
+    ).toBe("2026-04-29T13:00:00.000Z");
+  });
+
+  it("chart and table share the windowSince lower bound (no first-day drift)", async () => {
+    // The fix for the sparkline-omits-part-of-the-window bug: the chart must
+    // filter from the SAME instant the table does. Pass an explicit
+    // windowSince and assert the chart query binds it AND renders its first
+    // bucket there.
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const since = new Date("2026-04-24T00:00:00Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
+      bucket: "day",
+      bucketCount: 7,
+      windowSince: since,
+      now: () => new Date("2026-04-30T12:00:00Z"),
+    });
+    expect(lastSelect(handle.queries).params).toContain(
+      "2026-04-24T00:00:00.000Z",
+    );
+    expect(buckets[0]!.ts.toISOString()).toBe("2026-04-24T00:00:00.000Z");
+  });
+
+  it("retention stays the floor when windowSince reaches past it", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "eu",
+      retentionDays: 7,
+      windowSince: new Date("2020-01-01T00:00:00Z"), // well before retention
+      now: () => new Date("2026-04-30T12:00:00Z"),
+    });
+    // Lower bound = max(retention cutoff, windowSince) = retention cutoff.
+    expect(lastSelect(handle.queries).params).toContain(
+      "2026-04-23T12:00:00.000Z",
+    );
+  });
+
+  it("listAuditQueries filters by agent_name and mcp_token_id when set", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "eu",
+      agentName: "claude-code",
+      tokenId: "tok_42",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("agent_name =");
+    expect(sel.params).toContain("claude-code");
+    expect(sel.sql).toContain("mcp_token_id =");
+    expect(sel.params).toContain("tok_42");
+  });
+});
+
+describe("listAgents", () => {
+  it("selects distinct non-null agent_name under RLS bind", async () => {
+    handle.setNextResult([["claude-code"], ["cursor"]]);
+    const { listAgents } = await import("../src/lib/audit.ts");
+    const result = await listAgents(VALID_CUSTOMER_ID, "eu");
+    expect(result).toEqual(["claude-code", "cursor"]);
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql.toLowerCase()).toContain("distinct");
+    expect(sel.sql).toContain("agent_name");
+    expect(sel.sql.toLowerCase()).toContain("not null");
+    expect(sel.inTransaction).toBe(true);
+  });
+});
+
+describe("listTokenOptions", () => {
+  it("joins mcp_tokens for the label and falls back to a short id", async () => {
+    handle.setNextResult([
+      { id: "tok_1", name: "ci-runner", last4: "ab12" },
+      { id: "tok_longidxxxxxx", name: null, last4: null },
+    ]);
+    const { listTokenOptions } = await import("../src/lib/audit.ts");
+    const result = await listTokenOptions(VALID_CUSTOMER_ID, "eu");
+    expect(result[0]).toEqual({ id: "tok_1", label: "ci-runner ·ab12" });
+    expect(result[1]!.id).toBe("tok_longidxxxxxx");
+    expect(result[1]!.label).toMatch(/^token …/);
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql.toLowerCase()).toContain("left join mcp_tokens");
+    expect(sel.sql).toContain("mcp_token_id IS NOT NULL");
+  });
+});
+
+describe("eventVolumeByHour daily bucketing", () => {
+  it("returns N day-aligned buckets and date_truncs by day", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const now = () => new Date("2026-04-30T12:34:56Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
+      bucket: "day",
+      bucketCount: 7,
+      now,
+    });
+    expect(buckets).toHaveLength(7);
+    expect(buckets[6]!.ts.toISOString()).toBe("2026-04-30T00:00:00.000Z");
+    expect(buckets[0]!.ts.toISOString()).toBe("2026-04-24T00:00:00.000Z");
+    expect(lastSelect(handle.queries).sql).toContain("date_trunc('day', ts)");
+  });
+
+  it("threads agent / token filters into the chart query", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
+      agentName: "claude-code",
+      tokenId: "tok_42",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("agent_name =");
+    expect(sel.params).toContain("claude-code");
+    expect(sel.sql).toContain("mcp_token_id =");
+    expect(sel.params).toContain("tok_42");
   });
 });
 

@@ -14,3 +14,12 @@ export function relativeTime(d: Date, now: Date = new Date()): string {
   const day = Math.floor(hr / 24);
   return `${day}d ago`;
 }
+
+/** Absolute UTC timestamp for the audit list when the user toggles off
+ *  relative time. `YYYY-MM-DD HH:MM:SS` — second precision matters for
+ *  forensic ordering; "UTC" is implied by the page's UTC convention and
+ *  rendered alongside by the caller. */
+export function absoluteTime(d: Date): string {
+  const iso = d.toISOString(); // 2026-06-08T08:59:44.123Z
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}`;
+}

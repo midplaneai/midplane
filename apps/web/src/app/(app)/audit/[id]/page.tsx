@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { EventBadge } from "@/components/audit/event-badge";
 import { PayloadView } from "@/components/audit/payload-view";
 import { relativeTime } from "@/components/audit/relative-time";
+import { CopyButton } from "@/components/copy-button";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -106,8 +107,9 @@ export default async function AuditDetailPage({ params }: PageProps) {
 
         {queryContext.sqlRaw && (
           <Card className="mt-[18px]">
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
               <CardTitle>Query</CardTitle>
+              <CopyButton value={queryContext.sqlRaw} label="Copy SQL" />
             </CardHeader>
             <CardContent>
               <pre className="whitespace-pre-wrap break-all rounded-md border border-border bg-popover p-3.5 font-mono text-xs leading-relaxed text-foreground">
@@ -138,6 +140,12 @@ export default async function AuditDetailPage({ params }: PageProps) {
                 <Dd>{event.eventType}</Dd>
                 <Dt>Tenant</Dt>
                 <Dd>{event.tenantId}</Dd>
+                {event.actorClerkUserId && (
+                  <>
+                    <Dt>Actor</Dt>
+                    <Dd>{event.actorClerkUserId}</Dd>
+                  </>
+                )}
                 <Dt>Agent</Dt>
                 <Dd>{formatAgent(event)}</Dd>
                 <Dt>Intent</Dt>
@@ -146,6 +154,12 @@ export default async function AuditDetailPage({ params }: PageProps) {
                   <>
                     <Dt>Intent via</Dt>
                     <Dd>{intentSourceLabel(event.intentSource)}</Dd>
+                  </>
+                )}
+                {event.mcpTokenId && (
+                  <>
+                    <Dt>Token</Dt>
+                    <Dd>{event.mcpTokenId}</Dd>
                   </>
                 )}
                 <Dt>Query ID</Dt>

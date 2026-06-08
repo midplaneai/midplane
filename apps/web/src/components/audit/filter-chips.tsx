@@ -1,22 +1,39 @@
 import Link from "next/link";
 
 import { cn } from "@/lib/utils";
-import { QUERY_STATUSES, type QueryStatus } from "@/lib/audit";
+import {
+  EVENT_STATUSES,
+  QUERY_OUTCOME_STATUSES,
+  type AuditWindowKey,
+  type QueryStatus,
+  type TokenOption,
+} from "@/lib/audit";
+
+interface BuildUrlOverrides {
+  status?: readonly QueryStatus[];
+  tenantId?: string | null;
+  database?: string | null;
+  agentName?: string | null;
+  tokenId?: string | null;
+  cursor?: string | null;
+}
 
 interface FilterChipsProps {
   selectedStatuses: readonly QueryStatus[];
   selectedTenant: string | null;
   selectedDatabase: string | null;
+  selectedAgent: string | null;
+  selectedToken: string | null;
   tenants: readonly string[];
   databases: readonly string[];
+  agents: readonly string[];
+  tokens: readonly TokenOption[];
   counts: Record<QueryStatus, number>;
   search: string;
-  buildUrl: (overrides: {
-    status?: readonly QueryStatus[];
-    tenantId?: string | null;
-    database?: string | null;
-    cursor?: string | null;
-  }) => string;
+  /** Preserved across the search-form submit via hidden inputs. */
+  windowKey: AuditWindowKey;
+  timeFormat: "rel" | "abs";
+  buildUrl: (overrides: BuildUrlOverrides) => string;
 }
 
 const CHIP_BASE =
@@ -38,16 +55,24 @@ const CHIP_LABELS: Record<QueryStatus, string> = {
   STUCK: "Stuck",
   PENDING: "Pending",
   POLICY_RELOAD: "Policy reload",
+  TOKEN_CREATED: "Token created",
+  TOKEN_REVOKED: "Token revoked",
 };
 
 export function FilterChips({
   selectedStatuses,
   selectedTenant,
   selectedDatabase,
+  selectedAgent,
+  selectedToken,
   tenants,
   databases,
+  agents,
+  tokens,
   counts,
   search,
+  windowKey,
+  timeFormat,
   buildUrl,
 }: FilterChipsProps) {
   const allStatusesActive = selectedStatuses.length === 0;
@@ -61,22 +86,26 @@ export function FilterChips({
       >
         <b className="font-medium">All</b>
       </Chip>
-      {QUERY_STATUSES.map((s) => {
-        const active = selectedStatuses.includes(s);
-        const next = active
-          ? selectedStatuses.filter((x) => x !== s)
-          : [...selectedStatuses, s];
-        return (
-          <Chip
-            key={s}
-            href={buildUrl({ status: next, cursor: null })}
-            active={active}
-          >
-            <b className="font-medium">{CHIP_LABELS[s]}</b>
-            <Count active={active}>{counts[s]}</Count>
-          </Chip>
-        );
-      })}
+      {QUERY_OUTCOME_STATUSES.map((s) => (
+        <StatusChip
+          key={s}
+          status={s}
+          selectedStatuses={selectedStatuses}
+          count={counts[s]}
+          buildUrl={buildUrl}
+        />
+      ))}
+
+      <span className={cn(CHIP_LABEL, "ml-2 mr-1")}>Events</span>
+      {EVENT_STATUSES.map((s) => (
+        <StatusChip
+          key={s}
+          status={s}
+          selectedStatuses={selectedStatuses}
+          count={counts[s]}
+          buildUrl={buildUrl}
+        />
+      ))}
 
       {tenants.length > 0 && (
         <>
@@ -128,6 +157,56 @@ export function FilterChips({
         </>
       )}
 
+      {agents.length > 0 && (
+        <>
+          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Agent</span>
+          <Chip
+            href={buildUrl({ agentName: null, cursor: null })}
+            active={selectedAgent === null}
+          >
+            <b className="font-medium">All</b>
+            <Count active={selectedAgent === null}>{agents.length}</Count>
+          </Chip>
+          {agents.map((a) => (
+            <Chip
+              key={a}
+              href={buildUrl({
+                agentName: selectedAgent === a ? null : a,
+                cursor: null,
+              })}
+              active={selectedAgent === a}
+            >
+              <b className="font-mono font-medium">{truncate(a, 18)}</b>
+            </Chip>
+          ))}
+        </>
+      )}
+
+      {tokens.length > 0 && (
+        <>
+          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Token</span>
+          <Chip
+            href={buildUrl({ tokenId: null, cursor: null })}
+            active={selectedToken === null}
+          >
+            <b className="font-medium">All</b>
+            <Count active={selectedToken === null}>{tokens.length}</Count>
+          </Chip>
+          {tokens.map((t) => (
+            <Chip
+              key={t.id}
+              href={buildUrl({
+                tokenId: selectedToken === t.id ? null : t.id,
+                cursor: null,
+              })}
+              active={selectedToken === t.id}
+            >
+              <b className="font-mono font-medium">{truncate(t.label, 22)}</b>
+            </Chip>
+          ))}
+        </>
+      )}
+
       <form action="/audit" method="get" className="ml-auto">
         {selectedStatuses.length > 0 && (
           <input
@@ -142,6 +221,16 @@ export function FilterChips({
         {selectedDatabase && (
           <input type="hidden" name="database" value={selectedDatabase} />
         )}
+        {selectedAgent && (
+          <input type="hidden" name="agent" value={selectedAgent} />
+        )}
+        {selectedToken && (
+          <input type="hidden" name="token" value={selectedToken} />
+        )}
+        <input type="hidden" name="window" value={windowKey} />
+        {timeFormat === "abs" && (
+          <input type="hidden" name="t" value="abs" />
+        )}
         <input
           name="q"
           defaultValue={search}
@@ -154,6 +243,32 @@ export function FilterChips({
         />
       </form>
     </div>
+  );
+}
+
+// A single toggle chip for one status. Toggling adds/removes the status
+// from the multi-select set and resets the cursor (page 1) so the new
+// filter starts at the newest matching row.
+function StatusChip({
+  status,
+  selectedStatuses,
+  count,
+  buildUrl,
+}: {
+  status: QueryStatus;
+  selectedStatuses: readonly QueryStatus[];
+  count: number;
+  buildUrl: FilterChipsProps["buildUrl"];
+}) {
+  const active = selectedStatuses.includes(status);
+  const next = active
+    ? selectedStatuses.filter((x) => x !== status)
+    : [...selectedStatuses, status];
+  return (
+    <Chip href={buildUrl({ status: next, cursor: null })} active={active}>
+      <b className="font-medium">{CHIP_LABELS[status]}</b>
+      <Count active={active}>{count}</Count>
+    </Chip>
   );
 }
 
