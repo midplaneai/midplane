@@ -17,6 +17,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import {
+  auditWindowSince,
   countByStatus,
   eventVolumeByHour,
   isEventStatus,
@@ -29,6 +30,7 @@ import {
   QUERY_STATUSES,
   readStaleness,
   resolveAuditWindow,
+  type AuditWindow,
   type AuditWindowKey,
   type QueryStatus,
 } from "@/lib/audit";
@@ -39,11 +41,26 @@ const PAGE_SIZE = 50;
 
 type TimeFormat = "rel" | "abs";
 
-const WINDOW_LABELS: Record<AuditWindowKey, string> = {
-  "24h": "last 24h",
-  "7d": "last 7 days",
-  "30d": "last 30 days",
+// Nominal lookback for each window key, before retention clamping. Used only
+// to detect whether the resolved window was actually clamped.
+const NOMINAL_WINDOW_HOURS: Record<AuditWindowKey, number> = {
+  "24h": 24,
+  "7d": 24 * 7,
+  "30d": 24 * 30,
 };
+
+// Label the EFFECTIVE (post-clamp) window, not the requested key — when
+// retention caps a 30d request to 7 days, the chart must say "last 7 days",
+// not "last 30 days". Flag the clamp so the shortfall reads as a plan limit,
+// not a bug.
+function describeWindow(windowKey: AuditWindowKey, window: AuditWindow): string {
+  const base =
+    window.bucket === "hour"
+      ? "last 24h"
+      : `last ${Math.round(window.hours / 24)} days`;
+  const clamped = window.hours < NOMINAL_WINDOW_HOURS[windowKey];
+  return clamped ? `${base} (plan max)` : base;
+}
 
 interface PageProps {
   searchParams: Promise<{
@@ -79,11 +96,13 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   const timeFormat: TimeFormat = params.t === "abs" ? "abs" : "rel";
 
   // Resolve the chosen time window, clamped to the plan retention horizon.
-  // windowHours feeds every read so the list, chips, counts, and chart all
-  // honor the same span; bucket/bucketCount size the chart.
+  // windowSince is a SINGLE bucket-aligned instant (computed once off `now`)
+  // fed to every read AND the chart, so the sparkline total and the table
+  // filter the exact same range — no first-partial-day drift between them.
+  const now = new Date();
   const windowKey = parseAuditWindow(params.window);
   const window = resolveAuditWindow(windowKey, retentionDays);
-  const windowHours = window.hours;
+  const windowSince = auditWindowSince(window, now);
 
   const [list, tenants, databases, agents, tokens, counts, volume, staleness] =
     await Promise.all([
@@ -98,18 +117,18 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         cursor,
         pageSize: PAGE_SIZE,
         retentionDays,
-        windowHours,
+        windowSince,
       }),
-      listTenantIds(customer.id, customer.region, retentionDays, windowHours),
-      listDatabases(customer.id, customer.region, retentionDays, windowHours),
-      listAgents(customer.id, customer.region, retentionDays, windowHours),
-      listTokenOptions(customer.id, customer.region, retentionDays, windowHours),
+      listTenantIds(customer.id, customer.region, retentionDays, windowSince),
+      listDatabases(customer.id, customer.region, retentionDays, windowSince),
+      listAgents(customer.id, customer.region, retentionDays, windowSince),
+      listTokenOptions(customer.id, customer.region, retentionDays, windowSince),
       countByStatus(
         customer.id,
         customer.region,
-        undefined,
+        () => now,
         retentionDays,
-        windowHours,
+        windowSince,
       ),
       eventVolumeByHour(customer.id, customer.region, {
         tenantId: selectedTenant ?? undefined,
@@ -120,6 +139,8 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         retentionDays,
         bucket: window.bucket,
         bucketCount: window.bucketCount,
+        windowSince,
+        now: () => now,
       }),
       readStaleness(customer.id, customer.region),
     ]);
@@ -184,7 +205,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
         <VolumeSparkline
           buckets={volume}
           granularity={window.bucket}
-          windowLabel={WINDOW_LABELS[windowKey]}
+          windowLabel={describeWindow(windowKey, window)}
         />
 
         <FilterChips

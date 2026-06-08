@@ -823,11 +823,66 @@ describe("audit time window", () => {
     });
   });
 
-  it("listAuditQueries adds a ts lower bound when windowHours is set (no retention)", async () => {
+  it("listAuditQueries adds a ts lower bound when windowSince is set (no retention)", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
-    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu", windowHours: 24 });
-    expect(lastSelect(handle.queries).sql).toMatch(/ts"?\s*>=/i);
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "eu",
+      windowSince: new Date("2026-04-29T00:00:00Z"),
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toMatch(/ts"?\s*>=/i);
+    expect(sel.params).toContain("2026-04-29T00:00:00.000Z");
+  });
+
+  it("auditWindowSince aligns to the bucket boundary (the chart's first bucket start)", async () => {
+    const { auditWindowSince, resolveAuditWindow } = await import(
+      "../src/lib/audit.ts"
+    );
+    const now = new Date("2026-04-30T12:34:56Z");
+    // 7d → daily buckets aligned to midnight UTC, 6 days back.
+    expect(
+      auditWindowSince(resolveAuditWindow("7d", 30), now).toISOString(),
+    ).toBe("2026-04-24T00:00:00.000Z");
+    // 24h → hourly buckets aligned to the top of the hour, 23h back.
+    expect(
+      auditWindowSince(resolveAuditWindow("24h", 30), now).toISOString(),
+    ).toBe("2026-04-29T13:00:00.000Z");
+  });
+
+  it("chart and table share the windowSince lower bound (no first-day drift)", async () => {
+    // The fix for the sparkline-omits-part-of-the-window bug: the chart must
+    // filter from the SAME instant the table does. Pass an explicit
+    // windowSince and assert the chart query binds it AND renders its first
+    // bucket there.
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    const since = new Date("2026-04-24T00:00:00Z");
+    const buckets = await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
+      bucket: "day",
+      bucketCount: 7,
+      windowSince: since,
+      now: () => new Date("2026-04-30T12:00:00Z"),
+    });
+    expect(lastSelect(handle.queries).params).toContain(
+      "2026-04-24T00:00:00.000Z",
+    );
+    expect(buckets[0]!.ts.toISOString()).toBe("2026-04-24T00:00:00.000Z");
+  });
+
+  it("retention stays the floor when windowSince reaches past it", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "eu",
+      retentionDays: 7,
+      windowSince: new Date("2020-01-01T00:00:00Z"), // well before retention
+      now: () => new Date("2026-04-30T12:00:00Z"),
+    });
+    // Lower bound = max(retention cutoff, windowSince) = retention cutoff.
+    expect(lastSelect(handle.queries).params).toContain(
+      "2026-04-23T12:00:00.000Z",
+    );
   });
 
   it("listAuditQueries filters by agent_name and mcp_token_id when set", async () => {

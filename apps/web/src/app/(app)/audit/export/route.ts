@@ -10,6 +10,7 @@
 
 import { eventSummary } from "@/components/audit/status-badge";
 import {
+  auditWindowSince,
   listAuditQueries,
   parseAuditWindow,
   resolveAuditWindow,
@@ -48,6 +49,9 @@ export async function GET(req: Request) {
     parseAuditWindow(sp.get("window") ?? undefined),
     caps.auditRetentionDays,
   );
+  // Same bucket-aligned lower bound the /audit page uses, so an export matches
+  // exactly what the table showed.
+  const windowSince = auditWindowSince(window, new Date());
   const format = sp.get("format") === "json" ? "json" : "csv";
 
   const { rows, nextCursor } = await listAuditQueries(customer.id, {
@@ -58,7 +62,7 @@ export async function GET(req: Request) {
     agentName,
     tokenId,
     search,
-    windowHours: window.hours,
+    windowSince,
     retentionDays: caps.auditRetentionDays,
     pageSize: EXPORT_MAX,
   });

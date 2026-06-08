@@ -73,9 +73,17 @@ export function retentionSince(
 // The window is the user-chosen lookback the page filters to (default 24h),
 // SEPARATE from retention (the plan's hard horizon). The window is always
 // clamped to retention — a Free customer who picks 30d still only sees 7d.
-// Every list/count/chip read combines both bounds into a single ts lower
-// bound: the LATER of (now - retention) and (now - window). The chart reads
-// the same window to size + bucket its bars.
+//
+// The window's lower bound is a SINGLE bucket-aligned instant
+// (auditWindowSince): the start of the chart's first bar. The list, counts,
+// chips, export, AND the chart all filter from that exact instant, so the
+// sparkline total and the table can never disagree. Aligning to the bucket
+// boundary (top of hour for 24h, midnight UTC for 7d/30d) is what makes the
+// daily bars line up with the rows the table shows — a rolling `now - hours`
+// lower bound would slice the first partial day off the chart but keep it in
+// the table. Reads combine this instant with retention (the LATER of the two);
+// the aligned window start is always within retention, so retention is the
+// floor and the window is the active bound.
 
 export const AUDIT_WINDOWS = ["24h", "7d", "30d"] as const;
 export type AuditWindowKey = (typeof AUDIT_WINDOWS)[number];
@@ -126,20 +134,46 @@ export function resolveAuditWindow(
   return { ...base, hours, bucketCount };
 }
 
-/** Combined ts lower bound (the later of the retention and window bounds)
- *  as a Date, or null when neither is set. Used by the Drizzle-builder
+// Start of the first chart bucket for a given granularity + count, aligned
+// DOWN to the bucket boundary (top of hour / midnight UTC). This is the one
+// definition of "where the window begins" the whole page shares.
+function windowStart(
+  now: Date,
+  bucket: "hour" | "day",
+  count: number,
+): Date {
+  const stepMs = bucket === "day" ? 86_400_000 : 3_600_000;
+  const end = new Date(now);
+  if (bucket === "day") {
+    end.setUTCHours(0, 0, 0, 0);
+  } else {
+    end.setUTCMinutes(0, 0, 0);
+  }
+  return new Date(end.getTime() - (count - 1) * stepMs);
+}
+
+/** The aligned lower-bound instant for a resolved window — the start of the
+ *  chart's first bucket. Pass this same instant to every list/count/chip/
+ *  export read so they filter the identical range the chart renders. */
+export function auditWindowSince(
+  window: AuditWindow,
+  now: Date = new Date(),
+): Date {
+  return windowStart(now, window.bucket, window.bucketCount);
+}
+
+/** Combined ts lower bound (the later of the retention floor and the window
+ *  start) as a Date, or null when neither is set. Used by the Drizzle-builder
  *  chip-list reads. */
 function lowerBoundSince(
   retentionDays: number | undefined,
-  windowHours: number | undefined,
+  windowSince: Date | undefined,
   now: Date = new Date(),
 ): Date | null {
   const bounds: number[] = [];
   const ret = retentionSince(retentionDays, now);
   if (ret) bounds.push(ret.getTime());
-  if (windowHours !== undefined && Number.isFinite(windowHours)) {
-    bounds.push(now.getTime() - windowHours * 60 * 60 * 1000);
-  }
+  if (windowSince) bounds.push(windowSince.getTime());
   if (bounds.length === 0) return null;
   return new Date(Math.max(...bounds));
 }
@@ -147,10 +181,10 @@ function lowerBoundSince(
 /** lowerBoundSince as an ISO string for the raw-SQL reads. */
 function lowerBoundIso(
   retentionDays: number | undefined,
-  windowHours: number | undefined,
+  windowSince: Date | undefined,
   now: Date,
 ): string | null {
-  return lowerBoundSince(retentionDays, windowHours, now)?.toISOString() ?? null;
+  return lowerBoundSince(retentionDays, windowSince, now)?.toISOString() ?? null;
 }
 
 // Lifecycle event types — still emitted per-row by the OSS engine and
@@ -293,9 +327,11 @@ export interface ListAuditOpts {
   /** Plan retention window in days. When set, rows older than this are
    *  excluded. Omitted = no clamp. */
   retentionDays?: number;
-  /** User-chosen lookback in hours (the time-window filter). Combined with
-   *  retentionDays into a single ts lower bound. Omitted = no window clamp. */
-  windowHours?: number;
+  /** Bucket-aligned start of the selected time window (auditWindowSince).
+   *  Combined with retentionDays into a single ts lower bound. Pass the same
+   *  instant the chart uses so the two never disagree. Omitted = no window
+   *  clamp. */
+  windowSince?: Date;
 }
 
 export interface ListAuditResult {
@@ -323,7 +359,7 @@ export async function listAuditQueries(
   // whole — no split lifecycles.
   const retIso = lowerBoundIso(
     opts.retentionDays,
-    opts.windowHours,
+    opts.windowSince,
     new Date(nowMs),
   );
   const retentionClause = retIso ? sql`AND ts >= ${retIso}::timestamptz` : sql``;
@@ -575,9 +611,9 @@ export async function listTenantIds(
   customerId: string,
   region: Region,
   retentionDays?: number,
-  windowHours?: number,
+  windowSince?: Date,
 ): Promise<string[]> {
-  const since = lowerBoundSince(retentionDays, windowHours);
+  const since = lowerBoundSince(retentionDays, windowSince);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ tenantId: auditEventsIndex.tenantId })
@@ -606,9 +642,9 @@ export async function listDatabases(
   customerId: string,
   region: Region,
   retentionDays?: number,
-  windowHours?: number,
+  windowSince?: Date,
 ): Promise<string[]> {
-  const since = lowerBoundSince(retentionDays, windowHours);
+  const since = lowerBoundSince(retentionDays, windowSince);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ database: auditEventsIndex.database })
@@ -634,9 +670,9 @@ export async function listAgents(
   customerId: string,
   region: Region,
   retentionDays?: number,
-  windowHours?: number,
+  windowSince?: Date,
 ): Promise<string[]> {
-  const since = lowerBoundSince(retentionDays, windowHours);
+  const since = lowerBoundSince(retentionDays, windowSince);
   return withCustomerScope(region, customerId, async (tx) => {
     const rows = await tx
       .selectDistinct({ agentName: auditEventsIndex.agentName })
@@ -671,9 +707,9 @@ export async function listTokenOptions(
   customerId: string,
   region: Region,
   retentionDays?: number,
-  windowHours?: number,
+  windowSince?: Date,
 ): Promise<TokenOption[]> {
-  const sinceIso = lowerBoundIso(retentionDays, windowHours, new Date());
+  const sinceIso = lowerBoundIso(retentionDays, windowSince, new Date());
   const windowClause = sinceIso
     ? sql`AND a.ts >= ${sinceIso}::timestamptz`
     : sql``;
@@ -762,6 +798,10 @@ export async function eventVolumeByHour(
     bucket?: "hour" | "day";
     /** Number of buckets to render. Default = hours ?? 24. */
     bucketCount?: number;
+    /** Bucket-aligned window start (auditWindowSince). When the page passes
+     *  it, the chart filters + buckets from the EXACT instant the list uses,
+     *  so the two never disagree. Omitted = compute it from now + bucket. */
+    windowSince?: Date;
     now?: () => Date;
     retentionDays?: number;
   } & VolumeFilters = {},
@@ -770,15 +810,11 @@ export async function eventVolumeByHour(
   const stepMs = bucketUnit === "day" ? 86_400_000 : 3_600_000;
   const count = opts.bucketCount ?? opts.hours ?? 24;
   const now = (opts.now ?? (() => new Date()))();
-  // Align to the top of the current period so buckets land on clean
-  // boundaries (top of hour for hourly, midnight UTC for daily).
-  const end = new Date(now);
-  if (bucketUnit === "day") {
-    end.setUTCHours(0, 0, 0, 0);
-  } else {
-    end.setUTCMinutes(0, 0, 0);
-  }
-  const since = new Date(end.getTime() - (count - 1) * stepMs);
+  // The window start is the shared aligned instant — passed in by the page so
+  // the chart and the table filter the identical range, or computed here from
+  // `now` for standalone callers. windowStart aligns to the bucket boundary
+  // (top of hour / midnight UTC).
+  const since = opts.windowSince ?? windowStart(now, bucketUnit, count);
   // Clamp the query's lower bound to the retention window when it would reach
   // further back than the plan allows. Bucket construction below still spans
   // the requested window; out-of-retention buckets simply render empty.
@@ -913,7 +949,7 @@ export async function countByStatus(
   region: Region,
   now: () => Date = () => new Date(),
   retentionDays?: number,
-  windowHours?: number,
+  windowSince?: Date,
 ): Promise<Record<QueryStatus, number>> {
   const result: Record<QueryStatus, number> = {
     ALLOWED: 0,
@@ -934,7 +970,7 @@ export async function countByStatus(
   // Lower-bound clamp (retention ∧ window), applied to both the query
   // aggregation and the event count so the badge totals match what the list
   // actually shows for the selected window.
-  const retIso = lowerBoundIso(retentionDays, windowHours, nowDate);
+  const retIso = lowerBoundIso(retentionDays, windowSince, nowDate);
   const retentionClause = retIso ? sql`AND ts >= ${retIso}::timestamptz` : sql``;
   return withCustomerScope(region, customerId, async (tx) => {
     // Single statement: query lifecycles classified by status, plus a
