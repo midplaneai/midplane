@@ -570,6 +570,11 @@
   .editorial-page .flow-checkpoints { grid-template-columns: 1fr; gap: 8px; }
   .editorial-page .flow-check + .flow-check::before { content: "↓"; left: 50%; top: -16px; transform: translateX(-50%); }
   .editorial-page .flow-check-title { font-size: 20px; }
+  /* Audit card header: three items (title · meta · export) overflow a
+     narrow card on one line, and .audit-card{overflow:hidden} would clip
+     the rightmost (export). Let them wrap and left-align instead. */
+  .editorial-page .audit-card .head { flex-wrap: wrap; gap: 6px 14px; }
+  .editorial-page .audit-card .head .meta { margin-left: 0; }
   .editorial-page .split-pair { grid-template-columns: 1fr; gap: 32px; }
   .editorial-page .vs { grid-template-columns: 1fr; }
   .editorial-page .vs > .cell:nth-child(3n) { border-right: 1px solid var(--line); }
