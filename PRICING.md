@@ -58,7 +58,7 @@ $29 reads "hobby-tier" for a compliance-positioned product; the indie/post-MVP b
 
 - **Query volume.** Agent traffic doesn't bind on volume at any realistic individual or small-team scale. Keeping queries unmetered (subject to a fair-use abuse cap) avoids training customers that midplane is a metering product when it's actually a safety product.
 - **Regions.** Pick eu or us at signup; both are available to everyone. Active-active across both regions is a custom ask.
-- **Audit log export.** Not built yet. When it ships (S3 / Datadog / Splunk webhooks) it slots into Team.
+- **Audit log export.** CSV/JSON export of the filtered log is on every tier, clamped to the tier's retention window — exporting your own audit trail isn't a paywall. Streaming/SIEM delivery (S3 / Datadog / Splunk webhooks) isn't built yet; it slots into Team when it lands.
 - **Policy expressiveness.** Same engine across tiers. Hiding policy features behind a paywall hides the product.
 - **RBAC beyond Clerk's default `admin`/`member`.** Custom role layers (policy editor vs. viewer, audit reader, connection admin) don't exist yet. Slots into Team when built.
 

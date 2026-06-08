@@ -574,7 +574,8 @@ export default async function Landing() {
                 Every query. Every decision. <em>Filterable.</em>
               </h2>
               <p className="sec-sub">
-                Append-only. Filterable by agent, table, tenant, decision.
+                Append-only. Filter by agent, token, table, tenant, decision,
+                or time window — then export the filtered view to CSV or JSON.
                 Every row records the MCP client and the agent&apos;s declared
                 intent — and for changes you make in the dashboard, the
                 engineer who made them. So six months later you can ask
@@ -587,6 +588,9 @@ export default async function Landing() {
             <div className="head">
               <h4>audit_log · last 3 events</h4>
               <span className="meta">1 denied · region eu · acme/production</span>
+              <span className="at-export mono" aria-hidden>
+                ↓ export · csv / json
+              </span>
             </div>
             <div className="at-table">
               <div className="hd">
@@ -600,6 +604,7 @@ export default async function Landing() {
                 <span className="ts">14:02:11.034</span>
                 <span className="dec-allow">ALLOW</span>
                 <span className="sql">
+                  <span className="sk read">read</span>
                   SELECT id, email FROM users WHERE tenant_id = $1
                 </span>
                 <span>cursor · v0.45</span>
@@ -609,6 +614,7 @@ export default async function Landing() {
                 <span className="ts">14:02:13.221</span>
                 <span className="dec-deny">DENY</span>
                 <span className="sql">
+                  <span className="sk write">write</span>
                   WITH d AS (DELETE FROM users RETURNING *) SELECT…
                 </span>
                 <span>cursor · v0.45</span>
@@ -618,6 +624,7 @@ export default async function Landing() {
                 <span className="ts">14:02:18.555</span>
                 <span className="dec-allow">ALLOW</span>
                 <span className="sql">
+                  <span className="sk write">write</span>
                   UPDATE feature_flags SET enabled = true WHERE …
                 </span>
                 <span>claude-code · 1.2</span>

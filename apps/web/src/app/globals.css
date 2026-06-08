@@ -444,6 +444,15 @@
 .editorial-page .at-table .dur { color: var(--ink-3); text-align: right; }
 .editorial-page .at-table .dec-allow { color: var(--paper-allow); font-weight: 500; }
 .editorial-page .at-table .dec-deny { color: var(--paper-deny); font-weight: 500; }
+/* Export action in the card head — mirrors the shipped /audit export button.
+ * Non-interactive in this mockup; sits with .meta on the right. */
+.editorial-page .audit-card .head .at-export { font-family: var(--font-geist-mono); font-size: 11px; color: var(--ink-3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; white-space: nowrap; }
+/* Statement-kind tag inside the SQL cell — deliberately NEUTRAL (never
+ * allow/deny color; that stays reserved for the decision column per DESIGN).
+ * Reads sit back (ink-3 / hairline); writes/DDL carry more weight. */
+.editorial-page .at-table .sql .sk { display: inline-block; margin-right: 8px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--line); color: var(--ink-3); vertical-align: middle; }
+.editorial-page .at-table .sql .sk.write { border-color: var(--line-2); color: var(--ink-2); font-weight: 500; }
+.editorial-page .at-table .sql .sk.ddl { border-color: var(--line-2); color: var(--ink); font-weight: 600; }
 
 /* pricing */
 .editorial-page .pricing { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid var(--line); background: var(--paper-2); }
@@ -561,6 +570,11 @@
   .editorial-page .flow-checkpoints { grid-template-columns: 1fr; gap: 8px; }
   .editorial-page .flow-check + .flow-check::before { content: "↓"; left: 50%; top: -16px; transform: translateX(-50%); }
   .editorial-page .flow-check-title { font-size: 20px; }
+  /* Audit card header: three items (title · meta · export) overflow a
+     narrow card on one line, and .audit-card{overflow:hidden} would clip
+     the rightmost (export). Let them wrap and left-align instead. */
+  .editorial-page .audit-card .head { flex-wrap: wrap; gap: 6px 14px; }
+  .editorial-page .audit-card .head .meta { margin-left: 0; }
   .editorial-page .split-pair { grid-template-columns: 1fr; gap: 32px; }
   .editorial-page .vs { grid-template-columns: 1fr; }
   .editorial-page .vs > .cell:nth-child(3n) { border-right: 1px solid var(--line); }
