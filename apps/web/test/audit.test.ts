@@ -215,6 +215,21 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql).toContain("'TENANT_SCOPE_CHANGED'");
   });
 
+  it("admits credential events (TOKEN_CREATED / TOKEN_REVOKED) and classifies them by type", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    const sel = lastSelect(handle.queries);
+    // Token mint/revoke are written to audit_events_index but were invisible
+    // in /audit before this — they must ride in the event CTE so the audit
+    // log can answer "who minted/killed a credential?".
+    expect(sel.sql).toContain("'TOKEN_CREATED'");
+    expect(sel.sql).toContain("'TOKEN_REVOKED'");
+    // Classified per-type, not collapsed into POLICY_RELOAD.
+    expect(sel.sql).toContain("WHEN 'TOKEN_CREATED' THEN 'TOKEN_CREATED'");
+    expect(sel.sql).toContain("WHEN 'TOKEN_REVOKED' THEN 'TOKEN_REVOKED'");
+  });
+
   it("excludes policy events when search is active (no SQL to match against)", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
@@ -499,6 +514,36 @@ describe("listAuditQueries query shape", () => {
     expect(result.nextCursor).toBeNull();
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.status).toBe("ALLOWED");
+  });
+});
+
+describe("countByStatus", () => {
+  it("counts credential + config events per type so the chips show real totals", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    await countByStatus(VALID_CUSTOMER_ID, "eu");
+    const sel = lastSelect(handle.queries);
+    // The event branch GROUP BYs a CASE so POLICY_RELOAD / TOKEN_CREATED /
+    // TOKEN_REVOKED each get their own count, not one lumped total.
+    expect(sel.sql).toContain("'TOKEN_CREATED'");
+    expect(sel.sql).toContain("'TOKEN_REVOKED'");
+    expect(sel.sql.toLowerCase()).toContain("group by 1");
+  });
+
+  it("returns a zeroed record with every status key present", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    const result = await countByStatus(VALID_CUSTOMER_ID, "eu");
+    expect(result).toEqual({
+      ALLOWED: 0,
+      DENIED: 0,
+      FAILED: 0,
+      STUCK: 0,
+      PENDING: 0,
+      POLICY_RELOAD: 0,
+      TOKEN_CREATED: 0,
+      TOKEN_REVOKED: 0,
+    });
   });
 });
 

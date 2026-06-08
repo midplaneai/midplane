@@ -4,8 +4,10 @@ import { redirect } from "next/navigation";
 import { FilterChips } from "@/components/audit/filter-chips";
 import { RefreshButton } from "@/components/audit/refresh-button";
 import { relativeTime } from "@/components/audit/relative-time";
+import { SqlCopyButton } from "@/components/audit/sql-copy-button";
+import { SqlKindBadge } from "@/components/audit/sql-kind-badge";
 import { StalenessSubtitle } from "@/components/audit/staleness-banner";
-import { policyReloadSummary, StatusBadge } from "@/components/audit/status-badge";
+import { eventSummary, StatusBadge } from "@/components/audit/status-badge";
 import { VolumeSparkline } from "@/components/audit/volume-sparkline";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -15,6 +17,7 @@ import { cn } from "@/lib/utils";
 import {
   countByStatus,
   eventVolumeByHour,
+  isEventStatus,
   listAuditQueries,
   listDatabases,
   listTenantIds,
@@ -153,7 +156,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
                   data-tenant-id={r.tenantId}
                   data-database={r.database}
                   className={cn(
-                    "relative border-b border-card transition-colors",
+                    "group/row relative border-b border-card transition-colors",
                     // Deny rows carry a faint deny tint (mirrors the landing's
                     // .at-table .tr.deny treatment) so policy failures stand
                     // out at a glance.
@@ -189,24 +192,28 @@ export default async function AuditListPage({ searchParams }: PageProps) {
                     </span>
                   </Td>
                   <Td>
-                    {r.status === "POLICY_RELOAD" ? (
+                    {isEventStatus(r.status) ? (
                       <span
                         className="block max-w-[420px] truncate text-foreground"
                         data-testid="audit-policy-summary"
                       >
-                        {policyReloadSummary(r.policyPayload)}
+                        {eventSummary(r.status, r.policyPayload)}
                       </span>
                     ) : (
-                      <span
-                        title={r.sqlRaw ?? r.sqlFingerprint ?? undefined}
-                        className="block max-w-[420px] truncate font-mono text-xs text-foreground"
-                      >
-                        {r.sqlRaw ?? (
-                          <span className="text-subtle">
-                            {r.sqlFingerprint ?? "—"}
-                          </span>
-                        )}
-                      </span>
+                      <div className="flex max-w-[420px] items-center gap-2">
+                        <SqlKindBadge sql={r.sqlRaw} />
+                        <span
+                          title={r.sqlRaw ?? r.sqlFingerprint ?? undefined}
+                          className="min-w-0 flex-1 truncate font-mono text-xs text-foreground"
+                        >
+                          {r.sqlRaw ?? (
+                            <span className="text-subtle">
+                              {r.sqlFingerprint ?? "—"}
+                            </span>
+                          )}
+                        </span>
+                        {r.sqlRaw && <SqlCopyButton sql={r.sqlRaw} />}
+                      </div>
                     )}
                   </Td>
                   <Td className="whitespace-nowrap text-right font-mono text-[11px] text-subtle">

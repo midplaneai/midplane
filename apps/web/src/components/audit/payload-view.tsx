@@ -51,6 +51,10 @@ function Structured({
       return <FailedView payload={payload} />;
     case "POLICY_RELOADED":
       return <PolicyReloadedView payload={payload} />;
+    case "TOKEN_CREATED":
+      return <TokenCreatedView payload={payload} />;
+    case "TOKEN_REVOKED":
+      return <TokenRevokedView payload={payload} />;
     default:
       // Unknown event_type — nothing structured to say. The raw JSON
       // disclosure below carries the full record.
@@ -145,6 +149,61 @@ function FailedView({ payload }: { payload: Record<string, unknown> }) {
           </Field>
         )}
       </Fields>
+    </div>
+  );
+}
+
+// --- TOKEN_CREATED / TOKEN_REVOKED -------------------------------------------
+//
+// Credential lifecycle events emitted by the cloud (tokens.ts). They carry
+// no SQL — the "who" (actor / token id) lives in the Metadata card; these
+// views surface the credential-specific payload fields.
+
+function TokenCreatedView({ payload }: { payload: Record<string, unknown> }) {
+  const name = stringField(payload, "token_name");
+  const prefix = stringField(payload, "prefix");
+  const last4 = stringField(payload, "last4");
+  const expiresAt = stringField(payload, "expires_at");
+  const connectionId = stringField(payload, "connection_id");
+  return (
+    <Fields>
+      {name && <Field label="Token name">{name}</Field>}
+      {(prefix || last4) && (
+        <Field label="Token">
+          <span className="font-mono text-xs">
+            {prefix ?? "mp"}…{last4 ?? "????"}
+          </span>
+        </Field>
+      )}
+      <Field label="Expires">
+        {expiresAt ? (
+          <span className="font-mono text-xs">{expiresAt}</span>
+        ) : (
+          <span className="text-subtle">never</span>
+        )}
+      </Field>
+      {connectionId && (
+        <Field label="Connection">
+          <span className="font-mono text-xs">{connectionId}</span>
+        </Field>
+      )}
+    </Fields>
+  );
+}
+
+function TokenRevokedView({ payload }: { payload: Record<string, unknown> }) {
+  const reason = stringField(payload, "reason");
+  const connectionId = stringField(payload, "connection_id");
+  return (
+    <div className="space-y-3">
+      {reason && <Callout tone="deny">{reason}</Callout>}
+      {connectionId && (
+        <Fields>
+          <Field label="Connection">
+            <span className="font-mono text-xs">{connectionId}</span>
+          </Field>
+        </Fields>
+      )}
     </div>
   );
 }

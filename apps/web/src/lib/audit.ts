@@ -94,11 +94,15 @@ export type EventType = (typeof EVENT_TYPES)[number];
 // set of stage rows in the DB, not stored. Order here is the order chips
 // appear in the filter strip.
 //
-// POLICY_RELOAD is a non-query event (the OSS engine emits POLICY_RELOADED
-// rows on a successful /admin/policy hot-swap). It rides in the same list
-// because operators need a single place to verify when a policy change
-// took effect. It always carries a NULL query_id and shows alongside the
-// query rows; the status pill marks it visually distinct.
+// The last three are NON-QUERY events that ride in the same list because a
+// reviewer needs one place to see everything that touched the boundary:
+//   - POLICY_RELOAD   — config change (the engine's POLICY_RELOADED on a
+//                       hot-swap, plus the cloud's actor-stamped
+//                       POLICY_CHANGED / TENANT_SCOPE_CHANGED / REGION_CHANGED)
+//   - TOKEN_CREATED   — an MCP credential was minted
+//   - TOKEN_REVOKED   — an MCP credential was killed (a security event)
+// They carry a NULL query_id and no SQL; the status pill marks each
+// distinct and the list renders an event summary in the SQL column.
 export const QUERY_STATUSES = [
   "ALLOWED",
   "DENIED",
@@ -106,8 +110,33 @@ export const QUERY_STATUSES = [
   "STUCK",
   "PENDING",
   "POLICY_RELOAD",
+  "TOKEN_CREATED",
+  "TOKEN_REVOKED",
 ] as const;
 export type QueryStatus = (typeof QUERY_STATUSES)[number];
+
+// Query-outcome statuses vs. non-query event statuses. The filter strip
+// groups them under separate labels ("Status" vs "Events") and the list
+// renderer switches on isEventStatus() to decide between SQL and an event
+// summary. Keep these two arrays a partition of QUERY_STATUSES.
+export const QUERY_OUTCOME_STATUSES = [
+  "ALLOWED",
+  "DENIED",
+  "FAILED",
+  "STUCK",
+  "PENDING",
+] as const satisfies readonly QueryStatus[];
+export const EVENT_STATUSES = [
+  "POLICY_RELOAD",
+  "TOKEN_CREATED",
+  "TOKEN_REVOKED",
+] as const satisfies readonly QueryStatus[];
+
+/** True for the non-query rows (config + credential events) that ride in
+ *  the audit list. They have no query_id and no SQL. */
+export function isEventStatus(status: QueryStatus): boolean {
+  return (EVENT_STATUSES as readonly string[]).includes(status);
+}
 
 // A query is STUCK when it reached ATTEMPTED (or DECIDED) but no terminal
 // stage (EXECUTED/FAILED/DENIED) arrived after this many milliseconds of
@@ -145,12 +174,13 @@ export interface AuditQueryListRow {
   decisionReason: string | null;
   execMs: number | null;
   status: QueryStatus;
-  /** Full payload of the underlying POLICY_RELOADED event for
-   *  POLICY_RELOAD list rows. Null on every query row. OSS 0.4.0 emits
-   *  `sections_changed` / `databases_changed` / `diffs` here so the list
-   *  view can render "tenant_scope updated on main" instead of a bare
-   *  pill; older rows (pre-0.4.0) still resolve to a generic label via
-   *  policyReloadSummary's fallback. */
+  /** Full payload of the underlying non-query event — POLICY_RELOAD rows
+   *  carry the engine/config payload (OSS 0.4.0+ emits `sections_changed`
+   *  / `databases_changed` / `diffs` so the list renders "tenant_scope
+   *  updated on main"; older rows fall back to a generic label), and
+   *  TOKEN_CREATED / TOKEN_REVOKED rows carry the credential payload
+   *  (token_name / prefix / last4 / reason) the list summarizes. Null on
+   *  every query row. */
   policyPayload: Record<string, unknown> | null;
 }
 
@@ -262,11 +292,14 @@ export async function listAuditQueries(
     // decision (the OSS engine never emits EXECUTED without DECIDED+allow);
     // we trust that invariant rather than re-checking.
     //
-    // policy_events is unioned in alongside the query aggregation so
-    // POLICY_RELOADED rows (singletons, no lifecycle) keep showing up in
-    // the audit log — operators rely on this list to verify a hot-swap
-    // landed. Both CTEs project the same column shape with explicit
-    // NULL casts; UNION ALL needs matching types on each branch.
+    // policy_events is unioned in alongside the query aggregation so the
+    // non-query singletons (no lifecycle) keep showing up in the audit
+    // log: config changes (POLICY_RELOADED + the cloud's actor-stamped
+    // POLICY_CHANGED / TENANT_SCOPE_CHANGED / REGION_CHANGED) and
+    // credential events (TOKEN_CREATED / TOKEN_REVOKED). Operators rely on
+    // this list to verify a hot-swap landed and to see who minted/killed a
+    // token. Both CTEs project the same column shape with explicit NULL
+    // casts; UNION ALL needs matching types on each branch.
     const stmt = sql`
       WITH agg AS (
         SELECT
@@ -347,11 +380,15 @@ export async function listAuditQueries(
           NULL::text AS decision_reason,
           NULL::numeric AS exec_ms,
           payload AS policy_payload,
-          'POLICY_RELOAD' AS status
+          CASE event_type
+            WHEN 'TOKEN_CREATED' THEN 'TOKEN_CREATED'
+            WHEN 'TOKEN_REVOKED' THEN 'TOKEN_REVOKED'
+            ELSE 'POLICY_RELOAD'
+          END AS status
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
-          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
+          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED')
           ${retentionClause}
           ${tenantClause}
           ${databaseClause}
@@ -664,6 +701,8 @@ export async function countByStatus(
     STUCK: 0,
     PENDING: 0,
     POLICY_RELOAD: 0,
+    TOKEN_CREATED: 0,
+    TOKEN_REVOKED: 0,
   };
   // ISO text + ::timestamptz cast: see listAuditQueries above for the
   // postgres-js raw-unsafe Date-codec rationale. Same fix applies here.
@@ -708,13 +747,18 @@ export async function countByStatus(
       GROUP BY 1
       UNION ALL
       SELECT
-        'POLICY_RELOAD' AS status,
+        CASE event_type
+          WHEN 'TOKEN_CREATED' THEN 'TOKEN_CREATED'
+          WHEN 'TOKEN_REVOKED' THEN 'TOKEN_REVOKED'
+          ELSE 'POLICY_RELOAD'
+        END AS status,
         count(*)::int AS count
       FROM audit_events_index
       WHERE customer_id = ${customerId}
         AND region = ${region}
-        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED')
+        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED')
         ${retentionClause}
+      GROUP BY 1
     `;
     const raw = await tx.execute(stmt);
     const rows = ((raw as unknown as { rows?: unknown[] }).rows ??

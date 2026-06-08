@@ -1,7 +1,11 @@
 import Link from "next/link";
 
 import { cn } from "@/lib/utils";
-import { QUERY_STATUSES, type QueryStatus } from "@/lib/audit";
+import {
+  EVENT_STATUSES,
+  QUERY_OUTCOME_STATUSES,
+  type QueryStatus,
+} from "@/lib/audit";
 
 interface FilterChipsProps {
   selectedStatuses: readonly QueryStatus[];
@@ -38,6 +42,8 @@ const CHIP_LABELS: Record<QueryStatus, string> = {
   STUCK: "Stuck",
   PENDING: "Pending",
   POLICY_RELOAD: "Policy reload",
+  TOKEN_CREATED: "Token created",
+  TOKEN_REVOKED: "Token revoked",
 };
 
 export function FilterChips({
@@ -61,22 +67,26 @@ export function FilterChips({
       >
         <b className="font-medium">All</b>
       </Chip>
-      {QUERY_STATUSES.map((s) => {
-        const active = selectedStatuses.includes(s);
-        const next = active
-          ? selectedStatuses.filter((x) => x !== s)
-          : [...selectedStatuses, s];
-        return (
-          <Chip
-            key={s}
-            href={buildUrl({ status: next, cursor: null })}
-            active={active}
-          >
-            <b className="font-medium">{CHIP_LABELS[s]}</b>
-            <Count active={active}>{counts[s]}</Count>
-          </Chip>
-        );
-      })}
+      {QUERY_OUTCOME_STATUSES.map((s) => (
+        <StatusChip
+          key={s}
+          status={s}
+          selectedStatuses={selectedStatuses}
+          count={counts[s]}
+          buildUrl={buildUrl}
+        />
+      ))}
+
+      <span className={cn(CHIP_LABEL, "ml-2 mr-1")}>Events</span>
+      {EVENT_STATUSES.map((s) => (
+        <StatusChip
+          key={s}
+          status={s}
+          selectedStatuses={selectedStatuses}
+          count={counts[s]}
+          buildUrl={buildUrl}
+        />
+      ))}
 
       {tenants.length > 0 && (
         <>
@@ -154,6 +164,32 @@ export function FilterChips({
         />
       </form>
     </div>
+  );
+}
+
+// A single toggle chip for one status. Toggling adds/removes the status
+// from the multi-select set and resets the cursor (page 1) so the new
+// filter starts at the newest matching row.
+function StatusChip({
+  status,
+  selectedStatuses,
+  count,
+  buildUrl,
+}: {
+  status: QueryStatus;
+  selectedStatuses: readonly QueryStatus[];
+  count: number;
+  buildUrl: FilterChipsProps["buildUrl"];
+}) {
+  const active = selectedStatuses.includes(status);
+  const next = active
+    ? selectedStatuses.filter((x) => x !== status)
+    : [...selectedStatuses, status];
+  return (
+    <Chip href={buildUrl({ status: next, cursor: null })} active={active}>
+      <b className="font-medium">{CHIP_LABELS[status]}</b>
+      <Count active={active}>{count}</Count>
+    </Chip>
   );
 }
 

@@ -16,6 +16,10 @@ const VARIANT_MAP: Record<
   POLICY_CHANGED: "accent",
   TENANT_SCOPE_CHANGED: "accent",
   REGION_CHANGED: "accent",
+  TOKEN_CREATED: "accent",
+  // Revoking a credential is a security event worth flagging (anomaly
+  // amber), but it isn't a query denial — keep it out of the `deny` family.
+  TOKEN_REVOKED: "warn",
 };
 
 const ARIA_MAP: Record<string, string> = {
@@ -27,6 +31,8 @@ const ARIA_MAP: Record<string, string> = {
   POLICY_CHANGED: "Policy changed by user",
   TENANT_SCOPE_CHANGED: "Tenant scope changed by user",
   REGION_CHANGED: "Region changed by staff",
+  TOKEN_CREATED: "API token created",
+  TOKEN_REVOKED: "API token revoked",
 };
 
 export function EventBadge({
