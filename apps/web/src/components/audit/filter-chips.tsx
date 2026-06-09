@@ -1,10 +1,12 @@
+import { X } from "lucide-react";
 import Link from "next/link";
 
+import { AuditSearch } from "@/components/audit/audit-search";
+import { FacetedFilter } from "@/components/audit/faceted-filter";
 import { cn } from "@/lib/utils";
 import {
   EVENT_STATUSES,
   QUERY_OUTCOME_STATUSES,
-  type AuditWindowKey,
   type QueryStatus,
   type TokenOption,
 } from "@/lib/audit";
@@ -15,6 +17,7 @@ interface BuildUrlOverrides {
   database?: string | null;
   agentName?: string | null;
   tokenId?: string | null;
+  search?: string | null;
   cursor?: string | null;
 }
 
@@ -30,18 +33,14 @@ interface FilterChipsProps {
   tokens: readonly TokenOption[];
   counts: Record<QueryStatus, number>;
   search: string;
-  /** Preserved across the search-form submit via hidden inputs. */
-  windowKey: AuditWindowKey;
-  timeFormat: "rel" | "abs";
   buildUrl: (overrides: BuildUrlOverrides) => string;
 }
 
 const CHIP_BASE =
-  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors";
+  "inline-flex items-center gap-1.5 rounded-[3px] border px-2.5 py-1 text-xs transition-colors";
 const CHIP_INACTIVE =
   "border-border bg-secondary text-muted-foreground hover:border-border-strong hover:text-foreground";
-const CHIP_ACTIVE =
-  "border-border-strong bg-popover text-foreground";
+const CHIP_ACTIVE = "border-border-strong bg-popover text-foreground";
 const CHIP_LABEL =
   "font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle";
 
@@ -59,6 +58,20 @@ const CHIP_LABELS: Record<QueryStatus, string> = {
   TOKEN_REVOKED: "Token revoked",
 };
 
+// Dot color per status — mirrors StatusBadge's VARIANT_MAP so the lens chips
+// and the in-table badges read as one vocabulary (allow green, deny red,
+// staleness/credential amber, operator events brand blue, pending neutral).
+const STATUS_DOT: Record<QueryStatus, string> = {
+  ALLOWED: "bg-[hsl(var(--allow))]",
+  DENIED: "bg-[hsl(var(--deny))]",
+  FAILED: "bg-[hsl(var(--deny))]",
+  STUCK: "bg-[hsl(var(--warn))]",
+  PENDING: "bg-[hsl(var(--muted-foreground))]",
+  POLICY_RELOAD: "bg-[hsl(var(--brand))]",
+  TOKEN_CREATED: "bg-[hsl(var(--brand))]",
+  TOKEN_REVOKED: "bg-[hsl(var(--warn))]",
+};
+
 export function FilterChips({
   selectedStatuses,
   selectedTenant,
@@ -71,184 +84,210 @@ export function FilterChips({
   tokens,
   counts,
   search,
-  windowKey,
-  timeFormat,
   buildUrl,
 }: FilterChipsProps) {
   const allStatusesActive = selectedStatuses.length === 0;
+  const selectedTokenLabel =
+    tokens.find((t) => t.id === selectedToken)?.label ?? selectedToken;
+
+  const activeCount =
+    selectedStatuses.length +
+    (selectedTenant ? 1 : 0) +
+    (selectedDatabase ? 1 : 0) +
+    (selectedAgent ? 1 : 0) +
+    (selectedToken ? 1 : 0) +
+    (search ? 1 : 0);
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-3">
-      <span className={cn(CHIP_LABEL, "mr-1")}>Status</span>
-      <Chip
-        href={buildUrl({ status: [], cursor: null })}
-        active={allStatusesActive}
-      >
-        <b className="font-medium">All</b>
-      </Chip>
-      {QUERY_OUTCOME_STATUSES.map((s) => (
-        <StatusChip
-          key={s}
-          status={s}
-          selectedStatuses={selectedStatuses}
-          count={counts[s]}
-          buildUrl={buildUrl}
-        />
-      ))}
-
-      <span className={cn(CHIP_LABEL, "ml-2 mr-1")}>Events</span>
-      {EVENT_STATUSES.map((s) => (
-        <StatusChip
-          key={s}
-          status={s}
-          selectedStatuses={selectedStatuses}
-          count={counts[s]}
-          buildUrl={buildUrl}
-        />
-      ))}
-
-      {tenants.length > 0 && (
-        <>
-          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Tenant</span>
-          <Chip
-            href={buildUrl({ tenantId: null, cursor: null })}
-            active={selectedTenant === null}
-          >
-            <b className="font-medium">All</b>
-            <Count active={selectedTenant === null}>{tenants.length}</Count>
-          </Chip>
-          {tenants.map((t) => (
-            <Chip
-              key={t}
-              href={buildUrl({
-                tenantId: selectedTenant === t ? null : t,
-                cursor: null,
-              })}
-              active={selectedTenant === t}
-            >
-              <b className="font-mono font-medium">{truncate(t, 18)}</b>
-            </Chip>
-          ))}
-        </>
-      )}
-
-      {databases.length > 0 && (
-        <>
-          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Database</span>
-          <Chip
-            href={buildUrl({ database: null, cursor: null })}
-            active={selectedDatabase === null}
-          >
-            <b className="font-medium">All</b>
-            <Count active={selectedDatabase === null}>{databases.length}</Count>
-          </Chip>
-          {databases.map((d) => (
-            <Chip
-              key={d}
-              href={buildUrl({
-                database: selectedDatabase === d ? null : d,
-                cursor: null,
-              })}
-              active={selectedDatabase === d}
-            >
-              <b className="font-mono font-medium">{truncate(d, 18)}</b>
-            </Chip>
-          ))}
-        </>
-      )}
-
-      {agents.length > 0 && (
-        <>
-          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Agent</span>
-          <Chip
-            href={buildUrl({ agentName: null, cursor: null })}
-            active={selectedAgent === null}
-          >
-            <b className="font-medium">All</b>
-            <Count active={selectedAgent === null}>{agents.length}</Count>
-          </Chip>
-          {agents.map((a) => (
-            <Chip
-              key={a}
-              href={buildUrl({
-                agentName: selectedAgent === a ? null : a,
-                cursor: null,
-              })}
-              active={selectedAgent === a}
-            >
-              <b className="font-mono font-medium">{truncate(a, 18)}</b>
-            </Chip>
-          ))}
-        </>
-      )}
-
-      {tokens.length > 0 && (
-        <>
-          <span className={cn(CHIP_LABEL, "ml-3 mr-1")}>Token</span>
-          <Chip
-            href={buildUrl({ tokenId: null, cursor: null })}
-            active={selectedToken === null}
-          >
-            <b className="font-medium">All</b>
-            <Count active={selectedToken === null}>{tokens.length}</Count>
-          </Chip>
-          {tokens.map((t) => (
-            <Chip
-              key={t.id}
-              href={buildUrl({
-                tokenId: selectedToken === t.id ? null : t.id,
-                cursor: null,
-              })}
-              active={selectedToken === t.id}
-            >
-              <b className="font-mono font-medium">{truncate(t.label, 22)}</b>
-            </Chip>
-          ))}
-        </>
-      )}
-
-      <form action="/audit" method="get" className="ml-auto">
-        {selectedStatuses.length > 0 && (
-          <input
-            type="hidden"
-            name="status"
-            value={selectedStatuses.join(",")}
-          />
-        )}
-        {selectedTenant && (
-          <input type="hidden" name="tenant_id" value={selectedTenant} />
-        )}
-        {selectedDatabase && (
-          <input type="hidden" name="database" value={selectedDatabase} />
-        )}
-        {selectedAgent && (
-          <input type="hidden" name="agent" value={selectedAgent} />
-        )}
-        {selectedToken && (
-          <input type="hidden" name="token" value={selectedToken} />
-        )}
-        <input type="hidden" name="window" value={windowKey} />
-        {timeFormat === "abs" && (
-          <input type="hidden" name="t" value="abs" />
-        )}
-        <input
-          name="q"
-          defaultValue={search}
-          placeholder="Search SQL, fingerprint or query_id…"
-          aria-label="Search audit rows"
-          className={cn(
-            "w-[280px] rounded-md border border-border bg-secondary px-2.5 py-1 text-xs text-foreground placeholder:text-muted-foreground",
-            "focus:border-[hsl(var(--brand))] focus:outline-none",
+    <div className="mb-3 space-y-2.5 border-b border-border pb-3">
+      {/* Row 1 — search + entity facets ("what / where"). Open-ended sets
+          (tenant, database, agent, token) live behind searchable dropdowns so
+          the bar stays one line no matter how many values exist. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <AuditSearch initialValue={search} className="w-full sm:w-[300px]" />
+        <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
+          {tenants.length > 0 && (
+            <FacetedFilter
+              label="tenant"
+              allHref={buildUrl({ tenantId: null, cursor: null })}
+              selectedValue={selectedTenant}
+              selectedLabel={selectedTenant}
+              options={tenants.map((t) => ({
+                value: t,
+                label: t,
+                href: buildUrl({
+                  tenantId: selectedTenant === t ? null : t,
+                  cursor: null,
+                }),
+              }))}
+            />
           )}
-        />
-      </form>
+          {databases.length > 0 && (
+            <FacetedFilter
+              label="database"
+              allHref={buildUrl({ database: null, cursor: null })}
+              selectedValue={selectedDatabase}
+              selectedLabel={selectedDatabase}
+              options={databases.map((d) => ({
+                value: d,
+                label: d,
+                href: buildUrl({
+                  database: selectedDatabase === d ? null : d,
+                  cursor: null,
+                }),
+              }))}
+            />
+          )}
+          {agents.length > 0 && (
+            <FacetedFilter
+              label="agent"
+              allHref={buildUrl({ agentName: null, cursor: null })}
+              selectedValue={selectedAgent}
+              selectedLabel={selectedAgent}
+              options={agents.map((a) => ({
+                value: a,
+                label: a,
+                href: buildUrl({
+                  agentName: selectedAgent === a ? null : a,
+                  cursor: null,
+                }),
+              }))}
+            />
+          )}
+          {tokens.length > 0 && (
+            <FacetedFilter
+              label="token"
+              allHref={buildUrl({ tokenId: null, cursor: null })}
+              selectedValue={selectedToken}
+              selectedLabel={selectedTokenLabel}
+              options={tokens.map((t) => ({
+                value: t.id,
+                label: t.label,
+                href: buildUrl({
+                  tokenId: selectedToken === t.id ? null : t.id,
+                  cursor: null,
+                }),
+              }))}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Row 2 — status lens. The primary outcome axis stays inline: small
+          fixed enum, semantic-colored, scannable. Zero-count states recede
+          but stay clickable. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={cn(CHIP_LABEL, "mr-0.5")}>status</span>
+        <Chip
+          href={buildUrl({ status: [], cursor: null })}
+          active={allStatusesActive}
+        >
+          <b className="font-medium">All</b>
+        </Chip>
+        {QUERY_OUTCOME_STATUSES.map((s) => (
+          <StatusChip
+            key={s}
+            status={s}
+            selectedStatuses={selectedStatuses}
+            count={counts[s]}
+            buildUrl={buildUrl}
+          />
+        ))}
+
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        <span className={cn(CHIP_LABEL, "mr-0.5")}>events</span>
+        {EVENT_STATUSES.map((s) => (
+          <StatusChip
+            key={s}
+            status={s}
+            selectedStatuses={selectedStatuses}
+            count={counts[s]}
+            buildUrl={buildUrl}
+          />
+        ))}
+      </div>
+
+      {/* Row 3 — active-filter summary. One place that shows everything
+          currently narrowing the list; each pill removes itself, and
+          "clear all" resets to the unfiltered view (window/time format kept). */}
+      {activeCount > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={cn(CHIP_LABEL, "mr-0.5")}>filters</span>
+          {selectedStatuses.map((s) => (
+            <RemovePill
+              key={s}
+              value={CHIP_LABELS[s]}
+              href={buildUrl({
+                status: selectedStatuses.filter((x) => x !== s),
+                cursor: null,
+              })}
+              ariaLabel={`Remove ${CHIP_LABELS[s]} filter`}
+            />
+          ))}
+          {selectedTenant && (
+            <RemovePill
+              prefix="tenant"
+              value={selectedTenant}
+              href={buildUrl({ tenantId: null, cursor: null })}
+              ariaLabel="Remove tenant filter"
+            />
+          )}
+          {selectedDatabase && (
+            <RemovePill
+              prefix="database"
+              value={selectedDatabase}
+              href={buildUrl({ database: null, cursor: null })}
+              ariaLabel="Remove database filter"
+            />
+          )}
+          {selectedAgent && (
+            <RemovePill
+              prefix="agent"
+              value={selectedAgent}
+              href={buildUrl({ agentName: null, cursor: null })}
+              ariaLabel="Remove agent filter"
+            />
+          )}
+          {selectedToken && (
+            <RemovePill
+              prefix="token"
+              value={selectedTokenLabel ?? selectedToken}
+              href={buildUrl({ tokenId: null, cursor: null })}
+              ariaLabel="Remove token filter"
+            />
+          )}
+          {search && (
+            <RemovePill
+              prefix="search"
+              value={`“${search}”`}
+              href={buildUrl({ search: null, cursor: null })}
+              ariaLabel="Remove search filter"
+            />
+          )}
+          <Link
+            href={buildUrl({
+              status: [],
+              tenantId: null,
+              database: null,
+              agentName: null,
+              tokenId: null,
+              search: null,
+              cursor: null,
+            })}
+            className="ml-0.5 font-mono text-[11px] lowercase tracking-[0.04em] text-subtle underline-offset-2 transition-colors hover:text-foreground hover:underline"
+          >
+            clear all
+          </Link>
+        </div>
+      )}
     </div>
   );
 }
 
 // A single toggle chip for one status. Toggling adds/removes the status
 // from the multi-select set and resets the cursor (page 1) so the new
-// filter starts at the newest matching row.
+// filter starts at the newest matching row. Zero-count, unselected chips
+// dim — they lead nowhere in this window — but stay clickable.
 function StatusChip({
   status,
   selectedStatuses,
@@ -264,8 +303,17 @@ function StatusChip({
   const next = active
     ? selectedStatuses.filter((x) => x !== status)
     : [...selectedStatuses, status];
+  const dim = count === 0 && !active;
   return (
-    <Chip href={buildUrl({ status: next, cursor: null })} active={active}>
+    <Chip
+      href={buildUrl({ status: next, cursor: null })}
+      active={active}
+      className={dim ? "opacity-45" : undefined}
+    >
+      <span
+        className={cn("h-1.5 w-1.5 rounded-full", STATUS_DOT[status])}
+        aria-hidden
+      />
       <b className="font-medium">{CHIP_LABELS[status]}</b>
       <Count active={active}>{count}</Count>
     </Chip>
@@ -275,16 +323,18 @@ function StatusChip({
 function Chip({
   href,
   active,
+  className,
   children,
 }: {
   href: string;
   active: boolean;
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
     <Link
       href={href}
-      className={cn(CHIP_BASE, active ? CHIP_ACTIVE : CHIP_INACTIVE)}
+      className={cn(CHIP_BASE, active ? CHIP_ACTIVE : CHIP_INACTIVE, className)}
     >
       {children}
     </Link>
@@ -310,7 +360,39 @@ function Count({
   );
 }
 
-function truncate(s: string, n: number): string {
-  if (s.length <= n) return s;
-  return s.slice(0, n - 1) + "…";
+// One removable chip in the active-filters summary. The whole pill is the
+// remove target (click anywhere to drop the filter), matching the convention
+// in Sentry / Linear filter bars.
+function RemovePill({
+  prefix,
+  value,
+  href,
+  ariaLabel,
+}: {
+  prefix?: string;
+  value: string;
+  href: string;
+  ariaLabel: string;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-label={ariaLabel}
+      title={prefix ? `${prefix}: ${value}` : value}
+      className="group inline-flex items-center gap-1.5 rounded-[3px] border border-border bg-secondary px-2 py-1 text-xs transition-colors hover:border-border-strong"
+    >
+      {prefix && (
+        <span className="font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
+          {prefix}
+        </span>
+      )}
+      <span className="max-w-[180px] truncate font-mono font-medium text-foreground">
+        {value}
+      </span>
+      <X
+        className="h-3 w-3 shrink-0 text-subtle transition-colors group-hover:text-foreground"
+        aria-hidden
+      />
+    </Link>
+  );
 }

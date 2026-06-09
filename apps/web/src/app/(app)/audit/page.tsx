@@ -220,8 +220,6 @@ export default async function AuditListPage({ searchParams }: PageProps) {
           tokens={tokens}
           counts={counts}
           search={search}
-          windowKey={windowKey}
-          timeFormat={timeFormat}
           buildUrl={buildUrl}
         />
 
@@ -528,6 +526,7 @@ function makeUrlBuilder(state: {
     database?: string | null;
     agentName?: string | null;
     tokenId?: string | null;
+    search?: string | null;
     window?: AuditWindowKey;
     timeFormat?: TimeFormat;
     cursor?: string | null;
@@ -539,6 +538,7 @@ function makeUrlBuilder(state: {
     const database = pick(overrides.database, state.selectedDatabase);
     const agent = pick(overrides.agentName, state.selectedAgent);
     const token = pick(overrides.tokenId, state.selectedToken);
+    const searchVal = pick(overrides.search, state.search);
     const windowKey = pick(overrides.window, state.windowKey);
     const timeFormat = pick(overrides.timeFormat, state.timeFormat);
     const cursor = pick(overrides.cursor, state.cursor);
@@ -548,7 +548,7 @@ function makeUrlBuilder(state: {
     if (database) usp.set("database", database);
     if (agent) usp.set("agent", agent);
     if (token) usp.set("token", token);
-    if (state.search) usp.set("q", state.search);
+    if (searchVal) usp.set("q", searchVal);
     // Window is a normal param; omit the 24h default to keep URLs clean.
     if (windowKey !== "24h") usp.set("window", windowKey);
     if (timeFormat === "abs") usp.set("t", "abs");
