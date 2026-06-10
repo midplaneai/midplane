@@ -12,6 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // recorded so a test can assert the checks are ORG-SCOPED (org:pro etc.).
 let hasPredicate: (param: { plan: string }) => boolean;
 let hasCalls: Array<{ plan?: string; feature?: string }>;
+// auth() also yields sessionClaims, which carries the founder/internal
+// override (the `planOverride` claim sourced from Clerk public metadata).
+// Staged per-test; undefined = no override claim present.
+let authSessionClaims: Record<string, unknown> | undefined;
 
 const hasMock = (param: { plan: string }): boolean => {
   hasCalls.push(param);
@@ -20,13 +24,14 @@ const hasMock = (param: { plan: string }): boolean => {
 
 vi.mock("@clerk/nextjs/server", () => ({
   get auth() {
-    return async () => ({ has: hasMock });
+    return async () => ({ has: hasMock, sessionClaims: authSessionClaims });
   },
 }));
 
 beforeEach(() => {
   hasPredicate = () => false; // default: no paid plan → Free
   hasCalls = [];
+  authSessionClaims = undefined;
 });
 
 afterEach(() => {
@@ -134,6 +139,77 @@ describe("resolvePlan", () => {
     const { resolvePlan } = await import("../src/lib/plan.ts");
     const { plan } = await resolvePlan();
     expect(plan).toBe("free");
+  });
+});
+
+describe("resolvePlan — founder/internal override (planOverride claim)", () => {
+  it("forces Team caps when the override claim is 'team', no subscription needed", async () => {
+    authSessionClaims = { planOverride: "team" }; // hasPredicate → free
+    const { resolvePlan, CAPS } = await import("../src/lib/plan.ts");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("team");
+    expect(caps).toEqual(CAPS.team);
+  });
+
+  it("can force a LOWER tier than the subscription (test the capped UI on Pro)", async () => {
+    hasPredicate = hasPlans("org:pro"); // actually on Pro
+    authSessionClaims = { planOverride: "free" };
+    const { resolvePlan, CAPS } = await import("../src/lib/plan.ts");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("free");
+    expect(caps).toEqual(CAPS.free);
+  });
+
+  it("ignores an unknown / malformed override value (falls through to the subscription)", async () => {
+    hasPredicate = hasPlans("org:pro");
+    authSessionClaims = { planOverride: "enterprise" };
+    const { resolvePlan } = await import("../src/lib/plan.ts");
+    const { plan } = await resolvePlan();
+    expect(plan).toBe("pro");
+  });
+
+  it("no override claim → resolves from the subscription as normal", async () => {
+    hasPredicate = hasPlans(); // free
+    authSessionClaims = undefined;
+    const { resolvePlan } = await import("../src/lib/plan.ts");
+    const { plan } = await resolvePlan();
+    expect(plan).toBe("free");
+  });
+});
+
+describe("connectionCreateBlock", () => {
+  it("returns null when both caps have room", async () => {
+    const { connectionCreateBlock, CAPS } = await import("../src/lib/plan.ts");
+    expect(
+      connectionCreateBlock({ connections: 3, tokens: 4 }, CAPS.pro),
+    ).toBeNull();
+  });
+
+  it("flags the connection cap first when it's reached", async () => {
+    const { connectionCreateBlock, CAPS } = await import("../src/lib/plan.ts");
+    expect(
+      connectionCreateBlock({ connections: 1, tokens: 1 }, CAPS.free),
+    ).toEqual({ resource: "connections", limit: 1 });
+  });
+
+  it("flags the token cap when connections have room but tokens don't", async () => {
+    // Pro: 10 connections / 10 tokens. Manually minting extra tokens can
+    // exhaust the token slot a new connection's default would need before
+    // the connection cap is hit.
+    const { connectionCreateBlock, CAPS } = await import("../src/lib/plan.ts");
+    expect(
+      connectionCreateBlock({ connections: 4, tokens: 10 }, CAPS.pro),
+    ).toEqual({ resource: "tokens", limit: 10 });
+  });
+
+  it("never blocks on unlimited (Infinity) caps", async () => {
+    const { connectionCreateBlock, CAPS } = await import("../src/lib/plan.ts");
+    expect(
+      connectionCreateBlock(
+        { connections: 999_999, tokens: 999_999 },
+        CAPS.team,
+      ),
+    ).toBeNull();
   });
 });
 

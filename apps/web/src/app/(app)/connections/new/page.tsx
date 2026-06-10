@@ -9,12 +9,25 @@ import {
   NewConnectionForm,
   type NewConnectionFormState,
 } from "@/components/connections/new-connection-form";
+import Link from "next/link";
+
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
-import { createConnection, isValidDsn } from "@/lib/connections";
-import { PlanLimitError, resolvePlan, UPGRADE_URL } from "@/lib/plan";
+import {
+  createConnection,
+  getPlanUsage,
+  isValidDsn,
+} from "@/lib/connections";
+import {
+  connectionCreateBlock,
+  PlanLimitError,
+  resolvePlan,
+  UPGRADE_URL,
+} from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
@@ -31,6 +44,14 @@ const SHOW_ONCE_TTL_SECONDS = 5 * 60;
 export default async function NewConnection() {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
+
+  // Pre-flight the plan cap so a capped user sees the upgrade path BEFORE
+  // pasting a DSN — not after submitting a form that's doomed to fail. This
+  // is advisory; createAction still runs the authoritative locked check (it
+  // catches the concurrent-tab race this unlocked read can't). Mirrors the
+  // resource the action would throw on, so the messaging is consistent.
+  const { caps, plan } = await resolvePlan();
+  const block = connectionCreateBlock(await getPlanUsage(customer), caps);
 
   return (
     <>
@@ -57,7 +78,51 @@ export default async function NewConnection() {
               </>
             }
           />
-          <NewConnectionForm action={createAction} />
+          {block ? (
+            <EmptyState
+              title={
+                block.resource === "connections"
+                  ? "You've reached your plan's connection limit"
+                  : "You've reached your plan's token limit"
+              }
+              description={
+                block.resource === "connections" ? (
+                  <>
+                    The {plan} plan includes{" "}
+                    <strong className="font-medium text-foreground">
+                      {block.limit}{" "}
+                      {block.limit === 1 ? "connection" : "connections"}
+                    </strong>
+                    . Upgrade to add more, or delete one you no longer use.
+                  </>
+                ) : (
+                  <>
+                    The {plan} plan includes{" "}
+                    <strong className="font-medium text-foreground">
+                      {block.limit}{" "}
+                      {block.limit === 1 ? "agent token" : "agent tokens"}
+                    </strong>
+                    , and a new connection mints another. Upgrade, or revoke a
+                    token you no longer use.
+                  </>
+                )
+              }
+              action={
+                <div className="flex items-center gap-3">
+                  <Link href={UPGRADE_URL}>
+                    <Button size="sm">Upgrade your plan</Button>
+                  </Link>
+                  <Link href="/dashboard">
+                    <Button size="sm" variant="outline">
+                      Back to connections
+                    </Button>
+                  </Link>
+                </div>
+              }
+            />
+          ) : (
+            <NewConnectionForm action={createAction} />
+          )}
         </div>
       </PageContainer>
     </>

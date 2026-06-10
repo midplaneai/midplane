@@ -14,12 +14,16 @@ import { TokenList } from "@/components/tokens/token-list";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { PageHeader } from "@/components/ui/page-header";
 import { RegionBadge } from "@/components/ui/region-badge";
-import { getConnectionHomeData, type DashboardDatabase } from "@/lib/connections";
+import {
+  getConnectionHomeData,
+  getPlanUsage,
+  type DashboardDatabase,
+} from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
 import { formatRelative } from "@/lib/format";
 import { computeFreshness } from "@/lib/freshness";
-import { resolvePlan } from "@/lib/plan";
+import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { accessLabel } from "@/lib/policy-labels";
 import { listTokens } from "@/lib/tokens";
 
@@ -47,7 +51,10 @@ export default async function ConnectionHome({
   if (!customer) redirect("/signup/region");
 
   const { id } = await params;
-  const { caps } = await resolvePlan();
+  // One resolvePlan() read serves both consumers: auditRetentionDays
+  // clamps the home's last-query facts, caps.tokens drives the
+  // token-cap pre-flight below.
+  const { plan, caps } = await resolvePlan();
   const home = await getConnectionHomeData(customer, id, caps.auditRetentionDays);
   if (!home) notFound();
   const { connection: conn, databases, cursor } = home;
@@ -57,6 +64,17 @@ export default async function ConnectionHome({
   // deletes the connection between calls.
   const tokens = await listTokens(customer, id);
   if (tokens === null) notFound();
+
+  // Pre-flight the token cap so "Connect an agent" reflects the limit BEFORE
+  // the modal opens — same advisory-UX-over-authoritative-check split as the
+  // connection create flow (createToken still enforces under a row lock). The
+  // token cap is org-wide (all connections), so we read total usable tokens,
+  // not this connection's count.
+  const usage = await getPlanUsage(customer);
+  const tokenLimit =
+    Number.isFinite(caps.tokens) && usage.tokens >= caps.tokens
+      ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
+      : undefined;
 
   const connectionLabel = conn.name ?? conn.id.slice(0, 12);
   const freshness = computeFreshness(cursor);
@@ -159,6 +177,7 @@ export default async function ConnectionHome({
               tokens={tokens}
               createAction={createTokenAction}
               revokeAction={revokeTokenAction}
+              tokenLimit={tokenLimit}
             />
           </div>
         </div>
