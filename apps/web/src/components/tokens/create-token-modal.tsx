@@ -13,13 +13,17 @@ import { useUnlockCountdown } from "@/hooks/use-unlock-countdown";
 import { cn } from "@/lib/utils";
 
 // Create-token modal. Triggered by the [+ New token] button in the
-// Tokens list panel header. Two surfaces inside the same modal:
+// Tokens list panel header. Three surfaces inside the same modal:
 //   1. The form (name + expiry).
 //   2. After a successful submit, the show-once URL surface — the
 //      plaintext is in React state, never round-tripped through a
 //      cookie/session (unlike the connection-create flow which has to
 //      cross a redirect boundary). The "I've saved it" button discards
 //      the plaintext from state and closes the modal.
+//   3. The limit panel (when `limitReached` is set) — shown in place of
+//      the form so a capped user sees the limit + upgrade/revoke paths on
+//      open instead of after submitting. The trigger keeps its normal
+//      label; we explain on open rather than swapping in a billing button.
 //
 // On a successful create the action calls revalidatePath() for the
 // connection page so the new row appears in the list when the modal
@@ -52,6 +56,15 @@ interface CreateTokenModalProps {
   region?: string | null;
   /** Override the trigger button label (e.g. "Connect your first agent"). */
   triggerLabel?: string;
+  /** When the org is already at its token cap, the modal opens to a limit
+   *  panel (Upgrade + "revoke one to free a slot") instead of the form — so
+   *  the user sees the limit before filling it in, not after submitting. The
+   *  trigger keeps its normal "Connect an agent" label (we honor the intent
+   *  and explain on open, rather than swapping in a billing button). The cap
+   *  is org-wide, so `limit` reads "across all your connections". createToken
+   *  still enforces under a lock, and the in-form plan_limit branch below
+   *  stays as the backstop for a race (another tab/device minting). */
+  limitReached?: { limit: number; plan: string; upgradeUrl: string };
 }
 
 const EXPIRY_OPTIONS = [
@@ -69,6 +82,7 @@ export function CreateTokenModal({
   connectionName,
   region,
   triggerLabel = "Connect an agent",
+  limitReached,
 }: CreateTokenModalProps) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -196,7 +210,14 @@ export function CreateTokenModal({
           >
             <X className="h-4 w-4" strokeWidth={1.5} />
           </DialogPrimitive.Close>
-          {mcpUrl ? (
+          {limitReached ? (
+            <LimitPanel
+              limit={limitReached.limit}
+              plan={limitReached.plan}
+              upgradeUrl={limitReached.upgradeUrl}
+              onClose={() => handleOpenChange(false)}
+            />
+          ) : mcpUrl ? (
             <SuccessPanel
               mcpUrl={mcpUrl}
               connectionName={connectionName}
@@ -339,6 +360,46 @@ function SuccessPanel({
         >
           {locked ? `I've saved it (${remaining})` : "I've saved it"}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+// Shown in place of the form when the org is already at its token cap.
+// Names the cap, then offers BOTH ways forward — upgrade, or revoke an agent
+// from the list behind the modal to free a slot — so the paid path isn't the
+// only visible exit. Mirrors the /connections/new at-limit surface.
+function LimitPanel({
+  limit,
+  plan,
+  upgradeUrl,
+  onClose,
+}: {
+  limit: number;
+  plan: string;
+  upgradeUrl: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <div className="space-y-1">
+        <DialogPrimitive.Title className="text-base font-medium text-foreground">
+          You&apos;ve reached your plan&apos;s agent limit
+        </DialogPrimitive.Title>
+        <DialogPrimitive.Description className="text-xs text-muted-foreground">
+          The {plan} plan includes {limit} agent{" "}
+          {limit === 1 ? "token" : "tokens"} across all your connections.
+          Upgrade for more, or revoke an agent you no longer use to free a
+          slot.
+        </DialogPrimitive.Description>
+      </div>
+      <div className="flex items-center justify-end gap-2 pt-2">
+        <Button type="button" variant="outline" size="sm" onClick={onClose}>
+          Close
+        </Button>
+        <a href={upgradeUrl}>
+          <Button size="sm">Upgrade your plan</Button>
+        </a>
       </div>
     </div>
   );

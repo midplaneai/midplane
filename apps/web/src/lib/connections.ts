@@ -290,6 +290,28 @@ export function isValidDsn(s: unknown): s is string {
   return typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8;
 }
 
+/** Read-only plan usage for pre-flight UX gating (current connection +
+ *  usable-token counts for the customer's region). NOT authoritative: the
+ *  locked count inside createConnection is the real cap enforcer and closes
+ *  the concurrent-create race. This unlocked read can be a hair stale, which
+ *  is fine — the UI uses it to show "N of M" usage and hide the create form
+ *  when a cap is already reached; the transaction still has the final say.
+ *
+ *  Pairs with {@link connectionCreateBlock} in lib/plan.ts. */
+export async function getPlanUsage(
+  customer: Customer,
+): Promise<{ connections: number; tokens: number }> {
+  const db = getDb(customer.region);
+  const [connRows, tokens] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(connections)
+      .where(eq(connections.customerId, customer.id)),
+    countUsableTokens(db, customer.id),
+  ]);
+  return { connections: Number(connRows[0]?.count ?? 0), tokens };
+}
+
 // Update the user-supplied name on the parent connection. Cosmetic — no
 // caches to invalidate, no container to restart, no token rotation.
 // Returns null when the id is unknown OR owned by another customer

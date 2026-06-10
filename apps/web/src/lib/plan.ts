@@ -79,6 +79,49 @@ export interface ResolvedPlan {
   caps: PlanCaps;
 }
 
+// Founder / internal plan override, read from the active org's (or user's)
+// Clerk PUBLIC METADATA surfaced into the session token as a `planOverride`
+// claim. Editable straight from the Clerk dashboard — no env var, no org-id
+// list to keep in sync, no customers.plan column (decision D2 stays intact),
+// and no network round-trip (it rides the JWT exactly like has()).
+//
+// One-time setup — Clerk dashboard → Sessions → Customize session token:
+//   { "planOverride": "{{org.public_metadata.plan_override}}" }
+// (swap `org` for `user` to flag a person regardless of the active org).
+// Then set that org's / user's public metadata to { "plan_override": "team" }.
+//
+// A valid slug here OVERRIDES the subscription, in either direction: set
+// "team" to test without limits, or "free"/"pro" to exercise the capped UI
+// on an account that actually pays for more. Anything else is ignored.
+function planFromOverrideClaim(value: unknown): Plan | null {
+  return value === "free" || value === "pro" || value === "team"
+    ? value
+    : null;
+}
+
+/** Which plan cap (if any) blocks creating ONE more connection right now.
+ *
+ *  Pure + read-only: mirrors the order of checks inside createConnection
+ *  (connection cap first, then the token slot the auto-minted default
+ *  consumes) so a pre-flight gate renders the SAME resource the authoritative
+ *  transaction would throw on. Returns null when a create would succeed.
+ *
+ *  This is advisory UX only — the locked count in createConnection is the
+ *  real enforcer and is what closes the concurrent-create race. Callers use
+ *  this to hide the create form / show usage, never to skip that check. */
+export function connectionCreateBlock(
+  usage: { connections: number; tokens: number },
+  caps: PlanCaps,
+): { resource: "connections" | "tokens"; limit: number } | null {
+  if (usage.connections >= caps.connections) {
+    return { resource: "connections", limit: caps.connections };
+  }
+  if (usage.tokens >= caps.tokens) {
+    return { resource: "tokens", limit: caps.tokens };
+  }
+  return null;
+}
+
 /** Where a capped user goes to upgrade. Relative so it resolves on whichever
  *  regional host served the request. */
 export const UPGRADE_URL = "/billing";
@@ -119,7 +162,17 @@ export async function resolvePlan(): Promise<ResolvedPlan> {
   // tests without pulling @clerk/nextjs/server into those paths. Mirrors
   // the dynamic-import pattern in clerk-users.ts / customer.ts.
   const { auth } = await import("@clerk/nextjs/server");
-  const { has } = await auth();
+  const { has, sessionClaims } = await auth();
+  // Founder / internal override first — a planOverride claim (sourced from
+  // Clerk public metadata) wins over the subscription, so it applies even
+  // when no paid plan is attached and can also force a LOWER tier for
+  // testing the capped UI.
+  const override = planFromOverrideClaim(
+    (sessionClaims as { planOverride?: unknown } | null)?.planOverride,
+  );
+  if (override) {
+    return { plan: override, caps: CAPS[override] };
+  }
   if (TEAM_SLUGS.some((slug) => has({ plan: slug }))) {
     return { plan: "team", caps: CAPS.team };
   }
