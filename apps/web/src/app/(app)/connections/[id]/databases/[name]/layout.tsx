@@ -5,6 +5,7 @@ import { Topbar } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { listDatabasesForConnection } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { computeDbTabs } from "@/lib/db-tabs";
 import { cn } from "@/lib/utils";
 
 // Connection-context strip for every per-DB page. Mounted ONCE as a
@@ -25,8 +26,6 @@ import { cn } from "@/lib/utils";
 // the strip doesn't quietly bet on low db counts. The current db is
 // always visible even when it sorts past the cutoff.
 
-const MAX_VISIBLE_DB_TABS = 4;
-
 export default async function DatabaseContextLayout({
   params,
   children,
@@ -45,14 +44,12 @@ export default async function DatabaseContextLayout({
 
   const connectionLabel = conn.name ?? conn.id.slice(0, 12);
 
-  // Always keep the current db visible: take the first N; if the
-  // current db sorts past the cutoff, swap it in for the last slot.
-  const names = databases.map((d) => d.name);
-  let visible = names.slice(0, MAX_VISIBLE_DB_TABS);
-  if (names.includes(current) && !visible.includes(current)) {
-    visible = [...visible.slice(0, MAX_VISIBLE_DB_TABS - 1), current];
-  }
-  const overflow = names.filter((n) => !visible.includes(n));
+  // Tab computation lives in lib/db-tabs.ts (pure, tested): first N
+  // tabs, current db always visible even past the cutoff.
+  const { visible, overflow } = computeDbTabs(
+    databases.map((d) => d.name),
+    current,
+  );
 
   return (
     <>

@@ -199,7 +199,7 @@ describe("POST /api/connections/[id]/dry-run", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ verdicts: [], truncated: false });
 
-    const [spawn, request] = dryRunMock.mock.calls[0] as [
+    const [spawn, request] = dryRunMock.mock.calls[0] as unknown as [
       {
         connectionId: string;
         region: string;

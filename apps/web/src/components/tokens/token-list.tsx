@@ -76,7 +76,8 @@ export async function TokenList({
   if (sorted.length === 0) {
     return (
       <section
-        className="space-y-5 rounded-lg border border-border bg-card p-6"
+        id="tokens"
+        className="scroll-mt-16 space-y-5 rounded-lg border border-border bg-card p-6"
         data-testid="token-list"
         data-state="empty"
       >
@@ -108,7 +109,8 @@ export async function TokenList({
 
   return (
     <section
-      className="space-y-3 rounded-lg border border-border bg-card p-6"
+      id="tokens"
+      className="scroll-mt-16 space-y-3 rounded-lg border border-border bg-card p-6"
       data-testid="token-list"
       data-state="populated"
     >

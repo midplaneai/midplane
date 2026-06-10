@@ -110,7 +110,8 @@ describe("addDatabaseFromForm", () => {
       customer,
       form({ ...VALID, default_access: "superuser" }),
     );
-    expect(addDatabaseMock.mock.calls[0]![4]).toBe("read");
+    const call = addDatabaseMock.mock.calls[0] as unknown as unknown[];
+    expect(call[4]).toBe("read");
   });
 
   it("maps DatabaseNameTaken to the inline-renderable message", async () => {
