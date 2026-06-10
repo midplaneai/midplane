@@ -20,6 +20,10 @@ const VARIANT_MAP: Record<
   // Revoking a credential is a security event worth flagging (anomaly
   // amber), but it isn't a query denial — keep it out of the `deny` family.
   TOKEN_REVOKED: "warn",
+  // Pausing is the same shape as a revoke — an operational kill switch, not a
+  // query denial. Amber. Resuming just restores service: neutral accent.
+  CONNECTION_PAUSED: "warn",
+  CONNECTION_RESUMED: "accent",
 };
 
 const ARIA_MAP: Record<string, string> = {
@@ -33,6 +37,8 @@ const ARIA_MAP: Record<string, string> = {
   REGION_CHANGED: "Region changed by staff",
   TOKEN_CREATED: "API token created",
   TOKEN_REVOKED: "API token revoked",
+  CONNECTION_PAUSED: "Connection paused by owner",
+  CONNECTION_RESUMED: "Connection resumed by owner",
 };
 
 export function EventBadge({

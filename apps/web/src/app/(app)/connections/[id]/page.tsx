@@ -20,18 +20,22 @@ import { TestReachabilityButton } from "@/components/connections/test-reachabili
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
 import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
+import { PauseConnectionButton } from "@/components/connections/pause-connection-button";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/connections/rename-database-control";
 import { RotateCredentialSheet } from "@/components/connections/rotate-credential-sheet";
 import { TenantScopeEditor } from "@/components/tenant-scope-editor";
 import { TokenList } from "@/components/tokens/token-list";
+import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   DatabaseNameTaken,
   deleteConnection,
+  emitConfigAuditRow,
   getConnectionHomeData,
   getConnectionWithDatabase,
   getConnectionWithDatabaseAndCredential,
@@ -39,9 +43,11 @@ import {
   isValidDatabaseName,
   isValidDsn,
   LastDatabaseProtected,
+  pauseConnection,
   removeDatabase,
   renameConnection,
   renameDatabase,
+  resumeConnection,
   rotateConnection,
   setTableAccess,
   setTenantScope,
@@ -112,6 +118,11 @@ export default async function ConnectionWorkspace({
 
   const label = connectionLabel(conn);
   const freshness = computeFreshness(cursor);
+  // Pause is a connection-level override of the freshness dot: a paused
+  // connection reads amber/"Paused" regardless of indexer state, and the
+  // rail header (visible from every pane) exposes one-click Resume.
+  const paused = conn.pausedAt != null;
+  const railFreshness = paused ? "paused" : freshness;
   const dbNames = databases.map((d) => d.name);
 
   // Which database the per-DB panes target. Trust ?db only if it names a db
@@ -179,6 +190,100 @@ export default async function ConnectionWorkspace({
       }
     }
     redirect("/dashboard");
+  }
+
+  async function pauseAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await auth();
+    const formId = formData.get("id");
+    if (typeof formId !== "string" || formId.length === 0) {
+      throw new Error("missing id");
+    }
+    const result = await pauseConnection(customer, formId);
+    if (!result) notFound();
+    // Drop the running session so no agent request reaches the engine after
+    // the switch flips — same teardown delete/rotate use. Best-effort: the
+    // pause is already durable in Postgres and the resolver rejects every
+    // request regardless; a failed teardown only lets the sidecar linger
+    // until its idle timer.
+    const ctx = getMcpProxyContext();
+    await ctx.registry.invalidate(result.id).catch((err) => {
+      console.error(
+        "[connections/[id].pauseAction] registry.invalidate failed",
+        err,
+      );
+    });
+    if (userId) {
+      try {
+        await emitConfigAuditRow(customer, {
+          tenantId: result.id,
+          database: "main",
+          eventType: "CONNECTION_PAUSED",
+          payload: { connection_id: result.id, action: "paused" },
+          actorClerkUserId: userId,
+        });
+      } catch (err) {
+        console.error(
+          "[pauseAction] CONNECTION_PAUSED audit write failed",
+          err,
+        );
+      }
+      getPostHog()?.capture({
+        distinctId: userId,
+        event: "connection_paused",
+        properties: {
+          connection_id: result.id,
+          region: customer.region,
+          source: "connection_workspace",
+        },
+      });
+    }
+    revalidatePath("/dashboard");
+    revalidatePath(`/connections/${result.id}`);
+  }
+
+  async function resumeAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await auth();
+    const formId = formData.get("id");
+    if (typeof formId !== "string" || formId.length === 0) {
+      throw new Error("missing id");
+    }
+    const result = await resumeConnection(customer, formId);
+    if (!result) notFound();
+    // No teardown — the next agent request spawns a fresh engine with the
+    // current policy. Clearing paused_at is all resume needs.
+    if (userId) {
+      try {
+        await emitConfigAuditRow(customer, {
+          tenantId: result.id,
+          database: "main",
+          eventType: "CONNECTION_RESUMED",
+          payload: { connection_id: result.id, action: "resumed" },
+          actorClerkUserId: userId,
+        });
+      } catch (err) {
+        console.error(
+          "[resumeAction] CONNECTION_RESUMED audit write failed",
+          err,
+        );
+      }
+      getPostHog()?.capture({
+        distinctId: userId,
+        event: "connection_resumed",
+        properties: {
+          connection_id: result.id,
+          region: customer.region,
+          source: "connection_workspace",
+        },
+      });
+    }
+    revalidatePath("/dashboard");
+    revalidatePath(`/connections/${result.id}`);
   }
 
   async function addDatabaseAction(formData: FormData) {
@@ -535,6 +640,51 @@ export default async function ConnectionWorkspace({
         </div>
       </section>
 
+      {/* Service — the reversible kill switch. Sits above the danger zone
+          because it's recoverable: pausing rejects agent requests but keeps
+          tokens, URLs, and policy intact; resume restores service. */}
+      <section
+        className={`${CARD} space-y-3 ${paused ? "border-[hsl(var(--warn)/0.4)]" : ""}`}
+      >
+        <div className="flex items-center gap-2">
+          <h2 className="text-base font-medium text-foreground">Service</h2>
+          {paused ? (
+            <Badge variant="warn" withDot>
+              Paused
+            </Badge>
+          ) : null}
+        </div>
+        {paused ? (
+          <>
+            <p className="text-xs text-muted-foreground">
+              Agent requests are being{" "}
+              <strong className="font-medium text-foreground">rejected</strong>.
+              Tokens, URLs, and policy are untouched — resume to restore service
+              with the same URLs.
+            </p>
+            <form action={resumeAction}>
+              <input type="hidden" name="id" value={conn.id} />
+              <Button type="submit" variant="outline" size="sm">
+                Resume connection
+              </Button>
+            </form>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              Reject every agent request without deleting anything — a
+              reversible kill switch.{" "}
+              <strong className="font-medium text-foreground">
+                Tokens, URLs, and policy stay intact
+              </strong>{" "}
+              and resume restores service instantly. The running session is
+              dropped immediately.
+            </p>
+            <PauseConnectionButton id={conn.id} action={pauseAction} />
+          </>
+        )}
+      </section>
+
       <section className={`${CARD} space-y-3 border-[hsl(var(--deny)/0.4)]`}>
         <h2 className="text-base font-medium text-foreground">
           Delete connection
@@ -557,14 +707,26 @@ export default async function ConnectionWorkspace({
         {label}
       </div>
       <div className="mt-1.5 flex items-center gap-1.5">
-        <FreshnessDot state={freshness} />
+        <FreshnessDot state={railFreshness} />
         <span className="text-xs capitalize text-muted-foreground">
-          {FRESHNESS_LABELS[freshness]}
+          {FRESHNESS_LABELS[railFreshness]}
         </span>
       </div>
-      <p className="mt-2 text-[11px] leading-snug text-subtle">
-        Hosted MCP server
-      </p>
+      {paused ? (
+        // Resume lives in the rail header so it's one click from any pane,
+        // not buried in Settings — the kill switch should be as easy to undo
+        // as it was to flip.
+        <form action={resumeAction} className="mt-2">
+          <input type="hidden" name="id" value={conn.id} />
+          <Button type="submit" variant="outline" size="sm" className="w-full">
+            Resume
+          </Button>
+        </form>
+      ) : (
+        <p className="mt-2 text-[11px] leading-snug text-subtle">
+          Hosted MCP server
+        </p>
+      )}
     </div>
   );
 

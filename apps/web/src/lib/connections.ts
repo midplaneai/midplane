@@ -87,7 +87,12 @@ export async function emitConfigAuditRow(
   row: {
     tenantId: string;
     database: string;
-    eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED" | "REGION_CHANGED";
+    eventType:
+      | "POLICY_CHANGED"
+      | "TENANT_SCOPE_CHANGED"
+      | "REGION_CHANGED"
+      | "CONNECTION_PAUSED"
+      | "CONNECTION_RESUMED";
     payload: Record<string, unknown>;
     actorClerkUserId: string;
   },
@@ -375,6 +380,49 @@ export async function deleteConnection(
       .where(eq(indexerCursors.connectionId, row.id));
     return { id: row.id };
   });
+}
+
+// Pause a connection — the reversible kill switch. Sets `paused_at` so the
+// resolver rejects agent requests with a distinct 403 while tokens, URLs,
+// and policy stay intact. Customer-gated (the WHERE pins customer_id so a
+// foreign id is a no-op) and idempotent: COALESCE keeps the original
+// pause instant if the connection is already paused, so a re-pause doesn't
+// move "paused since" — it returns the owned row either way, and null only
+// when the id isn't this customer's.
+//
+// Tearing down the running container (registry.invalidate) is the caller's
+// job — same split as deleteConnection, which returns the id and lets the
+// route/action stop the sidecar. Without that step the OSS container lingers
+// (still serving the now-paused connection) until its 30-minute idle timer.
+export async function pauseConnection(
+  customer: Customer,
+  id: string,
+): Promise<{ id: string } | null> {
+  const db = getDb(customer.region);
+  const updated = await db
+    .update(connections)
+    .set({ pausedAt: sql`COALESCE(${connections.pausedAt}, now())` })
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .returning({ id: connections.id });
+  return updated[0] ?? null;
+}
+
+// Resume a paused connection — clears `paused_at` so the resolver admits
+// agent requests again on the next call. No container teardown needed: the
+// next request spawns a fresh engine with the current policy. Customer-gated
+// and idempotent (clearing an already-active connection is a no-op that
+// still returns the owned row; null only for a foreign/unknown id).
+export async function resumeConnection(
+  customer: Customer,
+  id: string,
+): Promise<{ id: string } | null> {
+  const db = getDb(customer.region);
+  const updated = await db
+    .update(connections)
+    .set({ pausedAt: null })
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .returning({ id: connections.id });
+  return updated[0] ?? null;
 }
 
 // Dependencies rotateConnection needs to invalidate the in-memory layers.

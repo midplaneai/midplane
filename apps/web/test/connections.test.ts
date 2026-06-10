@@ -44,6 +44,10 @@ interface FakeDbHandle {
   /** Result of a connections DELETE…RETURNING (deleteConnection — returns
    *  just {id} since PR2; registry keys on connection id, not token). */
   setConnectionsReturning(rows: Array<{ id: string }>): void;
+  /** Result of a connections UPDATE…RETURNING that sets `pausedAt`
+   *  (pauseConnection / resumeConnection). Non-empty = the WHERE matched an
+   *  owned row; empty = foreign/unknown id → the lib returns null. */
+  setConnectionUpdateResult(rows: Array<{ id: string }>): void;
   /** Push the result for the NEXT select() call. Drains in FIFO order;
    *  once empty, selects fall back to setParentSelectResult. Lets
    *  multi-select helpers (addDatabase: parent + sibling-collision;
@@ -73,6 +77,7 @@ function makeFakeDb(): FakeDbHandle {
   let childUpdate: Array<{ id: string }> = [];
   let childDelete: Array<{ id: string }> = [];
   let childDeleteSet = false;
+  let connectionUpdate: Array<{ id: string }> = [];
   let deletedConnections: Array<{ id: string }> = [];
   const selectQueue: Array<unknown[]> = [];
   const calls: DbCall[] = [];
@@ -133,6 +138,10 @@ function makeFakeDb(): FakeDbHandle {
           if (set && "name" in set && childUpdate.length > 0) {
             // renameDatabase update: set {name}, returning {id}.
             return Promise.resolve(childUpdate);
+          }
+          if (set && "pausedAt" in set) {
+            // pauseConnection / resumeConnection update on connections.
+            return Promise.resolve(connectionUpdate);
           }
           return Promise.resolve([]);
         },
@@ -280,6 +289,9 @@ function makeFakeDb(): FakeDbHandle {
       deletedConnections = rows;
       parentSelect = rows.map((r) => ({ ...r, region: "eu" }));
     },
+    setConnectionUpdateResult(rows) {
+      connectionUpdate = rows;
+    },
   };
 }
 
@@ -370,6 +382,70 @@ describe("deleteConnection", () => {
       (c) => c.table === indexerCursors,
     );
     expect(cursorDelete, "indexer_cursors delete must fire").toBeDefined();
+  });
+});
+
+describe("pauseConnection", () => {
+  it("returns the row and issues a COALESCE update on connections when owned", async () => {
+    handle.setConnectionUpdateResult([{ id: "conn-1" }]);
+    const { connections } = await import("@midplane-cloud/db");
+    const { pauseConnection } = await import("../src/lib/connections.ts");
+    const result = await pauseConnection(customer, "conn-1");
+    expect(result).toMatchObject({ id: "conn-1" });
+    const upd = handle.calls.find(
+      (c) => c.op === "update" && c.table === connections,
+    );
+    expect(upd, "an UPDATE on connections must fire").toBeDefined();
+    const set = upd!.set as Record<string, unknown>;
+    // COALESCE(paused_at, now()) — a SQL expression, not a bare Date — so a
+    // re-pause is a no-op on "paused since". The ownership WHERE (customer_id)
+    // and true concurrency are integration-verified against a real Postgres.
+    expect(set.pausedAt).toBeDefined();
+    expect(set.pausedAt instanceof Date).toBe(false);
+  });
+
+  it("returns null for a foreign/unknown id (ownership-scoped)", async () => {
+    // WHERE pins customer_id, so a foreign id matches no row → empty returning.
+    handle.setConnectionUpdateResult([]);
+    const { pauseConnection } = await import("../src/lib/connections.ts");
+    const result = await pauseConnection(customer, "not-mine");
+    expect(result).toBeNull();
+  });
+
+  it("is idempotent — a second pause still returns the owned row", async () => {
+    handle.setConnectionUpdateResult([{ id: "conn-1" }]);
+    const { pauseConnection } = await import("../src/lib/connections.ts");
+    expect(await pauseConnection(customer, "conn-1")).toMatchObject({
+      id: "conn-1",
+    });
+    // No isNull(paused_at) guard in the WHERE, so re-pausing an already-paused
+    // connection returns the row rather than a misleading null.
+    expect(await pauseConnection(customer, "conn-1")).toMatchObject({
+      id: "conn-1",
+    });
+  });
+});
+
+describe("resumeConnection", () => {
+  it("clears paused_at and returns the row when owned", async () => {
+    handle.setConnectionUpdateResult([{ id: "conn-1" }]);
+    const { connections } = await import("@midplane-cloud/db");
+    const { resumeConnection } = await import("../src/lib/connections.ts");
+    const result = await resumeConnection(customer, "conn-1");
+    expect(result).toMatchObject({ id: "conn-1" });
+    const upd = handle.calls.find(
+      (c) => c.op === "update" && c.table === connections,
+    );
+    expect(upd, "an UPDATE on connections must fire").toBeDefined();
+    const set = upd!.set as Record<string, unknown>;
+    expect(set.pausedAt).toBeNull();
+  });
+
+  it("returns null for a foreign/unknown id (ownership-scoped)", async () => {
+    handle.setConnectionUpdateResult([]);
+    const { resumeConnection } = await import("../src/lib/connections.ts");
+    const result = await resumeConnection(customer, "not-mine");
+    expect(result).toBeNull();
   });
 });
 

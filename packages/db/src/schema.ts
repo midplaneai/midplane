@@ -98,6 +98,11 @@ export const connections = pgTable(
     // them apart in the dashboard. Nullable for rows created before this
     // column existed; the UI falls back to the connection id when null.
     name: text("name"),
+    // Reversible kill switch. Non-null = paused: the resolver rejects agent
+    // requests with a distinct 403 (next to the mcp_tokens.status='active'
+    // gate) while tokens, URLs, and policy stay intact. Clearing it restores
+    // service on the next request. Cloud-only — the OSS engine is untouched.
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

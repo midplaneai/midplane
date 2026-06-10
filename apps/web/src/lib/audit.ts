@@ -526,7 +526,7 @@ export async function listAuditQueries(
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
-          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED')
+          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
           ${retentionClause}
           ${tenantClause}
           ${databaseClause}
@@ -1014,7 +1014,7 @@ export async function countByStatus(
       FROM audit_events_index
       WHERE customer_id = ${customerId}
         AND region = ${region}
-        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED')
+        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
         ${retentionClause}
       GROUP BY 1
     `;

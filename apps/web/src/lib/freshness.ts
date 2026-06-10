@@ -15,7 +15,12 @@
 // server-rendered for PR-B; 60s client polling lands in PR-C and will reuse
 // this same function.
 
-export type Freshness = "live" | "down";
+// "paused" is a connection-level override, not an indexer signal:
+// computeFreshness never returns it (it only reads cursor state). The
+// connection workspace computes `conn.pausedAt ? "paused" : freshness` for
+// the rail dot, so a paused connection reads amber/"Paused" regardless of
+// indexer freshness.
+export type Freshness = "live" | "down" | "paused";
 
 export interface FreshnessInput {
   /** Last successful indexer drain. Null = the indexer has never run for
@@ -40,11 +45,14 @@ export function computeFreshness({
 export const FRESHNESS_LABELS: Record<Freshness, string> = {
   live: "live",
   down: "down",
+  paused: "paused",
 };
 
 /** Tailwind text-color class for the freshness dot, mapped to the semantic
- *  tokens (--allow / --deny). */
+ *  tokens (--allow / --deny / --warn). Paused is an operational state the
+ *  owner chose, not a failure — amber, like a token revoke, not deny-red. */
 export const FRESHNESS_COLORS: Record<Freshness, string> = {
   live: "text-[hsl(var(--allow))]",
   down: "text-[hsl(var(--deny))]",
+  paused: "text-[hsl(var(--warn))]",
 };
