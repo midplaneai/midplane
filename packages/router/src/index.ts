@@ -28,3 +28,12 @@ export { ExpirySweeper } from "./expiry-sweeper.ts";
 export type { ExpirySweeperOptions } from "./expiry-sweeper.ts";
 export { pushPolicy, PushPolicyError } from "./admin.ts";
 export type { PushPolicyDeps, PushPolicyResult } from "./admin.ts";
+export { dryRunPolicy } from "./dry-run.ts";
+export type {
+  DryRunDeps,
+  DryRunOutcome,
+  DryRunProbe,
+  DryRunRequest,
+  DryRunResponse,
+  DryRunVerdict,
+} from "./dry-run.ts";
