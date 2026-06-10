@@ -13,10 +13,11 @@ import {
 import type { Customer } from "@midplane-cloud/db";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 
-// Shared body of the add-database server actions. Two surfaces post the
-// same AddDatabaseForm: the dashboard list and the connection home —
-// each defines its own thin "use server" action (actions must live in
-// server files) that delegates here and then revalidates its own paths.
+// Shared body of the add-database server action. The connection
+// workspace's Database pane posts the AddDatabaseForm (via AddDatabaseSheet);
+// its thin "use server" action (actions must live in server files) delegates
+// here and then revalidates its own paths. Kept shared so any future surface
+// that grows a database posts the same validated path.
 //
 // Error contract: throws Error with a user-renderable message — the
 // client form wraps the action in try/catch and renders inline (see

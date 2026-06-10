@@ -104,6 +104,9 @@ export async function createTokenAction(
     // server-rendered token list when the modal closes.
     const mcpUrl = mintMcpUrl(customer.region, result.plaintext, process.env);
     revalidatePath(`/connections/${connectionId}`);
+    // Dashboard list shows an "agents" count per connection — bust it so a
+    // freshly minted token bumps the number on the next visit.
+    revalidatePath("/dashboard");
 
     getPostHog()?.capture({
       distinctId: userId,
@@ -154,6 +157,8 @@ export async function revokeTokenAction(
     });
     if (!result) return { ok: false, error: "not_found" };
     revalidatePath(`/connections/${connectionId}`);
+    // Keep the dashboard's "agents" count in sync after a revoke.
+    revalidatePath("/dashboard");
 
     getPostHog()?.capture({
       distinctId: userId,
