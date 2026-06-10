@@ -239,8 +239,10 @@ async function addDatabaseAction(formData: FormData) {
   if (!customer) redirect("/");
 
   // Shared body with the dashboard's action (lib/database-form.ts);
-  // this action owns its revalidation surface only.
+  // this action owns its revalidation surface only — including every
+  // per-DB page, whose sibling strip changes with membership.
   const { connectionId } = await addDatabaseFromForm(customer, formData);
   revalidatePath(`/connections/${connectionId}`);
   revalidatePath("/dashboard");
+  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }

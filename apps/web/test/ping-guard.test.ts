@@ -157,6 +157,22 @@ describe("pingDsnGuarded", () => {
     });
   });
 
+  it("opportunistic TLS (sslmode=prefer/allow) is not forced into mandatory TLS", async () => {
+    // Injecting an ssl object would turn prefer/allow into require —
+    // public plain-TCP servers the DSN accepts would fail the probe.
+    const ping = vi.fn(async () => ({ ok: true })) as never;
+    for (const mode of ["prefer", "allow"]) {
+      await pingDsnGuarded(
+        `postgres://u:p@db.example.com/app?sslmode=${mode}`,
+        { ping, lookup: lookupReturning(["52.10.0.5"]), env: GUARD_ON },
+      );
+      expect(ping).toHaveBeenLastCalledWith(expect.any(String), {
+        hostOverride: "52.10.0.5",
+        tlsServername: undefined,
+      });
+    }
+  });
+
   it("sslmode=disable omits SNI; ssl=true pins it", async () => {
     const ping = vi.fn(async () => ({ ok: true })) as never;
     const lookup = lookupReturning(["52.10.0.5"]);

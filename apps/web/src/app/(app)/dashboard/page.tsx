@@ -350,8 +350,10 @@ async function removeDatabaseAction(formData: FormData) {
     throw err;
   }
   revalidatePath("/dashboard");
-  // The connection home renders the db list too.
+  // The connection home renders the db list, and the sibling strip on
+  // EVERY per-DB page of this connection changes with membership.
   revalidatePath(`/connections/${connectionId}`);
+  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }
 
 async function renameDatabaseAction(formData: FormData) {
@@ -405,8 +407,10 @@ async function addDatabaseAction(formData: FormData) {
 
   // Validation + addDatabase + error mapping live in the shared helper
   // (the connection home posts the same form). This action only owns
-  // its revalidation surface.
+  // its revalidation surface — including every per-DB page, whose
+  // sibling strip changes with membership.
   const { connectionId } = await addDatabaseFromForm(customer, formData);
   revalidatePath("/dashboard");
   revalidatePath(`/connections/${connectionId}`);
+  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }

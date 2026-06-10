@@ -147,13 +147,22 @@ export async function vetDsnHost(
 }
 
 /** TLS intent from the DSN itself. We only force the ssl option (with
- *  the pinned servername) when the DSN asked for TLS — forcing it on a
- *  plain-TCP DSN would break the probe instead of guarding it. */
+ *  the pinned servername) when the DSN REQUIRES TLS — `prefer`/`allow`
+ *  are opportunistic, and injecting an ssl object would turn them into
+ *  mandatory-TLS probes that fail plain-TCP servers the DSN itself
+ *  accepts (codex review P2). For opportunistic modes the driver
+ *  negotiates as usual against the pinned IP. */
 function wantsTls(dsn: string): boolean {
   try {
     const url = new URL(dsn);
     const sslmode = url.searchParams.get("sslmode");
-    if (sslmode) return sslmode !== "disable";
+    if (sslmode) {
+      return (
+        sslmode === "require" ||
+        sslmode === "verify-ca" ||
+        sslmode === "verify-full"
+      );
+    }
     const ssl = url.searchParams.get("ssl");
     return ssl === "true" || ssl === "1";
   } catch {

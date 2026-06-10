@@ -1188,6 +1188,50 @@ describe("Indexer error recording", () => {
     });
   });
 
+  it("a successful drain resets the error-stamp throttle (fail→recover→fail stamps immediately)", async () => {
+    const { db, state, registry } = await buildHarness();
+    state.cursorsById.set(CURSOR_ID, {
+      id: CURSOR_ID,
+      connectionId: TEST_CONN_A,
+      lastId: "01HX0000000000000000000001",
+      customerId: TEST_CUST_A,
+      region: "eu",
+      lastIndexedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    let mode: "fail" | "ok" = "fail";
+    const fetchFn = vi.fn(async () =>
+      mode === "fail"
+        ? new Response("boom", { status: 500 })
+        : jsonResponse({
+            rows: [row("01HX0000000000000000000002")],
+            next_cursor: null,
+          }),
+    ) as unknown as typeof fetch;
+    let nowMs = new Date("2026-06-10T00:00:00Z").getTime();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      now: () => nowMs,
+    });
+
+    await ix.tick(); // fail #1 — stamps
+    expect(state.cursorsById.get(CURSOR_ID)!.lastErrorAt).toBeInstanceOf(Date);
+
+    mode = "ok";
+    nowMs += 5_000;
+    await ix.tick(); // recover — clears stamps AND the throttle
+    expect(state.cursorsById.get(CURSOR_ID)!.lastErrorAt).toBeNull();
+
+    mode = "fail";
+    nowMs += 5_000; // still inside the 60s throttle window of fail #1
+    await ix.tick(); // fail #2 — must stamp again immediately
+    expect(state.cursorsById.get(CURSOR_ID)!.lastErrorAt).toEqual(
+      new Date(nowMs),
+    );
+  });
+
   it("clears lastError/lastErrorAt on the next successful drain", async () => {
     const { db, state, registry } = await buildHarness();
     state.cursorsById.set(CURSOR_ID, {

@@ -22,6 +22,11 @@ import { getMcpProxyContext } from "@/lib/mcp-proxy";
 // client form wraps the action in try/catch and renders inline (see
 // add-database-form.tsx). Tamper-shaped failures (missing connectionId)
 // also throw; they're not reachable through the real form.
+//
+// Callers' revalidation duty: besides their own surface, membership
+// changes alter EVERY per-DB page of the connection (the sibling strip
+// in databases/[name]/layout.tsx renders the db list) — revalidate the
+// bracketed page path too.
 
 export async function addDatabaseFromForm(
   customer: Customer,

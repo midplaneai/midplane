@@ -31,6 +31,11 @@ import { listTables } from "@/lib/list-tables";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 
 const MAX_QUERY_LENGTH = 64;
+// Default stays at the autocomplete page size; the test panel asks for
+// more (?limit=) so its truncation facts are honest on wide schemas —
+// without this, a 200-table db introspects exactly 50 names and the
+// panel claims full coverage (codex review P2).
+const MAX_LIMIT = 250;
 
 interface OkBody {
   tables: string[];
@@ -54,6 +59,11 @@ export async function GET(
 
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").slice(0, MAX_QUERY_LENGTH);
+  const limitRaw = Number(url.searchParams.get("limit"));
+  const limit =
+    Number.isInteger(limitRaw) && limitRaw > 0
+      ? Math.min(limitRaw, MAX_LIMIT)
+      : undefined; // listTables default (autocomplete page size)
 
   // Per-db since the connections-ux PR (was main-db-only under PR-A's
   // single-DB scope). `db` defaults to "main" so pre-existing callers
@@ -91,7 +101,7 @@ export async function GET(
   }
 
   try {
-    const result = await listTables(decrypt.plaintext, { q });
+    const result = await listTables(decrypt.plaintext, { q, limit });
     const body: OkBody = { tables: result.tables };
     return Response.json(body, {
       status: 200,

@@ -506,6 +506,12 @@ export class Indexer {
         }
       }
     });
+
+    // Successful drain clears the error stamps in the DB — clear the
+    // recordError throttle too, so a fail→recover→fail-again sequence
+    // inside ERROR_STAMP_MIN_MS stamps the NEW outage immediately
+    // instead of staying green for up to a minute (codex review P2).
+    this.lastErrorStampMs.delete(connectionId);
   }
 
   /** Best-effort: stamp last_error / last_error_at on the connection's

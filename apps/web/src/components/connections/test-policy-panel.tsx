@@ -149,8 +149,11 @@ export function TestPolicyPanel({
     let introspected: string[] = [];
     let introspectionHint: string | null = null;
     try {
+      // limit=250 (route max): the default is the autocomplete's
+      // 50-row page — at the probe cap exactly, which made truncation
+      // invisible on wide schemas ("showing first 50 of 50").
       const res = await fetch(
-        `/api/connections/${connectionId}/tables?db=${encodeURIComponent(db.name)}`,
+        `/api/connections/${connectionId}/tables?db=${encodeURIComponent(db.name)}&limit=250`,
         { credentials: "same-origin" },
       );
       const body = (await res.json()) as { tables?: string[]; error?: string };
