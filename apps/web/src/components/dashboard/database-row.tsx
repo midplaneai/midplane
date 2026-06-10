@@ -17,7 +17,7 @@ import {
   useDatabaseLastQuery,
 } from "@/components/dashboard/freshness-provider";
 import { lastQueryLabel } from "@/lib/format";
-import { computeFreshness } from "@/lib/freshness";
+import { resolveFreshness } from "@/lib/freshness";
 import { accessLabel } from "@/lib/policy-labels";
 
 // One database row inside a connection card on the dashboard list. Read-only:
@@ -36,6 +36,7 @@ export function DatabaseRow({
   connectionId,
   database,
   initialLastQueryAt,
+  initialPausedAt,
   initialLastIndexedAt,
   initialLastErrorAt,
 }: {
@@ -48,6 +49,10 @@ export function DatabaseRow({
   /** Server-rendered fallback for the per-DB last-query timestamp.
    *  Used until the freshness provider has data for this connection. */
   initialLastQueryAt: Date | null;
+  /** Server-rendered fallback for the parent connection's paused state —
+   *  when set, the row dot reads "paused" (the whole connection is gated,
+   *  so every DB on it is too). */
+  initialPausedAt: Date | null;
   /** Server-rendered fallback for the connection-level cursor — drives
    *  the row's freshness dot (same dot as the connection header). */
   initialLastIndexedAt: Date | null;
@@ -64,7 +69,8 @@ export function DatabaseRow({
     lastIndexedAt: initialLastIndexedAt,
     lastErrorAt: initialLastErrorAt,
   };
-  const freshness = computeFreshness(cursor);
+  const pausedAt = liveConn ? liveConn.pausedAt : initialPausedAt;
+  const freshness = resolveFreshness(cursor, pausedAt);
   const liveLastQuery = useDatabaseLastQuery(connectionId, database.name);
   const lastQueryAt = liveConn ? liveLastQuery : initialLastQueryAt;
   const lastQueryText = lastQueryLabel(lastQueryAt); // shared copy — lib/format.ts

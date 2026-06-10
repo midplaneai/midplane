@@ -28,6 +28,10 @@ interface DatabaseFreshness {
 }
 
 export interface ConnectionFreshness {
+  /** Non-null = paused. Overrides the cursor-derived dot (see
+   *  resolveFreshness) so a paused connection reads "paused" on the
+   *  dashboard, refreshed on every poll. */
+  pausedAt: Date | null;
   cursor: { lastIndexedAt: Date | null; lastErrorAt: Date | null };
   databases: Map<string, DatabaseFreshness>;
 }
@@ -39,6 +43,7 @@ const FreshnessContext = createContext<Snapshot | null>(null);
 interface SerializedSnapshot {
   connections: Array<{
     id: string;
+    pausedAt: string | null;
     cursor: {
       lastIndexedAt: string | null;
       lastErrorAt: string | null;
@@ -53,6 +58,7 @@ interface SerializedSnapshot {
 export interface FreshnessInitial {
   connections: Array<{
     id: string;
+    pausedAt: Date | null;
     cursor: {
       lastIndexedAt: Date | null;
       lastErrorAt: Date | null;
@@ -75,6 +81,7 @@ function deserialize(payload: SerializedSnapshot): Snapshot {
       });
     }
     map.set(c.id, {
+      pausedAt: c.pausedAt ? new Date(c.pausedAt) : null,
       cursor: {
         lastIndexedAt: c.cursor.lastIndexedAt
           ? new Date(c.cursor.lastIndexedAt)
@@ -97,6 +104,7 @@ function fromInitial(initial: FreshnessInitial): Snapshot {
       dbs.set(d.name, { name: d.name, lastQueryAt: d.lastQueryAt });
     }
     map.set(c.id, {
+      pausedAt: c.pausedAt,
       cursor: c.cursor,
       databases: dbs,
     });

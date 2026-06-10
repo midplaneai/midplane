@@ -42,6 +42,20 @@ export function computeFreshness({
   return "live";
 }
 
+/** Connection-level display state for the freshness dot. A non-null
+ *  `pausedAt` is a deliberate owner action — the reversible kill switch —
+ *  and overrides the indexer signal: a paused connection reads "paused"
+ *  (amber), never "live"/"down". This is the single source of truth for the
+ *  override so every render site (workspace rail, dashboard header pill,
+ *  dashboard db-row dots) stays in lockstep instead of each re-deriving it. */
+export function resolveFreshness(
+  cursor: FreshnessInput,
+  pausedAt: Date | null,
+): Freshness {
+  if (pausedAt != null) return "paused";
+  return computeFreshness(cursor);
+}
+
 export const FRESHNESS_LABELS: Record<Freshness, string> = {
   live: "live",
   down: "down",

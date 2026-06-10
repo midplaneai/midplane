@@ -2076,6 +2076,7 @@ describe("getDashboardFreshness", () => {
     handle.queueSelect([
       {
         id: "conn-1",
+        pausedAt: null,
         lastIndexedAt: indexedAt,
         lastErrorAt: null,
       },
@@ -2090,6 +2091,7 @@ describe("getDashboardFreshness", () => {
     expect(snapshot.connections).toHaveLength(1);
     const c = snapshot.connections[0]!;
     expect(c.id).toBe("conn-1");
+    expect(c.pausedAt).toBeNull();
     expect(c.cursor.lastIndexedAt).toEqual(indexedAt);
     expect(c.databases).toEqual([
       { name: "main", lastQueryAt: mainQueryAt },
@@ -2100,5 +2102,21 @@ describe("getDashboardFreshness", () => {
     // a plaintext token column, the polling endpoint should still hold
     // the line.
     expect((c as Record<string, unknown>).mcpToken).toBeUndefined();
+  });
+
+  it("carries pausedAt so the dashboard dots can reflect the kill switch", async () => {
+    const pausedAt = new Date("2026-04-30T12:00:00Z");
+    handle.queueSelect([]); // no audit rows
+    handle.queueSelect([
+      { id: "conn-1", pausedAt, lastIndexedAt: null, lastErrorAt: null },
+    ]);
+    handle.queueSelect([{ connectionId: "conn-1", name: "main" }]);
+    const { getDashboardFreshness } = await import(
+      "../src/lib/connections.ts"
+    );
+
+    const snapshot = await getDashboardFreshness(customer);
+
+    expect(snapshot.connections[0]!.pausedAt).toEqual(pausedAt);
   });
 });

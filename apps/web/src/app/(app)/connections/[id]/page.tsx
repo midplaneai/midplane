@@ -55,7 +55,7 @@ import {
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
 import { connectionLabel, formatRelative } from "@/lib/format";
-import { computeFreshness, FRESHNESS_LABELS } from "@/lib/freshness";
+import { resolveFreshness, FRESHNESS_LABELS } from "@/lib/freshness";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { pingDsnGuarded } from "@/lib/ping-guard";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
@@ -117,12 +117,12 @@ export default async function ConnectionWorkspace({
   if (tokens === null) notFound();
 
   const label = connectionLabel(conn);
-  const freshness = computeFreshness(cursor);
   // Pause is a connection-level override of the freshness dot: a paused
-  // connection reads amber/"Paused" regardless of indexer state, and the
-  // rail header (visible from every pane) exposes one-click Resume.
+  // connection reads amber/"Paused" regardless of indexer state (see
+  // resolveFreshness — the same shared override the dashboard applies), and
+  // the rail header (visible from every pane) exposes one-click Resume.
   const paused = conn.pausedAt != null;
-  const railFreshness = paused ? "paused" : freshness;
+  const railFreshness = resolveFreshness(cursor, conn.pausedAt);
   const dbNames = databases.map((d) => d.name);
 
   // Which database the per-DB panes target. Trust ?db only if it names a db

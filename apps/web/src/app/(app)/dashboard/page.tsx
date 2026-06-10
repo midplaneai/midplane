@@ -146,7 +146,7 @@ export default async function Dashboard({
 
 function initialFreshness(
   rows: Array<{
-    connection: { id: string };
+    connection: { id: string; pausedAt: Date | null };
     databases: DashboardDatabase[];
     cursor: { lastIndexedAt: Date | null; lastErrorAt: Date | null };
   }>,
@@ -154,6 +154,7 @@ function initialFreshness(
   return {
     connections: rows.map((row) => ({
       id: row.connection.id,
+      pausedAt: row.connection.pausedAt,
       cursor: row.cursor,
       databases: row.databases.map((d) => ({
         name: d.name,
@@ -205,6 +206,7 @@ function ConnectionCard({
             <div className="mt-1.5">
               <LiveConnectionFreshness
                 connectionId={c.id}
+                initialPausedAt={c.pausedAt}
                 initialLastIndexedAt={cursor.lastIndexedAt}
                 initialLastErrorAt={cursor.lastErrorAt}
               />
@@ -288,6 +290,7 @@ function ConnectionCard({
               // cleanly.
               database={db}
               initialLastQueryAt={db.lastQueryAt}
+              initialPausedAt={c.pausedAt}
               initialLastIndexedAt={cursor.lastIndexedAt}
               initialLastErrorAt={cursor.lastErrorAt}
             />

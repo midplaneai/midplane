@@ -1605,6 +1605,10 @@ export async function getConnectionHomeData(
 export interface DashboardFreshnessSnapshot {
   connections: Array<{
     id: string;
+    /** Non-null = paused. Carried on the poll so the dashboard's freshness
+     *  dots reflect the kill switch (amber "paused") instead of the stale
+     *  indexer-derived live/down — see resolveFreshness. */
+    pausedAt: Date | null;
     cursor: {
       lastIndexedAt: Date | null;
       lastErrorAt: Date | null;
@@ -1625,6 +1629,7 @@ export async function getDashboardFreshness(
     db
       .select({
         id: connections.id,
+        pausedAt: connections.pausedAt,
         lastIndexedAt: indexerCursors.lastIndexedAt,
         lastErrorAt: indexerCursors.lastErrorAt,
       })
@@ -1665,6 +1670,7 @@ export async function getDashboardFreshness(
   return {
     connections: parents.map((p) => ({
       id: p.id,
+      pausedAt: p.pausedAt ?? null,
       cursor: {
         lastIndexedAt: p.lastIndexedAt,
         lastErrorAt: p.lastErrorAt,
