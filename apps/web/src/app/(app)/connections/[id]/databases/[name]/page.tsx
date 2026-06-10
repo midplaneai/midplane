@@ -7,14 +7,16 @@ import {
   parseTenantScopeOrThrow,
 } from "@midplane-cloud/db";
 
-import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { PageContainer } from "@/components/layout/app-shell";
+import { formatRelative } from "@/lib/format";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
 import { TenantScopeEditor } from "@/components/tenant-scope-editor";
-import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { TestReachabilityButton } from "@/components/connections/test-reachability-button";
 import { PageHeader } from "@/components/ui/page-header";
 import {
   getConnectionWithDatabase,
+  getConnectionWithDatabaseAndCredential,
   isValidDsn,
   rotateConnection,
   setTableAccess,
@@ -22,7 +24,9 @@ import {
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { pingDsnGuarded } from "@/lib/ping-guard";
 import { getPostHog } from "@/lib/posthog";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Per-DB detail page. The hierarchical dashboard owns the connection-level
 // surface (rename, delete, agent setup, MCP URL); this route is scoped to
@@ -104,6 +108,50 @@ export default async function DatabaseDetail({
     revalidatePath(`/connections/${id}/databases/${name}`);
   }
 
+  async function testReachabilityAction(): Promise<{
+    ok: boolean;
+    error?: string;
+  }> {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+
+    // Same per-customer budget as the pasted-DSN testers — switching
+    // surfaces doesn't reset the window.
+    const limited = checkRateLimit(`test-dsn:${customer.id}`, {
+      limit: 10,
+      windowMs: 60_000,
+    });
+    if (!limited.ok) {
+      return { ok: false, error: "too many tests — try again shortly" };
+    }
+
+    const result = await getConnectionWithDatabaseAndCredential(
+      customer,
+      id,
+      name,
+    );
+    if (!result) notFound();
+
+    const ctx = getMcpProxyContext();
+    const decrypt = await ctx.resolver.resolve({
+      connectionDatabase: result.database,
+      region: result.connection.region,
+      customerId: result.connection.customerId,
+    });
+    if (!decrypt.ok) {
+      return {
+        ok: false,
+        error:
+          "credential unavailable — try again, or rotate the connection string",
+      };
+    }
+    // Guarded even though the DSN came from our own row: it was only
+    // regex-validated at creation, so stored DSNs are not implicitly
+    // trusted with internal dials either.
+    return pingDsnGuarded(decrypt.plaintext);
+  }
+
   async function scopeAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
@@ -135,17 +183,11 @@ export default async function DatabaseDetail({
 
   const connectionLabel = conn.name ?? conn.id.slice(0, 12);
 
+  // Topbar (breadcrumb) + the sibling-db context strip are owned by the
+  // nested layout one level up (databases/[name]/layout.tsx) — this page
+  // renders content only.
   return (
     <>
-      <Topbar>
-        <Breadcrumb
-          items={[
-            { label: "Connections", href: "/dashboard" },
-            { label: connectionLabel, href: `/connections/${conn.id}` },
-            { label: db.name },
-          ]}
-        />
-      </Topbar>
       <PageContainer>
         <div className="mx-auto max-w-[760px]">
           <PageHeader
@@ -174,6 +216,7 @@ export default async function DatabaseDetail({
             <div className="pt-2">
               <PermissionGrid
                 connectionId={conn.id}
+                dbName={db.name}
                 initialPolicy={parsePolicyOrThrow(db.tableAccess)}
                 action={policyAction}
               />
@@ -204,6 +247,19 @@ export default async function DatabaseDetail({
 
           <section className="mt-6 space-y-3 rounded-none border border-border-strong bg-card p-6">
             <h2 className="text-base font-medium text-foreground">
+              Test reachability
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Opens one connection from the cloud using the stored credential
+              and runs{" "}
+              <strong className="font-medium text-foreground">SELECT 1</strong>
+              . Nothing is persisted and the running session is untouched.
+            </p>
+            <TestReachabilityButton action={testReachabilityAction} />
+          </section>
+
+          <section className="mt-6 space-y-3 rounded-none border border-border-strong bg-card p-6">
+            <h2 className="text-base font-medium text-foreground">
               Rotate connection string
             </h2>
             <p className="text-xs text-muted-foreground">
@@ -225,13 +281,3 @@ export default async function DatabaseDetail({
   );
 }
 
-function formatRelative(d: Date): string {
-  const ms = Date.now() - d.getTime();
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return `${day}d ago`;
-}
