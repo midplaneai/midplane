@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
 import { Database } from "lucide-react";
 
 import { type TableAccessPolicy } from "@midplane-cloud/db";
@@ -12,39 +11,26 @@ import { type TableAccessPolicy } from "@midplane-cloud/db";
 // imports from @midplane-cloud/db".
 import type { SafeConnectionDatabase } from "@/lib/connections";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { DatabaseRowMenu } from "@/components/dashboard/database-row-menu";
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
 import {
   useConnectionFreshness,
   useDatabaseLastQuery,
 } from "@/components/dashboard/freshness-provider";
-import { RenameDatabaseInline } from "@/components/dashboard/rename-database-inline";
 import { lastQueryLabel } from "@/lib/format";
 import { computeFreshness } from "@/lib/freshness";
 import { accessLabel } from "@/lib/policy-labels";
-import { cn } from "@/lib/utils";
 
-// Container for one DB row inside the dashboard's per-connection list.
-// Owns the local UI state for inline rename + remove confirmation +
-// the post-confirm fade-out animation. The static parts of the row
-// (name link, meta text) stay rendered as a server-passed Link so
-// navigation still works without client-side routing churn.
+// One database row inside a connection card on the dashboard list. Read-only:
+// it links into that database's pane in the connection workspace, where
+// rename / remove / rotate / policy all live now. The list identifies and
+// routes; the workspace manages. Live freshness still updates in place (the
+// dot color from the connection cursor, the per-DB last-query meta) via the
+// dashboard freshness provider, falling back to server-rendered values until
+// the first poll.
 //
-// Animation: on confirmed remove we set `removing=true` while the
-// server action runs in a transition. motion-safe: max-h + opacity
-// fade-out gives a slide-up of siblings; motion-reduce: snap to
-// hidden with no transition. Once revalidatePath lands, the row
-// unmounts naturally — we don't have to manually unmount.
+// `relative z-10` lifts the row above the card's stretched open-link (the
+// connection name's ::after covers the whole card) so clicking a DB navigates
+// to that DB, while clicking empty card chrome opens the connection.
 
 export function DatabaseRow({
   connectionId,
@@ -52,9 +38,6 @@ export function DatabaseRow({
   initialLastQueryAt,
   initialLastIndexedAt,
   initialLastErrorAt,
-  disableRemove,
-  removeAction,
-  renameAction,
 }: {
   connectionId: string;
   // Use the safe projection — never the full row. The full row includes
@@ -69,16 +52,7 @@ export function DatabaseRow({
    *  the row's freshness dot (same dot as the connection header). */
   initialLastIndexedAt: Date | null;
   initialLastErrorAt: Date | null;
-  disableRemove: boolean;
-  removeAction: (formData: FormData) => Promise<void>;
-  renameAction: (formData: FormData) => Promise<void>;
 }) {
-  const [renameMode, setRenameMode] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [removeError, setRemoveError] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
-
   const policy = database.tableAccess as TableAccessPolicy;
   const tableCount = Object.keys(policy.tables ?? {}).length;
 
@@ -95,99 +69,26 @@ export function DatabaseRow({
   const lastQueryAt = liveConn ? liveLastQuery : initialLastQueryAt;
   const lastQueryText = lastQueryLabel(lastQueryAt); // shared copy — lib/format.ts
 
-  function handleConfirmRemove() {
-    const fd = new FormData();
-    fd.set("connectionId", connectionId);
-    fd.set("name", database.name);
-    setRemoveError(null);
-    setConfirmOpen(false);
-    setRemoving(true);
-    startTransition(async () => {
-      try {
-        await removeAction(fd);
-        // Action revalidates /dashboard. The row will unmount on next
-        // render; the fade-out animation is what the user sees during
-        // the transition window.
-      } catch (e) {
-        setRemoving(false);
-        setRemoveError(e instanceof Error ? e.message : "remove failed");
-      }
-    });
-  }
-
   return (
-    <li
-      className={cn(
-        "group relative flex min-h-[44px] items-center motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out",
-        removing &&
-          "pointer-events-none motion-safe:max-h-0 motion-safe:min-h-0 motion-safe:opacity-0 motion-safe:overflow-hidden motion-reduce:hidden",
-      )}
-      aria-busy={removing || undefined}
-    >
-      {renameMode ? (
-        <RenameDatabaseInline
-          connectionId={connectionId}
-          initialName={database.name}
-          action={renameAction}
-          onDone={() => setRenameMode(false)}
+    <li className="relative z-10">
+      <Link
+        href={`/connections/${connectionId}?db=${encodeURIComponent(database.name)}&section=database`}
+        className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/40"
+      >
+        <FreshnessDot state={freshness} />
+        <Database
+          className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
+          strokeWidth={1.5}
+          aria-hidden
         />
-      ) : (
-        <Link
-          href={`/connections/${connectionId}?db=${encodeURIComponent(database.name)}&section=database`}
-          className="flex flex-1 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
-        >
-          <FreshnessDot state={freshness} />
-          <Database
-            className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-            strokeWidth={1.5}
-            aria-hidden
-          />
-          <span className="font-mono text-sm text-foreground">
-            {database.name}
-          </span>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {accessLabel(policy.default)} · {tableCount}{" "}
-            {tableCount === 1 ? "table" : "tables"} · {lastQueryText}
-          </span>
-        </Link>
-      )}
-      <div className="pr-2">
-        <DatabaseRowMenu
-          connectionId={connectionId}
-          dbName={database.name}
-          disableRemove={disableRemove}
-          onRename={() => setRenameMode(true)}
-          onRemove={() => setConfirmOpen(true)}
-        />
-      </div>
-      {removeError ? (
-        <div className="absolute right-12 top-1/2 -translate-y-1/2 text-xs text-destructive">
-          {removeError}
-        </div>
-      ) : null}
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Remove database <span className="font-mono">{database.name}</span>?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              The encrypted DSN row is removed and the running session
-              respawns without this database. Audit history for past
-              queries against it stays in the dashboard for compliance.
-              This can&apos;t be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmRemove}>
-              Remove database
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <span className="font-mono text-sm text-foreground">
+          {database.name}
+        </span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {accessLabel(policy.default)} · {tableCount}{" "}
+          {tableCount === 1 ? "table" : "tables"} · {lastQueryText}
+        </span>
+      </Link>
     </li>
   );
 }
-

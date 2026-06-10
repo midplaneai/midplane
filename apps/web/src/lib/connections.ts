@@ -28,6 +28,7 @@ import { normalizeName } from "./connection-name.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
 import {
+  countActiveTokensByConnection,
   countUsableTokens,
   emitTokenAuditRow,
   insertTokenRow,
@@ -1381,6 +1382,11 @@ export interface DashboardConnectionRow {
     lastIndexedAt: Date | null;
     lastErrorAt: Date | null;
   };
+  /** Count of usable agent tokens on this connection — drives the "agents"
+   *  stat on the dashboard list (0 = a non-functional connection, surfaced
+   *  as a "connect an agent" nudge). Same active predicate as the runtime
+   *  resolver; see countActiveTokensByConnection. */
+  activeTokens: number;
 }
 
 // Internal helper: compute MAX(ts) per database name within (customer,
@@ -1458,11 +1464,14 @@ export async function listDashboardConnections(
   if (parents.length === 0) return [];
 
   const parentIds = parents.map((p) => p.connection.id);
-  const children = await db
-    .select(SAFE_DATABASE_COLUMNS)
-    .from(connectionDatabases)
-    .where(inArray(connectionDatabases.connectionId, parentIds))
-    .orderBy(asc(connectionDatabases.name));
+  const [children, tokenCounts] = await Promise.all([
+    db
+      .select(SAFE_DATABASE_COLUMNS)
+      .from(connectionDatabases)
+      .where(inArray(connectionDatabases.connectionId, parentIds))
+      .orderBy(asc(connectionDatabases.name)),
+    countActiveTokensByConnection(customer, parentIds),
+  ]);
 
   const childrenByConn = new Map<string, DashboardDatabase[]>();
   for (const child of children) {
@@ -1481,6 +1490,7 @@ export async function listDashboardConnections(
       lastIndexedAt: p.lastIndexedAt,
       lastErrorAt: p.lastErrorAt,
     },
+    activeTokens: tokenCounts.get(p.connection.id) ?? 0,
   }));
 }
 

@@ -2,10 +2,9 @@ import { auth } from "@clerk/nextjs/server";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { AddDatabaseForm } from "@/components/dashboard/add-database-form";
 import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
 import { DatabaseRow } from "@/components/dashboard/database-row";
 import {
@@ -13,27 +12,23 @@ import {
   type FreshnessInitial,
 } from "@/components/dashboard/freshness-provider";
 import { LiveConnectionFreshness } from "@/components/dashboard/live-connection-freshness";
-import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
-import { type DashboardDatabase } from "@/lib/connections";
+import { RegionBadge } from "@/components/ui/region-badge";
 import {
-  DatabaseNameTaken,
+  type DashboardConnectionRow,
+  type DashboardDatabase,
   deleteConnection,
-  isValidDatabaseName,
-  LastDatabaseProtected,
   listDashboardConnections,
-  removeDatabase,
-  renameConnection,
-  renameDatabase,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
-import { addDatabaseFromForm } from "@/lib/database-form";
+import { connectionLabel, formatRelative } from "@/lib/format";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
+import { cn } from "@/lib/utils";
 
 // PR2 of mcp_url_auth_security: the dashboard no longer renders the
 // agent-facing URL because the plaintext token is not retrievable from
@@ -133,27 +128,14 @@ export default async function Dashboard({
           />
         ) : (
           <DashboardFreshnessProvider initial={initialFreshness(rows)}>
-            <ul className="divide-y divide-border border-y border-border">
-              {rows.map((row) => {
-                const { connection: c, databases, cursor } = row;
-                return (
-                  <li key={c.id} className="bg-background">
-                    <ConnectionHeader
-                      id={c.id}
-                      name={c.name}
-                      region={c.region}
-                      initialLastIndexedAt={cursor.lastIndexedAt}
-                      initialLastErrorAt={cursor.lastErrorAt}
-                    />
-                    <DatabaseList
-                      connectionId={c.id}
-                      databases={databases}
-                      initialLastIndexedAt={cursor.lastIndexedAt}
-                      initialLastErrorAt={cursor.lastErrorAt}
-                    />
-                  </li>
-                );
-              })}
+            <ul className="space-y-3">
+              {rows.map((row) => (
+                <ConnectionCard
+                  key={row.connection.id}
+                  row={row}
+                  deleteAction={deleteAction}
+                />
+              ))}
             </ul>
           </DashboardFreshnessProvider>
         )}
@@ -181,115 +163,143 @@ function initialFreshness(
   };
 }
 
-function ConnectionHeader({
-  id,
-  name,
-  region,
-  initialLastIndexedAt,
-  initialLastErrorAt,
+// One connection, rendered as a card. The whole card opens the connection
+// workspace (the name link's stretched ::after covers it); the inner deep
+// links — the database / agents stats and each DB row — sit above it (z-10)
+// so they route to their own pane. Rename / add-db / per-DB management all
+// moved into the workspace: the list identifies and routes, the workspace
+// manages. The "agents" stat doubles as the empty-state nudge — zero usable
+// tokens means the endpoint is dark, so it reads "connect an agent →" in the
+// warn tone instead of a dead "0".
+function ConnectionCard({
+  row,
+  deleteAction,
 }: {
-  id: string;
-  name: string | null;
-  region: string;
-  initialLastIndexedAt: Date | null;
-  initialLastErrorAt: Date | null;
+  row: DashboardConnectionRow;
+  deleteAction: (formData: FormData) => Promise<void>;
 }) {
+  const { connection: c, databases, cursor, activeTokens } = row;
+  const label = connectionLabel(c);
+
+  // Connection-level "last query" = the most recent across its databases.
+  // Server-rendered (the per-DB rows below carry the live values).
+  const lastQueryAt = databases.reduce<Date | null>((max, d) => {
+    if (!d.lastQueryAt) return max;
+    return !max || d.lastQueryAt > max ? d.lastQueryAt : max;
+  }, null);
+
+  const statLabel =
+    "font-mono text-[11px] lowercase tracking-[0.04em] transition-colors";
+
   return (
-    <div className="px-1 pt-4 pb-2">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <RenameConnectionInline
-            id={id}
-            initialName={name}
-            placeholder="Untitled connection"
-            action={renameAction}
-          />
+    <li className="group relative rounded-lg border border-border bg-card transition-colors hover:border-border-strong">
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <Link
+              href={`/connections/${c.id}`}
+              className="text-sm font-medium tracking-tight text-foreground after:absolute after:inset-0 focus-visible:underline focus-visible:outline-none"
+            >
+              {label}
+            </Link>
+            <div className="mt-1.5">
+              <LiveConnectionFreshness
+                connectionId={c.id}
+                initialLastIndexedAt={cursor.lastIndexedAt}
+                initialLastErrorAt={cursor.lastErrorAt}
+              />
+            </div>
+          </div>
+          <RegionBadge region={c.region} />
+          <div className="relative z-10">
+            <ConnectionRowMenu
+              id={c.id}
+              name={c.name}
+              deleteAction={deleteAction}
+            />
+          </div>
         </div>
-        <span className="font-mono text-[11px] uppercase tracking-[0.04em] text-subtle">
-          {region}
-        </span>
-        <LiveConnectionFreshness
-          connectionId={id}
-          initialLastIndexedAt={initialLastIndexedAt}
-          initialLastErrorAt={initialLastErrorAt}
-        />
-        {/* Entry to the connection home (databases + tokens + test +
-            settings). Was labeled "Connect", which read as a one-time
-            setup action and hid the page's hub role. */}
-        <Link href={`/connections/${id}`}>
-          <Button size="sm" variant="outline">
-            Open
-          </Button>
-        </Link>
-        <ConnectionRowMenu id={id} name={name} deleteAction={deleteAction} />
+
+        {/* Stat strip — deep links into the workspace's panes. Only the
+            links carry z-10; the gaps between them fall through to the
+            card's open-link. */}
+        <div className="mt-4 flex flex-wrap items-start gap-x-10 gap-y-3">
+          <Link
+            href={`/connections/${c.id}?section=database`}
+            className="group/stat relative z-10"
+          >
+            <div className="font-mono text-lg tabular-nums text-foreground">
+              {databases.length}
+            </div>
+            <div
+              className={cn(statLabel, "text-subtle group-hover/stat:text-foreground")}
+            >
+              {databases.length === 1 ? "database" : "databases"}
+            </div>
+          </Link>
+
+          <Link
+            href={`/connections/${c.id}?section=agents`}
+            className="group/stat relative z-10"
+          >
+            <div
+              className={cn(
+                "font-mono text-lg tabular-nums",
+                activeTokens > 0
+                  ? "text-foreground"
+                  : "text-[hsl(var(--warn))]",
+              )}
+            >
+              {activeTokens}
+            </div>
+            <div
+              className={cn(
+                statLabel,
+                activeTokens > 0
+                  ? "text-subtle group-hover/stat:text-foreground"
+                  : "text-[hsl(var(--warn))]",
+              )}
+            >
+              {activeTokens === 0
+                ? "connect an agent →"
+                : `active ${activeTokens === 1 ? "agent" : "agents"}`}
+            </div>
+          </Link>
+
+          <div>
+            <div className="font-mono text-lg tabular-nums text-foreground">
+              {lastQueryAt ? formatRelative(lastQueryAt) : "—"}
+            </div>
+            <div className={cn(statLabel, "text-subtle")}>
+              {lastQueryAt ? "last query" : "no queries yet"}
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
+
+      {databases.length > 0 ? (
+        <ul className="border-t border-border">
+          {databases.map((db) => (
+            <DatabaseRow
+              key={db.id}
+              connectionId={c.id}
+              // `db` is the safe projection from listDashboardConnections —
+              // no encryptedDsn / kmsKeyId, so it crosses the RSC boundary
+              // cleanly.
+              database={db}
+              initialLastQueryAt={db.lastQueryAt}
+              initialLastIndexedAt={cursor.lastIndexedAt}
+              initialLastErrorAt={cursor.lastErrorAt}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="relative z-10 border-t border-border px-4 py-3 text-xs text-muted-foreground">
+          No databases on this connection yet.
+        </p>
+      )}
+    </li>
   );
-}
-
-function DatabaseList({
-  connectionId,
-  databases,
-  initialLastIndexedAt,
-  initialLastErrorAt,
-}: {
-  connectionId: string;
-  databases: DashboardDatabase[];
-  initialLastIndexedAt: Date | null;
-  initialLastErrorAt: Date | null;
-}) {
-  const disableRemove = databases.length <= 1;
-  return (
-    <div className="ml-4 mb-4 mt-1 overflow-hidden rounded-md border border-border bg-card">
-      <ul className="divide-y divide-border">
-        {databases.map((db) => (
-          <DatabaseRow
-            key={db.id}
-            connectionId={connectionId}
-            // `db` is the safe projection from listDashboardConnections —
-            // no encryptedDsn / kmsKeyId, so it crosses the RSC boundary
-            // cleanly.
-            database={db}
-            initialLastQueryAt={db.lastQueryAt}
-            initialLastIndexedAt={initialLastIndexedAt}
-            initialLastErrorAt={initialLastErrorAt}
-            disableRemove={disableRemove}
-            removeAction={removeDatabaseAction}
-            renameAction={renameDatabaseAction}
-          />
-        ))}
-      </ul>
-      <AddDatabaseForm
-        connectionId={connectionId}
-        action={addDatabaseAction}
-      />
-    </div>
-  );
-}
-
-async function renameAction(formData: FormData) {
-  "use server";
-  const customer = await currentCustomer();
-  if (!customer) redirect("/");
-
-  const formId = formData.get("id");
-  if (typeof formId !== "string" || formId.length === 0) {
-    throw new Error("missing id");
-  }
-  const nameRaw = formData.get("name");
-  const name = typeof nameRaw === "string" ? nameRaw : null;
-
-  const renamed = await renameConnection(customer, formId, name);
-  if (!renamed) notFound();
-  revalidatePath("/dashboard");
-  // Per-DB detail pages render conn.name in the topbar; settings renders
-  // it in the topbar + delete-confirm label; the connection home renders
-  // it as the page title. Bust all three. The bracketed path revalidates
-  // every concrete /connections/[id]/databases/[name] path under this
-  // connection without us having to enumerate them.
-  revalidatePath(`/connections/${formId}`);
-  revalidatePath(`/connections/[id]/databases/[name]`, "page");
-  revalidatePath(`/connections/${formId}/settings`);
 }
 
 async function deleteAction(formData: FormData) {
@@ -321,96 +331,4 @@ async function deleteAction(formData: FormData) {
     }
   }
   revalidatePath("/dashboard");
-}
-
-async function removeDatabaseAction(formData: FormData) {
-  "use server";
-  const customer = await currentCustomer();
-  if (!customer) redirect("/");
-
-  const connectionId = formData.get("connectionId");
-  const dbName = formData.get("name");
-  if (typeof connectionId !== "string" || connectionId.length === 0) {
-    throw new Error("missing connectionId");
-  }
-  if (typeof dbName !== "string" || dbName.length === 0) {
-    throw new Error("missing name");
-  }
-
-  const ctx = getMcpProxyContext();
-  try {
-    const result = await removeDatabase(customer, connectionId, dbName, ctx);
-    if (!result) notFound();
-  } catch (err) {
-    if (err instanceof LastDatabaseProtected) {
-      throw new Error(
-        "Can't remove the only database. Add another first or delete the connection.",
-      );
-    }
-    throw err;
-  }
-  revalidatePath("/dashboard");
-  // The connection home renders the db list, and the sibling strip on
-  // EVERY per-DB page of this connection changes with membership.
-  revalidatePath(`/connections/${connectionId}`);
-  revalidatePath(`/connections/[id]/databases/[name]`, "page");
-}
-
-async function renameDatabaseAction(formData: FormData) {
-  "use server";
-  const customer = await currentCustomer();
-  if (!customer) redirect("/");
-
-  const connectionId = formData.get("connectionId");
-  const oldName = formData.get("name");
-  const newName = formData.get("newName");
-  if (typeof connectionId !== "string" || connectionId.length === 0) {
-    throw new Error("missing connectionId");
-  }
-  if (typeof oldName !== "string" || oldName.length === 0) {
-    throw new Error("missing name");
-  }
-  if (typeof newName !== "string" || !isValidDatabaseName(newName)) {
-    throw new Error(
-      "Name must be 1–32 lowercase letters / digits / _ - , starting with a letter.",
-    );
-  }
-
-  const ctx = getMcpProxyContext();
-  try {
-    const result = await renameDatabase(
-      customer,
-      connectionId,
-      oldName,
-      newName,
-      ctx,
-    );
-    if (!result) notFound();
-  } catch (err) {
-    if (err instanceof DatabaseNameTaken) {
-      throw new Error(`A database named "${err.takenName}" already exists.`);
-    }
-    throw err;
-  }
-  revalidatePath("/dashboard");
-  // The connection home renders the db list; the per-DB detail route
-  // lives at /databases/[name] — bust both old and new names so a stale
-  // cached instance under either path doesn't linger.
-  revalidatePath(`/connections/${connectionId}`);
-  revalidatePath(`/connections/[id]/databases/[name]`, "page");
-}
-
-async function addDatabaseAction(formData: FormData) {
-  "use server";
-  const customer = await currentCustomer();
-  if (!customer) redirect("/");
-
-  // Validation + addDatabase + error mapping live in the shared helper
-  // (the connection home posts the same form). This action only owns
-  // its revalidation surface — including every per-DB page, whose
-  // sibling strip changes with membership.
-  const { connectionId } = await addDatabaseFromForm(customer, formData);
-  revalidatePath("/dashboard");
-  revalidatePath(`/connections/${connectionId}`);
-  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }

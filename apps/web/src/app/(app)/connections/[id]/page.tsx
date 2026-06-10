@@ -22,6 +22,7 @@ import { RenameConnectionInline } from "@/components/dashboard/rename-connection
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
+import { RenameDatabaseControl } from "@/components/connections/rename-database-control";
 import { RotateCredentialSheet } from "@/components/connections/rotate-credential-sheet";
 import { TenantScopeEditor } from "@/components/tenant-scope-editor";
 import { TokenList } from "@/components/tokens/token-list";
@@ -29,15 +30,18 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  DatabaseNameTaken,
   deleteConnection,
   getConnectionHomeData,
   getConnectionWithDatabase,
   getConnectionWithDatabaseAndCredential,
   getPlanUsage,
+  isValidDatabaseName,
   isValidDsn,
   LastDatabaseProtected,
   removeDatabase,
   renameConnection,
+  renameDatabase,
   rotateConnection,
   setTableAccess,
   setTenantScope,
@@ -334,6 +338,43 @@ export default async function ConnectionWorkspace({
     redirect(`/connections/${id}?section=database`);
   }
 
+  async function renameDatabaseAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    // oldName comes from the form (the inline editor posts the name it
+    // opened on) rather than the closed-over selectedName — they're the same
+    // here, but trusting the submitted old name keeps the editor self-
+    // contained. The lib re-checks ownership under the hood.
+    const oldName = formData.get("name");
+    const newName = formData.get("newName");
+    if (typeof oldName !== "string" || oldName.length === 0) {
+      throw new Error("missing name");
+    }
+    if (typeof newName !== "string" || !isValidDatabaseName(newName)) {
+      throw new Error(
+        "Name must be 1–32 lowercase letters / digits / _ - , starting with a letter.",
+      );
+    }
+    const ctx = getMcpProxyContext();
+    try {
+      const result = await renameDatabase(customer, id, oldName, newName, ctx);
+      if (!result) notFound();
+    } catch (err) {
+      if (err instanceof DatabaseNameTaken) {
+        throw new Error(`A database named "${err.takenName}" already exists.`);
+      }
+      throw err;
+    }
+    revalidatePath("/dashboard");
+    revalidatePath(`/connections/${id}`);
+    // The per-DB detail route lives at /databases/[name]; the sibling strip
+    // on every per-DB page of this connection changes with the rename.
+    revalidatePath(`/connections/[id]/databases/[name]`, "page");
+    // The control navigates to ?db=<newName> client-side; no redirect here
+    // (it runs inside a client transition that would swallow NEXT_REDIRECT).
+  }
+
   // ---- panes -------------------------------------------------------------
 
   const databasePane = selDb ? (
@@ -412,6 +453,11 @@ export default async function ConnectionWorkspace({
           Actions
         </span>
         <div className="flex flex-wrap items-center gap-2">
+          <RenameDatabaseControl
+            connectionId={conn.id}
+            name={selDb.name}
+            action={renameDatabaseAction}
+          />
           <RotateCredentialSheet
             id={conn.id}
             dbName={selDb.name}

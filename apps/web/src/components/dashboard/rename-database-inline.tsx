@@ -26,9 +26,11 @@ export function RenameDatabaseInline({
   connectionId: string;
   initialName: string;
   action: (formData: FormData) => Promise<void>;
-  // Called when the rename completes (success or cancel) so the parent
-  // can flip out of rename mode.
-  onDone: () => void;
+  // Called when the rename completes so the parent can flip out of edit
+  // mode. On a successful rename it receives the committed `newName` (so a
+  // caller keyed on the old name — e.g. the workspace's ?db pane — can
+  // re-target it); on cancel / no-op it's called with no argument.
+  onDone: (result?: { newName: string }) => void;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function RenameDatabaseInline({
     startTransition(async () => {
       try {
         await action(fd);
-        onDone();
+        onDone({ newName: next });
       } catch (e) {
         setError(e instanceof Error ? e.message : "rename failed");
       }

@@ -81,6 +81,43 @@ export async function countUsableTokens(
   return Number(rows[0]?.count ?? 0);
 }
 
+/** Active token count per connection, for the dashboard list's "agents"
+ *  stat. "Active" matches countUsableTokens / the runtime resolver:
+ *  status='active' AND (expires_at IS NULL OR expires_at > NOW()) — so an
+ *  expired-but-unswept row (still 'active' in the table) is NOT counted,
+ *  keeping the dashboard number aligned with what an agent could actually
+ *  use. Connections with zero active tokens are absent from the map; the
+ *  caller defaults to 0. The connectionIds are assumed already
+ *  ownership-scoped by the caller (listDashboardConnections derives them
+ *  from the customer's own connections). */
+export async function countActiveTokensByConnection(
+  customer: Customer,
+  connectionIds: string[],
+): Promise<Map<string, number>> {
+  if (connectionIds.length === 0) return new Map();
+  const db = getDb(customer.region);
+  const rows = (await db
+    .select({
+      connectionId: mcpTokens.connectionId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(mcpTokens)
+    .where(
+      and(
+        inArray(mcpTokens.connectionId, connectionIds),
+        eq(mcpTokens.status, "active"),
+        sql`(${mcpTokens.expiresAt} IS NULL OR ${mcpTokens.expiresAt} > NOW())`,
+      ),
+    )
+    .groupBy(mcpTokens.connectionId)) as Array<{
+    connectionId: string;
+    count: number;
+  }>;
+  const map = new Map<string, number>();
+  for (const r of rows) map.set(r.connectionId, Number(r.count));
+  return map;
+}
+
 /** Build + insert a token row inside an EXISTING transaction. The caller owns
  *  the txn and any locking, and is responsible for the TOKEN_CREATED audit
  *  after commit (best-effort — see emitTokenAuditRow).
