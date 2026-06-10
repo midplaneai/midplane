@@ -68,7 +68,11 @@ type PanelState =
   // check must not silently switch back to the probe matrix).
   | { kind: "error"; message: string; retryable: boolean; mode: RunMode };
 
-const CLIENT_TIMEOUT_MS = 35_000; // server's engine timeout is 30s
+// Covers the server's true worst case, not just the engine call: a
+// cold Fly boot (spawner bootTimeoutMs 60s) + policy push + the 30s
+// /admin/dry-run timeout. A shorter client abort burned a probe slot
+// on requests that were about to succeed (review finding).
+const CLIENT_TIMEOUT_MS = 100_000;
 
 export function TestPolicyPanel({
   connectionId,
