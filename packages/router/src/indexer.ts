@@ -50,6 +50,10 @@ import type { Db } from "./resolve.ts";
 import type { ActiveContainer, ContainerRegistry } from "./spawner.ts";
 
 const DEFAULT_TICK_MS = 5_000;
+/** recordError write throttle — minute-level is plenty for the
+ *  freshness dot; without it a persistently-down engine churns an
+ *  indexer_cursors UPDATE every tick. */
+const ERROR_STAMP_MIN_MS = 60_000;
 const DEFAULT_BATCH_LIMIT = 500;
 const DEFAULT_RETENTION_GRACE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_SWEEP_MS = 60 * 60 * 1000;
@@ -186,6 +190,11 @@ export class Indexer {
    *  ContainerRegistry has had since day one). */
   private readonly cursorIdByConnectionId = new Map<string, string>();
 
+  /** Last time recordError stamped a row, per connection — write
+   *  throttle so a persistently-down engine doesn't churn
+   *  indexer_cursors every tick (see recordError). */
+  private readonly lastErrorStampMs = new Map<string, number>();
+
   constructor(opts: IndexerOptions) {
     if (!opts.indexerToken) {
       throw new Error(
@@ -232,6 +241,7 @@ export class Indexer {
           connectionId: container.connectionId,
           phase: "fetch",
         });
+        await this.recordError(container, err);
       }
     }
 
@@ -299,6 +309,7 @@ export class Indexer {
           connectionId: container.connectionId,
           phase: "write",
         });
+        await this.recordError(container, err);
         return;
       }
       cursor = resp.rows[resp.rows.length - 1]!.id;
@@ -495,6 +506,87 @@ export class Indexer {
         }
       }
     });
+
+    // Successful drain clears the error stamps in the DB — clear the
+    // recordError throttle too, so a fail→recover→fail-again sequence
+    // inside ERROR_STAMP_MIN_MS stamps the NEW outage immediately
+    // instead of staying green for up to a minute (codex review P2).
+    this.lastErrorStampMs.delete(connectionId);
+  }
+
+  /** Best-effort: stamp last_error / last_error_at on the connection's
+   *  cursor row so the dashboard freshness dot can actually go red —
+   *  computeFreshness returns "down" only when last_error_at is newer
+   *  than last_indexed_at. Before this, drain errors only reached the
+   *  onError callback and the dot stayed green no matter how broken the
+   *  engine was.
+   *
+   *  Never throws: it runs inside catch blocks, and a recording failure
+   *  must not mask or amplify the original error. Two paths, mirroring
+   *  the cursor write in writeBatch:
+   *    (a) cursor row exists → UPDATE by synthetic id (stable across the
+   *        FK ON DELETE SET NULL flip).
+   *    (b) no row yet (engine erroring since first sighting) → INSERT
+   *        with customer_id resolved from connections; if that row is
+   *        already gone the cursor is truly orphaned and there is
+   *        nothing for the dashboard to paint — skip.
+   */
+  private async recordError(
+    container: ActiveContainer,
+    err: unknown,
+  ): Promise<void> {
+    try {
+      // Throttle: a persistently-down engine fails every 5s tick; the
+      // freshness dot only needs minute-level granularity, so don't
+      // churn an UPDATE (plus the cursor lookup) on indexer_cursors
+      // every tick indefinitely.
+      const nowMs = this.nowFn();
+      const lastStamp = this.lastErrorStampMs.get(container.connectionId);
+      if (lastStamp !== undefined && nowMs - lastStamp < ERROR_STAMP_MIN_MS) {
+        return;
+      }
+      this.lastErrorStampMs.set(container.connectionId, nowMs);
+
+      const message = (err instanceof Error ? err.message : String(err)).slice(
+        0,
+        1000,
+      );
+      const errorAt = new Date(nowMs);
+
+      // loadCursorRow populates cursorIdByConnectionId as a side effect.
+      await this.loadCursorRow(container.connectionId);
+      const cachedCursorId = this.cursorIdByConnectionId.get(
+        container.connectionId,
+      );
+      if (cachedCursorId) {
+        await this.db
+          .update(indexerCursors)
+          .set({ lastError: message, lastErrorAt: errorAt })
+          .where(eq(indexerCursors.id, cachedCursorId));
+        return;
+      }
+
+      const meta = await this.resolveCustomer(container.connectionId);
+      if (!meta) return;
+      await this.db
+        .insert(indexerCursors)
+        .values({
+          id: ulid(),
+          connectionId: container.connectionId,
+          customerId: meta.customerId,
+          region: container.region,
+          lastError: message,
+          lastErrorAt: errorAt,
+        })
+        .onConflictDoUpdate({
+          target: indexerCursors.connectionId,
+          targetWhere: drizzleSql`connection_id IS NOT NULL`,
+          set: { lastError: message, lastErrorAt: errorAt },
+        });
+    } catch {
+      // Recording is diagnostics, not correctness — swallow. The
+      // original error already reached onError above.
+    }
   }
 
   private async loadCursorRow(

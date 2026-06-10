@@ -25,12 +25,16 @@ import {
   DecryptCache,
   DockerSpawner,
   DsnResolver,
+  dryRunPolicy,
   ExpirySweeper,
   FlyMachineSpawner,
   Indexer,
   loadRegions,
   pushPolicy as pushPolicyHelper,
+  type DryRunOutcome,
+  type DryRunRequest,
   type PushPolicyResult,
+  type SpawnOptions,
 } from "@midplane-cloud/router";
 import { getDb, type DatabaseEntry } from "@midplane-cloud/db";
 import { makeKmsContext } from "@midplane-cloud/kms";
@@ -53,6 +57,11 @@ interface McpProxyContext {
     connectionId: string,
     databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult>;
+  /** Engine policy dry-run (acquire → push → /admin/dry-run) for the
+   *  test panel. engine_unavailable when `INDEXER_TOKEN` is unset —
+   *  the engine's admin surface is 404 in that mode, so there is no
+   *  verdict to be had (laptop dev without token plumbing). */
+  dryRun(spawn: SpawnOptions, request: DryRunRequest): Promise<DryRunOutcome>;
 }
 
 const GLOBAL_KEY = "__midplane_mcp_proxy__";
@@ -147,6 +156,20 @@ export function getMcpProxyContext(): McpProxyContext {
     });
   };
 
+  const dryRun = async (
+    spawn: SpawnOptions,
+    request: DryRunRequest,
+  ): Promise<DryRunOutcome> => {
+    if (!indexerToken) {
+      return {
+        ok: false,
+        kind: "engine_unavailable",
+        detail: "INDEXER_TOKEN unset — engine admin surface disabled",
+      };
+    }
+    return dryRunPolicy(spawn, request, { registry, indexerToken });
+  };
+
   const ctx: McpProxyContext = {
     cache,
     registry,
@@ -154,6 +177,7 @@ export function getMcpProxyContext(): McpProxyContext {
     indexer,
     expirySweeper,
     pushPolicy,
+    dryRun,
   };
   g[GLOBAL_KEY] = ctx;
   return ctx;

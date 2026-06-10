@@ -45,6 +45,10 @@ interface CursorRow {
   customerId: string;
   region: "eu" | "us";
   lastIndexedAt?: Date;
+  /** Error stamps for the freshness dot — written by recordError on a
+   *  failed drain, cleared back to null by the next successful drain. */
+  lastError?: string | null;
+  lastErrorAt?: Date | null;
 }
 
 interface FakeDbState {
@@ -223,28 +227,39 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
           connectionId: string;
           customerId: string;
           region: "eu" | "us";
-          lastId: string;
+          lastId?: string;
           lastIndexedAt?: Date;
+          lastError?: string | null;
+          lastErrorAt?: Date | null;
         }>) {
           // onConflictDoUpdate semantics: customerId is immutable, so an
           // existing row's customerId stays — only lastId/lastIndexedAt
-          // get bumped. Look up the existing cursor by connection_id (the
-          // partial unique index's target predicate); if found, treat
-          // this as an UPDATE-in-place and keep the existing id.
+          // (and the error stamps) get bumped. Look up the existing
+          // cursor by connection_id (the partial unique index's target
+          // predicate); if found, treat this as an UPDATE-in-place and
+          // keep the existing id. recordError's insert carries no lastId
+          // (schema default "") — don't clobber an existing one.
           const existing = cursorByConnectionId(r.connectionId);
           if (existing) {
-            existing.lastId = r.lastId;
+            if (r.lastId !== undefined) existing.lastId = r.lastId;
             if (r.lastIndexedAt) existing.lastIndexedAt = r.lastIndexedAt;
+            if (r.lastError !== undefined) existing.lastError = r.lastError;
+            if (r.lastErrorAt !== undefined)
+              existing.lastErrorAt = r.lastErrorAt;
             // Note: customerId NOT updated on conflict — immutable.
             continue;
           }
           state.cursorsById.set(r.id, {
             id: r.id,
             connectionId: r.connectionId,
-            lastId: r.lastId,
+            lastId: r.lastId ?? "",
             customerId: r.customerId,
             region: r.region,
             ...(r.lastIndexedAt ? { lastIndexedAt: r.lastIndexedAt } : {}),
+            ...(r.lastError !== undefined ? { lastError: r.lastError } : {}),
+            ...(r.lastErrorAt !== undefined
+              ? { lastErrorAt: r.lastErrorAt }
+              : {}),
           });
         }
       }
@@ -288,11 +303,18 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
           const row = state.cursorsById.get(whereCond.firstUlid);
           if (!row) return;
           const s = setValue as
-            | { lastId?: string; lastIndexedAt?: Date }
+            | {
+                lastId?: string;
+                lastIndexedAt?: Date;
+                lastError?: string | null;
+                lastErrorAt?: Date | null;
+              }
             | undefined;
           if (s?.lastId !== undefined) row.lastId = s.lastId;
           if (s?.lastIndexedAt !== undefined)
             row.lastIndexedAt = s.lastIndexedAt;
+          if (s?.lastError !== undefined) row.lastError = s.lastError;
+          if (s?.lastErrorAt !== undefined) row.lastErrorAt = s.lastErrorAt;
         }
       }
       setValue = undefined;
@@ -769,12 +791,17 @@ describe("Indexer", () => {
     });
     await ix.tick();
 
-    // No cursor row exists — on txn failure the upsert never happens,
-    // and the indexer no longer pre-seeds an empty cursor (that was
-    // dropped along with the loadCursor() seed path; see Indexer.indexOne
-    // and writeBatch).
-    expect(state.cursorsById.size).toBe(0);
+    // The real invariant: the cursor does not ADVANCE on txn failure —
+    // the batch upsert never happens, so lastId stays at the schema
+    // default "". recordError does create a row now (error stamps only)
+    // so the freshness dot can go red; that row must not carry drain
+    // progress.
     expect(state.auditRows).toHaveLength(0);
+    const cursor = [...state.cursorsById.values()].find(
+      (c) => c.connectionId === TEST_CONN_A,
+    );
+    expect(cursor?.lastId ?? "").toBe("");
+    expect(cursor?.lastIndexedAt).toBeUndefined();
     expect(errors).toHaveLength(1);
   });
 
@@ -793,7 +820,13 @@ describe("Indexer", () => {
     });
     await ix.tick();
     expect(state.auditRows).toHaveLength(0);
-    expect(state.cursorsById.size).toBe(0);
+    // Cursor must not ADVANCE on 5xx; the error-stamped row recordError
+    // creates carries no drain progress (lastId stays "").
+    const cursor = [...state.cursorsById.values()].find(
+      (c) => c.connectionId === TEST_CONN_A,
+    );
+    expect(cursor?.lastId ?? "").toBe("");
+    expect(cursor?.lastIndexedAt).toBeUndefined();
     expect(errors).toHaveLength(1);
   });
 
@@ -1044,5 +1077,186 @@ describe("Indexer", () => {
     const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
     await ix.tick();
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error recording — the freshness dot's "down" state
+// ---------------------------------------------------------------------------
+//
+// REGRESSION GUARD: before this change the indexer only ever CLEARED
+// last_error_at (to null, on successful drain) and never wrote a
+// timestamp — so computeFreshness's "down" branch (apps/web/src/lib/
+// freshness.ts) was unreachable and every dashboard dot stayed green no
+// matter how broken an engine was. These tests pin the new behavior:
+// failed drains stamp last_error / last_error_at, successful drains
+// still clear them.
+
+describe("Indexer error recording", () => {
+  const CURSOR_ID = "01HXCRSR000000000000000000";
+
+  it("stamps lastError/lastErrorAt on the existing cursor row when the drain fails", async () => {
+    const { db, state, registry } = await buildHarness();
+    state.cursorsById.set(CURSOR_ID, {
+      id: CURSOR_ID,
+      connectionId: TEST_CONN_A,
+      lastId: "01HX0000000000000000000001",
+      customerId: TEST_CUST_A,
+      region: "eu",
+      lastIndexedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    const onError = vi.fn();
+    const fetchFn = vi.fn(
+      async () => new Response("boom", { status: 500 }),
+    ) as unknown as typeof fetch;
+    // Pinned clock — the assertion below must not depend on the host
+    // clock being past the fixture date.
+    const FIXED_NOW = new Date("2026-06-10T00:00:00Z").getTime();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onError,
+      now: () => FIXED_NOW,
+    });
+    await ix.tick();
+
+    const cursor = state.cursorsById.get(CURSOR_ID)!;
+    expect(cursor.lastErrorAt).toEqual(new Date(FIXED_NOW));
+    expect(cursor.lastError).toMatch(/audit\/since 500/);
+    // Error newer than the last good drain → the dot's "down" condition.
+    expect(cursor.lastErrorAt!.getTime()).toBeGreaterThan(
+      cursor.lastIndexedAt!.getTime(),
+    );
+    // Recording supplements the operator callback, never replaces it.
+    expect(onError).toHaveBeenCalled();
+
+    // Write throttle: a second failing tick inside ERROR_STAMP_MIN_MS
+    // must not stamp again (no UPDATE churn for a persistently-down
+    // engine).
+    const updatesBefore = state.updates.length;
+    await ix.tick();
+    expect(state.updates.length).toBe(updatesBefore);
+  });
+
+  it("creates a cursor row with lastErrorAt when the engine errors before any successful drain", async () => {
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(
+      async () => new Response("boom", { status: 502 }),
+    ) as unknown as typeof fetch;
+    const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+    await ix.tick();
+
+    const cursor = [...state.cursorsById.values()].find(
+      (c) => c.connectionId === TEST_CONN_A,
+    );
+    expect(cursor).toBeDefined();
+    expect(cursor!.lastErrorAt).toBeInstanceOf(Date);
+    expect(cursor!.lastError).toMatch(/audit\/since 502/);
+    expect(cursor!.lastIndexedAt).toBeUndefined();
+    expect(cursor!.customerId).toBe(TEST_CUST_A);
+  });
+
+  it("stamps lastErrorAt when the write phase fails (postgres outage)", async () => {
+    const { db, state, registry } = await buildHarness({ failNextTxn: true });
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [row("01HX0000000000000000000001")],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const onError = vi.fn();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onError,
+    });
+    await ix.tick();
+
+    const cursor = [...state.cursorsById.values()].find(
+      (c) => c.connectionId === TEST_CONN_A,
+    );
+    expect(cursor).toBeDefined();
+    expect(cursor!.lastError).toMatch(/simulated postgres outage/);
+    expect(cursor!.lastErrorAt).toBeInstanceOf(Date);
+    expect(onError).toHaveBeenCalledWith(expect.anything(), {
+      connectionId: TEST_CONN_A,
+      phase: "write",
+    });
+  });
+
+  it("a successful drain resets the error-stamp throttle (fail→recover→fail stamps immediately)", async () => {
+    const { db, state, registry } = await buildHarness();
+    state.cursorsById.set(CURSOR_ID, {
+      id: CURSOR_ID,
+      connectionId: TEST_CONN_A,
+      lastId: "01HX0000000000000000000001",
+      customerId: TEST_CUST_A,
+      region: "eu",
+      lastIndexedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    let mode: "fail" | "ok" = "fail";
+    const fetchFn = vi.fn(async () =>
+      mode === "fail"
+        ? new Response("boom", { status: 500 })
+        : jsonResponse({
+            rows: [row("01HX0000000000000000000002")],
+            next_cursor: null,
+          }),
+    ) as unknown as typeof fetch;
+    let nowMs = new Date("2026-06-10T00:00:00Z").getTime();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      now: () => nowMs,
+    });
+
+    await ix.tick(); // fail #1 — stamps
+    expect(state.cursorsById.get(CURSOR_ID)!.lastErrorAt).toBeInstanceOf(Date);
+
+    mode = "ok";
+    nowMs += 5_000;
+    await ix.tick(); // recover — clears stamps AND the throttle
+    expect(state.cursorsById.get(CURSOR_ID)!.lastErrorAt).toBeNull();
+
+    mode = "fail";
+    nowMs += 5_000; // still inside the 60s throttle window of fail #1
+    await ix.tick(); // fail #2 — must stamp again immediately
+    expect(state.cursorsById.get(CURSOR_ID)!.lastErrorAt).toEqual(
+      new Date(nowMs),
+    );
+  });
+
+  it("clears lastError/lastErrorAt on the next successful drain", async () => {
+    const { db, state, registry } = await buildHarness();
+    state.cursorsById.set(CURSOR_ID, {
+      id: CURSOR_ID,
+      connectionId: TEST_CONN_A,
+      lastId: "01HX0000000000000000000001",
+      customerId: TEST_CUST_A,
+      region: "eu",
+      lastIndexedAt: new Date("2026-06-01T00:00:00Z"),
+      lastError: "audit/since 500 from 127.0.0.1:30001",
+      lastErrorAt: new Date("2026-06-02T00:00:00Z"),
+    });
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [row("01HX0000000000000000000002")],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+    await ix.tick();
+
+    const cursor = state.cursorsById.get(CURSOR_ID)!;
+    expect(cursor.lastError).toBeNull();
+    expect(cursor.lastErrorAt).toBeNull();
+    expect(cursor.lastId).toBe("01HX0000000000000000000002");
+    expect(cursor.lastIndexedAt).toBeInstanceOf(Date);
   });
 });

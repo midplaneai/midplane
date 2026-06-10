@@ -22,8 +22,13 @@ import { connections, getDb } from "@midplane-cloud/db";
 
 import { isValidDsn } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
-import { pingDsn } from "@/lib/ping-dsn";
+import { pingDsnGuarded } from "@/lib/ping-guard";
 import { getPostHog } from "@/lib/posthog";
+import {
+  checkRateLimit,
+  PING_TEST_RATE_LIMIT,
+  pingTestKey,
+} from "@/lib/rate-limit";
 
 const TestBody = z.object({
   dsn: z.string().refine(isValidDsn, {
@@ -42,13 +47,32 @@ export async function POST(
   const { userId } = await auth();
   const { id } = await params;
 
+  // Shared budget with the raw-DSN surface — one key per customer
+  // across all ping endpoints (definitions live in lib/rate-limit.ts).
+  const limited = checkRateLimit(pingTestKey(customer.id), PING_TEST_RATE_LIMIT);
+  if (!limited.ok) {
+    return Response.json(
+      { error: "too many tests — try again shortly" },
+      {
+        status: 429,
+        headers: { "retry-after": String(limited.retryAfterS) },
+      },
+    );
+  }
+
+  // Malformed bodies are a 400, never a 500 — same contract as the
+  // raw-DSN sibling (both surfaces share TestDsnButton).
   let raw: unknown;
-  const contentType = req.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    raw = await req.json();
-  } else {
-    const form = await req.formData();
-    raw = Object.fromEntries(form.entries());
+  try {
+    const contentType = req.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      raw = await req.json();
+    } else {
+      const form = await req.formData();
+      raw = Object.fromEntries(form.entries());
+    }
+  } catch {
+    return Response.json({ error: "invalid body" }, { status: 400 });
   }
   const parsed = TestBody.safeParse(raw);
   if (!parsed.success) {
@@ -69,7 +93,10 @@ export async function POST(
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  const result = await pingDsn(parsed.data.dsn);
+  // Guarded since the connections-ux PR: this route previously pinged
+  // arbitrary pasted DSNs with only an ownership gate — an internal-
+  // network reachability oracle for any signed-in customer.
+  const result = await pingDsnGuarded(parsed.data.dsn);
 
   if (userId) {
     getPostHog()?.capture({

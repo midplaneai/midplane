@@ -29,7 +29,9 @@ import {
   useDatabaseLastQuery,
 } from "@/components/dashboard/freshness-provider";
 import { RenameDatabaseInline } from "@/components/dashboard/rename-database-inline";
+import { lastQueryLabel } from "@/lib/format";
 import { computeFreshness } from "@/lib/freshness";
+import { accessLabel } from "@/lib/policy-labels";
 import { cn } from "@/lib/utils";
 
 // Container for one DB row inside the dashboard's per-connection list.
@@ -91,7 +93,7 @@ export function DatabaseRow({
   const freshness = computeFreshness(cursor);
   const liveLastQuery = useDatabaseLastQuery(connectionId, database.name);
   const lastQueryAt = liveConn ? liveLastQuery : initialLastQueryAt;
-  const lastQueryText = lastQueryLabel(lastQueryAt);
+  const lastQueryText = lastQueryLabel(lastQueryAt); // shared copy — lib/format.ts
 
   function handleConfirmRemove() {
     const fd = new FormData();
@@ -189,25 +191,3 @@ export function DatabaseRow({
   );
 }
 
-function accessLabel(level: string): string {
-  if (level === "read") return "read";
-  if (level === "deny") return "deny";
-  if (level === "read_write") return "read · write";
-  return level;
-}
-
-function lastQueryLabel(lastQueryAt: Date | null): string {
-  if (!lastQueryAt) return "awaiting first query";
-  return `last query ${formatRelative(lastQueryAt)}`;
-}
-
-function formatRelative(d: Date): string {
-  const ms = Date.now() - d.getTime();
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return `${day}d ago`;
-}

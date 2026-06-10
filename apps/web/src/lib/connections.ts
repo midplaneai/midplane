@@ -897,11 +897,11 @@ export async function getConnectionWithDatabaseAndCredential(
   return { connection: conn, database };
 }
 
-/** List every DB on a connection, ordered by name. Used by the per-DB
- *  detail page (sibling tab strip is intentionally absent — PR-B locked
- *  the hierarchy as the navigation — but the dashboard renders the same
- *  list inline under each connection header). Returns null when the
- *  connection is unknown OR owned by another customer.
+/** List every DB on a connection, ordered by name. Data source for the
+ *  per-DB context strip (databases/[name]/layout.tsx — sibling tabs +
+ *  settings, added by the connections-ux design after the db pages
+ *  spent PR-B..PR-3 as dead ends). Returns null when the connection is
+ *  unknown OR owned by another customer.
  *
  *  Safe projection — no encryptedDsn / kmsKeyId. */
 export async function listDatabasesForConnection(
@@ -924,6 +924,37 @@ export async function listDatabasesForConnection(
   if (!conn) return null;
   const databases = await db
     .select(SAFE_DATABASE_COLUMNS)
+    .from(connectionDatabases)
+    .where(eq(connectionDatabases.connectionId, conn.id))
+    .orderBy(asc(connectionDatabases.name));
+  return { connection: conn, databases };
+}
+
+/** Credential-bearing variant of {@link listDatabasesForConnection} —
+ *  parent + ALL children with `encryptedDsn` + `kmsKeyId`. Required by
+ *  the dry-run route, which builds full SpawnOptions (the engine
+ *  container boots with every configured DB, same as the proxy path).
+ *  Ciphertext never reaches a client component or response body. */
+export async function getConnectionWithDatabasesAndCredentials(
+  customer: Customer,
+  id: string,
+): Promise<
+  | {
+      connection: typeof connections.$inferSelect;
+      databases: Array<typeof connectionDatabases.$inferSelect>;
+    }
+  | null
+> {
+  const db = getDb(customer.region);
+  const connRows = await db
+    .select()
+    .from(connections)
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .limit(1);
+  const conn = connRows[0];
+  if (!conn) return null;
+  const databases = await db
+    .select()
     .from(connectionDatabases)
     .where(eq(connectionDatabases.connectionId, conn.id))
     .orderBy(asc(connectionDatabases.name));
@@ -1451,6 +1482,62 @@ export async function listDashboardConnections(
       lastErrorAt: p.lastErrorAt,
     },
   }));
+}
+
+/** Single-connection slice of the dashboard data — the connection home
+ *  page (/connections/[id]) renders the same db rows + freshness facts
+ *  the list page does, scoped to one parent. Same safe projection, same
+ *  lastQueryAt semantics (clamped to the plan's retention window).
+ *  Returns null on unknown/foreign id — the page 404s with the same
+ *  leakage shape as every other connection read. */
+export async function getConnectionHomeData(
+  customer: Customer,
+  id: string,
+  retentionDays?: number,
+): Promise<{
+  connection: typeof connections.$inferSelect;
+  databases: DashboardDatabase[];
+  cursor: { lastIndexedAt: Date | null; lastErrorAt: Date | null };
+} | null> {
+  const db = getDb(customer.region);
+  const [parents, lastQueryMap] = await Promise.all([
+    db
+      .select({
+        connection: connections,
+        lastIndexedAt: indexerCursors.lastIndexedAt,
+        lastErrorAt: indexerCursors.lastErrorAt,
+      })
+      .from(connections)
+      .leftJoin(
+        indexerCursors,
+        eq(indexerCursors.connectionId, connections.id),
+      )
+      .where(
+        and(eq(connections.id, id), eq(connections.customerId, customer.id)),
+      )
+      .limit(1),
+    lastQueryByDatabase(customer, retentionDays),
+  ]);
+  const parent = parents[0];
+  if (!parent) return null;
+
+  const children = await db
+    .select(SAFE_DATABASE_COLUMNS)
+    .from(connectionDatabases)
+    .where(eq(connectionDatabases.connectionId, parent.connection.id))
+    .orderBy(asc(connectionDatabases.name));
+
+  return {
+    connection: parent.connection,
+    databases: children.map((c) => ({
+      ...c,
+      lastQueryAt: lastQueryMap.get(c.name) ?? null,
+    })),
+    cursor: {
+      lastIndexedAt: parent.lastIndexedAt,
+      lastErrorAt: parent.lastErrorAt,
+    },
+  };
 }
 
 /** Slim payload for the 60s polling endpoint. Identifiers + freshness

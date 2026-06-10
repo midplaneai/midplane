@@ -48,12 +48,16 @@ export function PermissionGrid({
   initialPolicy,
   action,
   connectionId,
+  dbName,
 }: {
   initialPolicy: TableAccessPolicy;
   // Server action signature: (FormData) => Promise<void>. The form
   // contains a single `policy` field with JSON-encoded TableAccessPolicy.
   action: (formData: FormData) => Promise<void>;
   connectionId: string;
+  /** Database the grid edits — scopes the autocomplete's introspection
+   *  to the right DB (the tables route is per-db). */
+  dbName?: string;
 }) {
   // `applied` is the policy currently committed to the server — the
   // baseline for the dirty check. It starts as the prop and shifts to
@@ -220,6 +224,7 @@ export function PermissionGrid({
                   value={r.name}
                   onChange={(v) => updateRow(r.key, { name: v })}
                   connectionId={connectionId}
+                  dbName={dbName}
                   excludeNames={
                     new Set([...usedNames].filter((n) => n !== r.name))
                   }

@@ -9,6 +9,7 @@ import {
   type RevokeTokenAction,
 } from "@/components/tokens/revoke-token-button";
 import { resolveClerkUsers } from "@/lib/clerk-users";
+import { formatRelativeLong } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { TokenSummary } from "@/lib/tokens";
 
@@ -75,7 +76,8 @@ export async function TokenList({
   if (sorted.length === 0) {
     return (
       <section
-        className="space-y-5 rounded-lg border border-border bg-card p-6"
+        id="tokens"
+        className="scroll-mt-16 space-y-5 rounded-lg border border-border bg-card p-6"
         data-testid="token-list"
         data-state="empty"
       >
@@ -107,7 +109,8 @@ export async function TokenList({
 
   return (
     <section
-      className="space-y-3 rounded-lg border border-border bg-card p-6"
+      id="tokens"
+      className="scroll-mt-16 space-y-3 rounded-lg border border-border bg-card p-6"
       data-testid="token-list"
       data-state="populated"
     >
@@ -245,7 +248,7 @@ function deriveStatusView(token: TokenSummary, now: Date): StatusView {
       kind: "revoked",
       badgeVariant: "deny",
       badgeLabel: "Revoked",
-      timingLine: `revoked ${formatRelativePast(revokedAt, now)}`,
+      timingLine: `revoked ${formatRelativeLong(revokedAt, now)}`,
       lastUsedLine,
     };
   }
@@ -255,7 +258,7 @@ function deriveStatusView(token: TokenSummary, now: Date): StatusView {
       kind: "expired",
       badgeVariant: "deny",
       badgeLabel: "Expired",
-      timingLine: `expired ${formatRelativePast(expiredAt, now)}`,
+      timingLine: `expired ${formatRelativeLong(expiredAt, now)}`,
       lastUsedLine,
     };
   }
@@ -325,17 +328,5 @@ function formatRemaining(days: number): string {
 
 function formatLastUsed(lastUsedAt: Date | null, now: Date): string {
   if (!lastUsedAt) return "Last used: (never used)";
-  return `Last used: ${formatRelativePast(lastUsedAt, now)}`;
-}
-
-function formatRelativePast(d: Date, now: Date): string {
-  const ms = Math.max(0, now.getTime() - d.getTime());
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return "just now";
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
-  const day = Math.floor(hr / 24);
-  return `${day} day${day === 1 ? "" : "s"} ago`;
+  return `Last used: ${formatRelativeLong(lastUsedAt, now)}`;
 }

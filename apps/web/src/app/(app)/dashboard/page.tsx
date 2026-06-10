@@ -4,8 +4,6 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
-
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { AddDatabaseForm } from "@/components/dashboard/add-database-form";
 import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
@@ -22,11 +20,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { type DashboardDatabase } from "@/lib/connections";
 import {
-  addDatabase,
   DatabaseNameTaken,
   deleteConnection,
   isValidDatabaseName,
-  isValidDsn,
   LastDatabaseProtected,
   listDashboardConnections,
   removeDatabase,
@@ -34,6 +30,7 @@ import {
   renameDatabase,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { addDatabaseFromForm } from "@/lib/database-form";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
@@ -216,9 +213,12 @@ function ConnectionHeader({
           initialLastIndexedAt={initialLastIndexedAt}
           initialLastErrorAt={initialLastErrorAt}
         />
+        {/* Entry to the connection home (databases + tokens + test +
+            settings). Was labeled "Connect", which read as a one-time
+            setup action and hid the page's hub role. */}
         <Link href={`/connections/${id}`}>
           <Button size="sm" variant="outline">
-            Connect
+            Open
           </Button>
         </Link>
         <ConnectionRowMenu id={id} name={name} deleteAction={deleteAction} />
@@ -283,9 +283,11 @@ async function renameAction(formData: FormData) {
   if (!renamed) notFound();
   revalidatePath("/dashboard");
   // Per-DB detail pages render conn.name in the topbar; settings renders
-  // it in the topbar + delete-confirm label. Bust both. The bracketed
-  // path revalidates every concrete /connections/[id]/databases/[name]
-  // path under this connection without us having to enumerate them.
+  // it in the topbar + delete-confirm label; the connection home renders
+  // it as the page title. Bust all three. The bracketed path revalidates
+  // every concrete /connections/[id]/databases/[name] path under this
+  // connection without us having to enumerate them.
+  revalidatePath(`/connections/${formId}`);
   revalidatePath(`/connections/[id]/databases/[name]`, "page");
   revalidatePath(`/connections/${formId}/settings`);
 }
@@ -348,6 +350,10 @@ async function removeDatabaseAction(formData: FormData) {
     throw err;
   }
   revalidatePath("/dashboard");
+  // The connection home renders the db list, and the sibling strip on
+  // EVERY per-DB page of this connection changes with membership.
+  revalidatePath(`/connections/${connectionId}`);
+  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }
 
 async function renameDatabaseAction(formData: FormData) {
@@ -387,8 +393,10 @@ async function renameDatabaseAction(formData: FormData) {
     throw err;
   }
   revalidatePath("/dashboard");
-  // Per-DB detail route lives at /databases/[name]; bust both old and new
-  // so a stale cached instance under either path doesn't linger.
+  // The connection home renders the db list; the per-DB detail route
+  // lives at /databases/[name] — bust both old and new names so a stale
+  // cached instance under either path doesn't linger.
+  revalidatePath(`/connections/${connectionId}`);
   revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }
 
@@ -397,48 +405,12 @@ async function addDatabaseAction(formData: FormData) {
   const customer = await currentCustomer();
   if (!customer) redirect("/");
 
-  const connectionId = formData.get("connectionId");
-  if (typeof connectionId !== "string" || connectionId.length === 0) {
-    throw new Error("missing connectionId");
-  }
-  const nameRaw = formData.get("name");
-  if (typeof nameRaw !== "string" || !isValidDatabaseName(nameRaw.trim())) {
-    throw new Error(
-      "Name must be 1–32 lowercase letters / digits / _ - , starting with a letter.",
-    );
-  }
-  const dbName = nameRaw.trim();
-  const dsn = formData.get("dsn");
-  if (!isValidDsn(dsn)) {
-    throw new Error("DSN must be a postgres:// or postgresql:// URL");
-  }
-  // The form posts a string; validate against the canonical enum so a
-  // tampered request can't smuggle in something the spawner would
-  // refuse. Missing field falls back to "read" — same posture as
-  // createConnection.
-  const accessRaw = formData.get("default_access");
-  const defaultAccess: AccessLevel =
-    typeof accessRaw === "string" &&
-    (ACCESS_LEVELS as readonly string[]).includes(accessRaw)
-      ? (accessRaw as AccessLevel)
-      : "read";
-
-  const ctx = getMcpProxyContext();
-  try {
-    const result = await addDatabase(
-      customer,
-      connectionId,
-      dbName,
-      dsn,
-      defaultAccess,
-      ctx,
-    );
-    if (!result) notFound();
-  } catch (err) {
-    if (err instanceof DatabaseNameTaken) {
-      throw new Error(`A database named "${err.takenName}" already exists.`);
-    }
-    throw err;
-  }
+  // Validation + addDatabase + error mapping live in the shared helper
+  // (the connection home posts the same form). This action only owns
+  // its revalidation surface — including every per-DB page, whose
+  // sibling strip changes with membership.
+  const { connectionId } = await addDatabaseFromForm(customer, formData);
   revalidatePath("/dashboard");
+  revalidatePath(`/connections/${connectionId}`);
+  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }
