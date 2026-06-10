@@ -19,13 +19,30 @@ export interface PingDsnResult {
   error?: string;
 }
 
-export async function pingDsn(dsn: string): Promise<PingDsnResult> {
+export interface PingDsnOptions {
+  /** Dial this address instead of the DSN's hostname. Set by the SSRF
+   *  guard (ping-guard.ts) so DNS rebinding can't swap the target
+   *  between vetting and connect. */
+  hostOverride?: string;
+  /** TLS servername (SNI) to present when dialing a pinned IP — the
+   *  original hostname, so SNI-routed poolers (Neon/Supabase) still
+   *  route and cert verification still checks the right name. Only set
+   *  when the DSN asked for TLS. */
+  tlsServername?: string;
+}
+
+export async function pingDsn(
+  dsn: string,
+  opts: PingDsnOptions = {},
+): Promise<PingDsnResult> {
   const sql = postgres(dsn, {
     max: 1,
     idle_timeout: 5,
     connect_timeout: CONNECT_TIMEOUT_S,
     prepare: false,
     onnotice: () => undefined,
+    ...(opts.hostOverride ? { host: opts.hostOverride } : {}),
+    ...(opts.tlsServername ? { ssl: { servername: opts.tlsServername } } : {}),
   });
   try {
     await sql.unsafe(`SET statement_timeout = '${STATEMENT_TIMEOUT_MS}ms'`);

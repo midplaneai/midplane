@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
 import { AccessRadio } from "@/components/access-radio";
+import { TestDsnButton } from "@/components/connections/test-dsn-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,6 +30,9 @@ export function NewConnectionForm({
   ) => Promise<NewConnectionFormState>;
 }) {
   const [state, formAction, pending] = useActionState(action, initialState);
+  // Remount key for TestDsnButton — editing the DSN clears a stale
+  // "✓ reachable".
+  const [testVersion, setTestVersion] = useState(0);
 
   return (
     <form action={formAction} className="space-y-6" noValidate>
@@ -59,6 +63,7 @@ export function NewConnectionForm({
           aria-invalid={state.error ? true : undefined}
           aria-describedby={state.error ? "new-connection-error" : undefined}
           disabled={pending}
+          onChange={() => setTestVersion((v) => v + 1)}
         />
         <p className="text-xs text-muted-foreground">
           <strong className="font-medium text-foreground">Best practice:</strong>{" "}
@@ -138,9 +143,16 @@ export function NewConnectionForm({
           ) : null}
         </p>
       ) : null}
-      <Button type="submit" size="lg" arrow disabled={pending}>
-        {pending ? "Creating…" : "Create connection"}
-      </Button>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" size="lg" arrow disabled={pending}>
+          {pending ? "Creating…" : "Create connection"}
+        </Button>
+        <TestDsnButton
+          key={testVersion}
+          endpoint="/api/connections/test-dsn"
+          disabled={pending}
+        />
+      </div>
     </form>
   );
 }

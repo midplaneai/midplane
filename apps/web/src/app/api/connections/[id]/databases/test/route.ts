@@ -22,8 +22,9 @@ import { connections, getDb } from "@midplane-cloud/db";
 
 import { isValidDsn } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
-import { pingDsn } from "@/lib/ping-dsn";
+import { pingDsnGuarded } from "@/lib/ping-guard";
 import { getPostHog } from "@/lib/posthog";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const TestBody = z.object({
   dsn: z.string().refine(isValidDsn, {
@@ -41,6 +42,23 @@ export async function POST(
   }
   const { userId } = await auth();
   const { id } = await params;
+
+  // Shared budget with the raw-DSN surface — one key per customer
+  // across all ping endpoints, so switching surfaces doesn't reset the
+  // window.
+  const limited = checkRateLimit(`test-dsn:${customer.id}`, {
+    limit: 10,
+    windowMs: 60_000,
+  });
+  if (!limited.ok) {
+    return Response.json(
+      { error: "too many tests — try again shortly" },
+      {
+        status: 429,
+        headers: { "retry-after": String(limited.retryAfterS) },
+      },
+    );
+  }
 
   let raw: unknown;
   const contentType = req.headers.get("content-type") ?? "";
@@ -69,7 +87,10 @@ export async function POST(
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  const result = await pingDsn(parsed.data.dsn);
+  // Guarded since the connections-ux PR: this route previously pinged
+  // arbitrary pasted DSNs with only an ownership gate — an internal-
+  // network reachability oracle for any signed-in customer.
+  const result = await pingDsnGuarded(parsed.data.dsn);
 
   if (userId) {
     getPostHog()?.capture({

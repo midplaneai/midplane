@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { Plus, X } from "lucide-react";
 
 import { AccessRadio } from "@/components/access-radio";
+import { TestDsnButton } from "@/components/connections/test-dsn-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,12 +27,6 @@ import { Label } from "@/components/ui/label";
 
 const DB_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
-type TestState =
-  | { kind: "idle" }
-  | { kind: "pending" }
-  | { kind: "ok" }
-  | { kind: "error"; message: string };
-
 export function AddDatabaseForm({
   connectionId,
   action,
@@ -45,7 +40,9 @@ export function AddDatabaseForm({
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [test, setTest] = useState<TestState>({ kind: "idle" });
+  // Remount key for TestDsnButton — bumping it clears a stale
+  // "✓ reachable" the moment any input changes.
+  const [testVersion, setTestVersion] = useState(0);
   // Transient banner shown for ~4s after a successful add — the new
   // row paints from the revalidated server data; this banner just
   // reassures the user that the engine will pick the DB up on the next
@@ -83,44 +80,7 @@ export function AddDatabaseForm({
 
   function reset() {
     setError(null);
-    setTest({ kind: "idle" });
-  }
-
-  async function runTest(form: HTMLFormElement) {
-    const fd = new FormData(form);
-    const dsn = fd.get("dsn");
-    if (typeof dsn !== "string" || dsn.length === 0) {
-      setTest({
-        kind: "error",
-        message: "Paste a connection string before testing.",
-      });
-      return;
-    }
-    setTest({ kind: "pending" });
-    try {
-      const res = await fetch(
-        `/api/connections/${connectionId}/databases/test`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ dsn }),
-        },
-      );
-      const body = (await res.json()) as { ok?: boolean; error?: string };
-      if (res.ok && body.ok) {
-        setTest({ kind: "ok" });
-      } else {
-        setTest({
-          kind: "error",
-          message: body.error ?? `HTTP ${res.status}`,
-        });
-      }
-    } catch (e) {
-      setTest({
-        kind: "error",
-        message: e instanceof Error ? e.message : "test failed",
-      });
-    }
+    setTestVersion((v) => v + 1);
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -153,7 +113,7 @@ export function AddDatabaseForm({
         form.reset();
         setOpen(false);
         setError(null);
-        setTest({ kind: "idle" });
+        setTestVersion((v) => v + 1);
         setJustAdded(name);
       } catch (e) {
         setError(e instanceof Error ? e.message : "add failed");
@@ -246,20 +206,11 @@ export function AddDatabaseForm({
         </fieldset>
 
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={pending || test.kind === "pending"}
-            onClick={(e) => {
-              const form = (e.currentTarget as HTMLButtonElement).closest(
-                "form",
-              );
-              if (form) void runTest(form);
-            }}
-          >
-            {test.kind === "pending" ? "Testing…" : "Test connection"}
-          </Button>
+          <TestDsnButton
+            key={testVersion}
+            endpoint={`/api/connections/${connectionId}/databases/test`}
+            disabled={pending}
+          />
           <Button type="submit" size="sm" disabled={pending}>
             {pending ? "Adding…" : "Add database"}
           </Button>
@@ -275,7 +226,6 @@ export function AddDatabaseForm({
           >
             Cancel
           </Button>
-          <TestStatus state={test} />
           {error ? (
             <span className="text-xs text-destructive">{error}</span>
           ) : null}
@@ -285,19 +235,4 @@ export function AddDatabaseForm({
   );
 }
 
-function TestStatus({ state }: { state: TestState }) {
-  if (state.kind === "idle" || state.kind === "pending") return null;
-  if (state.kind === "ok") {
-    return (
-      <span className="text-xs font-medium text-[hsl(var(--allow))]">
-        ✓ reachable
-      </span>
-    );
-  }
-  return (
-    <span className="text-xs text-destructive" title={state.message}>
-      ✗ {state.message}
-    </span>
-  );
-}
 
