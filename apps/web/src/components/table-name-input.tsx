@@ -195,7 +195,7 @@ export function TableNameInput({
       {open ? (
         <ul
           id={listboxId}
-          className="absolute left-0 top-full z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-border bg-popover shadow-md"
+          className="absolute left-0 top-full z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-border bg-popover"
           role="listbox"
         >
           <PanelContents

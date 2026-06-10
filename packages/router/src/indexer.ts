@@ -50,6 +50,10 @@ import type { Db } from "./resolve.ts";
 import type { ActiveContainer, ContainerRegistry } from "./spawner.ts";
 
 const DEFAULT_TICK_MS = 5_000;
+/** recordError write throttle — minute-level is plenty for the
+ *  freshness dot; without it a persistently-down engine churns an
+ *  indexer_cursors UPDATE every tick. */
+const ERROR_STAMP_MIN_MS = 60_000;
 const DEFAULT_BATCH_LIMIT = 500;
 const DEFAULT_RETENTION_GRACE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_SWEEP_MS = 60 * 60 * 1000;
@@ -185,6 +189,11 @@ export class Indexer {
    *  orphan cursors are unrecoverable (same limitation the in-memory
    *  ContainerRegistry has had since day one). */
   private readonly cursorIdByConnectionId = new Map<string, string>();
+
+  /** Last time recordError stamped a row, per connection — write
+   *  throttle so a persistently-down engine doesn't churn
+   *  indexer_cursors every tick (see recordError). */
+  private readonly lastErrorStampMs = new Map<string, number>();
 
   constructor(opts: IndexerOptions) {
     if (!opts.indexerToken) {
@@ -521,11 +530,22 @@ export class Indexer {
     err: unknown,
   ): Promise<void> {
     try {
+      // Throttle: a persistently-down engine fails every 5s tick; the
+      // freshness dot only needs minute-level granularity, so don't
+      // churn an UPDATE (plus the cursor lookup) on indexer_cursors
+      // every tick indefinitely.
+      const nowMs = this.nowFn();
+      const lastStamp = this.lastErrorStampMs.get(container.connectionId);
+      if (lastStamp !== undefined && nowMs - lastStamp < ERROR_STAMP_MIN_MS) {
+        return;
+      }
+      this.lastErrorStampMs.set(container.connectionId, nowMs);
+
       const message = (err instanceof Error ? err.message : String(err)).slice(
         0,
         1000,
       );
-      const errorAt = new Date(this.nowFn());
+      const errorAt = new Date(nowMs);
 
       // loadCursorRow populates cursorIdByConnectionId as a side effect.
       await this.loadCursorRow(container.connectionId);

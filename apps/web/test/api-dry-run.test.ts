@@ -10,7 +10,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { checkRateLimit, resetRateLimits } from "../src/lib/rate-limit.ts";
+import {
+  checkRateLimit,
+  DRY_RUN_RATE_LIMIT,
+  dryRunKey,
+  resetRateLimits,
+} from "../src/lib/rate-limit.ts";
 import { PROBE_TENANT_VALUE } from "../src/lib/probe-matrix.ts";
 
 const customer = {
@@ -161,15 +166,30 @@ describe("POST /api/connections/[id]/dry-run", () => {
     expect(unknownDb.status).toBe(404);
   });
 
-  it("429 per CONNECTION once the probe budget is spent", async () => {
+  it("429 per (customer, connection) once the probe budget is spent", async () => {
     for (let i = 0; i < 6; i++) {
-      checkRateLimit(`dry-run:${CONN.id}`, { limit: 6, windowMs: 60_000 });
+      checkRateLimit(dryRunKey(customer.id, CONN.id), DRY_RUN_RATE_LIMIT);
     }
     const { POST } = await loadRoute();
     const res = await POST(jsonRequest(PROBES_BODY), params);
     expect(res.status).toBe(429);
     expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(dryRunMock).not.toHaveBeenCalled();
+  });
+
+  it("a foreign tenant probing this connection id burns their OWN budget, not the owner's", async () => {
+    // Review finding: keying on the bare path param let any signed-in
+    // tenant starve the owner. Burn 6 slots as a DIFFERENT customer —
+    // the route must still serve the owner.
+    for (let i = 0; i < 6; i++) {
+      checkRateLimit(
+        dryRunKey("01HATTACKERXXXXXXXXXXXXXXX", CONN.id),
+        DRY_RUN_RATE_LIMIT,
+      );
+    }
+    const { POST } = await loadRoute();
+    const res = await POST(jsonRequest(PROBES_BODY), params);
+    expect(res.status).toBe(200);
   });
 
   it("503 when a credential can't be decrypted or stored policy is malformed", async () => {
@@ -248,5 +268,19 @@ describe("POST /api/connections/[id]/dry-run", () => {
       error: "engine_unavailable",
       detail: "engine timed out",
     });
+  });
+
+  it("collapses internal spawn error text to a bare 503 (no infra leak)", async () => {
+    dryRunMock = vi.fn(async () => ({
+      ok: false,
+      kind: "engine_unavailable",
+      detail: "Fly Machines API 422: capacity exhausted in fra region",
+    }));
+    const { POST } = await loadRoute();
+    const res = await POST(jsonRequest(PROBES_BODY), params);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string; detail?: string };
+    expect(body.error).toBe("engine_unavailable");
+    expect(body.detail).toBeUndefined();
   });
 });

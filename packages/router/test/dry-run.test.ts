@@ -210,6 +210,38 @@ describe("dryRunPolicy", () => {
     });
   });
 
+  it("maps a dry-run 401 (rotated/mismatched INDEXER_TOKEN) to engine_unavailable", async () => {
+    const registry = makeRegistry();
+    const { fn } = fetchScript([
+      okPolicy,
+      () => new Response("unauthorized", { status: 401 }),
+    ]);
+    const result = await dryRunPolicy(SPAWN, REQUEST, {
+      registry,
+      indexerToken: "t",
+      fetch: fn,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      kind: "engine_unavailable",
+      detail: "dry-run 401",
+    });
+  });
+
+  it("treats a 200 with a non-JSON body as engine_unavailable (not a crash)", async () => {
+    const registry = makeRegistry();
+    const { fn } = fetchScript([
+      okPolicy,
+      () => new Response("<html>gateway</html>", { status: 200 }),
+    ]);
+    const result = await dryRunPolicy(SPAWN, REQUEST, {
+      registry,
+      indexerToken: "t",
+      fetch: fn,
+    });
+    expect(result).toMatchObject({ ok: false, kind: "engine_unavailable" });
+  });
+
   it("times out the engine call and reports it retryably", async () => {
     const registry = makeRegistry();
     let call = 0;

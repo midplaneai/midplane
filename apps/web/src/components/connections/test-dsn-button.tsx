@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 // parent) but share the response shape {ok, error?} and the same
 // SSRF-guarded ping underneath.
 
-type TestState =
+export type TestState =
   | { kind: "idle" }
   | { kind: "pending" }
   | { kind: "ok" }
@@ -84,7 +84,9 @@ export function TestDsnButton({
   );
 }
 
-function TestStatus({ state }: { state: TestState }) {
+/** Shared by TestDsnButton and TestReachabilityButton — one rendering
+ *  of "✓ reachable" / "✗ message" across all three ping surfaces. */
+export function TestStatus({ state }: { state: TestState }) {
   if (state.kind === "idle" || state.kind === "pending") return null;
   if (state.kind === "ok") {
     return (

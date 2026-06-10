@@ -6,6 +6,7 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { listDatabasesForConnection } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { computeDbTabs } from "@/lib/db-tabs";
+import { connectionLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // Connection-context strip for every per-DB page. Mounted ONCE as a
@@ -42,7 +43,7 @@ export default async function DatabaseContextLayout({
   if (!result) notFound();
   const { connection: conn, databases } = result;
 
-  const connectionLabel = conn.name ?? conn.id.slice(0, 12);
+  const label = connectionLabel(conn);
 
   // Tab computation lives in lib/db-tabs.ts (pure, tested): first N
   // tabs, current db always visible even past the cutoff.
@@ -57,7 +58,7 @@ export default async function DatabaseContextLayout({
         <Breadcrumb
           items={[
             { label: "Connections", href: "/dashboard" },
-            { label: connectionLabel, href: `/connections/${conn.id}` },
+            { label, href: `/connections/${conn.id}` },
             { label: current },
           ]}
         />
@@ -71,7 +72,7 @@ export default async function DatabaseContextLayout({
           href={`/connections/${conn.id}`}
           className="max-w-[200px] truncate whitespace-nowrap py-2 pr-3 font-mono text-xs lowercase tracking-[0.04em] text-subtle transition-colors hover:text-foreground"
         >
-          ← {connectionLabel}
+          ← {label}
         </Link>
         {visible.map((dbName) => {
           const isCurrent = dbName === current;
@@ -81,7 +82,9 @@ export default async function DatabaseContextLayout({
               href={`/connections/${conn.id}/databases/${encodeURIComponent(dbName)}`}
               aria-current={isCurrent ? "page" : undefined}
               className={cn(
-                "whitespace-nowrap border-b-2 px-3 py-2 font-mono text-xs tracking-[0.04em] transition-colors",
+                // 3px indicator — same weight as the design system's
+                // selection rail (the one blessed brand box-shadow).
+                "whitespace-nowrap border-b-[3px] px-3 py-2 font-mono text-xs tracking-[0.04em] transition-colors",
                 isCurrent
                   ? "border-[hsl(var(--brand))] text-foreground"
                   : "border-transparent text-subtle hover:text-foreground",

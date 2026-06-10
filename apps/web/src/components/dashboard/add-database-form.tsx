@@ -182,7 +182,7 @@ export function AddDatabaseForm({
         </div>
 
         <fieldset className="space-y-1.5">
-          <legend className="text-xs font-medium text-foreground">
+          <legend className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-foreground">
             Default agent access
           </legend>
           <div className="grid gap-2 sm:grid-cols-3">

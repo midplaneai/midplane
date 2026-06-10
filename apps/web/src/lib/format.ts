@@ -18,6 +18,27 @@ export function formatRelative(d: Date, now: Date = new Date()): string {
   return `${day}d ago`;
 }
 
+/** Meta-line copy for a database's last agent query — shared by the
+ *  dashboard rows and the connection home so the two surfaces can't
+ *  drift ("awaiting first query" / "last query 12m ago"). */
+export function lastQueryLabel(
+  lastQueryAt: Date | null,
+  now: Date = new Date(),
+): string {
+  if (!lastQueryAt) return "awaiting first query";
+  return `last query ${formatRelative(lastQueryAt, now)}`;
+}
+
+/** Display label for a connection — the user's name, or a stable
+ *  id-prefix fallback for unnamed connections. One definition for the
+ *  five surfaces that render it. */
+export function connectionLabel(conn: {
+  name: string | null;
+  id: string;
+}): string {
+  return conn.name ?? conn.id.slice(0, 12);
+}
+
 export function formatRelativeLong(d: Date, now: Date = new Date()): string {
   const ms = Math.max(0, now.getTime() - d.getTime());
   const sec = Math.floor(ms / 1000);

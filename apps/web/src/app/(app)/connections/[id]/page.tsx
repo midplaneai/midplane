@@ -19,9 +19,10 @@ import {
   getPlanUsage,
   type DashboardDatabase,
 } from "@/lib/connections";
+import { Button } from "@/components/ui/button";
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
-import { formatRelative } from "@/lib/format";
+import { connectionLabel, lastQueryLabel } from "@/lib/format";
 import { computeFreshness } from "@/lib/freshness";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { accessLabel } from "@/lib/policy-labels";
@@ -35,8 +36,9 @@ import { createTokenAction, revokeTokenAction } from "./token-actions";
 // mcp_url_auth_security) per the connections-ux design doc: the page a
 // connection's name leads to should answer "what can my agents reach,
 // with which credentials, and is it healthy" without bouncing back to
-// the list. The policy test panel (engine dry-run) slots in between
-// databases and tokens once the OSS endpoint ships.
+// the list. The policy test panel (engine dry-run, OSS 0.8.0+) sits
+// between databases and tokens; against an older engine image it
+// degrades to a retryable engine_unavailable state.
 //
 // Per-DB settings (policy grid, DSN rotation) stay under
 // /connections/[id]/databases/[name]; connection-scoped settings stay
@@ -55,28 +57,29 @@ export default async function ConnectionHome({
   // clamps the home's last-query facts, caps.tokens drives the
   // token-cap pre-flight below.
   const { plan, caps } = await resolvePlan();
-  const home = await getConnectionHomeData(customer, id, caps.auditRetentionDays);
+  // The three reads below are independent of each other — only the
+  // retention clamp depends on resolvePlan. Concurrent, not a waterfall.
+  const [home, tokens, usage] = await Promise.all([
+    getConnectionHomeData(customer, id, caps.auditRetentionDays),
+    // listTokens returns null on unknown/foreign — the home check below
+    // already gates ownership, but mirror the leakage shape if a race
+    // deletes the connection between calls.
+    listTokens(customer, id),
+    // Pre-flight the token cap so "Connect an agent" reflects the limit
+    // BEFORE the modal opens — same advisory-UX-over-authoritative-check
+    // split as the connection create flow (createToken still enforces
+    // under a row lock). The token cap is org-wide (all connections).
+    getPlanUsage(customer),
+  ]);
   if (!home) notFound();
   const { connection: conn, databases, cursor } = home;
-
-  // listTokens returns null on unknown/foreign — the parent check above
-  // already gates ownership, but mirror the leakage shape if a race
-  // deletes the connection between calls.
-  const tokens = await listTokens(customer, id);
   if (tokens === null) notFound();
-
-  // Pre-flight the token cap so "Connect an agent" reflects the limit BEFORE
-  // the modal opens — same advisory-UX-over-authoritative-check split as the
-  // connection create flow (createToken still enforces under a row lock). The
-  // token cap is org-wide (all connections), so we read total usable tokens,
-  // not this connection's count.
-  const usage = await getPlanUsage(customer);
   const tokenLimit =
     Number.isFinite(caps.tokens) && usage.tokens >= caps.tokens
       ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
       : undefined;
 
-  const connectionLabel = conn.name ?? conn.id.slice(0, 12);
+  const label = connectionLabel(conn);
   const freshness = computeFreshness(cursor);
 
   return (
@@ -85,7 +88,7 @@ export default async function ConnectionHome({
         <Breadcrumb
           items={[
             { label: "Connections", href: "/dashboard" },
-            { label: connectionLabel },
+            { label },
           ]}
         />
       </Topbar>
@@ -94,7 +97,7 @@ export default async function ConnectionHome({
           <PageHeader
             title={
               <span className="flex items-center gap-2.5">
-                {connectionLabel}
+                {label}
                 <FreshnessDot state={freshness} />
                 <RegionBadge region={conn.region} />
               </span>
@@ -110,11 +113,13 @@ export default async function ConnectionHome({
               </>
             }
             actions={
-              <Link
-                href={`/connections/${conn.id}/settings`}
-                className="rounded-md border border-border bg-secondary px-3 py-1.5 text-xs text-foreground transition-colors hover:border-border-strong"
-              >
-                Settings
+              // Button primitive, matching the dashboard's Open action —
+              // a hand-rolled link here rendered square (rounded-md
+              // collapses to 0) against the 6px button radius.
+              <Link href={`/connections/${conn.id}/settings`}>
+                <Button size="sm" variant="outline">
+                  Settings
+                </Button>
               </Link>
             }
           />
@@ -197,9 +202,7 @@ function HomeDatabaseRow({
 }) {
   const policy = database.tableAccess as TableAccessPolicy;
   const tableCount = Object.keys(policy.tables ?? {}).length;
-  const lastQueryText = database.lastQueryAt
-    ? `last query ${formatRelative(database.lastQueryAt)}`
-    : "awaiting first query";
+  const lastQueryText = lastQueryLabel(database.lastQueryAt); // shared copy
 
   return (
     <li>

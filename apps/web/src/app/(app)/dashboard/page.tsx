@@ -283,9 +283,11 @@ async function renameAction(formData: FormData) {
   if (!renamed) notFound();
   revalidatePath("/dashboard");
   // Per-DB detail pages render conn.name in the topbar; settings renders
-  // it in the topbar + delete-confirm label. Bust both. The bracketed
-  // path revalidates every concrete /connections/[id]/databases/[name]
-  // path under this connection without us having to enumerate them.
+  // it in the topbar + delete-confirm label; the connection home renders
+  // it as the page title. Bust all three. The bracketed path revalidates
+  // every concrete /connections/[id]/databases/[name] path under this
+  // connection without us having to enumerate them.
+  revalidatePath(`/connections/${formId}`);
   revalidatePath(`/connections/[id]/databases/[name]`, "page");
   revalidatePath(`/connections/${formId}/settings`);
 }
@@ -348,6 +350,8 @@ async function removeDatabaseAction(formData: FormData) {
     throw err;
   }
   revalidatePath("/dashboard");
+  // The connection home renders the db list too.
+  revalidatePath(`/connections/${connectionId}`);
 }
 
 async function renameDatabaseAction(formData: FormData) {
@@ -387,8 +391,10 @@ async function renameDatabaseAction(formData: FormData) {
     throw err;
   }
   revalidatePath("/dashboard");
-  // Per-DB detail route lives at /databases/[name]; bust both old and new
-  // so a stale cached instance under either path doesn't linger.
+  // The connection home renders the db list; the per-DB detail route
+  // lives at /databases/[name] — bust both old and new names so a stale
+  // cached instance under either path doesn't linger.
+  revalidatePath(`/connections/${connectionId}`);
   revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }
 

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProbeMatrix,
   isTenantScoped,
+  MAX_PROBES_PER_RUN,
   PROBE_TABLE_CAP,
   probeLabel,
 } from "../src/lib/probe-matrix.ts";
@@ -69,6 +70,19 @@ describe("buildProbeMatrix", () => {
     expect(m.totalTables).toBe(60);
     expect(m.truncated).toBe(true);
     expect(m.probes).toHaveLength(PROBE_TABLE_CAP * 4);
+  });
+
+  it("worst case (every capped table scoped) stays within MAX_PROBES_PER_RUN", () => {
+    // The dry-run route's request validator enforces this ceiling — if a
+    // cap or action change pushes the panel's own request past it, this
+    // test fails before the route starts 400ing in production.
+    const tables = Array.from({ length: 60 }, (_, i) => `t${i}`);
+    const m = buildProbeMatrix(tables, {
+      column: "account_id",
+      overrides: {},
+      exempt: [],
+    });
+    expect(m.probes).toHaveLength(MAX_PROBES_PER_RUN);
   });
 });
 

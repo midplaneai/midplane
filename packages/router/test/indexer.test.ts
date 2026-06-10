@@ -1109,17 +1109,21 @@ describe("Indexer error recording", () => {
     const fetchFn = vi.fn(
       async () => new Response("boom", { status: 500 }),
     ) as unknown as typeof fetch;
+    // Pinned clock — the assertion below must not depend on the host
+    // clock being past the fixture date.
+    const FIXED_NOW = new Date("2026-06-10T00:00:00Z").getTime();
     const ix = new Indexer({
       db,
       registry,
       indexerToken: "t",
       fetch: fetchFn,
       onError,
+      now: () => FIXED_NOW,
     });
     await ix.tick();
 
     const cursor = state.cursorsById.get(CURSOR_ID)!;
-    expect(cursor.lastErrorAt).toBeInstanceOf(Date);
+    expect(cursor.lastErrorAt).toEqual(new Date(FIXED_NOW));
     expect(cursor.lastError).toMatch(/audit\/since 500/);
     // Error newer than the last good drain → the dot's "down" condition.
     expect(cursor.lastErrorAt!.getTime()).toBeGreaterThan(
@@ -1127,6 +1131,13 @@ describe("Indexer error recording", () => {
     );
     // Recording supplements the operator callback, never replaces it.
     expect(onError).toHaveBeenCalled();
+
+    // Write throttle: a second failing tick inside ERROR_STAMP_MIN_MS
+    // must not stamp again (no UPDATE churn for a persistently-down
+    // engine).
+    const updatesBefore = state.updates.length;
+    await ix.tick();
+    expect(state.updates.length).toBe(updatesBefore);
   });
 
   it("creates a cursor row with lastErrorAt when the engine errors before any successful drain", async () => {

@@ -12,6 +12,7 @@ import {
   getConnectionWithMainDatabase,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { connectionLabel } from "@/lib/format";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
 import { REGION_LABELS } from "@/lib/region";
@@ -81,7 +82,7 @@ export default async function ConnectionSettings({
           items={[
             { label: "Connections", href: "/dashboard" },
             {
-              label: conn.name ?? conn.id.slice(0, 12),
+              label: connectionLabel(conn),
               href: `/connections/${conn.id}`,
             },
             { label: "Settings" },

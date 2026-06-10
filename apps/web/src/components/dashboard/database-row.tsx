@@ -29,7 +29,7 @@ import {
   useDatabaseLastQuery,
 } from "@/components/dashboard/freshness-provider";
 import { RenameDatabaseInline } from "@/components/dashboard/rename-database-inline";
-import { formatRelative } from "@/lib/format";
+import { lastQueryLabel } from "@/lib/format";
 import { computeFreshness } from "@/lib/freshness";
 import { accessLabel } from "@/lib/policy-labels";
 import { cn } from "@/lib/utils";
@@ -93,7 +93,7 @@ export function DatabaseRow({
   const freshness = computeFreshness(cursor);
   const liveLastQuery = useDatabaseLastQuery(connectionId, database.name);
   const lastQueryAt = liveConn ? liveLastQuery : initialLastQueryAt;
-  const lastQueryText = lastQueryLabel(lastQueryAt);
+  const lastQueryText = lastQueryLabel(lastQueryAt); // shared copy — lib/format.ts
 
   function handleConfirmRemove() {
     const fd = new FormData();
@@ -191,7 +191,3 @@ export function DatabaseRow({
   );
 }
 
-function lastQueryLabel(lastQueryAt: Date | null): string {
-  if (!lastQueryAt) return "awaiting first query";
-  return `last query ${formatRelative(lastQueryAt)}`;
-}

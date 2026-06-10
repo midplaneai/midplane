@@ -8,7 +8,7 @@ import {
 } from "@midplane-cloud/db";
 
 import { PageContainer } from "@/components/layout/app-shell";
-import { formatRelative } from "@/lib/format";
+import { connectionLabel, formatRelative } from "@/lib/format";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RotateConnectionForm } from "@/components/rotate-connection-form";
 import { TenantScopeEditor } from "@/components/tenant-scope-editor";
@@ -26,7 +26,11 @@ import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { pingDsnGuarded } from "@/lib/ping-guard";
 import { getPostHog } from "@/lib/posthog";
-import { checkRateLimit } from "@/lib/rate-limit";
+import {
+  checkRateLimit,
+  PING_TEST_RATE_LIMIT,
+  pingTestKey,
+} from "@/lib/rate-limit";
 
 // Per-DB detail page. The hierarchical dashboard owns the connection-level
 // surface (rename, delete, agent setup, MCP URL); this route is scoped to
@@ -117,11 +121,11 @@ export default async function DatabaseDetail({
     if (!customer) redirect("/");
 
     // Same per-customer budget as the pasted-DSN testers — switching
-    // surfaces doesn't reset the window.
-    const limited = checkRateLimit(`test-dsn:${customer.id}`, {
-      limit: 10,
-      windowMs: 60_000,
-    });
+    // surfaces doesn't reset the window (lib/rate-limit.ts owns it).
+    const limited = checkRateLimit(
+      pingTestKey(customer.id),
+      PING_TEST_RATE_LIMIT,
+    );
     if (!limited.ok) {
       return { ok: false, error: "too many tests — try again shortly" };
     }
@@ -181,7 +185,7 @@ export default async function DatabaseDetail({
     revalidatePath(`/connections/${id}/databases/${name}`);
   }
 
-  const connectionLabel = conn.name ?? conn.id.slice(0, 12);
+  const label = connectionLabel(conn);
 
   // Topbar (breadcrumb) + the sibling-db context strip are owned by the
   // nested layout one level up (databases/[name]/layout.tsx) — this page
@@ -195,7 +199,7 @@ export default async function DatabaseDetail({
               <span className="flex items-baseline gap-2">
                 <span className="font-mono text-foreground">{db.name}</span>
                 <span className="text-sm font-normal text-muted-foreground">
-                  on {connectionLabel}
+                  on {label}
                 </span>
               </span>
             }

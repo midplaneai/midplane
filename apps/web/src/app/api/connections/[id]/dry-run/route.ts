@@ -30,26 +30,45 @@ import type { DryRunRequest } from "@midplane-cloud/router";
 import { getConnectionWithDatabasesAndCredentials } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
-import { PROBE_TENANT_VALUE } from "@/lib/probe-matrix";
-import { checkRateLimit } from "@/lib/rate-limit";
+import {
+  MAX_PROBES_PER_RUN,
+  PROBE_ACTIONS,
+  PROBE_TENANT_VALUE,
+} from "@/lib/probe-matrix";
+import {
+  checkRateLimit,
+  DRY_RUN_RATE_LIMIT,
+  dryRunKey,
+} from "@/lib/rate-limit";
 
 const Probe = z.object({
   table: z.string().min(1).max(128),
-  action: z.enum(["select", "insert", "update", "delete"]),
+  action: z.enum(PROBE_ACTIONS),
   cross_tenant: z.boolean().optional(),
 });
 
 const Body = z
   .object({
     database: z.string().min(1).max(64),
-    probes: z.array(Probe).min(1).max(250).optional(),
+    probes: z.array(Probe).min(1).max(MAX_PROBES_PER_RUN).optional(),
     sql: z.string().min(1).max(10_000).optional(),
   })
   .refine((b) => (b.probes === undefined) !== (b.sql === undefined), {
     message: "exactly one of probes | sql",
   });
 
-const RATE_LIMIT = { limit: 6, windowMs: 60_000 };
+// 503 details the client may see. dryRunPolicy's other details carry
+// raw spawner/Fly error text — operationally useful in logs, but an
+// internal-infrastructure leak in a response body. Anything not in
+// this set is logged server-side and collapsed to "engine_unavailable".
+const SAFE_UNAVAILABLE_DETAILS = new Set([
+  "credential_unavailable",
+  "invalid stored policy",
+  "policy delivery failed after spawn",
+  "engine image does not support dry-run yet",
+  "engine timed out",
+  "malformed dry-run response",
+]);
 
 export async function POST(
   req: Request,
@@ -61,9 +80,12 @@ export async function POST(
   }
   const { id } = await params;
 
-  // Per CONNECTION, not per customer: each run can spawn or wake a Fly
-  // machine — this is a cost/abuse cap, not request hygiene.
-  const limited = checkRateLimit(`dry-run:${id}`, RATE_LIMIT);
+  // Per (customer, connection): each run can spawn or wake a Fly
+  // machine — this is a cost/abuse cap. Keyed on the CUSTOMER too so a
+  // tenant probing a foreign connection id burns their own budget, not
+  // the owner's (review finding: the bare path param is unauthenticated
+  // at this point).
+  const limited = checkRateLimit(dryRunKey(customer.id, id), DRY_RUN_RATE_LIMIT);
   if (!limited.ok) {
     return Response.json(
       { error: "too many probe runs — try again shortly" },
@@ -99,15 +121,23 @@ export async function POST(
 
   // Same spawn construction as the proxy path (lib/proxy.ts): decrypt
   // every child — the container needs the full set to boot — and fail
-  // closed on malformed stored policy.
+  // closed on malformed stored policy. Credentials resolve concurrently
+  // (independent per credential; a cache miss is a KMS roundtrip, and
+  // serial resolves would stack on top of a possible cold spawn).
   const ctx = getMcpProxyContext();
+  const decrypts = await Promise.all(
+    databases.map((cdb) =>
+      ctx.resolver.resolve({
+        connectionDatabase: cdb,
+        region: conn.region,
+        customerId: conn.customerId,
+      }),
+    ),
+  );
   const spawnDatabases = [];
-  for (const cdb of databases) {
-    const decrypt = await ctx.resolver.resolve({
-      connectionDatabase: cdb,
-      region: conn.region,
-      customerId: conn.customerId,
-    });
+  for (let i = 0; i < databases.length; i++) {
+    const cdb = databases[i]!;
+    const decrypt = decrypts[i]!;
     if (!decrypt.ok) {
       return Response.json(
         { error: "engine_unavailable", detail: "credential_unavailable" },
@@ -160,8 +190,17 @@ export async function POST(
       { status: 400 },
     );
   }
+  // Spawner/Fly internals stay in the logs; the client gets a stable
+  // detail vocabulary.
+  const safeDetail =
+    outcome.detail && SAFE_UNAVAILABLE_DETAILS.has(outcome.detail)
+      ? outcome.detail
+      : undefined;
+  if (!safeDetail && outcome.detail) {
+    console.error("[dry-run] engine_unavailable:", outcome.detail);
+  }
   return Response.json(
-    { error: "engine_unavailable", detail: outcome.detail },
+    { error: "engine_unavailable", detail: safeDetail },
     { status: 503 },
   );
 }

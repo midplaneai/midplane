@@ -9,6 +9,7 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
+import { connectionLabel } from "@/lib/format";
 import { getConnectionWithMainDatabase } from "@/lib/connections";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
@@ -44,7 +45,7 @@ export default async function ConnectionCreated({
 
   const cookieStore = await cookies();
   const mcpUrl = cookieStore.get(SHOW_ONCE_COOKIE)?.value ?? null;
-  const connectionLabel = connection.name ?? connection.id.slice(0, 12);
+  const label = connectionLabel(connection);
   const connectionHref = `/connections/${connection.id}`;
 
   return (
@@ -53,7 +54,7 @@ export default async function ConnectionCreated({
         <Breadcrumb
           items={[
             { label: "Connections", href: "/dashboard" },
-            { label: connectionLabel, href: connectionHref },
+            { label, href: connectionHref },
             { label: "Connected" },
           ]}
         />

@@ -52,9 +52,11 @@ interface Verdict {
   matched_rule: string;
 }
 
+type RunMode = "probes" | "sql";
+
 type PanelState =
   | { kind: "idle" }
-  | { kind: "running"; mode: "probes" | "sql" }
+  | { kind: "running"; mode: RunMode }
   | {
       kind: "verdicts";
       verdicts: Verdict[];
@@ -62,7 +64,9 @@ type PanelState =
       totalTables: number;
       introspectionHint: string | null;
     }
-  | { kind: "error"; message: string; retryable: boolean };
+  // mode: which run failed — Retry re-runs THAT mode (a failed SQL
+  // check must not silently switch back to the probe matrix).
+  | { kind: "error"; message: string; retryable: boolean; mode: RunMode };
 
 const CLIENT_TIMEOUT_MS = 35_000; // server's engine timeout is 30s
 
@@ -166,6 +170,7 @@ export function TestPolicyPanel({
         message:
           "no tables found — add tables to the policy or check the database is reachable",
         retryable: true,
+        mode: "probes",
       });
       return;
     }
@@ -179,6 +184,7 @@ export function TestPolicyPanel({
         kind: "error",
         message: result.message,
         retryable: result.retryable,
+        mode: "probes",
       });
       return;
     }
@@ -201,6 +207,7 @@ export function TestPolicyPanel({
         kind: "error",
         message: result.message,
         retryable: result.retryable,
+        mode: "sql",
       });
       return;
     }
@@ -241,7 +248,7 @@ export function TestPolicyPanel({
               }}
               aria-label="Database to test"
               disabled={running}
-              className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs text-foreground"
+              className="h-9 rounded-none border border-input bg-background px-2 font-mono text-xs text-foreground"
             >
               {databases.map((d) => (
                 <option key={d.name} value={d.name}>
@@ -272,7 +279,7 @@ export function TestPolicyPanel({
       ) : null}
 
       {state.kind === "error" ? (
-        <div className="flex flex-wrap items-center gap-2 border border-[hsl(var(--deny)/0.4)] bg-[hsl(var(--deny)/0.06)] px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 border border-[hsl(var(--deny)/0.4)] bg-[hsl(var(--deny)/0.08)] px-3 py-2">
           <span className="text-xs text-[hsl(var(--deny))]">
             ✗ {state.message}
           </span>
@@ -281,7 +288,9 @@ export function TestPolicyPanel({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => void runProbes()}
+              onClick={() =>
+                void (state.mode === "sql" ? checkSql() : runProbes())
+              }
             >
               Retry
             </Button>
@@ -312,14 +321,19 @@ export function TestPolicyPanel({
                     : "flex items-center gap-3 px-3 py-2"
                 }
               >
-                <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
-                  {v.probe ? probeLabel(v.probe) : v.sql}
-                </span>
-                <span
-                  className="hidden truncate text-xs text-muted-foreground sm:block sm:max-w-[280px]"
-                  title={`${v.reason} (${v.matched_rule})`}
-                >
-                  {v.reason}
+                {/* Reason is the trust-critical payload — visible on
+                    every viewport (stacked under the probe label), full
+                    text in the title attr. */}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-mono text-xs text-foreground">
+                    {v.probe ? probeLabel(v.probe) : v.sql}
+                  </span>
+                  <span
+                    className="block truncate text-xs text-muted-foreground"
+                    title={`${v.reason} (${v.matched_rule})`}
+                  >
+                    {v.reason}
+                  </span>
                 </span>
                 <Badge variant={v.decision === "allow" ? "allow" : "deny"}>
                   {v.decision === "allow" ? "ALLOW" : "DENY"}

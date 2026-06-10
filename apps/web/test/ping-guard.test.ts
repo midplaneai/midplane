@@ -157,6 +157,41 @@ describe("pingDsnGuarded", () => {
     });
   });
 
+  it("sslmode=disable omits SNI; ssl=true pins it", async () => {
+    const ping = vi.fn(async () => ({ ok: true })) as never;
+    const lookup = lookupReturning(["52.10.0.5"]);
+    await pingDsnGuarded("postgres://u:p@db.example.com/app?sslmode=disable", {
+      ping,
+      lookup,
+      env: GUARD_ON,
+    });
+    expect(ping).toHaveBeenLastCalledWith(expect.any(String), {
+      hostOverride: "52.10.0.5",
+      tlsServername: undefined,
+    });
+    await pingDsnGuarded("postgres://u:p@db.example.com/app?ssl=true", {
+      ping,
+      lookup: lookupReturning(["52.10.0.5"]),
+      env: GUARD_ON,
+    });
+    expect(ping).toHaveBeenLastCalledWith(expect.any(String), {
+      hostOverride: "52.10.0.5",
+      tlsServername: "db.example.com",
+    });
+  });
+
+  it("fails closed when the resolver answers with zero records", async () => {
+    const ping = vi.fn() as never;
+    const lookup = lookupReturning([]);
+    const result = await pingDsnGuarded("postgres://u:p@db.example.com/app", {
+      ping,
+      lookup,
+      env: GUARD_ON,
+    });
+    expect(result).toEqual({ ok: false, error: GENERIC_PING_ERROR });
+    expect(ping).not.toHaveBeenCalled();
+  });
+
   it("dials IP-literal DSNs as-is once vetted", async () => {
     const ping = vi.fn(async () => ({ ok: true })) as never;
     const dsn = "postgres://u:p@52.10.0.5/app";

@@ -15,15 +15,17 @@ import { isValidDsn } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { pingDsnGuarded } from "@/lib/ping-guard";
 import { getPostHog } from "@/lib/posthog";
-import { checkRateLimit } from "@/lib/rate-limit";
+import {
+  checkRateLimit,
+  PING_TEST_RATE_LIMIT,
+  pingTestKey,
+} from "@/lib/rate-limit";
 
 const TestBody = z.object({
   dsn: z.string().refine(isValidDsn, {
     message: "must be a postgres:// or postgresql:// URL",
   }),
 });
-
-const RATE_LIMIT = { limit: 10, windowMs: 60_000 };
 
 export async function POST(req: Request) {
   const customer = await currentCustomer();
@@ -32,7 +34,7 @@ export async function POST(req: Request) {
   }
   const { userId } = await auth();
 
-  const limited = checkRateLimit(`test-dsn:${customer.id}`, RATE_LIMIT);
+  const limited = checkRateLimit(pingTestKey(customer.id), PING_TEST_RATE_LIMIT);
   if (!limited.ok) {
     return Response.json(
       { error: "too many tests — try again shortly" },

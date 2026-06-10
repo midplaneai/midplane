@@ -2,18 +2,17 @@
 
 import { useState, useTransition } from "react";
 
+import {
+  TestStatus,
+  type TestState,
+} from "@/components/connections/test-dsn-button";
 import { Button } from "@/components/ui/button";
 
 // [Test reachability] for a SAVED database — the stored (encrypted)
 // credential, not a pasted DSN. The server action decrypts and pings
 // behind the same SSRF guard as the pre-submit testers; this component
-// only owns the button states. Result resets on the next click.
-
-type TestState =
-  | { kind: "idle" }
-  | { kind: "pending" }
-  | { kind: "ok" }
-  | { kind: "error"; message: string };
+// only owns the button states. Status rendering is shared with
+// TestDsnButton (TestStatus) so the three ping surfaces can't drift.
 
 export function TestReachabilityButton({
   action,
@@ -56,16 +55,7 @@ export function TestReachabilityButton({
       >
         {test.kind === "pending" ? "Testing…" : "Test reachability"}
       </Button>
-      {test.kind === "ok" ? (
-        <span className="text-xs font-medium text-[hsl(var(--allow))]">
-          ✓ reachable
-        </span>
-      ) : null}
-      {test.kind === "error" ? (
-        <span className="text-xs text-destructive" title={test.message}>
-          ✗ {test.message}
-        </span>
-      ) : null}
+      <TestStatus state={test} />
     </div>
   );
 }

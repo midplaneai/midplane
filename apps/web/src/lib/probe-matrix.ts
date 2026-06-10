@@ -25,6 +25,12 @@ export const PROBE_TABLE_CAP = 50;
 export const PROBE_ACTIONS = ["select", "insert", "update", "delete"] as const;
 export type ProbeAction = (typeof PROBE_ACTIONS)[number];
 
+/** Worst case: every capped table is tenant-scoped (4 actions + 1
+ *  cross-tenant select). The dry-run route's request validator uses
+ *  this so a cap or action change can't silently 400 the panel's own
+ *  requests. */
+export const MAX_PROBES_PER_RUN = PROBE_TABLE_CAP * (PROBE_ACTIONS.length + 1);
+
 export interface Probe {
   table: string;
   action: ProbeAction;
