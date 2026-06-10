@@ -26,9 +26,12 @@ import { Label } from "@/components/ui/label";
 export function RotateConnectionForm({
   id,
   action,
+  onSuccess,
 }: {
   id: string;
   action: (formData: FormData) => Promise<void>;
+  /** Fires after a committed rotation so a host (e.g. a Sheet) can close. */
+  onSuccess?: () => void;
 }) {
   const [dsn, setDsn] = useState("");
   const [pending, startTransition] = useTransition();
@@ -50,6 +53,7 @@ export function RotateConnectionForm({
         // DSN is sensitive — clear after success so it doesn't sit in
         // the input. Also flips Save back to disabled.
         setDsn("");
+        onSuccess?.();
       } catch (e) {
         setError(e instanceof Error ? e.message : "rotation failed");
       }

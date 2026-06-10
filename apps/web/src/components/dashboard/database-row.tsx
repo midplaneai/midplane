@@ -133,7 +133,7 @@ export function DatabaseRow({
         />
       ) : (
         <Link
-          href={`/connections/${connectionId}/databases/${database.name}`}
+          href={`/connections/${connectionId}?db=${encodeURIComponent(database.name)}&section=database`}
           className="flex flex-1 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
         >
           <FreshnessDot state={freshness} />

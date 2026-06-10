@@ -51,7 +51,9 @@ export function DatabaseRowMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem asChild>
-          <Link href={`/connections/${connectionId}/databases/${dbName}`}>
+          <Link
+            href={`/connections/${connectionId}?db=${encodeURIComponent(dbName)}&section=database`}
+          >
             Edit policy & rotate DSN
           </Link>
         </DropdownMenuItem>

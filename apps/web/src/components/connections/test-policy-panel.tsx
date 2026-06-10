@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 // Types + probe builder are pure TS from the /policy subpath and
 // lib/probe-matrix — never the root @midplane-cloud/db entrypoint in a
@@ -77,9 +77,14 @@ const CLIENT_TIMEOUT_MS = 100_000;
 export function TestPolicyPanel({
   connectionId,
   databases,
+  reachabilitySlot,
 }: {
   connectionId: string;
   databases: TestPanelDatabase[];
+  /** Optional connectivity check (SELECT 1 on the stored credential),
+   *  folded into this card so "is it reachable" and "what would the policy
+   *  decide" are one Test surface instead of two adjacent boxes. */
+  reachabilitySlot?: ReactNode;
 }) {
   const [dbName, setDbName] = useState(databases[0]?.name ?? "");
   const [state, setState] = useState<PanelState>({ kind: "idle" });
@@ -234,18 +239,17 @@ export function TestPolicyPanel({
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
-          <h2 className="text-base font-medium text-foreground">
-            Test policy
-          </h2>
+          <h2 className="text-base font-medium text-foreground">Test</h2>
           <p className="text-xs text-muted-foreground">
-            Runs every table through the{" "}
+            Check the database is reachable, then dry-run every table through
+            the{" "}
             <strong className="font-medium text-foreground">
               same engine that enforces at query time
-            </strong>{" "}
-            and shows the verdict. Nothing is executed against your data.
+            </strong>
+            . Nothing is executed against your data.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {databases.length > 1 ? (
             <select
               value={db.name}
@@ -263,9 +267,8 @@ export function TestPolicyPanel({
                 </option>
               ))}
             </select>
-          ) : (
-            <span className="font-mono text-xs text-subtle">{db.name}</span>
-          )}
+          ) : null}
+          {reachabilitySlot}
           <Button
             type="button"
             size="sm"
