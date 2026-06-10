@@ -1845,17 +1845,23 @@ describe("getConnectionWithDatabase", () => {
   });
 });
 
-// listDashboardConnections + getDashboardFreshness exercise three
-// reads (parents + cursor join, audit max-ts aggregate, children
-// IN-list). Promise.all([parentsChain, lastQueryByDatabase()]) doesn't
-// drain queries in source order because the inner `await` inside
-// lastQueryByDatabase schedules its microtask BEFORE Promise.all
-// schedules its iteration microtasks. The actual drain order against
-// the fake's selectQueue is:
-//   1. audit aggregate (inner await fires first)
-//   2. parents (Promise.all microtask fires next)
-//   3. children (sequential after Promise.all resolves)
-// Tests queue rows in that order.
+// listDashboardConnections + getDashboardFreshness both lead with
+// Promise.all([parentsChain, lastQueryByDatabase()]), which doesn't drain
+// in source order: the inner `await` inside lastQueryByDatabase schedules
+// its microtask BEFORE Promise.all schedules its iteration microtasks, so
+// the audit aggregate drains before parents.
+//
+// getDashboardFreshness then reads children sequentially → drain order:
+//   1. audit aggregate  2. parents  3. children
+//
+// listDashboardConnections wraps children in a SECOND
+// Promise.all([childrenChain, countActiveTokensByConnection()]). Same
+// quirk: the token-count inner await drains before the lazy children
+// chain → drain order:
+//   1. audit aggregate  2. parents  3. token count  4. children
+// Tests queue rows in that order. countActiveTokensByConnection rows are
+// { connectionId, count }; an empty queue entry means "no active tokens"
+// and the row falls back to activeTokens: 0.
 
 describe("listDashboardConnections", () => {
   it("plumbs per-DB lastQueryAt from audit_events_index into each row", async () => {
@@ -1881,7 +1887,9 @@ describe("listDashboardConnections", () => {
         lastErrorAt: null,
       },
     ]);
-    // 3) children query (sequential after Promise.all)
+    // 3) token count (countActiveTokensByConnection inner await)
+    handle.queueSelect([{ connectionId: "conn-1", count: 2 }]);
+    // 4) children query (sequential after the second Promise.all)
     handle.queueSelect([
       {
         id: "cdb-main",
@@ -1908,10 +1916,11 @@ describe("listDashboardConnections", () => {
     const byName = new Map(rows[0]!.databases.map((d) => [d.name, d]));
     expect(byName.get("main")?.lastQueryAt).toEqual(mainQueryAt);
     expect(byName.get("analytics")?.lastQueryAt).toEqual(analyticsQueryAt);
+    expect(rows[0]!.activeTokens).toBe(2);
   });
 
   it("returns lastQueryAt: null when audit aggregate has no row for that DB", async () => {
-    handle.queueSelect([]); // audit: no rows yet (inner await first)
+    handle.queueSelect([]); // 1) audit: no rows yet (inner await first)
     handle.queueSelect([
       {
         connection: {
@@ -1924,7 +1933,8 @@ describe("listDashboardConnections", () => {
         lastIndexedAt: null,
         lastErrorAt: null,
       },
-    ]);
+    ]); // 2) parents
+    handle.queueSelect([]); // 3) token count: none active → activeTokens 0
     handle.queueSelect([
       {
         id: "cdb-main",
@@ -1932,18 +1942,19 @@ describe("listDashboardConnections", () => {
         name: "main",
         tableAccess: { default: "read", tables: {} },
       },
-    ]);
+    ]); // 4) children
     const { listDashboardConnections } = await import(
       "../src/lib/connections.ts"
     );
 
     const rows = await listDashboardConnections(customer);
     expect(rows[0]!.databases[0]!.lastQueryAt).toBeNull();
+    expect(rows[0]!.activeTokens).toBe(0);
   });
 
   it("coerces driver-returned ISO strings on the audit aggregate to real Dates", async () => {
     const isoString = "2026-04-30T11:30:00.000Z";
-    handle.queueSelect([{ database: "main", lastQueryAt: isoString }]);
+    handle.queueSelect([{ database: "main", lastQueryAt: isoString }]); // 1) audit
     handle.queueSelect([
       {
         connection: {
@@ -1956,7 +1967,8 @@ describe("listDashboardConnections", () => {
         lastIndexedAt: null,
         lastErrorAt: null,
       },
-    ]);
+    ]); // 2) parents
+    handle.queueSelect([{ connectionId: "conn-1", count: 3 }]); // 3) token count
     handle.queueSelect([
       {
         id: "cdb-main",
@@ -1964,7 +1976,7 @@ describe("listDashboardConnections", () => {
         name: "main",
         tableAccess: { default: "read", tables: {} },
       },
-    ]);
+    ]); // 4) children
     const { listDashboardConnections } = await import(
       "../src/lib/connections.ts"
     );
@@ -1974,6 +1986,7 @@ describe("listDashboardConnections", () => {
     expect((rows[0]!.databases[0]!.lastQueryAt as Date).toISOString()).toBe(
       isoString,
     );
+    expect(rows[0]!.activeTokens).toBe(3);
   });
 });
 
