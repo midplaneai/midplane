@@ -1,248 +1,547 @@
-import { ChevronRight, Database } from "lucide-react";
-import Link from "next/link";
+import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-import { type TableAccessPolicy } from "@midplane-cloud/db";
-import { parseTenantScopeOrThrow } from "@midplane-cloud/db";
+import {
+  parsePolicyOrThrow,
+  parseTenantScopeOrThrow,
+  type TableAccessPolicy,
+} from "@midplane-cloud/db";
 
+import { ConnectionRail } from "@/components/connections/connection-rail";
+import {
+  CONNECTION_SECTIONS,
+  type ConnectionSection,
+} from "@/components/connections/connection-sections";
+import { DatabaseStrip } from "@/components/connections/database-strip";
+import { DeleteDatabaseButton } from "@/components/connections/delete-database-button";
 import { TestPolicyPanel } from "@/components/connections/test-policy-panel";
-import { AddDatabaseForm } from "@/components/dashboard/add-database-form";
+import { TestReachabilityButton } from "@/components/connections/test-reachability-button";
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
+import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
+import { DeleteConnectionButton } from "@/components/delete-connection-button";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { PermissionGrid } from "@/components/permission-grid";
+import { RotateCredentialSheet } from "@/components/connections/rotate-credential-sheet";
+import { TenantScopeEditor } from "@/components/tenant-scope-editor";
 import { TokenList } from "@/components/tokens/token-list";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
-import { PageHeader } from "@/components/ui/page-header";
-import { RegionBadge } from "@/components/ui/region-badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
+  deleteConnection,
   getConnectionHomeData,
+  getConnectionWithDatabase,
+  getConnectionWithDatabaseAndCredential,
   getPlanUsage,
-  type DashboardDatabase,
+  isValidDsn,
+  LastDatabaseProtected,
+  removeDatabase,
+  renameConnection,
+  rotateConnection,
+  setTableAccess,
+  setTenantScope,
 } from "@/lib/connections";
-import { Button } from "@/components/ui/button";
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
-import { connectionLabel, lastQueryLabel } from "@/lib/format";
-import { computeFreshness } from "@/lib/freshness";
+import { connectionLabel, formatRelative } from "@/lib/format";
+import { computeFreshness, FRESHNESS_LABELS } from "@/lib/freshness";
+import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { pingDsnGuarded } from "@/lib/ping-guard";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
-import { accessLabel } from "@/lib/policy-labels";
+import { getPostHog } from "@/lib/posthog";
+import {
+  checkRateLimit,
+  PING_TEST_RATE_LIMIT,
+  pingTestKey,
+} from "@/lib/rate-limit";
+import { REGION_LABELS } from "@/lib/region";
 import { listTokens } from "@/lib/tokens";
 
 import { createTokenAction, revokeTokenAction } from "./token-actions";
 
-// Connection home — everything about one connection on one page:
-// databases (with add-database), token management, and the settings
-// entry. Promoted from a tokens-only surface (PR3 of
-// mcp_url_auth_security) per the connections-ux design doc: the page a
-// connection's name leads to should answer "what can my agents reach,
-// with which credentials, and is it healthy" without bouncing back to
-// the list. The policy test panel (engine dry-run, OSS 0.8.0+) sits
-// between databases and tokens; against an older engine image it
-// degrades to a retryable engine_unavailable state.
+// Connection workspace — one connection, one persistent left rail. Every
+// surface (connection-wide + per-database) is a peer in the rail, so any of
+// them is one click from any other; there's no "inside a database" sub-room
+// and no ambiguous up-link, because the connection name is the rail header,
+// not a destination.
 //
-// Per-DB settings (policy grid, DSN rotation) stay under
-// /connections/[id]/databases/[name]; connection-scoped settings stay
-// under /connections/[id]/settings.
+// The rail is organized by ASPECT, not by database. Multi-DB is a quiet
+// switcher in the rail header (?db=) that retargets only the per-DB panes
+// (Access, Source, per-DB reachability) — it disappears at one database.
+//
+// Per-DB server actions close over the selected db name (from ?db, the
+// authoritative resource ref); a tampered ?db can only hit another db the
+// caller already owns, which the lib re-checks under the hood.
 
-export default async function ConnectionHome({
+const SECTION_VALUES = CONNECTION_SECTIONS.map((s) => s.value);
+
+const CARD = "rounded-lg border border-border bg-card p-6";
+
+export default async function ConnectionWorkspace({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ section?: string; db?: string }>;
 }) {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
 
   const { id } = await params;
-  // One resolvePlan() read serves both consumers: auditRetentionDays
-  // clamps the home's last-query facts, caps.tokens drives the
-  // token-cap pre-flight below.
+  const { section, db } = await searchParams;
+  const initialSection: ConnectionSection = SECTION_VALUES.includes(
+    section as ConnectionSection,
+  )
+    ? (section as ConnectionSection)
+    : "database";
+
   const { plan, caps } = await resolvePlan();
-  // The three reads below are independent of each other — only the
-  // retention clamp depends on resolvePlan. Concurrent, not a waterfall.
   const [home, tokens, usage] = await Promise.all([
     getConnectionHomeData(customer, id, caps.auditRetentionDays),
-    // listTokens returns null on unknown/foreign — the home check below
-    // already gates ownership, but mirror the leakage shape if a race
-    // deletes the connection between calls.
     listTokens(customer, id),
-    // Pre-flight the token cap so "Connect an agent" reflects the limit
-    // BEFORE the modal opens — same advisory-UX-over-authoritative-check
-    // split as the connection create flow (createToken still enforces
-    // under a row lock). The token cap is org-wide (all connections).
     getPlanUsage(customer),
   ]);
   if (!home) notFound();
   const { connection: conn, databases, cursor } = home;
   if (tokens === null) notFound();
+
+  const label = connectionLabel(conn);
+  const freshness = computeFreshness(cursor);
+  const dbNames = databases.map((d) => d.name);
+
+  // Which database the per-DB panes target. Trust ?db only if it names a db
+  // on this connection; otherwise fall back to the first.
+  const selectedName =
+    typeof db === "string" && dbNames.includes(db)
+      ? db
+      : (dbNames[0] ?? null);
+  const selResult = selectedName
+    ? await getConnectionWithDatabase(customer, id, selectedName)
+    : null;
+  const selDb = selResult?.database ?? null;
+
   const tokenLimit =
     Number.isFinite(caps.tokens) && usage.tokens >= caps.tokens
       ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
       : undefined;
 
-  const label = connectionLabel(conn);
-  const freshness = computeFreshness(cursor);
+  // ---- server actions ----------------------------------------------------
+
+  async function renameAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const formId = formData.get("id");
+    if (typeof formId !== "string" || formId.length === 0) {
+      throw new Error("missing id");
+    }
+    const nameRaw = formData.get("name");
+    const name = typeof nameRaw === "string" ? nameRaw : null;
+    const renamed = await renameConnection(customer, formId, name);
+    if (!renamed) notFound();
+    revalidatePath("/dashboard");
+    revalidatePath(`/connections/${formId}`);
+  }
+
+  async function deleteAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await auth();
+    const formId = formData.get("id");
+    if (typeof formId !== "string" || formId.length === 0) {
+      throw new Error("missing id");
+    }
+    const deleted = await deleteConnection(customer, formId);
+    if (deleted) {
+      const ctx = getMcpProxyContext();
+      await ctx.registry.invalidate(deleted.id).catch((err) => {
+        console.error(
+          "[connections/[id].deleteAction] registry.invalidate failed",
+          err,
+        );
+      });
+      if (userId) {
+        getPostHog()?.capture({
+          distinctId: userId,
+          event: "connection_deleted",
+          properties: {
+            connection_id: deleted.id,
+            region: customer.region,
+            source: "connection_workspace",
+          },
+        });
+      }
+    }
+    redirect("/dashboard");
+  }
+
+  async function addDatabaseAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { connectionId } = await addDatabaseFromForm(customer, formData);
+    revalidatePath(`/connections/${connectionId}`);
+    revalidatePath("/dashboard");
+  }
+
+  // Per-DB actions target `selectedName` (closed over from ?db at render).
+  async function policyAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await auth();
+    if (!userId) redirect("/");
+    if (!selectedName) notFound();
+    const raw = formData.get("policy");
+    if (typeof raw !== "string") throw new Error("missing policy");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("policy is not valid JSON");
+    }
+    const policy = parsePolicyOrThrow(parsed);
+    const ctx = getMcpProxyContext();
+    const result = await setTableAccess(
+      customer,
+      id,
+      policy,
+      ctx,
+      userId,
+      selectedName,
+    );
+    if (!result) notFound();
+    revalidatePath(`/connections/${id}`);
+  }
+
+  async function scopeAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await auth();
+    if (!userId) redirect("/");
+    if (!selectedName) notFound();
+    const raw = formData.get("config");
+    if (typeof raw !== "string") throw new Error("missing config");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("config is not valid JSON");
+    }
+    const config = parseTenantScopeOrThrow(parsed);
+    const ctx = getMcpProxyContext();
+    const result = await setTenantScope(
+      customer,
+      id,
+      config,
+      ctx,
+      userId,
+      selectedName,
+    );
+    if (!result) notFound();
+    revalidatePath(`/connections/${id}`);
+  }
+
+  async function rotateAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await auth();
+    if (!selectedName) notFound();
+    const dsn = formData.get("dsn");
+    if (!isValidDsn(dsn)) {
+      throw new Error("DSN must be a postgres:// or postgresql:// URL");
+    }
+    const ctx = getMcpProxyContext();
+    const rotated = await rotateConnection(customer, id, dsn, ctx, selectedName);
+    if (!rotated) notFound();
+    revalidatePath(`/connections/${id}`);
+    if (userId) {
+      getPostHog()?.capture({
+        distinctId: userId,
+        event: "connection_rotated",
+        properties: {
+          connection_id: rotated.id,
+          region: customer.region,
+          source: "connection_workspace",
+        },
+      });
+    }
+  }
+
+  async function testReachabilityAction(): Promise<{
+    ok: boolean;
+    error?: string;
+  }> {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    if (!selectedName) return { ok: false, error: "no database selected" };
+    const limited = checkRateLimit(
+      pingTestKey(customer.id),
+      PING_TEST_RATE_LIMIT,
+    );
+    if (!limited.ok) {
+      return { ok: false, error: "too many tests — try again shortly" };
+    }
+    const result = await getConnectionWithDatabaseAndCredential(
+      customer,
+      id,
+      selectedName,
+    );
+    if (!result) notFound();
+    const ctx = getMcpProxyContext();
+    const decrypt = await ctx.resolver.resolve({
+      connectionDatabase: result.database,
+      region: result.connection.region,
+      customerId: result.connection.customerId,
+    });
+    if (!decrypt.ok) {
+      return {
+        ok: false,
+        error:
+          "credential unavailable — try again, or rotate the connection string",
+      };
+    }
+    return pingDsnGuarded(decrypt.plaintext);
+  }
+
+  async function deleteDatabaseAction() {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    if (!selectedName) notFound();
+    const ctx = getMcpProxyContext();
+    try {
+      const result = await removeDatabase(customer, id, selectedName, ctx);
+      if (!result) notFound();
+    } catch (err) {
+      // Disabled in the UI on the last DB, so this throw is tamper/race-only.
+      if (err instanceof LastDatabaseProtected) {
+        throw new Error(
+          "Can't remove the only database. Add another first or delete the connection.",
+        );
+      }
+      throw err;
+    }
+    revalidatePath("/dashboard");
+    revalidatePath(`/connections/${id}`);
+    // ?db pointed at the deleted database — drop it so the pane falls back to
+    // the first remaining one.
+    redirect(`/connections/${id}?section=database`);
+  }
+
+  // ---- panes -------------------------------------------------------------
+
+  const databasePane = selDb ? (
+    <>
+      <DatabaseStrip
+        databases={dbNames}
+        current={selDb.name}
+        connectionId={conn.id}
+        addAction={addDatabaseAction}
+      />
+      <div className="space-y-6">
+      <div className="space-y-3">
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+          Policy
+        </span>
+      <section className={CARD}>
+        <h2 className="text-base font-medium text-foreground">
+          Table permissions
+        </h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Per-table read / write policy enforced by the Midplane engine.{" "}
+          <strong className="font-medium text-foreground">
+            Saving stops the running session
+          </strong>{" "}
+          so the new policy takes effect on the next agent request.
+        </p>
+        <div className="pt-3">
+          <PermissionGrid
+            connectionId={conn.id}
+            dbName={selDb.name}
+            initialPolicy={parsePolicyOrThrow(selDb.tableAccess)}
+            action={policyAction}
+          />
+        </div>
+      </section>
+
+      <section className={CARD}>
+        <h2 className="text-base font-medium text-foreground">Tenant scoping</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Force agent queries to only see rows belonging to one tenant. Set the
+          default tenant column once; every queried table is{" "}
+          <strong className="font-medium text-foreground">
+            automatically scoped on it
+          </strong>
+          . List exceptions for tables that use a different column or are shared
+          across tenants.
+        </p>
+        <div className="pt-3">
+          <TenantScopeEditor
+            connectionId={conn.id}
+            initialConfig={parseTenantScopeOrThrow(selDb.tenantScope)}
+            action={scopeAction}
+          />
+        </div>
+      </section>
+      </div>
+
+      <TestPolicyPanel
+        connectionId={conn.id}
+        databases={[
+          {
+            name: selDb.name,
+            policyTables: Object.keys(
+              (selDb.tableAccess as TableAccessPolicy).tables ?? {},
+            ),
+            tenantScope: parseTenantScopeOrThrow(selDb.tenantScope),
+          },
+        ]}
+        reachabilitySlot={
+          <TestReachabilityButton action={testReachabilityAction} />
+        }
+      />
+
+      <div className="space-y-2 pt-2">
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+          Actions
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <RotateCredentialSheet
+            id={conn.id}
+            dbName={selDb.name}
+            action={rotateAction}
+            lastRotatedLabel={
+              selDb.rotatedAt
+                ? `Last rotated ${formatRelative(selDb.rotatedAt)}.`
+                : undefined
+            }
+          />
+          <DeleteDatabaseButton
+            name={selDb.name}
+            action={deleteDatabaseAction}
+            disabled={dbNames.length <= 1}
+          />
+        </div>
+        {dbNames.length <= 1 ? (
+          <p className="text-xs text-subtle">
+            Delete is unavailable on the only database — add another, or delete
+            the whole connection from Settings.
+          </p>
+        ) : null}
+      </div>
+      </div>
+    </>
+  ) : (
+    <p className="text-sm text-muted-foreground">No database on this connection yet.</p>
+  );
+
+  const agentsPane = (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Each agent gets its own credentialed URL — paste it into Cursor, Claude
+        Code, or any MCP client. Revoke the moment a laptop goes missing.
+      </p>
+      <TokenList
+        connectionId={conn.id}
+        connectionName={conn.name}
+        region={conn.region}
+        tokens={tokens}
+        createAction={createTokenAction}
+        revokeAction={revokeTokenAction}
+        tokenLimit={tokenLimit}
+      />
+    </div>
+  );
+
+  const settingsPane = (
+    <div className="space-y-6">
+      <section className={`${CARD} space-y-5`}>
+        <div className="space-y-2">
+          <Label>Name</Label>
+          <div className="flex min-h-9 items-center">
+            <RenameConnectionInline
+              id={conn.id}
+              initialName={conn.name}
+              placeholder="Untitled connection"
+              action={renameAction}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Shown across the dashboard and audit log. Click to edit.
+          </p>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="conn-region">Region</Label>
+          <Input id="conn-region" readOnly value={REGION_LABELS[conn.region]} />
+          <p className="text-xs text-muted-foreground">
+            Set when the connection was created and not editable.
+          </p>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="conn-id">Connection ID</Label>
+          <Input id="conn-id" readOnly value={conn.id} className="font-mono" />
+        </div>
+      </section>
+
+      <section className={`${CARD} space-y-3 border-[hsl(var(--deny)/0.4)]`}>
+        <h2 className="text-base font-medium text-foreground">
+          Delete connection
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Stops the MCP endpoint and removes the encrypted row.{" "}
+          <strong className="font-medium text-foreground">
+            All tokens on this connection are revoked.
+          </strong>{" "}
+          Audit history stays in the dashboard for compliance.
+        </p>
+        <DeleteConnectionButton id={conn.id} action={deleteAction} />
+      </section>
+    </div>
+  );
+
+  const railHeader = (
+    <div>
+      <div className="text-sm font-medium leading-snug tracking-tight text-foreground break-words">
+        {label}
+      </div>
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <FreshnessDot state={freshness} />
+        <span className="text-xs capitalize text-muted-foreground">
+          {FRESHNESS_LABELS[freshness]}
+        </span>
+      </div>
+      <p className="mt-2 text-[11px] leading-snug text-subtle">
+        Hosted MCP server
+      </p>
+    </div>
+  );
 
   return (
     <>
       <Topbar>
         <Breadcrumb
-          items={[
-            { label: "Connections", href: "/dashboard" },
-            { label },
-          ]}
+          items={[{ label: "Connections", href: "/dashboard" }, { label }]}
         />
       </Topbar>
       <PageContainer>
-        <div className="mx-auto max-w-[920px]">
-          <PageHeader
-            title={
-              <span className="flex items-center gap-2.5">
-                {label}
-                <FreshnessDot state={freshness} />
-                <RegionBadge region={conn.region} />
-              </span>
-            }
-            subtitle={
-              <>
-                This connection is a{" "}
-                <strong className="font-medium text-foreground">
-                  hosted MCP server
-                </strong>
-                . Each agent gets its own credentialed URL — paste it into
-                Cursor, Claude Code, or any MCP client.
-              </>
-            }
-            actions={
-              // Button primitive, matching the dashboard's Open action —
-              // a hand-rolled link here rendered square (rounded-md
-              // collapses to 0) against the 6px button radius.
-              <Link href={`/connections/${conn.id}/settings`}>
-                <Button size="sm" variant="outline">
-                  Settings
-                </Button>
-              </Link>
-            }
+        <div className="mx-auto max-w-[1100px]">
+          <ConnectionRail
+            initialSection={initialSection}
+            header={railHeader}
+            panes={{
+              database: databasePane,
+              agents: agentsPane,
+              settings: settingsPane,
+            }}
           />
-
-          <section
-            className="space-y-3 rounded-lg border border-border bg-card p-6"
-            data-testid="home-databases"
-          >
-            <div className="space-y-1">
-              <h2 className="text-base font-medium text-foreground">
-                Databases
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                Agents reach each database under its own{" "}
-                <strong className="font-medium text-foreground">
-                  per-table policy
-                </strong>
-                . Open one to edit permissions, tenant scoping, or rotate the
-                credential.
-              </p>
-            </div>
-            <div className="overflow-hidden rounded-md border border-border bg-background">
-              <ul className="divide-y divide-border">
-                {databases.map((db) => (
-                  <HomeDatabaseRow
-                    key={db.id}
-                    connectionId={conn.id}
-                    database={db}
-                    freshness={freshness}
-                  />
-                ))}
-              </ul>
-              <AddDatabaseForm
-                connectionId={conn.id}
-                action={addDatabaseAction}
-              />
-            </div>
-          </section>
-
-          <div className="mt-6">
-            <TestPolicyPanel
-              connectionId={conn.id}
-              databases={databases.map((db) => ({
-                name: db.name,
-                policyTables: Object.keys(
-                  (db.tableAccess as TableAccessPolicy).tables ?? {},
-                ),
-                // Normalized server-side — the panel is a client
-                // component and must not import the root db entrypoint.
-                tenantScope: parseTenantScopeOrThrow(db.tenantScope),
-              }))}
-            />
-          </div>
-
-          <div className="mt-6">
-            <TokenList
-              connectionId={conn.id}
-              connectionName={conn.name}
-              region={conn.region}
-              tokens={tokens}
-              createAction={createTokenAction}
-              revokeAction={revokeTokenAction}
-              tokenLimit={tokenLimit}
-            />
-          </div>
         </div>
       </PageContainer>
     </>
   );
-}
-
-function HomeDatabaseRow({
-  connectionId,
-  database,
-  freshness,
-}: {
-  connectionId: string;
-  database: DashboardDatabase;
-  freshness: ReturnType<typeof computeFreshness>;
-}) {
-  const policy = database.tableAccess as TableAccessPolicy;
-  const tableCount = Object.keys(policy.tables ?? {}).length;
-  const lastQueryText = lastQueryLabel(database.lastQueryAt); // shared copy
-
-  return (
-    <li>
-      <Link
-        href={`/connections/${connectionId}/databases/${database.name}`}
-        className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
-      >
-        <FreshnessDot state={freshness} />
-        <Database
-          className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-          strokeWidth={1.5}
-          aria-hidden
-        />
-        <span className="font-mono text-sm text-foreground">
-          {database.name}
-        </span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {accessLabel(policy.default)} · {tableCount}{" "}
-          {tableCount === 1 ? "table" : "tables"} · {lastQueryText}
-        </span>
-        <ChevronRight
-          className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-          strokeWidth={1.5}
-          aria-hidden
-        />
-      </Link>
-    </li>
-  );
-}
-
-async function addDatabaseAction(formData: FormData) {
-  "use server";
-  const customer = await currentCustomer();
-  if (!customer) redirect("/");
-
-  // Shared body with the dashboard's action (lib/database-form.ts);
-  // this action owns its revalidation surface only — including every
-  // per-DB page, whose sibling strip changes with membership.
-  const { connectionId } = await addDatabaseFromForm(customer, formData);
-  revalidatePath(`/connections/${connectionId}`);
-  revalidatePath("/dashboard");
-  revalidatePath(`/connections/[id]/databases/[name]`, "page");
 }

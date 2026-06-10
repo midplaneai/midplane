@@ -1,140 +1,15 @@
-import { auth } from "@clerk/nextjs/server";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 
-import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { DeleteConnectionButton } from "@/components/delete-connection-button";
-import { Breadcrumb } from "@/components/ui/breadcrumb";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { PageHeader } from "@/components/ui/page-header";
-import {
-  deleteConnection,
-  getConnectionWithMainDatabase,
-} from "@/lib/connections";
-import { currentCustomer } from "@/lib/customer";
-import { connectionLabel } from "@/lib/format";
-import { getMcpProxyContext } from "@/lib/mcp-proxy";
-import { getPostHog } from "@/lib/posthog";
-import { REGION_LABELS } from "@/lib/region";
+// Connection settings folded into the connection workspace's Settings tab
+// (region, id, rename, danger zone all live there now). This route stays
+// as a permanent redirect so existing bookmarks, the dashboard [⋯] menu,
+// and the db-context strip's "settings" link land on the same place.
 
-// Connection settings — small surface reached from the [⋯] menu on the
-// dashboard. Holds the bits that don't deserve real estate on the live
-// detail page: region (immutable), parent connection id, and the
-// delete-connection danger zone. Rename lives on the dashboard row;
-// per-DB ops live on the detail page.
-//
-// PR2 of mcp_url_auth_security: the masked-mcp-token panel is removed
-// because the plaintext is no longer retrievable (only the HMAC digest
-// is stored). PR3's token management surface — list, create, revoke —
-// replaces it.
-
-export default async function ConnectionSettings({
+export default async function ConnectionSettingsRedirect({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
-
   const { id } = await params;
-  const result = await getConnectionWithMainDatabase(customer, id);
-  if (!result) notFound();
-  const { connection: conn } = result;
-
-  async function deleteAction(formData: FormData) {
-    "use server";
-    const customer = await currentCustomer();
-    if (!customer) redirect("/");
-    const { userId } = await auth();
-
-    const formId = formData.get("id");
-    if (typeof formId !== "string" || formId.length === 0) {
-      throw new Error("missing id");
-    }
-    const deleted = await deleteConnection(customer, formId);
-    if (deleted) {
-      const ctx = getMcpProxyContext();
-      await ctx.registry.invalidate(deleted.id).catch((err) => {
-        console.error(
-          "[connections/[id]/settings.deleteAction] registry.invalidate failed",
-          err,
-        );
-      });
-      if (userId) {
-        getPostHog()?.capture({
-          distinctId: userId,
-          event: "connection_deleted",
-          properties: {
-            connection_id: deleted.id,
-            region: customer.region,
-            source: "dashboard",
-          },
-        });
-      }
-    }
-    redirect("/dashboard");
-  }
-
-  return (
-    <>
-      <Topbar>
-        <Breadcrumb
-          items={[
-            { label: "Connections", href: "/dashboard" },
-            {
-              label: connectionLabel(conn),
-              href: `/connections/${conn.id}`,
-            },
-            { label: "Settings" },
-          ]}
-        />
-      </Topbar>
-      <PageContainer>
-        <div className="mx-auto max-w-[760px]">
-          <PageHeader
-            title="Connection settings"
-            subtitle="Region and identifiers for this MCP endpoint."
-          />
-
-          <section className="space-y-5 rounded-lg border border-border-strong bg-card p-6">
-            <div className="space-y-2">
-              <Label htmlFor="conn-region">Region</Label>
-              <Input
-                id="conn-region"
-                readOnly
-                value={REGION_LABELS[conn.region]}
-              />
-              <p className="text-xs text-muted-foreground">
-                Set when the connection was created and not editable.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="conn-id">Connection ID</Label>
-              <Input
-                id="conn-id"
-                readOnly
-                value={conn.id}
-                className="font-mono"
-              />
-            </div>
-          </section>
-
-          <section className="mt-6 space-y-3 rounded-none border border-[hsl(var(--deny)/0.4)] bg-card p-6">
-            <h2 className="text-base font-medium text-foreground">
-              Delete connection
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              Stops the MCP endpoint and removes the encrypted row.{" "}
-              <strong className="font-medium text-foreground">
-                All tokens on this connection are revoked.
-              </strong>{" "}
-              Audit history stays in the dashboard for compliance.
-            </p>
-            <DeleteConnectionButton id={conn.id} action={deleteAction} />
-          </section>
-        </div>
-      </PageContainer>
-    </>
-  );
+  redirect(`/connections/${id}?section=settings`);
 }

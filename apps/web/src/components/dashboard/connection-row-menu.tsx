@@ -55,12 +55,14 @@ export function ConnectionRowMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem asChild>
-            {/* The home page carries databases + the test panel too;
-                the anchor lands this entry on its tokens section. */}
-            <Link href={`/connections/${id}#tokens`}>Connect an agent</Link>
+            {/* Deep-links straight to the connection workspace's tabs —
+                the Agents tab holds the credentialed URLs. */}
+            <Link href={`/connections/${id}?section=agents`}>
+              Connect an agent
+            </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link href={`/connections/${id}/settings`}>
+            <Link href={`/connections/${id}?section=settings`}>
               Connection settings
             </Link>
           </DropdownMenuItem>
