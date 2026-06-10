@@ -2,10 +2,11 @@ import { auth } from "@clerk/nextjs/server";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
+import { ConnectionServiceControl } from "@/components/dashboard/connection-service-control";
 import { DatabaseRow } from "@/components/dashboard/database-row";
 import {
   DashboardFreshnessProvider,
@@ -21,7 +22,10 @@ import {
   type DashboardConnectionRow,
   type DashboardDatabase,
   deleteConnection,
+  emitConfigAuditRow,
   listDashboardConnections,
+  pauseConnection,
+  resumeConnection,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { connectionLabel, formatRelative } from "@/lib/format";
@@ -134,6 +138,8 @@ export default async function Dashboard({
                   key={row.connection.id}
                   row={row}
                   deleteAction={deleteAction}
+                  pauseAction={pauseAction}
+                  resumeAction={resumeAction}
                 />
               ))}
             </ul>
@@ -175,9 +181,13 @@ function initialFreshness(
 function ConnectionCard({
   row,
   deleteAction,
+  pauseAction,
+  resumeAction,
 }: {
   row: DashboardConnectionRow;
   deleteAction: (formData: FormData) => Promise<void>;
+  pauseAction: (formData: FormData) => Promise<void>;
+  resumeAction: (formData: FormData) => Promise<void>;
 }) {
   const { connection: c, databases, cursor, activeTokens } = row;
   const label = connectionLabel(c);
@@ -203,13 +213,23 @@ function ConnectionCard({
             >
               {label}
             </Link>
-            <div className="mt-1.5">
+            <div className="mt-1.5 flex items-center gap-3">
               <LiveConnectionFreshness
                 connectionId={c.id}
                 initialPausedAt={c.pausedAt}
                 initialLastIndexedAt={cursor.lastIndexedAt}
                 initialLastErrorAt={cursor.lastErrorAt}
               />
+              {/* z-10 lifts the control above the card's stretched open-link
+                  (::after inset-0) so clicking Pause/Resume doesn't navigate. */}
+              <span className="relative z-10">
+                <ConnectionServiceControl
+                  connectionId={c.id}
+                  initialPausedAt={c.pausedAt}
+                  pauseAction={pauseAction}
+                  resumeAction={resumeAction}
+                />
+              </span>
             </div>
           </div>
           <RegionBadge region={c.region} />
@@ -332,6 +352,86 @@ async function deleteAction(formData: FormData) {
         },
       });
     }
+  }
+  revalidatePath("/dashboard");
+}
+
+async function pauseAction(formData: FormData) {
+  "use server";
+  const customer = await currentCustomer();
+  if (!customer) redirect("/");
+  const { userId } = await auth();
+  const id = formData.get("id");
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error("missing id");
+  }
+  const result = await pauseConnection(customer, id);
+  if (!result) notFound();
+  // Drop the running session — same teardown delete uses. Best-effort: the
+  // pause is durable and the resolver rejects every request regardless.
+  const ctx = getMcpProxyContext();
+  await ctx.registry.invalidate(result.id).catch((err) => {
+    console.error("[dashboard.pauseAction] registry.invalidate failed", err);
+  });
+  if (userId) {
+    try {
+      await emitConfigAuditRow(customer, {
+        tenantId: result.id,
+        database: "main",
+        eventType: "CONNECTION_PAUSED",
+        payload: { connection_id: result.id, action: "paused" },
+        actorClerkUserId: userId,
+      });
+    } catch (err) {
+      console.error("[dashboard.pauseAction] CONNECTION_PAUSED audit write failed", err);
+    }
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "connection_paused",
+      properties: {
+        connection_id: result.id,
+        region: customer.region,
+        source: "dashboard",
+      },
+    });
+  }
+  revalidatePath("/dashboard");
+}
+
+async function resumeAction(formData: FormData) {
+  "use server";
+  const customer = await currentCustomer();
+  if (!customer) redirect("/");
+  const { userId } = await auth();
+  const id = formData.get("id");
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error("missing id");
+  }
+  const result = await resumeConnection(customer, id);
+  if (!result) notFound();
+  // No teardown — the next agent request spawns a fresh engine with the
+  // current policy.
+  if (userId) {
+    try {
+      await emitConfigAuditRow(customer, {
+        tenantId: result.id,
+        database: "main",
+        eventType: "CONNECTION_RESUMED",
+        payload: { connection_id: result.id, action: "resumed" },
+        actorClerkUserId: userId,
+      });
+    } catch (err) {
+      console.error("[dashboard.resumeAction] CONNECTION_RESUMED audit write failed", err);
+    }
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "connection_resumed",
+      properties: {
+        connection_id: result.id,
+        region: customer.region,
+        source: "dashboard",
+      },
+    });
   }
   revalidatePath("/dashboard");
 }
