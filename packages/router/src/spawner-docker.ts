@@ -52,7 +52,7 @@ export class DockerSpawner implements Spawner {
   private readonly fetchFn: typeof fetch;
 
   constructor(opts: DockerSpawnerOptions = {}) {
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.7.1";
+    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.8.0";
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 30_000;
     this.indexerToken = opts.indexerToken;
     this.exec = opts.exec ?? execProcess;
