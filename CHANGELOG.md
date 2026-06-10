@@ -2,6 +2,23 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-06-10
+
+### Added
+
+- **`POST /admin/dry-run` — "would this SQL be allowed or denied?" from the engine, not a reimplementation.** The hosted dashboard gains a policy-test surface, and its verdict has to come from the *same* code that enforces policy at query time. This endpoint is the first half of the live enforcement path (parse → classify action → match `table_access` → apply `tenant_scope` → decide), stopped **before** any execution: it never opens a connection to the customer database and never runs a statement.
+  - **Single decision brain.** The decision logic was already a pure function (`evaluate()`); this release adds `Engine.decide()` (parse → policy, no audit, no socket) and refactors `Engine.handle()` so both routes run through the *same* guarded parse + the *same* `evaluate()` over the engine's own live (hot-swappable) rules. A drift-guard test drives `handle()` and `decide()` over the same statements + policy and asserts identical decisions, so a dry-run verdict can never diverge from what enforcement would do. The ATTEMPTED-before-policy audit ordering is preserved unchanged.
+  - **Request (exactly one of `probes` | `sql`, else `400`):** `{ database, tenant_context?: { value }, probes?: [{ table, action: select|insert|update|delete, cross_tenant? }], sql? }`. Probes let the cloud ask about a `(table, action)` without writing SQL; the endpoint synthesizes a representative statement (binding the tenant predicate where the table is scoped) and runs it through `decide()`.
+  - **Response `200`:** `{ verdicts: [{ probe|sql, decision: allow|deny, reason, matched_rule, tables, action }], truncated, total_tables?, policy_hash }`. `matched_rule` names the specific rule that decided it (e.g. `table:public.customers→deny`, `default:read`, `tenant_scope:orders.account_id`), computed from the same resolvers the live rules use so a label can't contradict the verdict. `policy_hash` is a stable hash of the currently-loaded policy so the cloud can detect a stale snapshot.
+  - **`cross_tenant: true`** binds the tenant predicate to a value *different* from `tenant_context.value` ("reach another tenant's rows") — deny wherever scoping is configured; where no scope is configured it returns the normal policy decision (an allow there is exactly the missing-scope the dashboard exists to surface, and is **not** special-cased away).
+  - **Caps:** up to 250 probes / 50 distinct tables per call; beyond that the first 50 tables' probes are evaluated and the response sets `truncated: true` + `total_tables`.
+  - **Auth + posture:** same bearer scheme as `POST /admin/policy` (the `INDEXER_TOKEN`); unset token → `404` (route reveals nothing), wrong/missing bearer → `401`. Malformed/unparseable custom SQL, an unknown `database` alias, both/neither of `probes`/`sql`, and a non-JSON body all return `400` with a parseable JSON error body.
+  - New engine exports back the label computation without duplicating logic: `Engine.decide()` / `DecisionPreview`, `resolveTableAccessForName` (+ `TableAccessResolution`), and `resolveTenantColumn`.
+
+### Why
+
+The hosted control plane's "test this policy" box must answer with the engine's real verdict, never a parallel evaluator that can quietly drift from enforcement — a security tool that says "this would be denied" in the UI while the live path allows it is worse than no tool. Carving `decide()` out of `handle()` (rather than re-deriving the answer) makes drift impossible by construction: there is one parse, one `evaluate()`, one set of rules. The endpoint stops before execution and never constructs a database connection, so testing a policy can't touch customer data — proven by a test that runs the full dry-run path against a poisoned executor and asserts it's never called.
+
 ## [0.7.1] — 2026-06-05
 
 ### Fixed

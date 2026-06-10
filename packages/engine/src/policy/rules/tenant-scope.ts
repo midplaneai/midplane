@@ -122,6 +122,20 @@ function requiredColumnFor(relname: string, cfg: TenantScopeConfig): string | nu
   return cfg.defaultColumn;
 }
 
+// Public wrapper over `requiredColumnFor` for callers outside the rule (the
+// cloud dry-run): given a bare relname and a resolved TenantScopeConfig, return
+// the tenant column the table must filter on, or null when the table isn't
+// scoped (exempt, unmapped, or an inert config). The dry-run uses this BOTH to
+// synthesize a correctly-scoped probe statement and to label the
+// `tenant_scope:<table>.<column>` matched_rule — the same `requiredColumnFor`
+// the live rule applies, so neither can drift from the verdict.
+export function resolveTenantColumn(
+  relname: string,
+  cfg: TenantScopeConfig,
+): string | null {
+  return requiredColumnFor(relname, cfg);
+}
+
 // Lift an IR TableRef into a ScopedTable when it requires scoping. Returns null
 // for the information_schema carve-out and for exempt/unmapped tables.
 function toScopedRef(ref: TableRef, cfg: TenantScopeConfig): ScopedTable | null {

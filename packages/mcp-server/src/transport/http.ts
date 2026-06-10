@@ -68,6 +68,13 @@ export interface AdminRoutes {
   // the throw is mapped to a 400 response with the error message in the
   // body. Returns the wall-clock time the swap was applied.
   setPolicy: (yamlText: string) => Promise<{ applied_at: string }>;
+  // Policy dry-run ("would this SQL be allowed or denied?"). Takes the parsed
+  // JSON request body and returns the verdicts response. A DryRunError (bad
+  // request shape, unknown database, unparseable SQL) is mapped to a 400; any
+  // other throw is an unexpected bug and maps to 500. Optional so transports
+  // bootstrapped without the dry-run wiring (older tests) keep compiling — the
+  // route then reports 503.
+  dryRun?: (body: unknown) => Promise<unknown>;
 }
 
 export async function startHttp(
@@ -158,6 +165,11 @@ async function handle(
   // so self-hosts without the token reveal nothing.
   if (req.method === "POST" && url === "/admin/policy") {
     await handleAdminPolicy(req, res, indexer, admin);
+    return;
+  }
+  // Admin policy dry-run — same auth/posture as /admin/policy.
+  if (req.method === "POST" && url === "/admin/dry-run") {
+    await handleAdminDryRun(req, res, indexer, admin);
     return;
   }
 
@@ -355,6 +367,59 @@ async function handleAdminPolicy(
     return;
   }
   writeJson(res, 200, { ok: true, applied_at: result.applied_at });
+}
+
+async function handleAdminDryRun(
+  req: IncomingMessage,
+  res: ServerResponse,
+  indexer: IndexerRoutes | undefined,
+  admin: AdminRoutes | undefined,
+): Promise<void> {
+  // Same bearer scheme + 404-when-unset posture as /admin/policy: a self-host
+  // without INDEXER_TOKEN reveals nothing about the route's existence.
+  const auth = checkBearer(req, indexer?.token);
+  if (auth === "missing") {
+    res.statusCode = 404;
+    res.end("not found");
+    return;
+  }
+  if (auth === "bad") {
+    writeJson(res, 401, { error: "unauthorized" });
+    return;
+  }
+  if (!admin || !admin.dryRun) {
+    writeJson(res, 503, { ok: false, error: "engine not ready" });
+    return;
+  }
+
+  // Body must be JSON (the dry-run request); a non-JSON body is a 400 rather
+  // than letting it reach the validator as `undefined`.
+  const text = await readText(req);
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    writeJson(res, 400, {
+      ok: false,
+      error: "request body must be valid JSON",
+    });
+    return;
+  }
+
+  try {
+    const result = await admin.dryRun(body);
+    writeJson(res, 200, result);
+  } catch (err) {
+    // DryRunError = client error (bad shape / unknown DB / unparseable SQL) →
+    // 400 with a parseable JSON body, same convention as /admin/policy
+    // validation errors. Anything else is an unexpected server bug → 500.
+    if (err instanceof Error && err.name === "DryRunError") {
+      writeJson(res, 400, { ok: false, error: err.message });
+      return;
+    }
+    logger.error({ err }, "dry-run handler threw");
+    writeJson(res, 500, { ok: false, error: "internal error" });
+  }
 }
 
 async function readText(req: IncomingMessage): Promise<string> {

@@ -8,10 +8,14 @@ import type { NormalizedProgram } from "../ir/types.ts";
 import type { Rule, RuleEvalContext, RuleVerdict } from "./rules/index.ts";
 
 export type { Rule, RuleVerdict, RuleEvalContext } from "./rules/index.ts";
-export { tableAccess } from "./rules/table-access.ts";
-export type { TableAccessConfig, TableAccessLevel } from "./rules/table-access.ts";
+export { tableAccess, resolveTableAccessForName } from "./rules/table-access.ts";
+export type {
+  TableAccessConfig,
+  TableAccessLevel,
+  TableAccessResolution,
+} from "./rules/table-access.ts";
 export { multiStatement } from "./rules/multi-statement.ts";
-export { tenantScope } from "./rules/tenant-scope.ts";
+export { tenantScope, resolveTenantColumn } from "./rules/tenant-scope.ts";
 export type { TenantScopeConfig, TenantScopeSource } from "./rules/tenant-scope.ts";
 export { parseError } from "./rules/parse-error.ts";
 

@@ -75,7 +75,7 @@ const NOOP_TELEMETRY: TelemetryHandle = {
 export function buildServer(opts: BuildServerOptions): McpServer {
   const server = new McpServer({
     name: "midplane-mcp-server",
-    version: "0.7.1",
+    version: "0.8.0",
   });
 
   const telemetry = opts.telemetry ?? NOOP_TELEMETRY;

@@ -35,6 +35,12 @@ import {
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
 import {
+  validateDryRunRequest,
+  executeDryRun,
+  DryRunError,
+  type DryRunResponse,
+} from "./dry-run.ts";
+import {
   DEFAULT_DB_NAME,
   EMPTY_TENANT_SCOPE,
   loadPolicyFile,
@@ -117,6 +123,13 @@ export interface EngineRegistry {
   // dispatches based on shape (legacy → swap on __default__; multi-DB →
   // diff and reconcile).
   setPolicy(yamlText: string): Promise<{ applied_at: string }>;
+  // Policy dry-run ("would this SQL be allowed or denied?"). Resolves the
+  // request's `database` to its live engine + policy holder and runs every
+  // probe/statement through `engine.decide()` — the same decision brain the
+  // `query` tool enforces, stopped before any execution. Never opens a
+  // connection to the customer DB. Throws DryRunError (→ HTTP 400) on a bad
+  // request shape, an unknown database alias, or unparseable custom SQL.
+  dryRun(body: unknown): Promise<DryRunResponse>;
   close(): Promise<void>;
 }
 
@@ -302,6 +315,29 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
         });
     },
     setPolicy,
+    async dryRun(body: unknown): Promise<DryRunResponse> {
+      // Validate first so a malformed body yields a precise error (and so the
+      // `database` field is well-typed before we resolve it).
+      const req = validateDryRunRequest(body);
+      const entry = entries.get(req.database);
+      if (!entry) {
+        throw new DryRunError(
+          `Unknown database "${req.database}". Configured databases: ${[...entries.keys()].sort().join(", ")}.`,
+        );
+      }
+      // Hand the dry-run the entry's LIVE engine + holder pointers, so a
+      // verdict reflects the current (hot-swappable) policy and is computed by
+      // the exact engine the `query` tool drives.
+      return executeDryRun(
+        {
+          engine: entry.engine,
+          tableAccess: entry.holder.tableAccess,
+          tenantScope: entry.holder.tenantScope,
+          ctxBase: entry.ctxBase,
+        },
+        req,
+      );
+    },
     async close() {
       // Drain every per-DB executor pool; only the underlying SQLite gets
       // close()'d (audit may be a wrapper).

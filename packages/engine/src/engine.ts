@@ -64,6 +64,30 @@ export type Decision =
   // sentence the rule produced.
   | { allowed: false; reason: string; message: string; auditId: string };
 
+// The verdict half of the pipeline, with NO execution and NO audit — exactly
+// what `Engine.decide()` returns. It is the FIRST half of `handle()` (parse →
+// classify → policy), stopped before any Postgres socket is opened. The cloud
+// dashboard's policy test surface ("would this SQL be allowed or denied?")
+// consumes this; the values are computed by the same guarded parse + the same
+// `evaluate()` the live enforcement path runs, so a preview can never drift
+// from what `handle()` would decide for the same statement + policy.
+export type DecisionPreview = {
+  // Uppercase to mirror the engine's internal verdict + the audit `decision`
+  // field. The HTTP dry-run layer lowercases it for its wire contract.
+  decision: "ALLOW" | "DENY";
+  // Wire-level rule name on DENY (e.g. "table_access", "tenant_scope_missing",
+  // "parse_error", "internal_error"); null on ALLOW.
+  reason: string | null;
+  // Polished agent-facing sentence on DENY — IDENTICAL to the `message`
+  // `handle()` returns and audits for the same denial; null on ALLOW.
+  message: string | null;
+  // Canonical statement keyword (SELECT/INSERT/UPDATE/DELETE/…); null only when
+  // there were no statements (e.g. a parse failure).
+  statementType: string | null;
+  // Tables the statement touches, as the audit pipeline records them.
+  tablesTouched: string[];
+};
+
 export interface EngineOptions {
   policy: { rules: Rule[] };
   audit: AuditWriter;
@@ -115,16 +139,9 @@ export class Engine {
 
     // ── 1. parse — never throws past here. A WASM crash converts to a
     //    synthetic parse-failure ParseResult so ATTEMPTED still records
-    //    the agent's intent before any policy runs.
-    let parseResult: Awaited<ReturnType<Dialect["parse"]>>;
-    try {
-      parseResult = await this.dialect.parse(input.sql);
-    } catch (err) {
-      parseResult = {
-        ok: false,
-        error: `parser_crashed: ${(err as Error)?.message ?? String(err)}`,
-      };
-    }
+    //    the agent's intent before any policy runs. The same guarded parse
+    //    backs Engine.decide() so dry-run verdicts can't diverge from enforcement.
+    const parseResult = await this.parseGuarded(input.sql);
 
     // ── 2. audit ATTEMPTED — written BEFORE policy so a misbehaving rule
     //    or future built-in bug cannot disappear the query from audit.
@@ -152,22 +169,11 @@ export class Engine {
     // ── 3. policy — wrapped so any rule throw produces a clean DENY
     //    DECIDED row with reason=internal_error rather than an unhandled
     //    exception. The original error is logged to ops for diagnosis.
-    let evalResult: ReturnType<typeof evaluate>;
-    try {
-      evalResult = evaluate({
-        parse: parseResult,
-        ctx: input.ctx,
-        rules: this.rules,
-        dialect: this.dialect,
-      });
-    } catch (err) {
-      console.error("[engine] policy evaluation threw:", err);
-      evalResult = {
-        verdict: { decision: "DENY", reason: "internal_error" },
-        statementType: null,
-        tablesTouched: [],
-      };
-    }
+    //    Runs AFTER the ATTEMPTED write (above) so a misbehaving rule can
+    //    never disappear the query from audit; Engine.decide() reuses this
+    //    same guarded evaluation so a dry-run can't disagree with the live
+    //    decision.
+    const evalResult = this.evaluateGuarded(parseResult, input.ctx);
 
     // ── 4. audit DECIDED — failure here aborts the pipeline.
     const decidedId = this.idGen();
@@ -291,6 +297,85 @@ export class Engine {
     await this.writePostExecBestEffort(executed);
 
     return { allowed: true, result: execResult, auditId: decidedId };
+  }
+
+  // Compute the policy verdict for a statement WITHOUT auditing or executing
+  // it. This is the first half of `handle()` — parse → classify → policy —
+  // stopped before the ATTEMPTED write and before any Postgres connection is
+  // opened. It exists so the cloud's policy-test surface gets its "allow or
+  // deny?" answer from the SAME code that enforces policy at query time: it
+  // runs `parseGuarded` + `evaluateGuarded`, the exact two primitives
+  // `handle()` runs, over the engine's OWN rules + dialect (so a hot-swapped
+  // policy is reflected immediately). It never touches `this.executor`, so it
+  // can never open a socket to the customer database.
+  //
+  // Like `handle()`, this never throws on bad SQL: an unparseable statement
+  // comes back as a `parse_error` DENY (the parse_error rule's job), and a
+  // rule that throws comes back as an `internal_error` DENY — identical to
+  // what the live path would decide and audit.
+  async decide(input: { sql: string; ctx: EngineContext }): Promise<DecisionPreview> {
+    const parseResult = await this.parseGuarded(input.sql);
+    const evalResult = this.evaluateGuarded(parseResult, input.ctx);
+    if (evalResult.verdict.decision === "DENY") {
+      return {
+        decision: "DENY",
+        reason: evalResult.verdict.reason,
+        message:
+          evalResult.verdict.message ??
+          defaultMessageForRule(evalResult.verdict.reason),
+        statementType: evalResult.statementType,
+        tablesTouched: evalResult.tablesTouched,
+      };
+    }
+    return {
+      decision: "ALLOW",
+      reason: null,
+      message: null,
+      statementType: evalResult.statementType,
+      tablesTouched: evalResult.tablesTouched,
+    };
+  }
+
+  // Parse, converting a WASM crash into a synthetic parse-failure ParseResult
+  // instead of throwing. Shared by `handle()` (which writes ATTEMPTED before
+  // calling `evaluateGuarded`) and `decide()` so both classify identically.
+  private async parseGuarded(
+    sql: string,
+  ): Promise<Awaited<ReturnType<Dialect["parse"]>>> {
+    try {
+      return await this.dialect.parse(sql);
+    } catch (err) {
+      return {
+        ok: false,
+        error: `parser_crashed: ${(err as Error)?.message ?? String(err)}`,
+      };
+    }
+  }
+
+  // Run all policy rules over the parsed statement, converting any rule throw
+  // (or a dialect normalize() throw) into a clean internal_error DENY rather
+  // than an unhandled exception. The single decision brain — `handle()` and
+  // `decide()` both route through here, so dry-run verdicts cannot diverge
+  // from enforcement.
+  private evaluateGuarded(
+    parseResult: Awaited<ReturnType<Dialect["parse"]>>,
+    ctx: EngineContext,
+  ): ReturnType<typeof evaluate> {
+    try {
+      return evaluate({
+        parse: parseResult,
+        ctx,
+        rules: this.rules,
+        dialect: this.dialect,
+      });
+    } catch (err) {
+      console.error("[engine] policy evaluation threw:", err);
+      return {
+        verdict: { decision: "DENY", reason: "internal_error" },
+        statementType: null,
+        tablesTouched: [],
+      };
+    }
   }
 
   // Pre-execute audit writes are critical-path. A throw here aborts the pipeline.

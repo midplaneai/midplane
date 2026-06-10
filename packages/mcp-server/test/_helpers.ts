@@ -150,6 +150,11 @@ export function makeTestHandle(opts: {
     async setPolicy() {
       return { applied_at: new Date().toISOString() };
     },
+    async dryRun() {
+      // The dry-run path is exercised against the real production registry in
+      // dry-run.test.ts; this single-engine stub doesn't need a faithful impl.
+      return { verdicts: [], truncated: false, policy_hash: "0".repeat(16) };
+    },
     async close() {},
   };
   return {

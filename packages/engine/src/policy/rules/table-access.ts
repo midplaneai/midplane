@@ -133,7 +133,27 @@ function displayName(ref: TableRef): string {
   return ref.schema !== null ? `${ref.schema}.${ref.relname}` : ref.relname;
 }
 
+// How a table's permission level was decided. Beyond the level itself, this
+// names WHICH key resolved it so callers (the cloud dry-run's `matched_rule`)
+// can say "table:public.customers→deny" vs "default:read" vs the
+// information_schema carve-out. The rule itself only reads `.level`; the
+// attribution is free metadata the dry-run consumes.
+export interface TableAccessResolution {
+  level: TableAccessLevel;
+  source: "table" | "default" | "information_schema";
+  // The config key that matched, for source === "table" (e.g. "public.users"
+  // or a bare "users"); null for "default" and "information_schema".
+  key: string | null;
+}
+
 function resolvePermission(ref: TableRef, cfg: TableAccessConfig): TableAccessLevel {
+  return resolveDetailed(ref, cfg).level;
+}
+
+// The single resolution implementation. `resolvePermission` (used by the rule's
+// allow/deny decision) and `resolveTableAccessForName` (used by the dry-run's
+// label) both go through this, so a label can never disagree with the verdict.
+function resolveDetailed(ref: TableRef, cfg: TableAccessConfig): TableAccessResolution {
   // information_schema is a read-only set of SQL-standard views over schema (not
   // row data). Granting unconditional `read` is structurally required: agents on
   // default-deny tokens need it to discover what tables exist (the MCP
@@ -142,12 +162,12 @@ function resolvePermission(ref: TableRef, cfg: TableAccessConfig): TableAccessLe
   // discovery out. pg_catalog is intentionally NOT carved out — it exposes
   // pg_roles, pg_proc bodies, pg_settings, etc. and stays subject to policy.
   if (ref.schema === "information_schema") {
-    return "read";
+    return { level: "read", source: "information_schema", key: null };
   }
   if (ref.schema !== null) {
     const qualified = `${ref.schema}.${ref.relname}`;
     if (Object.prototype.hasOwnProperty.call(cfg.tables, qualified)) {
-      return cfg.tables[qualified]!;
+      return { level: cfg.tables[qualified]!, source: "table", key: qualified };
     }
   } else {
     // Bare reference. Postgres's default search_path resolves these to
@@ -156,11 +176,29 @@ function resolvePermission(ref: TableRef, cfg: TableAccessConfig): TableAccessLe
     // bare key so the two match without forcing operators to double-list.
     const publicQualified = `public.${ref.relname}`;
     if (Object.prototype.hasOwnProperty.call(cfg.tables, publicQualified)) {
-      return cfg.tables[publicQualified]!;
+      return { level: cfg.tables[publicQualified]!, source: "table", key: publicQualified };
     }
   }
   if (Object.prototype.hasOwnProperty.call(cfg.tables, ref.relname)) {
-    return cfg.tables[ref.relname]!;
+    return { level: cfg.tables[ref.relname]!, source: "table", key: ref.relname };
   }
-  return cfg.default;
+  return { level: cfg.default, source: "default", key: null };
+}
+
+// Resolve a table NAME (bare `users` or schema-qualified `public.users`)
+// against a table_access config, returning the level AND how it resolved.
+// Shares `resolveDetailed` with the live rule, so the dry-run's `matched_rule`
+// label is guaranteed consistent with the actual table_access verdict. A
+// missing config falls back to the no-YAML default (read everything, write
+// nothing) — exactly what the rule does for an engine booted without YAML.
+export function resolveTableAccessForName(
+  tableName: string,
+  cfg: TableAccessConfig | undefined,
+): TableAccessResolution {
+  const dot = tableName.lastIndexOf(".");
+  const ref: TableRef =
+    dot >= 0
+      ? { schema: tableName.slice(0, dot), relname: tableName.slice(dot + 1) }
+      : { schema: null, relname: tableName };
+  return resolveDetailed(ref, cfg ?? LEGACY_NO_YAML_CONFIG);
 }

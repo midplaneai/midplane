@@ -89,7 +89,10 @@ export async function runServer(): Promise<void> {
         port: cfg.port,
         host: cfg.host,
         indexer: { audit: handle.registry.audit, token: cfg.indexerToken },
-        admin: { setPolicy: (yaml) => handle.registry.setPolicy(yaml) },
+        admin: {
+          setPolicy: (yaml) => handle.registry.setPolicy(yaml),
+          dryRun: (body) => handle.registry.dryRun(body),
+        },
       },
     );
     close = async () => {

@@ -1,7 +1,13 @@
 // @midplane/engine — public entrypoint.
 
 export { Engine } from "./engine.ts";
-export type { AgentIntent, EngineContext, EngineOptions, Decision } from "./engine.ts";
+export type {
+  AgentIntent,
+  EngineContext,
+  EngineOptions,
+  Decision,
+  DecisionPreview,
+} from "./engine.ts";
 
 export type {
   AuditWriter,
@@ -22,7 +28,11 @@ export { EnvCredentialStore } from "./crypto/credential-store.ts";
 export type { Executor, ExecutionResult, ExecuteContext } from "./executor.ts";
 
 export type { Rule, RuleVerdict } from "./policy/index.ts";
-export type { TableAccessConfig, TableAccessLevel } from "./policy/index.ts";
+export type {
+  TableAccessConfig,
+  TableAccessLevel,
+  TableAccessResolution,
+} from "./policy/index.ts";
 export type { TenantScopeConfig, TenantScopeSource } from "./policy/index.ts";
 export {
   evaluate,
@@ -30,6 +40,8 @@ export {
   multiStatement,
   tenantScope,
   parseError,
+  resolveTableAccessForName,
+  resolveTenantColumn,
 } from "./policy/index.ts";
 
 // Dialect surface (0.6.0). `parse` / `warmup` / `ParseResult` / `PgParseTree`
