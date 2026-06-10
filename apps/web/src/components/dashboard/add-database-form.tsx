@@ -30,12 +30,19 @@ const DB_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 export function AddDatabaseForm({
   connectionId,
   action,
+  embedded = false,
+  onClose,
 }: {
   connectionId: string;
   // Server action: receives FormData with `name`, `dsn`,
   // `default_access`. Throws on validation / collision so we can
   // catch + render inline.
   action: (formData: FormData) => Promise<void>;
+  // Embedded: always-expanded form with no collapsed toggle and no own
+  // header (the host — e.g. a Sheet — owns the chrome). onClose fires on a
+  // successful add or cancel so the host can dismiss.
+  embedded?: boolean;
+  onClose?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -54,7 +61,7 @@ export function AddDatabaseForm({
     return () => window.clearTimeout(t);
   }, [justAdded]);
 
-  if (!open) {
+  if (!embedded && !open) {
     return (
       <div className="border-t border-border px-3 py-2">
         {justAdded ? (
@@ -83,6 +90,12 @@ export function AddDatabaseForm({
     setTestVersion((v) => v + 1);
   }
 
+  function dismiss() {
+    reset();
+    if (embedded) onClose?.();
+    else setOpen(false);
+  }
+
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     reset();
@@ -107,14 +120,18 @@ export function AddDatabaseForm({
     startTransition(async () => {
       try {
         await action(fd);
-        // Server action revalidates /dashboard. The new row will paint
-        // on next render — collapse + clear so the user sees it. The
-        // post-add banner stays for 4s.
+        // Server action revalidates the page; the new database paints on
+        // the next render. Embedded (in a Sheet) we hand control back to the
+        // host to dismiss; inline we collapse + flash a confirmation banner.
         form.reset();
-        setOpen(false);
         setError(null);
         setTestVersion((v) => v + 1);
-        setJustAdded(name);
+        if (embedded) {
+          onClose?.();
+        } else {
+          setOpen(false);
+          setJustAdded(name);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "add failed");
       }
@@ -122,26 +139,29 @@ export function AddDatabaseForm({
   }
 
   return (
-    <div className="border-t border-border bg-muted/20 px-3 py-3">
+    <div
+      className={embedded ? "" : "border-t border-border bg-muted/20 px-3 py-3"}
+    >
       <form onSubmit={handleSubmit} className="space-y-3">
-        <div className="flex items-baseline justify-between">
-          <h3 className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
-            Add database
-          </h3>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              reset();
-            }}
-            className="text-subtle hover:text-foreground"
-            aria-label="Close add-database form"
-          >
-            <X className="h-3.5 w-3.5" strokeWidth={1.5} />
-          </button>
-        </div>
+        {!embedded ? (
+          <div className="flex items-baseline justify-between">
+            <h3 className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
+              Add database
+            </h3>
+            <button
+              type="button"
+              onClick={dismiss}
+              className="text-subtle hover:text-foreground"
+              aria-label="Close add-database form"
+            >
+              <X className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </button>
+          </div>
+        ) : null}
 
-        <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
+        <div
+          className={`grid gap-3 ${embedded ? "" : "sm:grid-cols-[180px_1fr]"}`}
+        >
           <div className="space-y-1.5">
             <Label htmlFor="add-db-name" className="text-xs">
               Name
@@ -185,7 +205,7 @@ export function AddDatabaseForm({
           <legend className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-foreground">
             Default agent access
           </legend>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className={`grid gap-2 ${embedded ? "" : "sm:grid-cols-3"}`}>
             <AccessRadio
               value="read"
               label="Read"
@@ -219,10 +239,7 @@ export function AddDatabaseForm({
             variant="ghost"
             size="sm"
             disabled={pending}
-            onClick={() => {
-              setOpen(false);
-              reset();
-            }}
+            onClick={dismiss}
           >
             Cancel
           </Button>
