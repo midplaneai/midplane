@@ -39,6 +39,9 @@ export interface TableNameInputProps {
   value: string;
   onChange: (v: string) => void;
   connectionId: string;
+  /** Database name on the connection — the tables route is per-db.
+   *  Omitted falls back to the route's default ("main"). */
+  dbName?: string;
   excludeNames: Set<string>;
   placeholder?: string;
   ariaLabel?: string;
@@ -48,6 +51,7 @@ export function TableNameInput({
   value,
   onChange,
   connectionId,
+  dbName,
   excludeNames,
   placeholder = "public.users",
   ariaLabel = "Table name",
@@ -81,7 +85,9 @@ export function TableNameInput({
     const handle = window.setTimeout(async () => {
       setState((prev) => (prev.kind === "error" ? prev : { kind: "loading" }));
       try {
-        const url = `/api/connections/${connectionId}/tables?q=${encodeURIComponent(trimmed)}`;
+        const url = `/api/connections/${connectionId}/tables?q=${encodeURIComponent(trimmed)}${
+          dbName ? `&db=${encodeURIComponent(dbName)}` : ""
+        }`;
         const res = await fetch(url, {
           credentials: "same-origin",
           signal: ctl.signal,
@@ -109,7 +115,7 @@ export function TableNameInput({
       window.clearTimeout(handle);
       ctl.abort();
     };
-  }, [value, open, connectionId]);
+  }, [value, open, connectionId, dbName]);
 
   const filtered =
     state.kind === "loaded"
