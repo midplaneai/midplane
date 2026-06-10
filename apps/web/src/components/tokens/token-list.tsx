@@ -41,6 +41,7 @@ export async function TokenList({
   tokens,
   createAction,
   revokeAction,
+  tokenLimit,
   now = new Date(),
 }: {
   connectionId: string;
@@ -49,6 +50,11 @@ export async function TokenList({
   tokens: TokenSummary[];
   createAction: CreateTokenAction;
   revokeAction: RevokeTokenAction;
+  /** Set when the org is already at its (finite) token cap — the create
+   *  modal opens to a limit panel (upgrade + revoke-to-free-a-slot) instead
+   *  of the form. The cap is org-wide, so this is decided by the page from
+   *  total usable-token usage, not this connection's rows. */
+  tokenLimit?: { limit: number; plan: string; upgradeUrl: string };
   now?: Date;
 }) {
   // Sort: active first, then expired/revoked. Within each, most-recently-
@@ -92,6 +98,7 @@ export async function TokenList({
           region={region}
           action={createAction}
           triggerLabel="Connect an agent"
+          limitReached={tokenLimit}
         />
         <ConnectAgentGuide connectionName={connectionName} region={region} />
       </section>
@@ -119,6 +126,7 @@ export async function TokenList({
           connectionName={connectionName}
           region={region}
           action={createAction}
+          limitReached={tokenLimit}
         />
       </header>
 

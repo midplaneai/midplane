@@ -34,7 +34,7 @@ import {
   renameDatabase,
 } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
-import { resolvePlan } from "@/lib/plan";
+import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
 
@@ -64,6 +64,15 @@ export default async function Dashboard({
     caps.auditRetentionDays,
   );
 
+  // Surface the connection cap in the header so the limit is visible before
+  // the user tries to add one (and the create form already guards the same
+  // cap on /connections/new). Unlimited (Team) shows no counter. atLimit
+  // only fires when rows is non-empty, so it never collides with the
+  // empty-state branch below.
+  const connectionLimit = caps.connections;
+  const atConnectionLimit =
+    Number.isFinite(connectionLimit) && rows.length >= connectionLimit;
+
   return (
     <>
       <Topbar>
@@ -83,12 +92,27 @@ export default async function Dashboard({
             </>
           }
           actions={
-            <Link href="/connections/new">
-              <Button size="sm">
-                <Plus className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-                New connection
-              </Button>
-            </Link>
+            <div className="flex items-center gap-3">
+              {Number.isFinite(connectionLimit) ? (
+                <span className="font-mono text-[11px] uppercase tracking-[0.04em] text-subtle">
+                  {rows.length} / {connectionLimit}
+                </span>
+              ) : null}
+              {atConnectionLimit ? (
+                <Link href={UPGRADE_URL}>
+                  <Button size="sm" variant="outline">
+                    Upgrade to add more
+                  </Button>
+                </Link>
+              ) : (
+                <Link href="/connections/new">
+                  <Button size="sm">
+                    <Plus className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
+                    New connection
+                  </Button>
+                </Link>
+              )}
+            </div>
           }
         />
 

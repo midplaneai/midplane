@@ -5,8 +5,9 @@ import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { TokenList } from "@/components/tokens/token-list";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { PageHeader } from "@/components/ui/page-header";
-import { getConnectionWithMainDatabase } from "@/lib/connections";
+import { getConnectionWithMainDatabase, getPlanUsage } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
+import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { listTokens } from "@/lib/tokens";
 
 import { createTokenAction, revokeTokenAction } from "./token-actions";
@@ -36,6 +37,18 @@ export default async function ConnectionDetail({
   // deletes the connection between calls.
   const tokens = await listTokens(customer, id);
   if (tokens === null) notFound();
+
+  // Pre-flight the token cap so "Connect an agent" reflects the limit BEFORE
+  // the modal opens — same advisory-UX-over-authoritative-check split as the
+  // connection create flow (createToken still enforces under a row lock). The
+  // token cap is org-wide (all connections), so we read total usable tokens,
+  // not this connection's count.
+  const { plan, caps } = await resolvePlan();
+  const usage = await getPlanUsage(customer);
+  const tokenLimit =
+    Number.isFinite(caps.tokens) && usage.tokens >= caps.tokens
+      ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
+      : undefined;
 
   const connectionLabel = conn.name ?? conn.id.slice(0, 12);
 
@@ -79,6 +92,7 @@ export default async function ConnectionDetail({
             tokens={tokens}
             createAction={createTokenAction}
             revokeAction={revokeTokenAction}
+            tokenLimit={tokenLimit}
           />
         </div>
       </PageContainer>
