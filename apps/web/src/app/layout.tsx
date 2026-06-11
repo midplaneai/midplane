@@ -60,11 +60,22 @@ export default function RootLayout({
           // Clerk doesn't read CSS custom properties — these hex values must
           // be kept in sync with the warm-dark tokens in globals.css. See
           // DESIGN.md decision log (2026-05-22 re-skin).
+          //
+          // Use the current variable names (colorForeground / colorInput /
+          // colorInputForeground / colorMutedForeground). The older
+          // colorText / colorInputBackground / colorInputText /
+          // colorTextSecondary names are no longer wired through clerk-js, so
+          // they silently fall back to Clerk's light-theme defaults — the
+          // result is near-black headings/labels and white inputs on our dark
+          // card (illegible). Renaming is the whole fix; don't add the old
+          // keys back.
           colorBackground: "#1c1916",
-          colorInputBackground: "#221f1c",
-          colorInputText: "#f3efe7",
-          colorText: "#f3efe7",
-          colorTextSecondary: "#bdb4a6",
+          colorInput: "#221f1c",
+          colorInputForeground: "#f3efe7",
+          colorForeground: "#f3efe7",
+          colorMutedForeground: "#bdb4a6",
+          colorMuted: "#221f1c",
+          colorBorder: "#2a2622",
           colorPrimary: "#f3efe7",
           // Text on primary-filled controls (e.g. PricingTable's "Subscribe").
           // colorPrimary is the cream paper, so the label must be the dark ink
