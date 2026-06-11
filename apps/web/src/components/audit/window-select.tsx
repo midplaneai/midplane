@@ -7,6 +7,7 @@ const LABELS: Record<AuditWindowKey, string> = {
   "24h": "24h",
   "7d": "7d",
   "30d": "30d",
+  "90d": "90d",
 };
 
 // Segmented time-window control. URL-driven (each segment is a Link) so the

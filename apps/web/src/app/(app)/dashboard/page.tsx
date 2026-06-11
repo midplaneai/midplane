@@ -298,14 +298,14 @@ function ConnectionCard({
           {/* "queries" stat — always a deep-link to this connection's audit
               log, even with zero queries (it just lands on the connection-
               scoped audit view, empty or not — a valid "no activity yet"
-              destination, not a dead stat). window=30d (the widest key) so it
+              destination, not a dead stat). window=90d (the widest key) so it
               spans the connection's full retained history; the audit page
               clamps it to the plan's retention. Without it /audit defaults to
               24h and a "last query" older than a day (this stat honors the
-              plan's 7d/30d retention) would land on an empty table. statTile's
+              plan's 7d/30d/90d retention) would land on an empty table. statTile's
               relative z-10 keeps the click off the card's stretched open-link. */}
           <Link
-            href={`/audit?connection=${c.id}&window=30d`}
+            href={`/audit?connection=${c.id}&window=90d`}
             aria-label={`View ${label}'s queries in the audit log`}
             title={`View ${label}'s queries in the audit log`}
             className={statTile}

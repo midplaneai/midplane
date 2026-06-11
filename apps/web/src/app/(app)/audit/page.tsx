@@ -48,6 +48,7 @@ const NOMINAL_WINDOW_HOURS: Record<AuditWindowKey, number> = {
   "24h": 24,
   "7d": 24 * 7,
   "30d": 24 * 30,
+  "90d": 24 * 90,
 };
 
 // Label the EFFECTIVE (post-clamp) window, not the requested key — when
@@ -82,8 +83,8 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
 
-  // Plan retention window (Free 7d, Pro/Team 30d). Threaded into every audit
-  // read so the list, chips, counts, and chart all honor the same horizon.
+  // Plan retention window (Free 7d, Pro 30d, Team 90d). Threaded into every
+  // audit read so the list, chips, counts, and chart all honor the same horizon.
   const { caps } = await resolvePlan();
   const retentionDays = caps.auditRetentionDays;
 
