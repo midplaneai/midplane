@@ -85,7 +85,7 @@ export function retentionSince(
 // the aligned window start is always within retention, so retention is the
 // floor and the window is the active bound.
 
-export const AUDIT_WINDOWS = ["24h", "7d", "30d"] as const;
+export const AUDIT_WINDOWS = ["24h", "7d", "30d", "90d"] as const;
 export type AuditWindowKey = (typeof AUDIT_WINDOWS)[number];
 
 export interface AuditWindow {
@@ -103,6 +103,10 @@ const WINDOW_DEFS: Record<AuditWindowKey, AuditWindow> = {
   "24h": { key: "24h", hours: 24, bucket: "hour", bucketCount: 24 },
   "7d": { key: "7d", hours: 24 * 7, bucket: "day", bucketCount: 7 },
   "30d": { key: "30d", hours: 24 * 30, bucket: "day", bucketCount: 30 },
+  // 90d reaches Team's retention horizon. On lower tiers resolveAuditWindow
+  // clamps it down (Pro → 30 daily bars, Free → 7) and the page flags it as
+  // "(plan max)", so the option doubles as the upgrade nudge.
+  "90d": { key: "90d", hours: 24 * 90, bucket: "day", bucketCount: 90 },
 };
 
 /** Coerce an arbitrary string (URL param) to a valid window key. */
