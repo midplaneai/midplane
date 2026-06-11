@@ -34,6 +34,16 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { TableNameInput } from "@/components/table-name-input";
+import { cn } from "@/lib/utils";
+
+// Matrix layout: tables are rows, access levels are columns. Each row is
+// a labeled segmented control (deny / read / read+write); the default for
+// unlisted tables is the pinned top row, so the catch-all and the explicit
+// overrides pick a level the same way instead of a segmented control + a
+// per-row dropdown. Shared grid template keeps the default row and the
+// override rows column-aligned, so deny/read/write line up down the table.
+const GRID_COLS =
+  "grid grid-cols-[minmax(11rem,1.5fr)_repeat(3,minmax(6rem,1fr))_2.75rem] items-stretch";
 
 interface TableRow {
   // Stable client-side key so React doesn't reuse inputs across reorders.
@@ -168,97 +178,101 @@ export function PermissionGrid({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <fieldset className="space-y-2">
-        <legend className="text-sm font-medium">
-          Default for unlisted tables
-        </legend>
-        <div className="flex flex-wrap gap-2">
-          {ACCESS_LEVELS.map((level) => {
-            const selected = defaultLevel === level;
-            return (
-              <label
-                key={level}
-                className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
-                  selected
-                    ? LEVEL_SELECTED_CLASS[level]
-                    : "border-border hover:bg-accent"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="default_preview"
-                  value={level}
-                  checked={selected}
-                  onChange={() => {
-                    setDefaultLevel(level);
-                    setSavedAt(null);
-                  }}
-                  className="sr-only"
-                />
-                <span
-                  aria-hidden
-                  className={`h-1.5 w-1.5 rounded-full ${LEVEL_DOT_CLASS[level]}`}
-                />
-                {LEVEL_LABEL[level]}
-              </label>
-            );
-          })}
+      <div
+        className="border border-border"
+        role="group"
+        aria-label="Table access policy"
+      >
+        {/* Default row — the catch-all, pinned at the top and held on
+            --card so it reads as the fallback. No header band: every
+            segment is labeled, so the first row doubles as the legend.
+            The label mirrors the name inputs' font + text offset (px-3
+            inside an h-9 box) so it lines up with the rows below. */}
+        <div
+          className={cn(GRID_COLS, "border-b-2 border-border bg-card")}
+          role="radiogroup"
+          aria-label="Default access for unlisted tables"
+        >
+          <div className="flex items-center px-2 py-1">
+            <span className="flex h-9 items-center px-3 font-mono text-sm text-muted-foreground">
+              unlisted tables
+            </span>
+          </div>
+          {ACCESS_LEVELS.map((level) => (
+            <LevelCell
+              key={level}
+              level={level}
+              selected={defaultLevel === level}
+              groupName="default-level"
+              rowLabel="unlisted tables"
+              onSelect={() => {
+                setDefaultLevel(level);
+                setSavedAt(null);
+              }}
+            />
+          ))}
+          <div className="border-l border-border" aria-hidden />
         </div>
-      </fieldset>
 
-      <div className="space-y-2">
-        <div className="text-sm font-medium">Per-table overrides</div>
+        {/* Explicit per-table overrides */}
         {rows.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            No overrides. The default above applies to every table.
+          <p className="px-3 py-3 text-xs text-muted-foreground">
+            No overrides — the default above applies to every table.
           </p>
         ) : (
-          <ul className="space-y-2">
-            {rows.map((r) => (
-              <li
+          rows.map((r) => {
+            const label = r.name.trim() || "new table";
+            return (
+              <div
                 key={r.key}
-                className="flex flex-wrap items-center gap-2 rounded-md border bg-card p-2"
+                className={cn(
+                  GRID_COLS,
+                  "border-b border-border last:border-b-0",
+                )}
+                role="radiogroup"
+                aria-label={`Access for ${label}`}
                 data-testid="permission-row"
               >
-                <TableNameInput
-                  value={r.name}
-                  onChange={(v) => updateRow(r.key, { name: v })}
-                  connectionId={connectionId}
-                  dbName={dbName}
-                  excludeNames={
-                    new Set([...usedNames].filter((n) => n !== r.name))
-                  }
-                />
-                <select
-                  value={r.level}
-                  onChange={(e) =>
-                    updateRow(r.key, { level: e.target.value as AccessLevel })
-                  }
-                  aria-label="Access level"
-                  className="flex h-9 rounded-md border border-input bg-background px-2 py-1 text-sm"
-                >
-                  {ACCESS_LEVELS.map((level) => (
-                    <option key={level} value={level}>
-                      {LEVEL_LABEL[level]}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => removeRow(r.key)}
-                >
-                  Remove
-                </Button>
-              </li>
-            ))}
-          </ul>
+                <div className="flex items-center px-2 py-1">
+                  <TableNameInput
+                    value={r.name}
+                    onChange={(v) => updateRow(r.key, { name: v })}
+                    connectionId={connectionId}
+                    dbName={dbName}
+                    excludeNames={
+                      new Set([...usedNames].filter((n) => n !== r.name))
+                    }
+                  />
+                </div>
+                {ACCESS_LEVELS.map((level) => (
+                  <LevelCell
+                    key={level}
+                    level={level}
+                    selected={r.level === level}
+                    groupName={`level-${r.key}`}
+                    rowLabel={label}
+                    onSelect={() => updateRow(r.key, { level })}
+                  />
+                ))}
+                <div className="flex items-center justify-center border-l border-border">
+                  <button
+                    type="button"
+                    onClick={() => removeRow(r.key)}
+                    aria-label={`Remove ${label}`}
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            );
+          })
         )}
-        <Button type="button" variant="outline" size="sm" onClick={addRow}>
-          + Add table
-        </Button>
       </div>
+
+      <Button type="button" variant="outline" size="sm" onClick={addRow}>
+        + Add table
+      </Button>
 
       {error ? (
         <p className="text-xs text-destructive" data-testid="permission-error">
@@ -291,6 +305,54 @@ export function PermissionGrid({
   );
 }
 
+// A single segment in a row's access control: one level, always labeled.
+// The whole cell is the click target (a label wrapping an sr-only radio).
+// Unselected segments are muted text; the selected one takes the level's
+// semantic color + a faint tint of it, so a row reads its access level
+// from the one cell that's lit. No dot — the label is self-describing, so
+// the three segments together read as a per-row segmented control. Each
+// row owns a unique `groupName` so native radio grouping (arrow-key nav)
+// stays row-scoped — the policy is built from React state at submit, not
+// these field names, so the names are free to be per-row.
+function LevelCell({
+  level,
+  selected,
+  groupName,
+  rowLabel,
+  onSelect,
+}: {
+  level: AccessLevel;
+  selected: boolean;
+  groupName: string;
+  rowLabel: string;
+  onSelect: () => void;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex cursor-pointer items-center justify-center border-l border-border py-2 font-mono text-xs lowercase tracking-[0.02em] transition-colors",
+        selected
+          ? LEVEL_SELECTED_CLASS[level]
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+      )}
+    >
+      <input
+        type="radio"
+        name={groupName}
+        value={level}
+        checked={selected}
+        onChange={onSelect}
+        aria-label={`${rowLabel}: ${LEVEL_LABEL[level]}`}
+        className="sr-only"
+      />
+      {LEVEL_LABEL[level]}
+    </label>
+  );
+}
+
+// Source case is canonical (Title Case); segments render it lowercase via
+// CSS so screen readers still announce "Read + write" (DESIGN.md voice
+// split).
 const LEVEL_LABEL: Record<AccessLevel, string> = {
   deny: "Deny",
   read: "Read",
@@ -298,17 +360,13 @@ const LEVEL_LABEL: Record<AccessLevel, string> = {
 };
 
 // Semantic-color vocabulary from DESIGN.md: deny=red, read=warn (cautious
-// middle), read_write=allow (open). The dot is always visible; the
-// tinted background + colored border only appears on the selected pill.
-const LEVEL_DOT_CLASS: Record<AccessLevel, string> = {
-  deny: "bg-deny",
-  read: "bg-warn",
-  read_write: "bg-allow",
-};
+// middle), read_write=allow (open). The selected segment takes the level's
+// color as both text and a faint background tint; unselected segments stay
+// neutral so the lit one is unambiguous.
 const LEVEL_SELECTED_CLASS: Record<AccessLevel, string> = {
-  deny: "border-deny/40 bg-deny/10",
-  read: "border-warn/40 bg-warn/10",
-  read_write: "border-allow/40 bg-allow/10",
+  deny: "bg-deny/10 font-medium text-deny",
+  read: "bg-warn/10 font-medium text-warn",
+  read_write: "bg-allow/10 font-medium text-allow",
 };
 
 function policyToRows(policy: TableAccessPolicy): TableRow[] {

@@ -6,8 +6,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import type { TableAccessPolicy } from "@midplane-cloud/db/policy";
+
 import {
   buildProbeMatrix,
+  expectedDecision,
   isTenantScoped,
   MAX_PROBES_PER_RUN,
   PROBE_TABLE_CAP,
@@ -83,6 +86,70 @@ describe("buildProbeMatrix", () => {
       exempt: [],
     });
     expect(m.probes).toHaveLength(MAX_PROBES_PER_RUN);
+  });
+});
+
+describe("expectedDecision", () => {
+  // default read; orders is opened to writes; secrets is locked.
+  const policy: TableAccessPolicy = {
+    default: "read",
+    tables: { orders: "read_write", secrets: "deny" },
+  };
+
+  it("select allowed at read+, denied only at deny", () => {
+    // default read
+    expect(
+      expectedDecision({ table: "users", action: "select" }, policy, NO_SCOPE),
+    ).toBe("allow");
+    expect(
+      expectedDecision(
+        { table: "secrets", action: "select" },
+        policy,
+        NO_SCOPE,
+      ),
+    ).toBe("deny");
+  });
+
+  it("writes allowed only at read_write", () => {
+    // default read → writes denied
+    expect(
+      expectedDecision({ table: "users", action: "insert" }, policy, NO_SCOPE),
+    ).toBe("deny");
+    // orders override read_write → writes allowed
+    expect(
+      expectedDecision({ table: "orders", action: "update" }, policy, NO_SCOPE),
+    ).toBe("allow");
+  });
+
+  it("a table override beats the default", () => {
+    const denyDefault: TableAccessPolicy = {
+      default: "deny",
+      tables: { orders: "read_write" },
+    };
+    expect(
+      expectedDecision(
+        { table: "orders", action: "delete" },
+        denyDefault,
+        NO_SCOPE,
+      ),
+    ).toBe("allow");
+    expect(
+      expectedDecision(
+        { table: "anything-else", action: "select" },
+        denyDefault,
+        NO_SCOPE,
+      ),
+    ).toBe("deny");
+  });
+
+  it("a cross-tenant read is always denied", () => {
+    expect(
+      expectedDecision(
+        { table: "orders", action: "select", cross_tenant: true },
+        policy,
+        SCOPED,
+      ),
+    ).toBe("deny");
   });
 });
 
