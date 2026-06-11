@@ -47,6 +47,9 @@ const GRID_COLS =
 
 interface TableRow {
   // Stable client-side key so React doesn't reuse inputs across reorders.
+  // It is ALSO rendered into each radio's `name` attribute (groupName),
+  // so it must be deterministic across server and client renders — see
+  // policyToRows: no Date.now() in the initial keys, or hydration breaks.
   key: string;
   name: string;
   level: AccessLevel;
@@ -372,7 +375,15 @@ const LEVEL_SELECTED_CLASS: Record<AccessLevel, string> = {
 function policyToRows(policy: TableAccessPolicy): TableRow[] {
   return Object.entries(policy.tables)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([name, level], i) => ({ key: `init-${i}-${Date.now()}`, name, level }));
+    // Deterministic key by index — NOT Date.now(). This useState
+    // initializer runs on both the server render and the client
+    // hydration; a timestamp would differ between the two and the key
+    // is rendered into the radio `name`, producing a hydration mismatch.
+    // The index is stable for the initial rows and independent of the
+    // editable table name (so typing a name doesn't remount the input).
+    // addRow's keys can stay timestamp-based: those rows are created by a
+    // post-hydration click, so they have no server render to disagree with.
+    .map(([name, level], i) => ({ key: `init-${i}`, name, level }));
 }
 
 // Canonical string for compare. Sorts table entries so insertion
