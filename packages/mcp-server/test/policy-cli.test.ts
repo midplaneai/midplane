@@ -112,6 +112,13 @@ describe("scaffold()", () => {
     expect(doc.tenant_scope.column).toBe("tenant_id");
   });
 
+  test("scaffold emits a default-ON guardrails block that validates", () => {
+    const text = scaffold({ tables: null, tenantColumn: undefined, introspected: false });
+    const doc = yaml.load(text) as any;
+    expect(PolicyFileSchema.safeParse(doc).success).toBe(true);
+    expect(doc.guardrails).toEqual({ block_unqualified_dml: true, block_ddl: true });
+  });
+
   test("connected DB with zero public tables → valid (tables: {})", () => {
     const text = scaffold({ tables: [], tenantColumn: undefined, introspected: true });
     const doc = yaml.load(text) as any;
@@ -318,6 +325,17 @@ describe("midplane policy lint", () => {
     expect(r.stdout).toMatch(/no findings/i);
   });
 
+  test("disabled guardrails → [WARN], exit 0", async () => {
+    const f = writeFile(
+      "noguard.yaml",
+      "table_access:\n  default: read\n  tables: { public.users: read }\nguardrails:\n  block_ddl: false\n  block_unqualified_dml: false\n",
+    );
+    const r = await runCli(["policy", "lint", f]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/\[WARN\].*block_ddl/);
+    expect(r.stdout).toMatch(/\[WARN\].*block_unqualified_dml/);
+  });
+
   test("per-database labelling for the multi-DB shape", async () => {
     const f = writeFile(
       "multi.yaml",
@@ -398,6 +416,15 @@ describe("midplane policy test", () => {
     expect(r.stdout).toMatch(/rule:\s+multi_statement/);
   });
 
+  test("DDL on a read_write table → DENY dangerous_statement, exit 1", async () => {
+    // flags is read_write (table_access permits) and DROP isn't tenant-scoped,
+    // so the default-ON guardrail is what denies it.
+    const f = writeFile("p.yaml", STRICT_POLICY);
+    const r = await runCli(["policy", "test", f, "--sql", "DROP TABLE flags", "--tenant-id", "a"]);
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toMatch(/rule:\s+dangerous_statement/);
+  });
+
   test("unparseable SQL → DENY parse_error, exit 1", async () => {
     const f = writeFile("p.yaml", STRICT_POLICY);
     const r = await runCli(["policy", "test", f, "--sql", "SELECT FROM WHERE"]);
@@ -424,11 +451,13 @@ describe("midplane policy test", () => {
         "  - name: analytics\n    url: ${Y}\n    table_access: { default: read_write }\n",
     );
     // analytics is read_write → the same write that prod denies is allowed.
-    const a = await runCli(["policy", "test", f, "--db", "analytics", "--sql", "DELETE FROM t", "--json"]);
+    // WHERE-qualified so the dangerous_statement guardrail (no-WHERE DML) isn't
+    // what decides it — this test is about table_access selection by --db.
+    const a = await runCli(["policy", "test", f, "--db", "analytics", "--sql", "DELETE FROM t WHERE id = 1", "--json"]);
     expect(a.exitCode).toBe(0);
     expect(JSON.parse(a.stdout).decision).toBe("ALLOW");
 
-    const p = await runCli(["policy", "test", f, "--db", "prod", "--sql", "DELETE FROM t", "--json"]);
+    const p = await runCli(["policy", "test", f, "--db", "prod", "--sql", "DELETE FROM t WHERE id = 1", "--json"]);
     expect(p.exitCode).toBe(1);
     expect(JSON.parse(p.stdout).decision).toBe("DENY");
   });

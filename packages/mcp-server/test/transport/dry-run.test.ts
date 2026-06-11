@@ -595,3 +595,70 @@ describe("POST /admin/dry-run — INDEXER_TOKEN unset", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Guardrails: custom SQL surfaces dangerous_statement; hot-reload flips it.
+// Proves the engine-factory wires the rule default-ON (no guardrails block in
+// the policy) and that a /admin/policy swap of `guardrails` is reflected live.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POST /admin/dry-run — guardrails (dangerous_statement)", () => {
+  let s: Setup;
+
+  // `posts` is read_write, so table_access permits the write — the guardrail is
+  // unambiguously what denies DDL / no-WHERE DML. No `guardrails` block ⇒ ON.
+  const POLICY =
+    "table_access:\n  default: read\n  tables:\n    posts: read_write\n";
+
+  beforeAll(async () => {
+    s = await setup(POLICY);
+  });
+  afterAll(() => teardown(s));
+
+  async function sqlVerdict(sql: string): Promise<any> {
+    const res = await post(s, { database: DEFAULT_DB_NAME, sql });
+    expect(res.status).toBe(200);
+    return res.body.verdicts[0];
+  }
+
+  test("DROP TABLE on a read_write table → deny dangerous_statement", async () => {
+    const v = await sqlVerdict("DROP TABLE posts");
+    expect(v.decision).toBe("deny");
+    expect(v.matched_rule).toBe("dangerous_statement");
+  });
+
+  test("no-WHERE DELETE on a read_write table → deny dangerous_statement", async () => {
+    const v = await sqlVerdict("DELETE FROM posts");
+    expect(v.decision).toBe("deny");
+    expect(v.matched_rule).toBe("dangerous_statement");
+  });
+
+  test("WHERE-qualified DELETE on the same table → allow", async () => {
+    const v = await sqlVerdict("DELETE FROM posts WHERE id = 1");
+    expect(v.decision).toBe("allow");
+  });
+
+  test("hot-reloading guardrails off flips the verdict, and policy_hash moves", async () => {
+    const before = await post(s, { database: DEFAULT_DB_NAME, sql: "DROP TABLE posts" });
+    const hashBefore = before.body.policy_hash;
+
+    // Re-send table_access (required) + turn both guards off.
+    const reload = await fetch(`http://127.0.0.1:${s.server.port}/admin/policy`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body:
+        "table_access:\n  default: read\n  tables:\n    posts: read_write\n" +
+        "guardrails:\n  block_unqualified_dml: false\n  block_ddl: false\n",
+    });
+    expect(reload.status).toBe(200);
+
+    const after = await sqlVerdict("DROP TABLE posts");
+    expect(after.decision).toBe("allow");
+    const delAfter = await sqlVerdict("DELETE FROM posts");
+    expect(delAfter.decision).toBe("allow");
+
+    const hashAfter = (await post(s, { database: DEFAULT_DB_NAME, sql: "DROP TABLE posts" }))
+      .body.policy_hash;
+    expect(hashAfter).not.toBe(hashBefore);
+  });
+});

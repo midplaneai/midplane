@@ -26,6 +26,7 @@ AI coding agents are getting plugged into production Postgres without an audit t
 ## What it blocks
 
 - **Destructive writes against production.** Out of the box (no YAML), every write denies — `DELETE FROM users` is denied even with a `WHERE`. Opt in per-table via the `table_access` YAML; mark `feature_flags: read_write` to let the agent update flags while `users` and `payments` stay read-only and `audit_log` stays `deny` (no read either).
+- **Whole-table wipes and schema destruction.** Categorical `guardrails` (on by default) deny `DELETE`/`UPDATE` with no `WHERE` clause and all `DROP`/`TRUNCATE`/`ALTER` — **regardless of `table_access`**, so marking a table `read_write` to allow legitimate writes can't be turned into a `DELETE FROM orders` or `DROP TABLE orders`. Opt out per flag (`guardrails: { block_ddl: false }`).
 - **SQL stacked-statement injection.** `SELECT 1; DROP TABLE users` is denied at parse time.
 - **Cross-tenant exfiltration.** Opt in by mapping a tenant column once; queries on that table without the right `WHERE` predicate are denied at any AST depth (subqueries, CTEs, JOINs).
 - **CTE-embedded writes.** `WITH x AS (DELETE FROM ...) SELECT * FROM x` doesn't fool the recursive AST walk.

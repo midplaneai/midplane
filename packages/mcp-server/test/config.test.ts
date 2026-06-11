@@ -308,3 +308,59 @@ describe("resolveDatabasesFromConfig", () => {
     expect(warnings.some((w) => /DATABASE_URL/.test(w))).toBe(true);
   });
 });
+
+describe("guardrails resolution", () => {
+  test("omitted guardrails section → default ON (the safety net)", () => {
+    const p = parsePolicyYaml("table_access:\n  default: read\n", "test");
+    expect(p.hasGuardrails).toBe(false);
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+    expect(p.databases[0]!.guardrails).toEqual({
+      blockUnqualifiedDml: true,
+      blockDdl: true,
+    });
+  });
+
+  test("empty document → guardrails still default ON", () => {
+    const p = parsePolicyYaml("", "test");
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+  });
+
+  test("explicit per-flag opt-out keeps the other flag on", () => {
+    const p = parsePolicyYaml(
+      "table_access:\n  default: read\nguardrails:\n  block_ddl: false\n",
+      "test",
+    );
+    expect(p.hasGuardrails).toBe(true);
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: false });
+  });
+
+  test("empty guardrails block → both flags default ON", () => {
+    const p = parsePolicyYaml(
+      "table_access:\n  default: read\nguardrails: {}\n",
+      "test",
+    );
+    expect(p.hasGuardrails).toBe(true);
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+  });
+
+  test("per-DB guardrails resolve independently (omit → ON, explicit → as set)", () => {
+    const p = parsePolicyYaml(
+      "databases:\n" +
+        "  - name: a\n    url: postgres://a\n" +
+        "  - name: b\n    url: postgres://b\n    guardrails: { block_unqualified_dml: false, block_ddl: false }\n",
+      "test",
+    );
+    const a = p.databases.find((d) => d.name === "a")!;
+    const b = p.databases.find((d) => d.name === "b")!;
+    expect(a.hasGuardrails).toBe(false);
+    expect(a.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+    expect(b.hasGuardrails).toBe(true);
+    expect(b.guardrails).toEqual({ blockUnqualifiedDml: false, blockDdl: false });
+  });
+
+  test("non-boolean flag is a schema error", () => {
+    expect(() =>
+      parsePolicyYaml("guardrails:\n  block_ddl: maybe\n", "test"),
+    ).toThrow(/guardrails/);
+  });
+});

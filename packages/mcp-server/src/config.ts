@@ -67,6 +67,16 @@ const TableAccessSchema = z.object({
   tables: z.record(z.string(), TableAccessLevelSchema).default({}),
 });
 
+// Destructive-statement guardrails (0.9.0). Categorical blocks that fire
+// REGARDLESS of table_access / tenant_scope — the "an agent can't nuke prod"
+// net. Both flags default ON, and crucially the whole section defaults ON when
+// OMITTED (see resolveGuardrails): a self-host deployment is protected out of
+// the box without writing any YAML. An operator opts OUT explicitly per flag.
+const GuardrailsSchema = z.object({
+  block_unqualified_dml: z.boolean().default(true), // DELETE/UPDATE with no WHERE
+  block_ddl: z.boolean().default(true), // DROP / TRUNCATE / ALTER
+});
+
 // Supported dialects. Postgres-only on the public build: the engine ships one
 // concrete `Dialect` (`dialects/postgres/`). The seam is dialect-ready (a MySQL
 // adapter is implemented + tested on a branch), but the public surface stays
@@ -88,6 +98,7 @@ const DatabaseEntrySchema = z.object({
   dialect: DialectSchema.default("postgres"),
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),
+  guardrails: GuardrailsSchema.optional(),
 });
 
 // Exported so `midplane policy validate` can check a candidate file against
@@ -96,6 +107,7 @@ export const PolicyFileSchema = z.object({
   // Legacy single-DB shape (still the documented common case).
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),
+  guardrails: GuardrailsSchema.optional(),
   // Multi-DB shape (0.2.0+). Mutually exclusive with the legacy shape at
   // resolve time; if both are present the legacy fields are ignored and a
   // warning is emitted.
@@ -117,6 +129,23 @@ export interface TenantScopeSpec {
   exempt: string[];
 }
 
+// Resolved guardrails config the engine's dangerous_statement rule evaluates
+// against. Always well-formed; an omitted `guardrails` section resolves to
+// DEFAULT_GUARDRAILS (both ON) so destructive ops are blocked out of the box.
+export interface GuardrailsSpec {
+  blockUnqualifiedDml: boolean;
+  blockDdl: boolean;
+}
+
+// Default-ON posture for an omitted `guardrails` section: block both
+// whole-table DML and DDL. This is the policy decision that makes "an agent
+// can't nuke prod" true without any YAML — the server (not the engine library)
+// owns it, mirroring how table_access defaults to deny-all-writes.
+export const DEFAULT_GUARDRAILS: GuardrailsSpec = {
+  blockUnqualifiedDml: true,
+  blockDdl: true,
+};
+
 // One resolved DB. The loader produces N>=1 of these from a YAML doc:
 // either one synthetic `__default__` (legacy shape) or one per `databases:`
 // entry. Downstream construction (engine registry) treats both uniformly.
@@ -133,6 +162,12 @@ export interface DatabaseSpec {
     tables: Record<string, TableAccessLevel>;
   } | null;
   hasTableAccess: boolean;
+  // Always resolved (DEFAULT_GUARDRAILS when the section is omitted).
+  guardrails: GuardrailsSpec;
+  // True iff the source document explicitly contained a `guardrails:` section.
+  // Preserves omit-vs-set for the hot-reload "don't touch" rule (mirrors
+  // hasTenantScope) — a body editing table_access alone never clears guardrails.
+  hasGuardrails: boolean;
 }
 
 export const EMPTY_TENANT_SCOPE: TenantScopeSpec = {
@@ -171,6 +206,8 @@ export interface LoadedPolicy {
   } | null;
   hasTenantScope: boolean;
   hasTableAccess: boolean;
+  guardrails: GuardrailsSpec;
+  hasGuardrails: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -251,6 +288,9 @@ export function parsePolicyYaml(
           hasTenantScope: false,
           tableAccess: null,
           hasTableAccess: false,
+          // Empty doc still gets the default-ON safety net.
+          guardrails: DEFAULT_GUARDRAILS,
+          hasGuardrails: false,
         },
       ],
       hasDatabasesBlock: false,
@@ -258,6 +298,8 @@ export function parsePolicyYaml(
       tableAccess: null,
       hasTenantScope: false,
       hasTableAccess: false,
+      guardrails: DEFAULT_GUARDRAILS,
+      hasGuardrails: false,
     };
   }
 
@@ -292,6 +334,8 @@ export function parsePolicyYaml(
       tableAccess: null,
       hasTenantScope: false,
       hasTableAccess: false,
+      guardrails: DEFAULT_GUARDRAILS,
+      hasGuardrails: false,
     };
   }
 
@@ -306,6 +350,10 @@ export function parsePolicyYaml(
     rawDoc,
     "table_access",
   );
+  const hasGuardrails = Object.prototype.hasOwnProperty.call(
+    rawDoc,
+    "guardrails",
+  );
 
   const tenantScope = resolveTenantScope(
     parsed.data.tenant_scope,
@@ -315,6 +363,7 @@ export function parsePolicyYaml(
 
   const ta = parsed.data.table_access;
   const tableAccess = ta ? { default: ta.default, tables: ta.tables } : null;
+  const guardrails = resolveGuardrails(parsed.data.guardrails);
 
   return {
     databases: [
@@ -326,6 +375,8 @@ export function parsePolicyYaml(
         hasTenantScope,
         tableAccess,
         hasTableAccess,
+        guardrails,
+        hasGuardrails,
       },
     ],
     hasDatabasesBlock: false,
@@ -333,6 +384,8 @@ export function parsePolicyYaml(
     tableAccess,
     hasTenantScope,
     hasTableAccess,
+    guardrails,
+    hasGuardrails,
   };
 }
 
@@ -359,6 +412,21 @@ function resolveTenantScope(
     defaultColumn: raw.column ?? null,
     overrides,
     exempt: raw.exempt ?? [],
+  };
+}
+
+// Normalize a parsed `guardrails` block into a GuardrailsSpec. An OMITTED
+// section (raw === undefined) resolves to DEFAULT_GUARDRAILS (both ON) — the
+// out-of-the-box safety net. A present section keeps zod's per-flag defaults
+// (each flag independently defaults true), so `guardrails: { block_ddl: false }`
+// disables only DDL blocking.
+function resolveGuardrails(
+  raw: z.infer<typeof GuardrailsSchema> | undefined,
+): GuardrailsSpec {
+  if (!raw) return DEFAULT_GUARDRAILS;
+  return {
+    blockUnqualifiedDml: raw.block_unqualified_dml,
+    blockDdl: raw.block_ddl,
   };
 }
 
@@ -390,14 +458,16 @@ function resolveDatabaseEntry(
 
   const ta = entry.table_access;
   const tableAccess = ta ? { default: ta.default, tables: ta.tables } : null;
+  const guardrails = resolveGuardrails(entry.guardrails);
 
-  // hasTenantScope / hasTableAccess for individual entries — read from the
-  // raw doc so omit-vs-empty distinction survives. For the multi-DB shape
-  // the hot-reload endpoint applies these per-entry.
+  // hasTenantScope / hasTableAccess / hasGuardrails for individual entries —
+  // read from the raw doc so omit-vs-empty distinction survives. For the
+  // multi-DB shape the hot-reload endpoint applies these per-entry.
   const rawDatabases = (rawDoc.databases as Array<Record<string, unknown>>) ?? [];
   const rawEntry = rawDatabases[idx] ?? {};
   const hasTenantScope = Object.prototype.hasOwnProperty.call(rawEntry, "tenant_scope");
   const hasTableAccess = Object.prototype.hasOwnProperty.call(rawEntry, "table_access");
+  const hasGuardrails = Object.prototype.hasOwnProperty.call(rawEntry, "guardrails");
 
   return {
     name: entry.name,
@@ -407,6 +477,8 @@ function resolveDatabaseEntry(
     hasTenantScope,
     tableAccess,
     hasTableAccess,
+    guardrails,
+    hasGuardrails,
   };
 }
 

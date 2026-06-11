@@ -92,6 +92,26 @@ export type ScopeUnit =
   | { kind: "insert"; shape: InsertShape }
   | { kind: "merge"; target: TableRef };
 
+// One destructive-operation site the `dangerous_statement` guardrail may block,
+// in the adapter's walk order. The dialect emits these UNCONDITIONALLY (it does
+// not read policy); the rule decides whether the matching guardrail
+// (block_unqualified_dml / block_ddl) is enabled and denies on the first match.
+// Surfaced as its own IR field — rather than reusing `scopeUnits.predicates` —
+// because "has a WHERE clause at all" is a different question than the
+// equality-only predicates tenant_scope tracks (a `DELETE … WHERE status <> 'x'`
+// has a WHERE but no equality predicate, so it is NOT unqualified).
+//   • "unqualified_dml" — a DELETE or UPDATE with NO WHERE clause (the
+//      whole-table write). `operation` is the keyword; `table` is the target,
+//      schema-qualified when written that way. Detected at every DELETE/UPDATE
+//      node, including ones nested in CTEs (a no-WHERE DELETE in a data-modifying
+//      CTE wipes the table just the same), so the guard is fail-closed.
+//   • "ddl"            — a DROP / TRUNCATE / ALTER statement. `operation` is the
+//      human keyword for the message (e.g. "DROP TABLE", "TRUNCATE",
+//      "ALTER TABLE"). CREATE is intentionally NOT included in v1.
+export type DangerousStatement =
+  | { kind: "unqualified_dml"; operation: "DELETE" | "UPDATE"; table: string }
+  | { kind: "ddl"; operation: string };
+
 // A statement a dialect parser could not faithfully model. `touchedTables`
 // carries the tables it could identify so tenant_scope fails closed when one is
 // scoped (tenantScope.evaluateIR iterates `unsupported`); table_access denies it
@@ -117,5 +137,6 @@ export interface NormalizedProgram {
   allRelnames: string[];
   accessChecks: AccessCheck[]; // for table_access
   scopeUnits: ScopeUnit[]; // for tenant_scope
+  dangerousStatements: DangerousStatement[]; // for dangerous_statement guardrails
   unsupported: UnsupportedStatement[]; // fail-closed (empty for the Postgres adapter)
 }

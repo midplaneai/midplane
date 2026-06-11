@@ -18,6 +18,7 @@ import type { PgParseTree } from "./parse.ts";
 import { walk as visitorWalk } from "./visitor.ts";
 import type {
   AccessCheck,
+  DangerousStatement,
   EqualityPredicate,
   InsertShape,
   NormalizedProgram,
@@ -35,6 +36,7 @@ export function normalize(ast: unknown): NormalizedProgram {
     allRelnames,
     accessChecks: collectAccessChecks(stmts),
     scopeUnits: collectScopeUnits(stmts),
+    dangerousStatements: collectDangerousStatements(stmts),
     unsupported: [], // libpg_query faithfully parses everything it accepts
   };
 }
@@ -112,12 +114,40 @@ const WRITE_STATEMENT_KINDS = new Set([
   "VariableSetStmt",
 ]);
 
+// Every ALTER form libpg_query models. Most are their own `Alter…Stmt` node
+// kind (AlterTableStmt, AlterEnumStmt = `ALTER TYPE … ADD VALUE`, AlterRoleStmt,
+// AlterObjectSchemaStmt = `ALTER … SET SCHEMA`, …); `ALTER … RENAME` is the
+// outlier modeled as `RenameStmt`. Matched as a family so both the table_access
+// classifier and the dangerous_statement guardrail cover the whole `ALTER`
+// surface — fail closed rather than enumerate a list that drifts as PG grows.
+function isAlterKind(kind: string): boolean {
+  return /^Alter[A-Za-z]+Stmt$/.test(kind) || kind === "RenameStmt";
+}
+
+// Human keyword for an ALTER-family node, for deny messages. A few get a clean
+// SQL-shaped label; the rest derive `ALTER <X>` from the node name
+// (AlterRoleStmt → "ALTER ROLE", AlterTableMoveAllStmt → "ALTER TABLE MOVE ALL").
+function alterKeyword(kind: string): string {
+  switch (kind) {
+    case "RenameStmt":
+      return "ALTER … RENAME";
+    case "AlterObjectSchemaStmt":
+      return "ALTER … SET SCHEMA";
+    case "AlterEnumStmt":
+      return "ALTER TYPE";
+    default: {
+      const body = kind.replace(/^Alter/, "").replace(/Stmt$/, "");
+      return body
+        ? `ALTER ${body.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toUpperCase()}`
+        : "ALTER";
+    }
+  }
+}
+
 function humanStatement(kind: string): string {
   switch (kind) {
     case "GrantRoleStmt":
       return "GRANT ROLE";
-    case "AlterDomainStmt":
-      return "ALTER DOMAIN";
     case "CreateSchemaStmt":
       return "CREATE SCHEMA";
     case "CreateRoleStmt":
@@ -129,6 +159,9 @@ function humanStatement(kind: string): string {
     case "VariableSetStmt":
       return "SET";
     default:
+      // ALTER family (incl. AlterDomainStmt, AlterEnumStmt, RenameStmt, …) →
+      // a readable `ALTER …` keyword for the no_target message.
+      if (isAlterKind(kind)) return alterKeyword(kind);
       return kind.replace(/Stmt$/, "").toUpperCase();
   }
 }
@@ -167,6 +200,12 @@ function extractWriteTargets(kind: string, node: Record<string, unknown>): BareR
     case "IndexStmt":
     case "RuleStmt":
     case "RefreshMatViewStmt":
+    // `ALTER … RENAME` / `ALTER … SET SCHEMA` on a TABLE carry the target in
+    // `relation` (so it's checked as a write on that table, like ADD COLUMN);
+    // the same node on a non-table object (type, function, …) has no `relation`
+    // and falls through to `[]` → no_target → deny.
+    case "RenameStmt":
+    case "AlterObjectSchemaStmt":
       return refsFromRelation(node.relation);
     case "TruncateStmt":
       return refsFromList(node.relations);
@@ -303,7 +342,13 @@ function collectAccessChecks(
         }
         const cteNames = collectCteNames(innerObj);
         if (cteNames) cteScopes.push(cteNames);
-        if (WRITE_STATEMENT_KINDS.has(kind)) {
+        // The whole ALTER family counts as a write/side-effect, not just the
+        // two kinds in WRITE_STATEMENT_KINDS — otherwise `ALTER … RENAME`,
+        // `ALTER TYPE … ADD VALUE`, etc. would fall through to a bare read
+        // check and a `read` table could be renamed/altered when block_ddl is
+        // off. Relation-bearing ALTERs check their target table; the rest emit
+        // no_target (deny regardless of policy), matching DROP-on-non-table.
+        if (WRITE_STATEMENT_KINDS.has(kind) || isAlterKind(kind)) {
           const targets = extractWriteTargets(kind, innerObj);
           if (targets.length === 0) {
             checks.push({ kind: "no_target", keyword: humanStatement(kind) });
@@ -564,6 +609,108 @@ function collectScopeUnits(
 
   for (const s of stmts) walk(s.stmt);
   return units;
+}
+
+// ── dangerous_statement → DangerousStatement[] (destructive-op guardrails) ──
+
+// The DDL the `block_ddl` guardrail covers: DROP, TRUNCATE, and the WHOLE ALTER
+// family (every `Alter…Stmt` node plus `RenameStmt` — see isAlterKind), so the
+// "DROP / TRUNCATE / ALTER" contract has no gaps as Postgres adds ALTER forms
+// (`ALTER TYPE … ADD VALUE`, `ALTER ROLE …`, etc.). CREATE is deliberately
+// excluded in v1. The operation label comes from dropLabel / alterKeyword and
+// is for the deny message only — the deny decision does not depend on it.
+function ddlOperation(kind: string, node: Record<string, unknown>): string | null {
+  if (kind === "DropStmt") return dropLabel(node);
+  if (kind === "TruncateStmt") return "TRUNCATE";
+  if (isAlterKind(kind)) return alterKeyword(kind);
+  return null;
+}
+
+// "OBJECT_TABLE" → "DROP TABLE"; falls back to a bare "DROP" when removeType is
+// missing or unrecognized. The label is for the operator-facing message only —
+// the deny decision does not depend on it.
+function dropLabel(node: Record<string, unknown>): string {
+  const t = node.removeType;
+  if (typeof t === "string" && t.startsWith("OBJECT_")) {
+    return `DROP ${t.slice("OBJECT_".length).replace(/_/g, " ")}`;
+  }
+  return "DROP";
+}
+
+// The display name of a DELETE/UPDATE target (schema-qualified when written so),
+// for the unqualified-DML message. Falls back to "the target table" when the
+// relation can't be read (shouldn't happen for a parsed DELETE/UPDATE).
+function dmlTargetName(node: Record<string, unknown>): string {
+  const rel = node.relation;
+  if (rel && typeof rel === "object" && !Array.isArray(rel)) {
+    const ref = rangeVarToBareRef(rel as Record<string, unknown>);
+    if (ref) return ref.schema !== null ? `${ref.schema}.${ref.relname}` : ref.relname;
+  }
+  return "the target table";
+}
+
+// Walk every statement node (top-level AND nested) and flag the destructive
+// sites the guardrails block: DELETE/UPDATE with no WHERE clause, and
+// DROP/TRUNCATE/ALTER DDL. The walk descends into children of flagged nodes too,
+// so a no-WHERE DELETE hidden in a CTE (`WITH d AS (DELETE FROM t RETURNING *)
+// …`) is caught — it wipes the table just the same. Emitted in DFS order; the
+// rule denies on the first match for whichever guardrail is enabled.
+function collectDangerousStatements(
+  stmts: Array<{ stmt: Record<string, unknown> }>,
+): DangerousStatement[] {
+  const out: DangerousStatement[] = [];
+
+  const walk = (value: unknown): void => {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+      return;
+    }
+    if (typeof value !== "object") return;
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj);
+
+    if (keys.length === 1) {
+      const kind = keys[0]!;
+      const inner = obj[kind];
+      if (
+        inner !== null &&
+        typeof inner === "object" &&
+        !Array.isArray(inner) &&
+        /^[A-Z]/.test(kind)
+      ) {
+        const innerObj = inner as Record<string, unknown>;
+        if (kind === "DeleteStmt" || kind === "UpdateStmt") {
+          // No `whereClause` field ⇒ no WHERE ⇒ whole-table write. A present
+          // whereClause (any expression, even `WHERE true`) is "qualified" — the
+          // guardrail is specifically the missing-WHERE footgun, not a predicate
+          // strength check (that's tenant_scope's job).
+          if (innerObj.whereClause === null || innerObj.whereClause === undefined) {
+            out.push({
+              kind: "unqualified_dml",
+              operation: kind === "DeleteStmt" ? "DELETE" : "UPDATE",
+              table: dmlTargetName(innerObj),
+            });
+          }
+          for (const k of Object.keys(innerObj)) walk(innerObj[k]);
+          return;
+        }
+        const op = ddlOperation(kind, innerObj);
+        if (op !== null) {
+          out.push({ kind: "ddl", operation: op });
+          for (const k of Object.keys(innerObj)) walk(innerObj[k]);
+          return;
+        }
+        for (const k of Object.keys(innerObj)) walk(innerObj[k]);
+        return;
+      }
+    }
+
+    for (const k of keys) walk(obj[k]);
+  };
+
+  for (const s of stmts) walk(s.stmt);
+  return out;
 }
 
 // ── 3. accumulator → allRelnames + auditStatementType (the shared visitor walk) ──

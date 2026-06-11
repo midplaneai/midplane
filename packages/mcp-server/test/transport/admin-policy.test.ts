@@ -363,6 +363,65 @@ describe("POST /admin/policy", () => {
       users: { from: "read", to: "read_write" },
     });
   });
+
+  test("guardrails: default-ON enforces through the query tool; hot-reload off + don't-touch", async () => {
+    const postPolicy = (body: string) =>
+      fetch(url("/admin/policy"), {
+        method: "POST",
+        headers: { "content-type": "application/yaml", authorization: `Bearer ${TOKEN}` },
+        body,
+      });
+
+    // `posts` writable; NO guardrails block ⇒ default ON. (This block never
+    // activates tenant_scope, so the guardrail is what governs DDL/no-WHERE DML.)
+    const onYaml = "table_access:\n  default: deny\n  tables:\n    posts: read_write\n";
+    expect((await postPolicy(onYaml)).status).toBe(200);
+
+    // End-to-end through the real `query` tool: the guardrail denies DDL and
+    // no-WHERE DML on a read_write table, proving the engine-factory wires it
+    // default-ON without any guardrails YAML.
+    const drop = await runQuery("DROP TABLE posts");
+    expect(drop.isError).toBe(true);
+    expect(drop.data.policy_rule).toBe("dangerous_statement");
+
+    const wipe = await runQuery("DELETE FROM posts");
+    expect(wipe.isError).toBe(true);
+    expect(wipe.data.policy_rule).toBe("dangerous_statement");
+
+    // A WHERE-qualified DELETE still flows through to execution.
+    expect((await runQuery("DELETE FROM posts WHERE id = 1")).isError).toBe(false);
+
+    expect(handle.registry.describe()[0]!.guardrails_block_ddl).toBe(true);
+
+    // Hot-reload guardrails OFF (re-send the required table_access).
+    const offYaml =
+      "table_access:\n  default: deny\n  tables:\n    posts: read_write\n" +
+      "guardrails:\n  block_ddl: false\n  block_unqualified_dml: false\n";
+    expect((await postPolicy(offYaml)).status).toBe(200);
+
+    expect((await runQuery("DROP TABLE posts")).isError).toBe(false);
+    expect(handle.registry.describe()[0]!.guardrails_block_ddl).toBe(false);
+
+    // The POLICY_RELOADED row names guardrails as a changed section.
+    const reloads = handle.registry.audit
+      .readSince("0", 1000)
+      .filter((r) => r.event_type === "POLICY_RELOADED");
+    const target = reloads.find((r) => {
+      const g = (r.payload as { diff?: { guardrails?: { block_ddl?: { from: boolean; to: boolean } } } })
+        .diff?.guardrails?.block_ddl;
+      return g?.from === true && g?.to === false;
+    });
+    expect(target).toBeDefined();
+    expect((target!.payload as { sections_changed: string[] }).sections_changed).toContain(
+      "guardrails",
+    );
+
+    // Don't-touch: a table_access-only swap must NOT silently re-enable the
+    // guardrails the operator turned off (mirrors tenant_scope's omit rule).
+    expect((await postPolicy(onYaml)).status).toBe(200);
+    expect((await runQuery("DROP TABLE posts")).isError).toBe(false);
+    expect(handle.registry.describe()[0]!.guardrails_block_ddl).toBe(false);
+  });
 });
 
 describe("POST /admin/policy — INDEXER_TOKEN unset", () => {

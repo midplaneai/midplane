@@ -10,6 +10,7 @@ import { Engine } from "../src/engine.ts";
 import { tableAccess, type TableAccessConfig } from "../src/policy/rules/table-access.ts";
 import { multiStatement } from "../src/policy/rules/multi-statement.ts";
 import { tenantScope } from "../src/policy/rules/tenant-scope.ts";
+import { dangerousStatement } from "../src/policy/rules/dangerous-statement.ts";
 import { parseError } from "../src/policy/rules/parse-error.ts";
 import { recordDecided } from "./_verdict-recorder.ts";
 
@@ -87,6 +88,10 @@ export function makeEngine(opts: {
       multiStatement(),
       tableAccess(opts.tableAccess),
       tenantScope(),
+      // Wired LAST to mirror production wiring. Inert here (no source) so the
+      // existing corpus's verdicts are unchanged; the dangerous-statement
+      // corpus passes its own rule list with guardrails active.
+      dangerousStatement(),
     ];
 
   let counter = 0;

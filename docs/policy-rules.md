@@ -1,8 +1,14 @@
 # Policy rules
 
-OSS Midplane ships four policy rules. The `table_access` rule is YAML-
-driven; the rest are hardcoded. Approvals (Slack-bot, web queue,
-escalation) are a Cloud feature, not OSS.
+OSS Midplane ships five policy rules. The `table_access` and `guardrails`
+rules are YAML-driven; the rest are hardcoded. Approvals (Slack-bot, web
+queue, escalation) are a Cloud feature, not OSS.
+
+Evaluation order (first DENY wins): `parse_error` → `multi_statement` →
+`table_access` → `tenant_scope` → `dangerous_statement`. The guardrails run
+**last**, so when a more-specific rule would also deny, that rule's reason
+surfaces; `dangerous_statement` only adds new denials for statements every
+other rule permitted.
 
 ## `table_access` (default: ON)
 
@@ -158,6 +164,56 @@ Adding a `column:` to an existing config will likely deny some queries that work
 - Update agent SQL to include the predicate everywhere else.
 
 Per-session: set `MIDPLANE_TENANT_ID=42` in env vars. Hosted: `tenant_id` claim on the issued MCP token.
+
+## `dangerous_statement` (default: ON)
+
+The "an agent can't nuke prod" net. Blocks categorically-destructive
+operations **regardless of `table_access` / `tenant_scope`** — so marking a
+table `read_write` to allow legitimate writes does *not* thereby permit a
+whole-table wipe or a schema change. Two independently-toggled guards, **both
+on by default** (a self-host deployment is protected without writing any YAML):
+
+```yaml
+guardrails:
+  block_unqualified_dml: true   # deny DELETE/UPDATE with no WHERE clause
+  block_ddl: true               # deny DROP / TRUNCATE / ALTER
+```
+
+- **`block_unqualified_dml`** — denies a `DELETE` or `UPDATE` with no `WHERE`
+  clause (the whole-table write). Detected at every `DELETE`/`UPDATE` node,
+  including ones hidden in a data-modifying CTE (`WITH d AS (DELETE FROM t
+  RETURNING *) …` is caught — it wipes the table just the same). Presence of
+  *any* `WHERE` (even `WHERE true`) makes it "qualified" — this guard is the
+  missing-`WHERE` footgun specifically, not a predicate-strength check (that's
+  `tenant_scope`'s job).
+- **`block_ddl`** — denies `DROP`, `TRUNCATE`, and the **whole `ALTER`
+  family** — every `ALTER …` form, including ones libpg_query models as their
+  own node kind (`ALTER … RENAME`, `ALTER TYPE … ADD VALUE`, `ALTER ROLE`,
+  `ALTER … SET SCHEMA`, …), not just `ALTER TABLE`. `CREATE` is **not** blocked
+  in v1. (`table_access` independently classifies the same ALTER forms as
+  writes/side-effects, so disabling `block_ddl` still leaves an `ALTER` on a
+  non-`read_write` table denied.)
+
+The whole `guardrails:` section defaults ON when omitted, and each flag
+independently defaults `true` when the section is present — so
+`guardrails: { block_ddl: false }` keeps unqualified-DML blocking on while
+allowing DDL. Set a flag to `false` to opt out.
+
+```sql
+-- with a policy that marks `orders: read_write` and no guardrails block:
+DELETE FROM orders                       -- DENY  (no WHERE → whole-table wipe)
+DELETE FROM orders WHERE id = 1          -- ALLOW (scoped to specific rows)
+UPDATE orders SET shipped = true         -- DENY  (no WHERE)
+DROP TABLE orders                        -- DENY  (DDL)
+TRUNCATE orders                          -- DENY  (DDL)
+ALTER TABLE orders ADD COLUMN x int      -- DENY  (DDL)
+```
+
+Because the guardrails run last, a destructive statement on a table that
+`table_access` *already* denies (e.g. a `DROP` under the no-YAML
+deny-all-writes default) surfaces the `table_access` reason — it's blocked
+either way. Hot-swappable via `POST /admin/policy` like the other sections;
+omitting `guardrails` from a swap body leaves the current posture untouched.
 
 ## `parse_error` (default: ON, implicit)
 

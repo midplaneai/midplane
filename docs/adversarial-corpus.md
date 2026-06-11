@@ -395,6 +395,35 @@ all deny under both legacy and any YAML config.
 
 ---
 
+## 6. dangerous_statement (destructive-op guardrails)
+
+Categorical blocks that fire **regardless of `table_access` / `tenant_scope`**
+(the "an agent can't nuke prod" net). Both guards default ON. These cases use a
+permissive policy (the target table is `read_write` and unscoped) so the
+guardrail is unambiguously the denier — a table marked `read_write` to allow
+legitimate writes cannot be turned into a whole-table wipe or a schema change.
+Wired last, so a statement a stricter rule already denies surfaces *that* rule's
+reason (it's blocked either way).
+
+| SQL                                                       | Verdict | Rule                  | Why this matters |
+|-----------------------------------------------------------|---------|-----------------------|------------------|
+| `DELETE FROM webhooks`                                    | DENY    | `dangerous_statement` | No `WHERE` → whole-table wipe, even on a `read_write` table. |
+| `UPDATE webhooks SET enabled = true`                      | DENY    | `dangerous_statement` | No `WHERE` → every row rewritten. |
+| `WITH d AS (DELETE FROM webhooks RETURNING *) SELECT * FROM d` | DENY | `dangerous_statement` | No-`WHERE` DELETE hidden in a CTE is caught (fail-closed on nested DML). |
+| `DROP TABLE webhooks`                                     | DENY    | `dangerous_statement` | DDL on a `read_write` table. |
+| `TRUNCATE webhooks`                                       | DENY    | `dangerous_statement` | DDL. |
+| `ALTER TABLE webhooks ADD COLUMN flag boolean`            | DENY    | `dangerous_statement` | DDL. |
+| `ALTER TABLE webhooks RENAME TO hooks`                    | DENY    | `dangerous_statement` | `ALTER … RENAME` (a `RenameStmt`) is covered. |
+| `DROP INDEX webhooks_idx`                                 | DENY    | `dangerous_statement` | Non-table DROP variants count too. |
+| `DELETE FROM webhooks WHERE id = 1`                       | ALLOW   | —                     | A `WHERE` makes it qualified — the guard is the missing-`WHERE` footgun, not a predicate-strength check. |
+| `DELETE FROM webhooks WHERE true`                         | ALLOW   | —                     | An explicit `WHERE` (even a tautology) is not "unqualified" — that distinction is `tenant_scope`'s job, not this guard's. |
+
+`CREATE` is intentionally not blocked in v1. Each guard is independently
+toggleable (`guardrails: { block_ddl: false }`); with both off, the cases above
+fall through to `table_access` / `tenant_scope`.
+
+---
+
 ## Known limitations
 
 The following shapes currently **allow** when an audit mindset would

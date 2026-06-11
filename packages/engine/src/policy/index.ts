@@ -17,6 +17,11 @@ export type {
 export { multiStatement } from "./rules/multi-statement.ts";
 export { tenantScope, resolveTenantColumn } from "./rules/tenant-scope.ts";
 export type { TenantScopeConfig, TenantScopeSource } from "./rules/tenant-scope.ts";
+export { dangerousStatement } from "./rules/dangerous-statement.ts";
+export type {
+  DangerousStatementConfig,
+  DangerousStatementSource,
+} from "./rules/dangerous-statement.ts";
 export { parseError } from "./rules/parse-error.ts";
 
 export interface EvaluateInput {
@@ -40,7 +45,9 @@ export interface EvaluateResult {
 //
 // Rule evaluation order on DENY: the rule list is checked in array order;
 // the first DENY verdict wins. Order parse_error → multi_statement →
-// table_access → tenant_scope so the most-specific failure surfaces.
+// table_access → tenant_scope → dangerous_statement so the most-specific
+// failure surfaces (the destructive-op guardrail runs last and only adds
+// denials for statements every other rule permitted).
 export function evaluate(input: EvaluateInput): EvaluateResult {
   const rctx: RuleEvalContext = { parse: input.parse, ctx: input.ctx };
 
@@ -79,5 +86,6 @@ const EMPTY_PROGRAM: NormalizedProgram = {
   allRelnames: [],
   accessChecks: [],
   scopeUnits: [],
+  dangerousStatements: [],
   unsupported: [],
 };

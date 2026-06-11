@@ -27,6 +27,7 @@ import {
   multiStatement,
   tableAccess,
   tenantScope,
+  dangerousStatement,
   postgresDialect,
   getDialect,
   type Rule,
@@ -210,6 +211,15 @@ export function scaffold(opts: ScaffoldOpts): string {
     w("#   column: tenant_id");
     w("#   exempt: [audit_log]");
   }
+
+  w();
+  w("# guardrails: destructive-operation blocks that fire REGARDLESS of the");
+  w("# table_access / tenant_scope policy above — the \"an agent can't nuke");
+  w("# prod\" net. Both default ON (this block is shown for visibility; deleting");
+  w("# it changes nothing). Set a flag to false to opt out of that block.");
+  w("guardrails:");
+  w("  block_unqualified_dml: true   # deny DELETE/UPDATE with no WHERE clause");
+  w("  block_ddl: true               # deny DROP / TRUNCATE / ALTER");
   w();
   return lines.join("\n");
 }
@@ -305,6 +315,7 @@ function lint(args: string[]): void {
     label: string;
     tableAccess?: z.infer<typeof PolicyFileSchema>["table_access"];
     tenantScope?: z.infer<typeof PolicyFileSchema>["tenant_scope"];
+    guardrails?: z.infer<typeof PolicyFileSchema>["guardrails"];
   }> = [];
   if (cfg.databases && cfg.databases.length > 0) {
     for (const d of cfg.databases) {
@@ -312,10 +323,16 @@ function lint(args: string[]): void {
         label: `databases.${d.name}`,
         tableAccess: d.table_access,
         tenantScope: d.tenant_scope,
+        guardrails: d.guardrails,
       });
     }
   } else {
-    units.push({ label: "table_access", tableAccess: cfg.table_access, tenantScope: cfg.tenant_scope });
+    units.push({
+      label: "table_access",
+      tableAccess: cfg.table_access,
+      tenantScope: cfg.tenant_scope,
+      guardrails: cfg.guardrails,
+    });
   }
 
   for (const u of units) {
@@ -378,6 +395,24 @@ function lint(args: string[]): void {
           message: at(`\`${t}\` looks like an audit table but isn't in \`tenant_scope.exempt\` — strict scoping will deny writes to it. Add it to \`exempt\` if it spans tenants.`),
         });
       }
+    }
+
+    // Guardrails opt-outs. Omitted ⇒ both ON (the safe default) ⇒ no finding.
+    // An explicit `false` re-opens a destructive class an agent can reach, so
+    // surface it for review. Warning, not error — it's a deliberate operator
+    // choice, but one worth seeing in the report.
+    const gr = u.guardrails;
+    if (gr?.block_unqualified_dml === false) {
+      findings.push({
+        severity: "warn",
+        message: at("`guardrails.block_unqualified_dml: false` — DELETE/UPDATE with no WHERE clause are allowed on any writable table (whole-table wipes)."),
+      });
+    }
+    if (gr?.block_ddl === false) {
+      findings.push({
+        severity: "warn",
+        message: at("`guardrails.block_ddl: false` — DROP / TRUNCATE / ALTER are allowed on any writable table (schema destruction)."),
+      });
     }
 
     // No deny anywhere: nothing in this unit's policy restricts beyond the
@@ -485,12 +520,13 @@ async function test(args: string[]): Promise<void> {
 
   const dialect = dialectFor(spec);
 
-  // Same four rules, in the same order, the engine wires up per DB.
+  // Same rules, in the same order, the engine wires up per DB.
   const rules: Rule[] = [
     parseError(),
     multiStatement(),
     tableAccess(spec.tableAccess ?? undefined),
     tenantScope(spec.tenantScope),
+    dangerousStatement(spec.guardrails),
   ];
 
   const ctx: EngineContext = {

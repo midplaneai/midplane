@@ -35,6 +35,7 @@ export const PolicyRule = {
   TABLE_ACCESS: "table_access",
   MULTI_STATEMENT: "multi_statement",
   TENANT_SCOPE_MISSING: "tenant_scope_missing",
+  DANGEROUS_STATEMENT: "dangerous_statement",
   PARSE_ERROR: "parse_error",
 } as const;
 export type PolicyRule = (typeof PolicyRule)[keyof typeof PolicyRule];

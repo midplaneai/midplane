@@ -73,6 +73,24 @@ describe("TelemetryCollector — heartbeat drain", () => {
     expect(drained!.statement_types).toEqual({ DELETE: 1 });
   });
 
+  test("DECIDED DENY counts dangerous_statement (guardrail rollout is visible)", () => {
+    const c = new TelemetryCollector(() => 1_000);
+    c.recordToolCall("query", false);
+
+    c.onAuditEvent(event({
+      event_type: "DECIDED",
+      payload: {
+        decision: "DENY",
+        policy_rule: "dangerous_statement",
+        reason: "denied",
+        statement_type: "DROP",
+      },
+    }));
+
+    const drained = c.drainHeartbeat();
+    expect(drained!.denials_by_rule).toEqual({ dangerous_statement: 1 });
+  });
+
   test("unknown policy_rule names are silently dropped", () => {
     const c = new TelemetryCollector(() => 1_000);
     c.recordToolCall("query", false);

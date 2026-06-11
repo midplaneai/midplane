@@ -2,6 +2,30 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-06-11
+
+### Added
+
+- **Dangerous-statement guardrails — categorical blocks that fire *regardless of `table_access` / `tenant_scope`*.** The "an agent can't nuke prod" net: a table marked `read_write` to allow legitimate writes can no longer be turned into a whole-table wipe or a schema change. New fifth policy rule `dangerous_statement`, **on by default** — a self-host deployment is protected without writing any YAML.
+  - **`block_unqualified_dml`** — denies `DELETE`/`UPDATE` with **no `WHERE` clause** (the whole-table write). Detected at every `DELETE`/`UPDATE` node, including ones hidden in a data-modifying CTE (`WITH d AS (DELETE FROM t RETURNING *) …`). Presence of *any* `WHERE` (even `WHERE true`) makes it qualified — this is the missing-`WHERE` footgun specifically, not a predicate-strength check (that stays `tenant_scope`'s job).
+  - **`block_ddl`** — denies `DROP`, `TRUNCATE`, and the **whole `ALTER` family** (every `Alter…Stmt` node plus `RenameStmt`/`AlterObjectSchemaStmt` — `ALTER … RENAME`, `ALTER TYPE … ADD VALUE`, `ALTER ROLE`, …), so the coverage has no gaps as Postgres grows ALTER forms. `CREATE` is **not** blocked in v1. The same ALTER forms are also classified by `table_access` (relation-bearing ones check their target table; the rest are `no_target` denials), so disabling `block_ddl` doesn't let `ALTER … RENAME` bypass a `read` table's policy.
+  - **YAML contract (per-DB; both default ON, even when the section is omitted):**
+    ```yaml
+    guardrails:
+      block_unqualified_dml: true   # DELETE/UPDATE with no WHERE
+      block_ddl: true               # DROP/TRUNCATE/ALTER
+    ```
+    Each flag independently defaults `true` when the block is present, so `guardrails: { block_ddl: false }` keeps unqualified-DML blocking on while allowing DDL.
+  - **Evaluation order:** `parse_error` → `multi_statement` → `table_access` → `tenant_scope` → `dangerous_statement`. The guardrail runs **last**, so when a more-specific rule would also deny (e.g. a `DROP` under the no-YAML deny-all-writes default), that rule's reason surfaces — the statement is blocked either way; the guardrail only adds *new* denials for statements every other rule permitted.
+  - **Engine:** the rule reads a new dialect-agnostic IR field (`NormalizedProgram.dangerousStatements`) the Postgres adapter emits — keeping the rule dialect-blind like every other rule, and faithfully distinguishing "no `WHERE` at all" from a non-equality `WHERE` (which the existing equality-only predicate IR could not).
+  - **Hot-swap + audit:** swappable via `POST /admin/policy` like `table_access`/`tenant_scope` (omitting `guardrails` from a body leaves the current posture untouched); the `POLICY_RELOADED` audit row carries the guardrails state, a per-flag diff, and `guardrails` in `sections_changed`. `list_databases` and the dry-run `policy_hash` include the posture.
+  - **CLI:** `midplane policy init` scaffolds the block, `midplane policy lint` warns on an explicit opt-out, and `midplane policy test` evaluates it.
+
+### Changed
+
+- **Behavior change (safe-by-default):** because guardrails default ON, upgrading a deployment that marks tables `read_write` will now **deny** a no-`WHERE` `DELETE`/`UPDATE` or a `DROP`/`TRUNCATE`/`ALTER` on those tables that previously passed `table_access`. This is the intended safety net; opt out per flag in your policy YAML (`guardrails.block_ddl: false` / `guardrails.block_unqualified_dml: false`). The no-YAML default already denied all writes, so out-of-the-box allow/deny outcomes are unchanged — only the surfaced reason can differ.
+- **Dry-run probes** for `delete`/`update` now synthesize a WHERE-qualified statement even for unscoped tables, so a `(table, action)` probe tests `table_access`/`tenant_scope` without itself tripping the new missing-`WHERE` guardrail.
+
 ## [0.8.0] — 2026-06-10
 
 ### Added

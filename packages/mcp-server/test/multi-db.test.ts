@@ -201,6 +201,8 @@ describe("multi-DB tool surface", () => {
         tenant_scope_overrides: {},
         tenant_scope_exempt: [],
         table_access_default: "read_write",
+        guardrails_block_unqualified_dml: true,
+        guardrails_block_ddl: true,
       },
       {
         name: "prod",
@@ -209,6 +211,8 @@ describe("multi-DB tool surface", () => {
         tenant_scope_overrides: { users: "org_id" },
         tenant_scope_exempt: [],
         table_access_default: "deny",
+        guardrails_block_unqualified_dml: true,
+        guardrails_block_ddl: true,
       },
     ]);
 

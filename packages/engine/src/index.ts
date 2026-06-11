@@ -34,11 +34,16 @@ export type {
   TableAccessResolution,
 } from "./policy/index.ts";
 export type { TenantScopeConfig, TenantScopeSource } from "./policy/index.ts";
+export type {
+  DangerousStatementConfig,
+  DangerousStatementSource,
+} from "./policy/index.ts";
 export {
   evaluate,
   tableAccess,
   multiStatement,
   tenantScope,
+  dangerousStatement,
   parseError,
   resolveTableAccessForName,
   resolveTenantColumn,

@@ -21,11 +21,14 @@ export const ToolName = z.enum([
 ]);
 export type ToolName = z.infer<typeof ToolName>;
 
-// Mirrors PolicyRule from packages/engine/src/audit/types.ts.
+// Mirrors PolicyRule from packages/engine/src/audit/types.ts (+ the synthesized
+// `internal_error` a thrown rule produces). Keep in lockstep — a rule missing
+// here is silently dropped from `denials_by_rule` by the collector.
 export const PolicyRuleName = z.enum([
   "table_access",
   "multi_statement",
   "tenant_scope_missing",
+  "dangerous_statement",
   "parse_error",
   "internal_error",
 ]);

@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import {
   resolveTableAccessForName,
   resolveTenantColumn,
+  type DangerousStatementConfig,
   type DecisionPreview,
   type Engine,
   type EngineContext,
@@ -99,6 +100,9 @@ export interface DryRunTarget {
   engine: Engine;
   tableAccess: TableAccessConfig | undefined;
   tenantScope: TenantScopeConfig;
+  // Live guardrails posture, for the policy_hash (the verdict itself already
+  // reflects guardrails — engine.decide() reads the same holder the rule does).
+  guardrails: DangerousStatementConfig;
   ctxBase: EngineContext;
 }
 
@@ -267,16 +271,23 @@ function buildProbeSql(
         ? `SELECT * FROM ${table} WHERE ${column} = ${lit}`
         : `SELECT * FROM ${table}`;
     case "delete":
+      // Always WHERE-qualified: a probe answers "does policy permit this action
+      // on this table?" (table_access + tenant_scope), so it must not itself
+      // trip the dangerous_statement guardrail's no-WHERE check. Scoped tables
+      // carry the tenant predicate; unscoped tables get a benign throwaway
+      // predicate that's never executed.
       return column
         ? `DELETE FROM ${table} WHERE ${column} = ${lit}`
-        : `DELETE FROM ${table}`;
+        : `DELETE FROM ${table} WHERE ${PROBE_COLUMN} = ${lit}`;
     case "update":
       // SET targets an arbitrary column (tenant_scope ignores SET; table_access
       // only cares about the target table). The WHERE clause carries the scope
-      // predicate when the table is scoped.
+      // predicate when the table is scoped, else a benign throwaway predicate —
+      // qualified either way so the guardrail's no-WHERE check isn't what decides
+      // a probe.
       return column
         ? `UPDATE ${table} SET ${PROBE_COLUMN} = NULL WHERE ${column} = ${lit}`
-        : `UPDATE ${table} SET ${PROBE_COLUMN} = NULL`;
+        : `UPDATE ${table} SET ${PROBE_COLUMN} = NULL WHERE ${PROBE_COLUMN} = ${lit}`;
     case "insert":
       // A scoped INSERT must name the tenant column with the bound literal; an
       // unscoped one just needs a syntactically valid column list.
@@ -372,6 +383,11 @@ function label(
         matched_rule: "multi_statement",
         reason: "Denied — multiple statements in one query are not allowed.",
       };
+    case "dangerous_statement":
+      return {
+        matched_rule: "dangerous_statement",
+        reason: shorten(preview.message),
+      };
     case "parse_error":
       return { matched_rule: "parse_error", reason: shorten(preview.message) };
     default:
@@ -407,6 +423,10 @@ function computePolicyHash(target: DryRunTarget): string {
       column: ts.defaultColumn,
       overrides: sortedRecord(ts.overrides),
       exempt: [...ts.exempt].sort(),
+    },
+    guardrails: {
+      block_unqualified_dml: target.guardrails.blockUnqualifiedDml,
+      block_ddl: target.guardrails.blockDdl,
     },
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);

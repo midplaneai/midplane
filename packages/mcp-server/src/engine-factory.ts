@@ -24,10 +24,12 @@ import {
   multiStatement,
   tableAccess,
   tenantScope,
+  dangerousStatement,
   getDialect,
   type AuditEvent,
   type AuditWriter,
   type CredentialStore,
+  type DangerousStatementConfig,
   type EngineContext,
   type Executor,
   type TableAccessConfig,
@@ -42,11 +44,13 @@ import {
 } from "./dry-run.ts";
 import {
   DEFAULT_DB_NAME,
+  DEFAULT_GUARDRAILS,
   EMPTY_TENANT_SCOPE,
   loadPolicyFile,
   parsePolicyYaml,
   resolveDatabasesFromConfig,
   type DatabaseSpec,
+  type GuardrailsSpec,
   type LoadedPolicy,
   type TableAccessLevel,
   type TenantScopeSpec,
@@ -64,6 +68,10 @@ export interface PolicyHolder {
   // short-circuits ALLOW when `defaultColumn === null` and `overrides`
   // is empty. Swapping the pointer in place flips enforcement cleanly.
   tenantScope: TenantScopeSpec;
+  // Resolved guardrails config (block_unqualified_dml + block_ddl). Defaults
+  // to DEFAULT_GUARDRAILS (both ON). The dangerous_statement rule reads this
+  // via a getter once per query, so a hot-swap flips traffic cleanly.
+  guardrails: GuardrailsSpec;
 }
 
 // What the MCP layer holds per registered DB.
@@ -118,6 +126,8 @@ export interface EngineRegistry {
     tenant_scope_overrides: Record<string, string>;
     tenant_scope_exempt: string[];
     table_access_default: TableAccessLevel | null;
+    guardrails_block_unqualified_dml: boolean;
+    guardrails_block_ddl: boolean;
   }>;
   // Hot-swap entrypoint. Same body as 0.1.x's setPolicy — the registry
   // dispatches based on shape (legacy → swap on __default__; multi-DB →
@@ -167,6 +177,9 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
           hasTenantScope: false,
           tableAccess: null,
           hasTableAccess: false,
+          // No YAML still gets the default-ON guardrails safety net.
+          guardrails: DEFAULT_GUARDRAILS,
+          hasGuardrails: false,
         },
       ],
       hasDatabasesBlock: false,
@@ -174,6 +187,8 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
       tableAccess: null,
       hasTenantScope: false,
       hasTableAccess: false,
+      guardrails: DEFAULT_GUARDRAILS,
+      hasGuardrails: false,
     };
   }
   const specs = resolveDatabasesFromConfig(policy, cfg, (msg) =>
@@ -256,10 +271,19 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
     const tenantScopeDiff = next.hasTenantScope
       ? diffTenantScope(target.holder.tenantScope, next.tenantScope)
       : null;
+    // Guardrails follow tenant_scope's omit-vs-set rule: an explicit
+    // `guardrails` body swaps; omitting it leaves the current guardrails
+    // untouched (so a body editing table_access alone never re-opens DDL/DML).
+    const guardrailsDiff = next.hasGuardrails
+      ? diffGuardrails(target.holder.guardrails, next.guardrails)
+      : null;
 
     target.holder.tableAccess = newTableAccess;
     if (next.hasTenantScope) {
       target.holder.tenantScope = next.tenantScope;
+    }
+    if (next.hasGuardrails) {
+      target.holder.guardrails = { ...next.guardrails };
     }
 
     return finalizeReload(cfg, baseAudit, "admin_endpoint", [
@@ -267,8 +291,10 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
         name: target.name,
         tableAccess: target.holder.tableAccess,
         tenantScope: target.holder.tenantScope,
+        guardrails: target.holder.guardrails,
         tableAccessDiff,
         tenantScopeDiff,
+        guardrailsDiff,
         kind: "swapped",
       },
     ]);
@@ -311,6 +337,8 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
             table_access_default: e.holder.tableAccess
               ? e.holder.tableAccess.default
               : null,
+            guardrails_block_unqualified_dml: e.holder.guardrails.blockUnqualifiedDml,
+            guardrails_block_ddl: e.holder.guardrails.blockDdl,
           };
         });
     },
@@ -333,6 +361,7 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
           engine: entry.engine,
           tableAccess: entry.holder.tableAccess,
           tenantScope: entry.holder.tenantScope,
+          guardrails: entry.holder.guardrails,
           ctxBase: entry.ctxBase,
         },
         req,
@@ -375,6 +404,7 @@ function makeEngineEntry(
       ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
       : undefined,
     tenantScope: cloneTenantScope(spec.tenantScope),
+    guardrails: { ...spec.guardrails },
   };
 
   // Resolve the dialect for this DB. Postgres is a stateless singleton; one
@@ -396,6 +426,11 @@ function makeEngineEntry(
         // once per finalize() so a swap mid-traffic flips queries cleanly
         // between old and new config without rebuilding the engine.
         tenantScope((): TenantScopeConfig => holder.tenantScope),
+        // Wired LAST: the destructive-op net fires only for statements
+        // table_access + tenant_scope permitted, so a more-specific rule's
+        // reason surfaces when one applies. Reads the holder via getter for
+        // hot-swap, same as the rules above.
+        dangerousStatement((): DangerousStatementConfig => holder.guardrails),
       ],
     },
     audit,
@@ -519,12 +554,17 @@ async function swapMultiDb(
         name: spec.name,
         tableAccess: fresh.holder.tableAccess,
         tenantScope: fresh.holder.tenantScope,
+        guardrails: fresh.holder.guardrails,
         tableAccessDiff: fresh.holder.tableAccess
           ? diffTableAccess(undefined, fresh.holder.tableAccess)
           : null,
         tenantScopeDiff: tenantScopeIsActive(fresh.holder.tenantScope)
           ? diffTenantScope(EMPTY_TENANT_SCOPE, fresh.holder.tenantScope)
           : null,
+        // Diff a brand-new DB's guardrails against the default-ON baseline so
+        // the row names any explicit opt-out (e.g. block_ddl: false) the
+        // operator added; a default-ON new DB produces an empty diff.
+        guardrailsDiff: diffGuardrails(DEFAULT_GUARDRAILS, fresh.holder.guardrails),
         kind: "added",
       });
       continue;
@@ -543,6 +583,7 @@ async function swapMultiDb(
       // should see what their stricter prod policy turned into.
       const prevTableAccess = existing.holder.tableAccess;
       const prevTenantScope = existing.holder.tenantScope;
+      const prevGuardrails = existing.holder.guardrails;
       const maybeClose = (existing.executor as { close?: () => Promise<void> }).close;
       if (typeof maybeClose === "function") {
         await maybeClose.call(existing.executor).catch((err) => {
@@ -555,6 +596,7 @@ async function swapMultiDb(
         name: spec.name,
         tableAccess: fresh.holder.tableAccess,
         tenantScope: fresh.holder.tenantScope,
+        guardrails: fresh.holder.guardrails,
         // URL change is validated to require table_access, so
         // fresh.holder.tableAccess is always defined here.
         tableAccessDiff: fresh.holder.tableAccess
@@ -564,6 +606,7 @@ async function swapMultiDb(
           prevTenantScope,
           fresh.holder.tenantScope,
         ),
+        guardrailsDiff: diffGuardrails(prevGuardrails, fresh.holder.guardrails),
         kind: "rebuilt",
       });
       continue;
@@ -580,18 +623,26 @@ async function swapMultiDb(
     const tenantScopeDiff = spec.hasTenantScope
       ? diffTenantScope(existing.holder.tenantScope, spec.tenantScope)
       : null;
+    const guardrailsDiff = spec.hasGuardrails
+      ? diffGuardrails(existing.holder.guardrails, spec.guardrails)
+      : null;
 
     existing.holder.tableAccess = newTableAccess;
     if (spec.hasTenantScope) {
       existing.holder.tenantScope = spec.tenantScope;
+    }
+    if (spec.hasGuardrails) {
+      existing.holder.guardrails = { ...spec.guardrails };
     }
 
     summaries.push({
       name: spec.name,
       tableAccess: existing.holder.tableAccess,
       tenantScope: existing.holder.tenantScope,
+      guardrails: existing.holder.guardrails,
       tableAccessDiff,
       tenantScopeDiff,
+      guardrailsDiff,
       kind: "swapped",
     });
   }
@@ -620,8 +671,10 @@ interface ReloadSummary {
   name: string;
   tableAccess: TableAccessConfig | undefined;
   tenantScope: TenantScopeSpec;
+  guardrails: GuardrailsSpec;
   tableAccessDiff: TableAccessDiff | null;
   tenantScopeDiff: TenantScopeDiff | null;
+  guardrailsDiff: GuardrailsDiff | null;
   // What kind of change happened to this DB. "added" + "rebuilt" both
   // count as DB-level changes regardless of section diffs (the DB
   // itself appearing or having its pool destroyed IS the event), so
@@ -662,6 +715,14 @@ interface TenantScopeDiff {
   exempt_removed?: string[];
 }
 
+// guardrails diff (0.9.0). Each flag reports a boolean flip; both omitted when
+// unchanged, so a no-op swap produces an empty diff (consistent with the other
+// sections — an empty diff means "didn't move").
+interface GuardrailsDiff {
+  block_unqualified_dml?: { from: boolean; to: boolean };
+  block_ddl?: { from: boolean; to: boolean };
+}
+
 // Write the POLICY_RELOADED audit row. Best-effort — the swap already
 // applied; an audit failure is logged but doesn't roll back.
 async function finalizeReload(
@@ -693,6 +754,7 @@ async function finalizeReload(
     // change-feed rather than "what was touched".
     if (diffHasChange(s.tableAccessDiff)) sectionsChanged.push("table_access");
     if (diffHasChange(s.tenantScopeDiff)) sectionsChanged.push("tenant_scope");
+    if (diffHasChange(s.guardrailsDiff)) sectionsChanged.push("guardrails");
 
     const event: AuditEvent = {
       id: ulid(),
@@ -735,12 +797,19 @@ async function finalizeReload(
               exempt: s.tenantScope.exempt,
             }
           : null,
+        // Current guardrails posture (0.9.0). Always present — guardrails are
+        // never "off"; both flags carry their boolean state.
+        guardrails: {
+          block_unqualified_dml: s.guardrails.blockUnqualifiedDml,
+          block_ddl: s.guardrails.blockDdl,
+        },
         // Coarse diff of what changed for THIS row's DB. `null` for
         // brand-new entries (no prior state to diff against) or sections
         // that weren't touched.
         diff: {
           table_access: s.tableAccessDiff,
           tenant_scope: s.tenantScopeDiff,
+          guardrails: s.guardrailsDiff,
         },
       },
     };
@@ -779,10 +848,16 @@ async function finalizeReload(
 // re-sends matching policy) doesn't lie about a change happening.
 function summaryHasChange(s: ReloadSummary): boolean {
   if (s.kind === "added" || s.kind === "rebuilt") return true;
-  return diffHasChange(s.tableAccessDiff) || diffHasChange(s.tenantScopeDiff);
+  return (
+    diffHasChange(s.tableAccessDiff) ||
+    diffHasChange(s.tenantScopeDiff) ||
+    diffHasChange(s.guardrailsDiff)
+  );
 }
 
-function diffHasChange(diff: TableAccessDiff | TenantScopeDiff | null): boolean {
+function diffHasChange(
+  diff: TableAccessDiff | TenantScopeDiff | GuardrailsDiff | null,
+): boolean {
   if (diff === null) return false;
   for (const key of Object.keys(diff)) {
     const v = (diff as Record<string, unknown>)[key];
@@ -863,6 +938,26 @@ function diffTenantScope(
   if (exemptAdded.length > 0) diff.exempt_added = exemptAdded;
   if (exemptRemoved.length > 0) diff.exempt_removed = exemptRemoved;
 
+  return diff;
+}
+
+// Compute the boolean flips between two GuardrailsSpec snapshots. Unchanged
+// flags are omitted, so a no-op swap yields an empty diff (which diffHasChange
+// reports as "no change", same as the other sections).
+function diffGuardrails(
+  prev: GuardrailsSpec,
+  next: GuardrailsSpec,
+): GuardrailsDiff {
+  const diff: GuardrailsDiff = {};
+  if (prev.blockUnqualifiedDml !== next.blockUnqualifiedDml) {
+    diff.block_unqualified_dml = {
+      from: prev.blockUnqualifiedDml,
+      to: next.blockUnqualifiedDml,
+    };
+  }
+  if (prev.blockDdl !== next.blockDdl) {
+    diff.block_ddl = { from: prev.blockDdl, to: next.blockDdl };
+  }
   return diff;
 }
 
