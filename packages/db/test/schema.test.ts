@@ -42,6 +42,9 @@ describe("schema parity with OSS audit_events", () => {
     expect(cols).toContain("region");
     // 0009: per-DB attribution from OSS 0.2.0 audit pull payload.
     expect(cols).toContain("database");
+    // 0020: cloud-only connection attribution (FK ON DELETE SET NULL so
+    // audit history survives connection deletion).
+    expect(cols).toContain("connectionId");
   });
 });
 

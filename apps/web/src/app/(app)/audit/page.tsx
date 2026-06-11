@@ -34,6 +34,7 @@ import {
   type AuditWindowKey,
   type QueryStatus,
 } from "@/lib/audit";
+import { listConnectionOptions } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { resolvePlan } from "@/lib/plan";
 
@@ -69,6 +70,7 @@ interface PageProps {
     database?: string;
     agent?: string;
     token?: string;
+    connection?: string;
     q?: string;
     window?: string;
     t?: string;
@@ -91,6 +93,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   const selectedDatabase = params.database?.trim() || null;
   const selectedAgent = params.agent?.trim() || null;
   const selectedToken = params.token?.trim() || null;
+  const selectedConnection = params.connection?.trim() || null;
   const search = params.q?.trim() ?? "";
   const cursor = params.cursor?.trim() || undefined;
   const timeFormat: TimeFormat = params.t === "abs" ? "abs" : "rel";
@@ -104,46 +107,59 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   const window = resolveAuditWindow(windowKey, retentionDays);
   const windowSince = auditWindowSince(window, now);
 
-  const [list, tenants, databases, agents, tokens, counts, volume, staleness] =
-    await Promise.all([
-      listAuditQueries(customer.id, {
-        region: customer.region,
-        statuses: selectedStatuses,
-        tenantId: selectedTenant ?? undefined,
-        database: selectedDatabase ?? undefined,
-        agentName: selectedAgent ?? undefined,
-        tokenId: selectedToken ?? undefined,
-        search,
-        cursor,
-        pageSize: PAGE_SIZE,
-        retentionDays,
-        windowSince,
-      }),
-      listTenantIds(customer.id, customer.region, retentionDays, windowSince),
-      listDatabases(customer.id, customer.region, retentionDays, windowSince),
-      listAgents(customer.id, customer.region, retentionDays, windowSince),
-      listTokenOptions(customer.id, customer.region, retentionDays, windowSince),
-      countByStatus(
-        customer.id,
-        customer.region,
-        () => now,
-        retentionDays,
-        windowSince,
-      ),
-      eventVolumeByHour(customer.id, customer.region, {
-        tenantId: selectedTenant ?? undefined,
-        database: selectedDatabase ?? undefined,
-        agentName: selectedAgent ?? undefined,
-        tokenId: selectedToken ?? undefined,
-        search,
-        retentionDays,
-        bucket: window.bucket,
-        bucketCount: window.bucketCount,
-        windowSince,
-        now: () => now,
-      }),
-      readStaleness(customer.id, customer.region),
-    ]);
+  const [
+    list,
+    tenants,
+    databases,
+    agents,
+    tokens,
+    connections,
+    counts,
+    volume,
+    staleness,
+  ] = await Promise.all([
+    listAuditQueries(customer.id, {
+      region: customer.region,
+      statuses: selectedStatuses,
+      tenantId: selectedTenant ?? undefined,
+      database: selectedDatabase ?? undefined,
+      agentName: selectedAgent ?? undefined,
+      tokenId: selectedToken ?? undefined,
+      connectionId: selectedConnection ?? undefined,
+      search,
+      cursor,
+      pageSize: PAGE_SIZE,
+      retentionDays,
+      windowSince,
+    }),
+    listTenantIds(customer.id, customer.region, retentionDays, windowSince),
+    listDatabases(customer.id, customer.region, retentionDays, windowSince),
+    listAgents(customer.id, customer.region, retentionDays, windowSince),
+    listTokenOptions(customer.id, customer.region, retentionDays, windowSince),
+    listConnectionOptions(customer),
+    countByStatus(
+      customer.id,
+      customer.region,
+      () => now,
+      retentionDays,
+      windowSince,
+      selectedConnection ?? undefined,
+    ),
+    eventVolumeByHour(customer.id, customer.region, {
+      tenantId: selectedTenant ?? undefined,
+      database: selectedDatabase ?? undefined,
+      agentName: selectedAgent ?? undefined,
+      tokenId: selectedToken ?? undefined,
+      connectionId: selectedConnection ?? undefined,
+      search,
+      retentionDays,
+      bucket: window.bucket,
+      bucketCount: window.bucketCount,
+      windowSince,
+      now: () => now,
+    }),
+    readStaleness(customer.id, customer.region),
+  ]);
 
   const totalCount = Object.values(counts).reduce((sum, n) => sum + n, 0);
   const hasFilters =
@@ -152,6 +168,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
     selectedDatabase !== null ||
     selectedAgent !== null ||
     selectedToken !== null ||
+    selectedConnection !== null ||
     search.length > 0;
 
   const buildUrl = makeUrlBuilder({
@@ -160,6 +177,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
     selectedDatabase,
     selectedAgent,
     selectedToken,
+    selectedConnection,
     search,
     windowKey,
     timeFormat,
@@ -214,10 +232,12 @@ export default async function AuditListPage({ searchParams }: PageProps) {
           selectedDatabase={selectedDatabase}
           selectedAgent={selectedAgent}
           selectedToken={selectedToken}
+          selectedConnection={selectedConnection}
           tenants={tenants}
           databases={databases}
           agents={agents}
           tokens={tokens}
+          connections={connections}
           counts={counts}
           search={search}
           buildUrl={buildUrl}
@@ -515,6 +535,7 @@ function makeUrlBuilder(state: {
   selectedDatabase: string | null;
   selectedAgent: string | null;
   selectedToken: string | null;
+  selectedConnection: string | null;
   search: string;
   windowKey: AuditWindowKey;
   timeFormat: TimeFormat;
@@ -526,6 +547,7 @@ function makeUrlBuilder(state: {
     database?: string | null;
     agentName?: string | null;
     tokenId?: string | null;
+    connectionId?: string | null;
     search?: string | null;
     window?: AuditWindowKey;
     timeFormat?: TimeFormat;
@@ -538,6 +560,7 @@ function makeUrlBuilder(state: {
     const database = pick(overrides.database, state.selectedDatabase);
     const agent = pick(overrides.agentName, state.selectedAgent);
     const token = pick(overrides.tokenId, state.selectedToken);
+    const connection = pick(overrides.connectionId, state.selectedConnection);
     const searchVal = pick(overrides.search, state.search);
     const windowKey = pick(overrides.window, state.windowKey);
     const timeFormat = pick(overrides.timeFormat, state.timeFormat);
@@ -548,6 +571,7 @@ function makeUrlBuilder(state: {
     if (database) usp.set("database", database);
     if (agent) usp.set("agent", agent);
     if (token) usp.set("token", token);
+    if (connection) usp.set("connection", connection);
     if (searchVal) usp.set("q", searchVal);
     // Window is a normal param; omit the 24h default to keep URLs clean.
     if (windowKey !== "24h") usp.set("window", windowKey);

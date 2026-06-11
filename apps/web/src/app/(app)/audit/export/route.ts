@@ -44,6 +44,7 @@ export async function GET(req: Request) {
   const database = sp.get("database")?.trim() || undefined;
   const agentName = sp.get("agent")?.trim() || undefined;
   const tokenId = sp.get("token")?.trim() || undefined;
+  const connectionId = sp.get("connection")?.trim() || undefined;
   const search = sp.get("q")?.trim() || undefined;
   const window = resolveAuditWindow(
     parseAuditWindow(sp.get("window") ?? undefined),
@@ -61,6 +62,7 @@ export async function GET(req: Request) {
     database,
     agentName,
     tokenId,
+    connectionId,
     search,
     windowSince,
     retentionDays: caps.auditRetentionDays,

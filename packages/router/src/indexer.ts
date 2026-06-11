@@ -418,6 +418,12 @@ export class Indexer {
               customerId,
               tenantId: row.tenant_id,
               region,
+              // Cloud-only attribution. writeBatch is called once per
+              // connection (the indexer drains each container per-
+              // connection), so connectionId is in scope here; the engine
+              // never emits it. FK ON DELETE SET NULL keeps the audit row
+              // after the connection is deleted.
+              connectionId,
               queryId: row.query_id,
               agentName: row.agent_name ?? null,
               agentVersion: row.agent_version ?? null,

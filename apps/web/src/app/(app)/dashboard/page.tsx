@@ -201,6 +201,13 @@ function ConnectionCard({
 
   const statLabel =
     "font-mono text-[11px] lowercase tracking-[0.04em] transition-colors";
+  // Clickable stat tile. relative z-10 lifts it above the card's stretched
+  // open-link; the negative margins give it an 8×4px hit-padding without
+  // shifting the row's rhythm; hover paints the --secondary surface (the
+  // design system's hover fill) so the tile reads as a real target. radius
+  // stays 0 per the spec-sheet aesthetic.
+  const statTile =
+    "group/stat relative z-10 -mx-2 -my-1 px-2 py-1 transition-colors hover:bg-secondary";
 
   return (
     <li className="group relative rounded-lg border border-border bg-card transition-colors hover:border-border-strong">
@@ -248,7 +255,7 @@ function ConnectionCard({
         <div className="mt-4 flex flex-wrap items-start gap-x-10 gap-y-3">
           <Link
             href={`/connections/${c.id}?section=database`}
-            className="group/stat relative z-10"
+            className={statTile}
           >
             <div className="font-mono text-lg tabular-nums text-foreground">
               {databases.length}
@@ -262,7 +269,7 @@ function ConnectionCard({
 
           <Link
             href={`/connections/${c.id}?section=agents`}
-            className="group/stat relative z-10"
+            className={statTile}
           >
             <div
               className={cn(
@@ -288,14 +295,42 @@ function ConnectionCard({
             </div>
           </Link>
 
-          <div>
+          {/* "queries" stat — always a deep-link to this connection's audit
+              log, even with zero queries (it just lands on the connection-
+              scoped audit view, empty or not — a valid "no activity yet"
+              destination, not a dead stat). window=30d (the widest key) so it
+              spans the connection's full retained history; the audit page
+              clamps it to the plan's retention. Without it /audit defaults to
+              24h and a "last query" older than a day (this stat honors the
+              plan's 7d/30d retention) would land on an empty table. statTile's
+              relative z-10 keeps the click off the card's stretched open-link. */}
+          <Link
+            href={`/audit?connection=${c.id}&window=30d`}
+            aria-label={`View ${label}'s queries in the audit log`}
+            title={`View ${label}'s queries in the audit log`}
+            className={statTile}
+          >
             <div className="font-mono text-lg tabular-nums text-foreground">
               {lastQueryAt ? formatRelative(lastQueryAt) : "—"}
             </div>
-            <div className={cn(statLabel, "text-subtle")}>
+            <div
+              className={cn(
+                statLabel,
+                "flex items-center gap-1 text-subtle group-hover/stat:text-foreground",
+              )}
+            >
               {lastQueryAt ? "last query" : "no queries yet"}
+              {/* Off-card target (the audit log) → flag with the mono → that
+                  fades in on hover, the same "go" affordance buttons +
+                  empty-state links use. */}
+              <span
+                aria-hidden
+                className="font-mono opacity-0 transition-opacity group-hover/stat:opacity-100"
+              >
+                →
+              </span>
             </div>
-          </div>
+          </Link>
         </div>
       </div>
 

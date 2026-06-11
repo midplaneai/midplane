@@ -530,6 +530,32 @@ describe("countByStatus", () => {
     expect(sel.sql.toLowerCase()).toContain("group by 1");
   });
 
+  it("scopes both branches to a connection when connectionId is passed", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    await countByStatus(
+      VALID_CUSTOMER_ID,
+      "eu",
+      undefined,
+      undefined,
+      undefined,
+      "01HXCONN0000000000000000AA",
+    );
+    const sel = lastSelect(handle.queries);
+    // Both the query agg and the event count must carry the clause so the
+    // chip badges + "of N" total match a connection-filtered table.
+    const occurrences = (sel.sql.match(/connection_id =/g) ?? []).length;
+    expect(occurrences).toBeGreaterThanOrEqual(2);
+    expect(sel.params).toContain("01HXCONN0000000000000000AA");
+  });
+
+  it("adds NO connection_id clause when connectionId is omitted", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    await countByStatus(VALID_CUSTOMER_ID, "eu");
+    expect(lastSelect(handle.queries).sql).not.toContain("connection_id =");
+  });
+
   it("returns a zeroed record with every status key present", async () => {
     handle.setNextResult([]);
     const { countByStatus } = await import("../src/lib/audit.ts");
@@ -899,6 +925,29 @@ describe("audit time window", () => {
     expect(sel.sql).toContain("mcp_token_id =");
     expect(sel.params).toContain("tok_42");
   });
+
+  it("listAuditQueries filters by connection_id in BOTH the query and config-event branches", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, {
+      region: "eu",
+      connectionId: "01HXCONN0000000000000000AA",
+    });
+    const sel = lastSelect(handle.queries);
+    // The clause must appear in the query agg AND the policy_events CTE so
+    // a connection-filtered view keeps the connection's config/credential
+    // events alongside its queries.
+    const occurrences = (sel.sql.match(/connection_id =/g) ?? []).length;
+    expect(occurrences).toBeGreaterThanOrEqual(2);
+    expect(sel.params).toContain("01HXCONN0000000000000000AA");
+  });
+
+  it("listAuditQueries adds NO connection_id clause when connectionId is omitted", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    expect(lastSelect(handle.queries).sql).not.toContain("connection_id =");
+  });
 });
 
 describe("listAgents", () => {
@@ -960,6 +1009,17 @@ describe("eventVolumeByHour daily bucketing", () => {
     expect(sel.params).toContain("claude-code");
     expect(sel.sql).toContain("mcp_token_id =");
     expect(sel.params).toContain("tok_42");
+  });
+
+  it("threads connectionId into the chart query so the sparkline matches a connection-filtered table", async () => {
+    handle.setNextResult([]);
+    const { eventVolumeByHour } = await import("../src/lib/audit.ts");
+    await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
+      connectionId: "01HXCONN0000000000000000AA",
+    });
+    const sel = lastSelect(handle.queries);
+    expect(sel.sql).toContain("connection_id =");
+    expect(sel.params).toContain("01HXCONN0000000000000000AA");
   });
 });
 
