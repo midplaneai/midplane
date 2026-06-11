@@ -673,7 +673,7 @@ export default async function Landing() {
                 </li>
                 <li>
                   <span>MCP tokens</span>
-                  <b>1</b>
+                  <b>5</b>
                 </li>
                 <li>
                   <span>Seats</span>
@@ -713,7 +713,7 @@ export default async function Landing() {
                 </li>
                 <li>
                   <span>MCP tokens</span>
-                  <b>10</b>
+                  <b>50</b>
                 </li>
                 <li>
                   <span>Seats</span>
@@ -761,7 +761,7 @@ export default async function Landing() {
                 </li>
                 <li>
                   <span>Audit retention</span>
-                  <b>30 days</b>
+                  <b>90 days</b>
                 </li>
                 <li>
                   <span>SSO / SAML</span>
@@ -807,7 +807,7 @@ export default async function Landing() {
               </li>
               <li>
                 <b>Custom retention</b>
-                <span>beyond 30 days</span>
+                <span>beyond 90 days</span>
               </li>
               <li>
                 <b>SLA</b>

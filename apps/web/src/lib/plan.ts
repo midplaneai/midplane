@@ -30,12 +30,27 @@ export interface PlanCaps {
 }
 
 export const CAPS: Record<Plan, PlanCaps> = {
-  free: { connections: 1, tokens: 1, auditRetentionDays: 7, sso: false },
-  pro: { connections: 10, tokens: 10, auditRetentionDays: 30, sso: false },
+  // Tokens > connections on every finite tier ON PURPOSE — they are not the
+  // same axis. A token IS the value metric (agents governed); a connection is
+  // an infra count. Two forces push the token cap above the connection cap:
+  //   1. Zero-downtime rotation is mint-new → cut the agent over → revoke-old,
+  //      so it needs +1 usable slot over steady state. A cap of 1 made safe
+  //      rotation impossible on a product whose whole pitch is credential
+  //      hygiene — the N+1 floor, not a pricing lever.
+  //   2. The headline demo is many agents on ONE connection, each with its own
+  //      identity in the audit log. With one token you cannot even show it.
+  // Free stays gated on connections (1) / retention (7d) / SSO, so a generous
+  // token count there sells the multi-agent story without cannibalizing Pro.
+  free: { connections: 1, tokens: 5, auditRetentionDays: 7, sso: false },
+  pro: { connections: 10, tokens: 50, auditRetentionDays: 30, sso: false },
   team: {
     connections: Infinity,
     tokens: Infinity,
-    auditRetentionDays: 30,
+    // Team retention EXCEEDS Pro (90 vs 30): audit history is what the
+    // compliance buyer at this tier actually pays for, so the premium tier
+    // must out-deliver Pro on it. Cheap to extend — retention is a query-time
+    // visibility clamp, not storage deletion (old rows already persist).
+    auditRetentionDays: 90,
     sso: true,
   },
 };

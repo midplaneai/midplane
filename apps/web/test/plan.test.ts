@@ -50,20 +50,20 @@ describe("CAPS", () => {
     const { CAPS } = await import("../src/lib/plan.ts");
     expect(CAPS.free).toEqual({
       connections: 1,
-      tokens: 1,
+      tokens: 5,
       auditRetentionDays: 7,
       sso: false,
     });
     expect(CAPS.pro).toEqual({
       connections: 10,
-      tokens: 10,
+      tokens: 50,
       auditRetentionDays: 30,
       sso: false,
     });
     expect(CAPS.team).toEqual({
       connections: Infinity,
       tokens: Infinity,
-      auditRetentionDays: 30,
+      auditRetentionDays: 90,
       sso: true,
     });
   });
@@ -193,13 +193,13 @@ describe("connectionCreateBlock", () => {
   });
 
   it("flags the token cap when connections have room but tokens don't", async () => {
-    // Pro: 10 connections / 10 tokens. Manually minting extra tokens can
+    // Pro: 10 connections / 50 tokens. Manually minting extra tokens can
     // exhaust the token slot a new connection's default would need before
     // the connection cap is hit.
     const { connectionCreateBlock, CAPS } = await import("../src/lib/plan.ts");
     expect(
-      connectionCreateBlock({ connections: 4, tokens: 10 }, CAPS.pro),
-    ).toEqual({ resource: "tokens", limit: 10 });
+      connectionCreateBlock({ connections: 4, tokens: 50 }, CAPS.pro),
+    ).toEqual({ resource: "tokens", limit: 50 });
   });
 
   it("never blocks on unlimited (Infinity) caps", async () => {
