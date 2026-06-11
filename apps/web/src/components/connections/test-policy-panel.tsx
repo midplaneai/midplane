@@ -5,25 +5,35 @@ import { useState, type ReactNode } from "react";
 // Types + probe builder are pure TS from the /policy subpath and
 // lib/probe-matrix — never the root @midplane-cloud/db entrypoint in a
 // client component (see CLAUDE.md).
-import type { TenantScopeConfig } from "@midplane-cloud/db/policy";
+import type {
+  AccessLevel,
+  TableAccessPolicy,
+  TenantScopeConfig,
+} from "@midplane-cloud/db/policy";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   buildProbeMatrix,
+  expectedDecision,
   probeLabel,
   type Probe,
 } from "@/lib/probe-matrix";
 
-// Policy test panel — the trust surface. One click runs the probe
-// matrix (every table × select/insert/update/delete, plus cross-tenant
-// selects on scoped tables) through the REAL engine via
-// POST /api/connections/:id/dry-run and renders allow/deny + reason.
-// Nothing executes; the verdict pipeline stops at the decision step.
+// Policy test panel — the trust surface. Now that the editor matrix shows
+// the policy itself, listing every table×action verdict would just
+// re-state it. So this is a RECONCILIATION, not a dump: it runs the probe
+// matrix through the REAL engine (POST /api/connections/:id/dry-run) and
+// compares each live verdict to what the policy-as-configured should
+// decide. The headline is a single pass/fail; only the parts the matrix
+// can't show get rows — mismatches (a policy that didn't reach the engine,
+// a parse surprise), the cross-tenant denies (the tenant guarantee), and a
+// risk callout when the default itself is writable. The full per-check
+// list stays available, collapsed. Nothing executes against the data.
 //
 // State machine:
 //
-//   idle ──run──► running ──► verdicts
+//   idle ──run──► running ──► probe-result / sql-result
 //     ▲             │  └────► error (engine_unavailable → retryable;
 //     └── change db ┘          engine_rejected → engine's body verbatim)
 //
@@ -32,15 +42,12 @@ import {
 // and policy rows for tables that don't exist still get verdicts.
 // Introspection soft-fails ({tables:[], error}) degrade to policy-only
 // with an inline hint, never a dead panel.
-//
-// The custom SQL disclosure posts {sql} to the same endpoint — the
-// advanced path, collapsed by default (probes-first per the design
-// doc's revised P2).
 
 export interface TestPanelDatabase {
   name: string;
-  /** Table names already present in the table_access policy. */
-  policyTables: string[];
+  /** Full table_access policy — levels drive the expected verdicts the
+   *  engine's live answer is reconciled against. */
+  policy: TableAccessPolicy;
   tenantScope: TenantScopeConfig;
 }
 
@@ -52,18 +59,31 @@ interface Verdict {
   matched_rule: string;
 }
 
+/** A probe verdict joined to what the policy-as-configured should decide. */
+interface ReconciledProbe {
+  probe: Probe;
+  expected: "allow" | "deny";
+  actual: "allow" | "deny";
+  match: boolean;
+  reason: string;
+  matched_rule: string;
+}
+
 type RunMode = "probes" | "sql";
 
 type PanelState =
   | { kind: "idle" }
   | { kind: "running"; mode: RunMode }
   | {
-      kind: "verdicts";
-      verdicts: Verdict[];
+      kind: "probe-result";
+      reconciled: ReconciledProbe[];
       shownTables: number;
       totalTables: number;
+      unlistedCount: number;
+      defaultLevel: AccessLevel;
       introspectionHint: string | null;
     }
+  | { kind: "sql-result"; verdicts: Verdict[] }
   // mode: which run failed — Retry re-runs THAT mode (a failed SQL
   // check must not silently switch back to the probe matrix).
   | { kind: "error"; message: string; retryable: boolean; mode: RunMode };
@@ -172,8 +192,9 @@ export function TestPolicyPanel({
         "couldn't introspect the database — showing policy tables only";
     }
 
+    const policyTables = Object.keys(db.policy.tables);
     const matrix = buildProbeMatrix(
-      [...introspected, ...db.policyTables],
+      [...introspected, ...policyTables],
       db.tenantScope,
     );
     if (matrix.probes.length === 0) {
@@ -200,11 +221,31 @@ export function TestPolicyPanel({
       });
       return;
     }
+
+    // Join each live verdict to what the policy-as-configured expects.
+    const reconciled: ReconciledProbe[] = result.verdicts
+      .filter((v): v is Verdict & { probe: Probe } => Boolean(v.probe))
+      .map((v) => {
+        const expected = expectedDecision(v.probe, db.policy, db.tenantScope);
+        return {
+          probe: v.probe,
+          expected,
+          actual: v.decision,
+          match: expected === v.decision,
+          reason: v.reason,
+          matched_rule: v.matched_rule,
+        };
+      });
+    const listed = new Set(policyTables);
+    const unlistedCount = matrix.tables.filter((t) => !listed.has(t)).length;
+
     setState({
-      kind: "verdicts",
-      verdicts: result.verdicts,
+      kind: "probe-result",
+      reconciled,
       shownTables: matrix.tables.length,
       totalTables: matrix.totalTables,
+      unlistedCount,
+      defaultLevel: db.policy.default,
       introspectionHint,
     });
   }
@@ -223,13 +264,7 @@ export function TestPolicyPanel({
       });
       return;
     }
-    setState({
-      kind: "verdicts",
-      verdicts: result.verdicts,
-      shownTables: 0,
-      totalTables: 0,
-      introspectionHint: null,
-    });
+    setState({ kind: "sql-result", verdicts: result.verdicts });
   }
 
   return (
@@ -241,12 +276,12 @@ export function TestPolicyPanel({
         <div className="space-y-1">
           <h2 className="text-base font-medium text-foreground">Test</h2>
           <p className="text-xs text-muted-foreground">
-            Check the database is reachable, then dry-run every table through
-            the{" "}
+            Run your policy through the{" "}
             <strong className="font-medium text-foreground">
               same engine that enforces at query time
-            </strong>
-            . Nothing is executed against your data.
+            </strong>{" "}
+            and confirm it decides what you configured. Nothing is executed
+            against your data.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -308,50 +343,22 @@ export function TestPolicyPanel({
         </div>
       ) : null}
 
-      {state.kind === "verdicts" ? (
-        <div className="space-y-2">
-          {state.introspectionHint ? (
-            <p className="text-xs text-[hsl(var(--warn))]">
-              {state.introspectionHint}
-            </p>
-          ) : null}
-          {state.totalTables > state.shownTables && state.shownTables > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              showing the first {state.shownTables} of {state.totalTables}{" "}
-              tables
-            </p>
-          ) : null}
-          <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-background">
-            {state.verdicts.map((v, i) => (
-              <li
-                key={i}
-                className={
-                  v.decision === "deny"
-                    ? "flex items-center gap-3 bg-[hsl(var(--deny)/0.06)] px-3 py-2"
-                    : "flex items-center gap-3 px-3 py-2"
-                }
-              >
-                {/* Reason is the trust-critical payload — visible on
-                    every viewport (stacked under the probe label), full
-                    text in the title attr. */}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-mono text-xs text-foreground">
-                    {v.probe ? probeLabel(v.probe) : v.sql}
-                  </span>
-                  <span
-                    className="block truncate text-xs text-muted-foreground"
-                    title={`${v.reason} (${v.matched_rule})`}
-                  >
-                    {v.reason}
-                  </span>
-                </span>
-                <Badge variant={v.decision === "allow" ? "allow" : "deny"}>
-                  {v.decision === "allow" ? "ALLOW" : "DENY"}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {state.kind === "probe-result" ? (
+        <ProbeReconciliation state={state} />
+      ) : null}
+
+      {state.kind === "sql-result" ? (
+        <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-background">
+          {state.verdicts.map((v, i) => (
+            <ReasonRow
+              key={i}
+              label={v.sql ?? (v.probe ? probeLabel(v.probe) : "")}
+              reason={v.reason}
+              matchedRule={v.matched_rule}
+              decision={v.decision}
+            />
+          ))}
+        </ul>
       ) : null}
 
       <details
@@ -386,5 +393,174 @@ export function TestPolicyPanel({
         </div>
       </details>
     </section>
+  );
+}
+
+// The reconciliation view: a pass/fail headline, then only the rows the
+// editor matrix can't already show — mismatches, the writable-default
+// callout, the cross-tenant guarantees — with the full check list folded
+// behind a disclosure.
+function ProbeReconciliation({
+  state,
+}: {
+  state: Extract<PanelState, { kind: "probe-result" }>;
+}) {
+  const { reconciled, shownTables, totalTables, unlistedCount, defaultLevel } =
+    state;
+  const mismatches = reconciled.filter((r) => !r.match);
+  const guarantees = reconciled.filter(
+    (r) => r.probe.cross_tenant && r.match && r.actual === "deny",
+  );
+  const ok = mismatches.length === 0;
+
+  return (
+    <div className="space-y-3">
+      {state.introspectionHint ? (
+        <p className="text-xs text-[hsl(var(--warn))]">
+          {state.introspectionHint}
+        </p>
+      ) : null}
+
+      {/* Headline — the one line that answers "is the engine doing what I
+          configured?" */}
+      <div
+        className={
+          ok
+            ? "flex items-baseline gap-2 border border-[hsl(var(--allow)/0.4)] bg-[hsl(var(--allow)/0.08)] px-3 py-2"
+            : "flex items-baseline gap-2 border border-[hsl(var(--deny)/0.4)] bg-[hsl(var(--deny)/0.08)] px-3 py-2"
+        }
+        role="status"
+        data-testid="reconciliation-headline"
+      >
+        <span
+          className={
+            ok
+              ? "text-sm font-medium text-[hsl(var(--allow))]"
+              : "text-sm font-medium text-[hsl(var(--deny))]"
+          }
+        >
+          {ok
+            ? "✓ engine enforces your policy"
+            : `✗ ${mismatches.length} ${mismatches.length === 1 ? "mismatch" : "mismatches"} — reality differs from your policy`}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {shownTables} {shownTables === 1 ? "table" : "tables"} checked
+          {totalTables > shownTables ? ` of ${totalTables}` : ""}
+        </span>
+      </div>
+
+      {/* Mismatches — the bugs. Each shows what the engine actually did
+          against what the policy says it should. */}
+      {mismatches.length > 0 ? (
+        <ul className="divide-y divide-border overflow-hidden rounded-md border border-[hsl(var(--deny)/0.4)] bg-background">
+          {mismatches.map((r, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-3 bg-[hsl(var(--deny)/0.06)] px-3 py-2"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-xs text-foreground">
+                  {probeLabel(r.probe)}
+                </span>
+                <span
+                  className="block truncate text-xs text-muted-foreground"
+                  title={`${r.reason} (${r.matched_rule})`}
+                >
+                  expected {r.expected} — {r.reason}
+                </span>
+              </span>
+              <Badge variant={r.actual === "allow" ? "allow" : "deny"}>
+                {r.actual === "allow" ? "ALLOW" : "DENY"}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {/* Risk callout — a writable default means every table you didn't
+          list is writable. The matrix shows the default level; this says
+          how many real tables inherit it. */}
+      {defaultLevel === "read_write" && unlistedCount > 0 ? (
+        <p className="border border-[hsl(var(--warn)/0.4)] bg-[hsl(var(--warn)/0.08)] px-3 py-2 text-xs text-[hsl(var(--warn))]">
+          ⚠ {unlistedCount} unlisted{" "}
+          {unlistedCount === 1 ? "table is" : "tables are"} writable under your
+          default — add overrides to lock them down.
+        </p>
+      ) : null}
+
+      {/* Tenant guarantee — the cross-tenant deny isn't expressible in the
+          deny/read/write matrix, so it's always worth showing. */}
+      {guarantees.length > 0 ? (
+        <ul className="space-y-1">
+          {guarantees.map((r, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+            >
+              <span className="text-[hsl(var(--allow))]">✓</span>
+              <span className="font-mono text-foreground">{r.probe.table}</span>
+              <span>cross-tenant read denied</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {/* Full detail, folded — the curious can still see every check. */}
+      <details className="text-xs">
+        <summary className="cursor-pointer list-none font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+          ▸ all {reconciled.length} checks
+        </summary>
+        <ul className="mt-2 divide-y divide-border overflow-hidden rounded-md border border-border bg-background">
+          {reconciled.map((r, i) => (
+            <ReasonRow
+              key={i}
+              label={probeLabel(r.probe)}
+              reason={r.reason}
+              matchedRule={r.matched_rule}
+              decision={r.actual}
+            />
+          ))}
+        </ul>
+      </details>
+    </div>
+  );
+}
+
+// One verdict line: statement/probe label over its reason, with the
+// decision badge. Deny rows carry the subtle blush tint (DESIGN.md).
+function ReasonRow({
+  label,
+  reason,
+  matchedRule,
+  decision,
+}: {
+  label: string;
+  reason: string;
+  matchedRule: string;
+  decision: "allow" | "deny";
+}) {
+  return (
+    <li
+      className={
+        decision === "deny"
+          ? "flex items-center gap-3 bg-[hsl(var(--deny)/0.06)] px-3 py-2"
+          : "flex items-center gap-3 px-3 py-2"
+      }
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-mono text-xs text-foreground">
+          {label}
+        </span>
+        <span
+          className="block truncate text-xs text-muted-foreground"
+          title={`${reason} (${matchedRule})`}
+        >
+          {reason}
+        </span>
+      </span>
+      <Badge variant={decision === "allow" ? "allow" : "deny"}>
+        {decision === "allow" ? "ALLOW" : "DENY"}
+      </Badge>
+    </li>
   );
 }

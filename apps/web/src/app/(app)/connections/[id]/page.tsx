@@ -5,7 +5,6 @@ import { notFound, redirect } from "next/navigation";
 import {
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
-  type TableAccessPolicy,
 } from "@midplane-cloud/db";
 
 import { ConnectionRail } from "@/components/connections/connection-rail";
@@ -542,9 +541,7 @@ export default async function ConnectionWorkspace({
         databases={[
           {
             name: selDb.name,
-            policyTables: Object.keys(
-              (selDb.tableAccess as TableAccessPolicy).tables ?? {},
-            ),
+            policy: parsePolicyOrThrow(selDb.tableAccess),
             tenantScope: parseTenantScopeOrThrow(selDb.tenantScope),
           },
         ]}
