@@ -39,7 +39,7 @@ Deferred work captured during reviews. Each item has enough context to pick up c
 
 ### Audit storage-pruning job (real retention, not just query-time hiding)
 - **What:** A scheduled job that DELETES `audit_events_index` rows older than each
-  customer's plan retention window (Free 7d / Pro 30d / Team 30d), per region.
+  customer's plan retention window (Free 7d / Pro 30d / Team 90d), per region.
 - **Why:** The pricing PR clamps audit reads to the retention window, which closes the
   visibility/privacy gap — but old rows persist in Postgres indefinitely. "We retain
   7 days" while storing forever is a cost + compliance mismatch (raised by codex in the

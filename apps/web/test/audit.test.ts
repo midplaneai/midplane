@@ -821,6 +821,7 @@ describe("audit time window", () => {
     const { parseAuditWindow } = await import("../src/lib/audit.ts");
     expect(parseAuditWindow("7d")).toBe("7d");
     expect(parseAuditWindow("30d")).toBe("30d");
+    expect(parseAuditWindow("90d")).toBe("90d");
     expect(parseAuditWindow(undefined)).toBe("24h");
     expect(parseAuditWindow("bogus")).toBe("24h");
   });
@@ -844,6 +845,32 @@ describe("audit time window", () => {
     expect(resolveAuditWindow("7d", 30)).toEqual({
       key: "7d",
       hours: 168,
+      bucket: "day",
+      bucketCount: 7,
+    });
+  });
+
+  it("resolveAuditWindow lets Team reach 90d and clamps it for lower tiers", async () => {
+    const { resolveAuditWindow } = await import("../src/lib/audit.ts");
+    // Team (90d retention) → the full 90 daily bars, unclamped. This is the
+    // whole point of the window: days 31-90 are now reachable, not capped at 30.
+    expect(resolveAuditWindow("90d", 90)).toEqual({
+      key: "90d",
+      hours: 24 * 90,
+      bucket: "day",
+      bucketCount: 90,
+    });
+    // Pro (30d) picking 90d → clamped to 30 daily bars.
+    expect(resolveAuditWindow("90d", 30)).toEqual({
+      key: "90d",
+      hours: 24 * 30,
+      bucket: "day",
+      bucketCount: 30,
+    });
+    // Free (7d) picking 90d → clamped to 7 daily bars.
+    expect(resolveAuditWindow("90d", 7)).toEqual({
+      key: "90d",
+      hours: 24 * 7,
       bucket: "day",
       bucketCount: 7,
     });

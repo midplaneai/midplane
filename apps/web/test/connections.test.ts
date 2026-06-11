@@ -511,7 +511,7 @@ describe("createConnection plan caps", () => {
     const { mcpTokens, connections: connectionsTable } = await import(
       "@midplane-cloud/db"
     );
-    // Under cap: 0 existing connections, 0 usable tokens (Free 1/1).
+    // Under cap: 0 existing connections, 0 usable tokens (Free 1 conn / 5 tokens).
     handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
     handle.queueSelect([]); // connection count → 0 < 1 ✓
     handle.queueSelect([]); // countUsableTokens: connection ids → none → 0 < 1 ✓
