@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
@@ -120,6 +120,12 @@ export async function emitConfigAuditRow(
       eventType: row.eventType,
       payload: row.payload,
       actorClerkUserId: row.actorClerkUserId,
+      // Every config event passes the connection id as tenantId (see the
+      // setTableAccess comment — "tenant_id = connection_id so a future
+      // per-connection audit view can filter on it for free"). Stamp the
+      // canonical connection_id column (0020) from it so a connection-
+      // filtered /audit keeps these config rows alongside the query rows.
+      connectionId: row.tenantId,
     });
   });
 }
@@ -317,6 +323,33 @@ export async function getPlanUsage(
     countUsableTokens(db, customer.id),
   ]);
   return { connections: Number(connRows[0]?.count ?? 0), tokens };
+}
+
+export interface ConnectionOption {
+  /** connections.id — the audit filter value (connection_id). */
+  id: string;
+  /** Display label for the chip: the user's connection name, else a stable
+   *  id-prefix (mirrors connectionLabel so the chip reads the same as the
+   *  card it was deep-linked from). */
+  label: string;
+}
+
+/** The customer's connections (id + display label) for the /audit
+ *  connection filter chip. Newest-first to match the dashboard list. Unlike
+ *  the audit chip lists (tenants/databases/agents/tokens, which are DISTINCT
+ *  over audit rows), this reads the connections table directly so a brand-
+ *  new connection with no audit rows yet still appears in the dropdown. */
+export async function listConnectionOptions(
+  customer: Customer,
+): Promise<ConnectionOption[]> {
+  const db = getDb(customer.region);
+  const rows = await db
+    .select({ id: connections.id, name: connections.name })
+    .from(connections)
+    .where(eq(connections.customerId, customer.id))
+    .orderBy(desc(connections.createdAt));
+  // Label parity with connectionLabel (lib/format): name, else id-prefix.
+  return rows.map((r) => ({ id: r.id, label: r.name ?? r.id.slice(0, 12) }));
 }
 
 // Update the user-supplied name on the parent connection. Cosmetic — no
@@ -1412,18 +1445,17 @@ export async function renameDatabase(
  *  that drives the connection-level freshness dot. */
 export type DashboardDatabase = SafeConnectionDatabase & {
   /** Most recent ts of an actual agent query (ATTEMPTED/DECIDED/EXECUTED/
-   *  FAILED) on `audit_events_index` for this DB name within the customer's
+   *  FAILED) on `audit_events_index` for this DB within the customer's
    *  region — control-plane rows (policy / token / pause-resume) are
    *  excluded so a config action never reads as "last query". NULL when the
    *  agent has never queried this DB — the dashboard renders this as
    *  "awaiting first query".
    *
-   *  KNOWN LIMITATION: audit_events_index has no `connection_id` column
-   *  today, so the max-ts aggregate fan-ins across same-named DBs in
-   *  different connections of the same customer-region. If a customer
-   *  has two connections each with a "main" DB, both rows show the same
-   *  lastQueryAt. PR-C accepts this for v1; a future schema migration
-   *  adds the disambiguator. */
+   *  Scoped to (connection_id, database) via the 0020 column, so a customer
+   *  with two connections each holding a "main" DB sees each card's "last
+   *  query" independently — no more fan-in across same-named DBs. Rows that
+   *  predate the backfill carry a NULL connection_id and are excluded from
+   *  this aggregate (a new query re-establishes the timestamp). */
   lastQueryAt: Date | null;
 };
 
@@ -1441,9 +1473,21 @@ export interface DashboardConnectionRow {
   activeTokens: number;
 }
 
-// Internal helper: compute MAX(ts) per database name within (customer,
-// region). The compound index audit_customer_region_database_ts_idx
-// makes this a single index scan with no per-database round trips.
+// Composite key for the last-query aggregate: a DB name alone fans in
+// across connections (two connections each with a "main" DB would collide),
+// so the map is keyed on (connection_id, database). A space separates the
+// two parts unambiguously — a ULID connection id is Crockford base32 and a
+// DB alias matches DB_NAME_RE, so neither can contain a space.
+function lastQueryKey(connectionId: string, database: string): string {
+  return `${connectionId} ${database}`;
+}
+
+// Internal helper: compute MAX(ts) per (connection_id, database) within
+// (customer, region). The compound index
+// audit_customer_region_connection_ts_idx covers the scan. Grouping by
+// connection_id (added in 0020) is what makes each card's "last query"
+// truly its own — before it, same-named DBs in different connections
+// shared a timestamp.
 //
 // retentionDays clamps the aggregate to the plan's audit window so the
 // dashboard freshness dot can't surface "last query" derived from a row
@@ -1460,6 +1504,7 @@ async function lastQueryByDatabase(
       : null;
   const rows = await db
     .select({
+      connectionId: auditEventsIndex.connectionId,
       database: auditEventsIndex.database,
       lastQueryAt: sql<Date | string>`MAX(${auditEventsIndex.ts})`,
     })
@@ -1475,22 +1520,27 @@ async function lastQueryByDatabase(
         // this filter, pausing a connection would make its "main" DB read
         // "last query: just now" with no query ever sent.
         inArray(auditEventsIndex.eventType, [...EVENT_TYPES]),
+        // Rows that predate the backfill (or never carried a token) have a
+        // NULL connection_id and can't be attributed to a card — skip them
+        // rather than bucket them under a meaningless key. Also lets the
+        // partial connection index serve the scan.
+        isNotNull(auditEventsIndex.connectionId),
         since ? gte(auditEventsIndex.ts, since) : undefined,
       ),
     )
-    .groupBy(auditEventsIndex.database);
+    .groupBy(auditEventsIndex.connectionId, auditEventsIndex.database);
 
   // Some drivers return the aggregate as a string (Postgres TIMESTAMPTZ
   // text representation) instead of a Date; coerce defensively so
   // downstream consumers always see a real Date.
   const map = new Map<string, Date>();
   for (const row of rows) {
-    if (!row.lastQueryAt) continue;
+    if (!row.lastQueryAt || !row.connectionId) continue;
     const d =
       row.lastQueryAt instanceof Date
         ? row.lastQueryAt
         : new Date(row.lastQueryAt);
-    map.set(row.database, d);
+    map.set(lastQueryKey(row.connectionId, row.database), d);
   }
   return map;
 }
@@ -1537,7 +1587,8 @@ export async function listDashboardConnections(
     const list = childrenByConn.get(child.connectionId) ?? [];
     list.push({
       ...child,
-      lastQueryAt: lastQueryMap.get(child.name) ?? null,
+      lastQueryAt:
+        lastQueryMap.get(lastQueryKey(child.connectionId, child.name)) ?? null,
     });
     childrenByConn.set(child.connectionId, list);
   }
@@ -1600,7 +1651,8 @@ export async function getConnectionHomeData(
     connection: parent.connection,
     databases: children.map((c) => ({
       ...c,
-      lastQueryAt: lastQueryMap.get(c.name) ?? null,
+      lastQueryAt:
+        lastQueryMap.get(lastQueryKey(c.connectionId, c.name)) ?? null,
     })),
     cursor: {
       lastIndexedAt: parent.lastIndexedAt,
@@ -1673,7 +1725,8 @@ export async function getDashboardFreshness(
     const list = childrenByConn.get(child.connectionId) ?? [];
     list.push({
       name: child.name,
-      lastQueryAt: lastQueryMap.get(child.name) ?? null,
+      lastQueryAt:
+        lastQueryMap.get(lastQueryKey(child.connectionId, child.name)) ?? null,
     });
     childrenByConn.set(child.connectionId, list);
   }

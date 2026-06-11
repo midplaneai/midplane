@@ -1944,10 +1944,15 @@ describe("listDashboardConnections", () => {
     const indexedAt = new Date("2026-04-30T10:00:00Z");
     const mainQueryAt = new Date("2026-04-30T11:30:00Z");
     const analyticsQueryAt = new Date("2026-04-30T11:45:00Z");
-    // 1) audit aggregate (inner await fires first)
+    // 1) audit aggregate (inner await fires first). 0020: keyed by
+    // (connection_id, database), so each row carries its connection id.
     handle.queueSelect([
-      { database: "main", lastQueryAt: mainQueryAt },
-      { database: "analytics", lastQueryAt: analyticsQueryAt },
+      { connectionId: "conn-1", database: "main", lastQueryAt: mainQueryAt },
+      {
+        connectionId: "conn-1",
+        database: "analytics",
+        lastQueryAt: analyticsQueryAt,
+      },
     ]);
     // 2) parents query (Promise.all microtask)
     handle.queueSelect([
@@ -2030,7 +2035,9 @@ describe("listDashboardConnections", () => {
 
   it("coerces driver-returned ISO strings on the audit aggregate to real Dates", async () => {
     const isoString = "2026-04-30T11:30:00.000Z";
-    handle.queueSelect([{ database: "main", lastQueryAt: isoString }]); // 1) audit
+    handle.queueSelect([
+      { connectionId: "conn-1", database: "main", lastQueryAt: isoString },
+    ]); // 1) audit
     handle.queueSelect([
       {
         connection: {
@@ -2064,6 +2071,71 @@ describe("listDashboardConnections", () => {
     );
     expect(rows[0]!.activeTokens).toBe(3);
   });
+
+  it("scopes lastQueryAt per connection — same-named DBs in different connections don't share a timestamp (0020)", async () => {
+    // Before 0020 the aggregate grouped by DB name only, so two connections
+    // each with a "main" DB collided on one timestamp. The fake ignores the
+    // WHERE/GROUP BY, so we exercise the call-site shape: the map is keyed by
+    // (connection_id, database) and each child looks up its own composite
+    // key. Distinct timestamps in → distinct timestamps out.
+    const conn1Main = new Date("2026-05-01T10:00:00Z");
+    const conn2Main = new Date("2026-05-01T12:00:00Z");
+    // 1) audit aggregate — same DB name "main" under two connection ids.
+    handle.queueSelect([
+      { connectionId: "conn-1", database: "main", lastQueryAt: conn1Main },
+      { connectionId: "conn-2", database: "main", lastQueryAt: conn2Main },
+    ]);
+    // 2) parents — two connections.
+    handle.queueSelect([
+      {
+        connection: {
+          id: "conn-1",
+          customerId: customer.id,
+          region: "eu",
+          name: "alpha",
+          createdAt: new Date(),
+        },
+        lastIndexedAt: null,
+        lastErrorAt: null,
+      },
+      {
+        connection: {
+          id: "conn-2",
+          customerId: customer.id,
+          region: "eu",
+          name: "beta",
+          createdAt: new Date(),
+        },
+        lastIndexedAt: null,
+        lastErrorAt: null,
+      },
+    ]);
+    // 3) token count — none.
+    handle.queueSelect([]);
+    // 4) children — each connection's "main" DB (IN-list across both parents).
+    handle.queueSelect([
+      {
+        id: "cdb-1",
+        connectionId: "conn-1",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+      },
+      {
+        id: "cdb-2",
+        connectionId: "conn-2",
+        name: "main",
+        tableAccess: { default: "read", tables: {} },
+      },
+    ]);
+    const { listDashboardConnections } = await import(
+      "../src/lib/connections.ts"
+    );
+
+    const rows = await listDashboardConnections(customer);
+    const byId = new Map(rows.map((r) => [r.connection.id, r]));
+    expect(byId.get("conn-1")!.databases[0]!.lastQueryAt).toEqual(conn1Main);
+    expect(byId.get("conn-2")!.databases[0]!.lastQueryAt).toEqual(conn2Main);
+  });
 });
 
 describe("getDashboardFreshness", () => {
@@ -2071,8 +2143,10 @@ describe("getDashboardFreshness", () => {
     const indexedAt = new Date("2026-04-30T10:00:00Z");
     const mainQueryAt = new Date("2026-04-30T11:30:00Z");
     // Same drain order as listDashboardConnections — audit first, then
-    // parents, then children.
-    handle.queueSelect([{ database: "main", lastQueryAt: mainQueryAt }]);
+    // parents, then children. 0020: aggregate keyed by (connection_id, db).
+    handle.queueSelect([
+      { connectionId: "conn-1", database: "main", lastQueryAt: mainQueryAt },
+    ]);
     handle.queueSelect([
       {
         id: "conn-1",

@@ -590,6 +590,11 @@ export async function emitTokenAuditRow(
       payload: row.payload,
       actorClerkUserId: row.actorClerkUserId,
       mcpTokenId: row.mcpTokenId,
+      // Stamp the canonical connection scope (0020) so a connection-
+      // filtered /audit keeps these credential events. tenant_id carries
+      // the same id for back-compat; connection_id is the column the filter
+      // and the FK ON DELETE SET NULL key on.
+      connectionId: row.connectionId,
     });
   });
 }

@@ -242,6 +242,17 @@ export const auditEventsIndex = pgTable(
     // TOKEN_REVOKED rows stamp it directly. NULL for rows where no token
     // identity applies (engine pre-lockstep, REGION_CHANGED, etc.).
     mcpTokenId: text("mcp_token_id"),
+    // Cloud-only connection attribution. The indexer drains each engine
+    // container per-connection, so the parent connection id is in scope at
+    // insert time (the engine itself never emits it). Lets the audit log
+    // filter to one connection and disambiguates same-named DBs across
+    // connections (the dashboard's per-card "last query"). FK ON DELETE
+    // SET NULL (mirrors indexer_cursors.connection_id, 0018): audit history
+    // MUST survive connection deletion for compliance, so the row outlives
+    // the connection with connection_id flipped to NULL — never CASCADE.
+    // NULL on config events (no connection drain), pre-0.6.0 rows, and any
+    // existing row not reached by the 0020 backfill.
+    connectionId: text("connection_id"),
   },
   (t) => ({
     customerTsIdx: index("audit_customer_region_ts_idx").on(
@@ -282,6 +293,26 @@ export const auditEventsIndex = pgTable(
       t.ts.desc(),
     ),
     queryIdIdx: index("audit_query_id_idx").on(t.queryId),
+    // Connection scoping (0020). FK ON DELETE SET NULL so audit history
+    // outlives connection deletion (compliance) — the row's connection_id
+    // flips to NULL rather than the row CASCADE-deleting. Mirrors the
+    // indexer_cursors → connections FK from 0018. The migration creates
+    // the constraint inline (auto-named) the same way 0018 did; this
+    // declaration is the read-side mirror.
+    connectionFk: foreignKey({
+      name: "audit_events_index_connection_fk",
+      columns: [t.connectionId],
+      foreignColumns: [connections.id],
+    }).onDelete("set null"),
+    // Partial index (WHERE connection_id IS NOT NULL) — the /audit
+    // connection filter always supplies a concrete id and never scans the
+    // NULL bucket (config events + pre-backfill rows), so the predicate
+    // keeps the index small. Mirrors the agent_name / mcp_token_id partial
+    // indexes; Drizzle can't express the WHERE, so the migration owns it
+    // and this declaration is the read-side mirror.
+    customerConnectionTsIdx: index(
+      "audit_customer_region_connection_ts_idx",
+    ).on(t.customerId, t.region, t.connectionId, t.ts.desc()),
     // Functional index on payload->>'sql_fingerprint' for ATTEMPTED rows
     // (matches OSS perf-review compound index). Created in
     // 0001_constraints.sql since Drizzle doesn't model partial expression

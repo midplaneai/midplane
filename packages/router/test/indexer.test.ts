@@ -570,6 +570,32 @@ describe("Indexer", () => {
     expect(cursor?.lastId).toBe("01HX0000000000000000000002");
   });
 
+  it("stamps connection_id (cloud-only) on every indexed audit row", async () => {
+    // 0020: the indexer drains per-connection, so writeBatch stamps the
+    // parent connection id on each row — the engine never emits it. This is
+    // what lets /audit filter by connection and disambiguates same-named
+    // DBs across connections on the dashboard.
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [
+          row("01HX0000000000000000000001"),
+          row("01HX0000000000000000000002"),
+        ],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+    await ix.tick();
+
+    expect(state.auditRows).toHaveLength(2);
+    for (const r of state.auditRows) {
+      expect((r as unknown as { connectionId: string }).connectionId).toBe(
+        TEST_CONN_A,
+      );
+    }
+  });
+
   it("threads mcp_token_id from OSS pull JSON into audit_events_index (when token row exists)", async () => {
     // OSS 0.6.0 lockstep (PR2 of mcp_url_auth_security): every audit
     // row from a session carries the X-Midplane-Token-Id the cloud

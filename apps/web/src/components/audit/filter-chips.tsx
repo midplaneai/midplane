@@ -10,6 +10,9 @@ import {
   type QueryStatus,
   type TokenOption,
 } from "@/lib/audit";
+// Type-only import — erased at compile time, so it doesn't pull the
+// postgres driver in @/lib/connections into this (server) component bundle.
+import { type ConnectionOption } from "@/lib/connections";
 
 interface BuildUrlOverrides {
   status?: readonly QueryStatus[];
@@ -17,6 +20,7 @@ interface BuildUrlOverrides {
   database?: string | null;
   agentName?: string | null;
   tokenId?: string | null;
+  connectionId?: string | null;
   search?: string | null;
   cursor?: string | null;
 }
@@ -27,10 +31,12 @@ interface FilterChipsProps {
   selectedDatabase: string | null;
   selectedAgent: string | null;
   selectedToken: string | null;
+  selectedConnection: string | null;
   tenants: readonly string[];
   databases: readonly string[];
   agents: readonly string[];
   tokens: readonly TokenOption[];
+  connections: readonly ConnectionOption[];
   counts: Record<QueryStatus, number>;
   search: string;
   buildUrl: (overrides: BuildUrlOverrides) => string;
@@ -78,10 +84,12 @@ export function FilterChips({
   selectedDatabase,
   selectedAgent,
   selectedToken,
+  selectedConnection,
   tenants,
   databases,
   agents,
   tokens,
+  connections,
   counts,
   search,
   buildUrl,
@@ -89,6 +97,9 @@ export function FilterChips({
   const allStatusesActive = selectedStatuses.length === 0;
   const selectedTokenLabel =
     tokens.find((t) => t.id === selectedToken)?.label ?? selectedToken;
+  const selectedConnectionLabel =
+    connections.find((c) => c.id === selectedConnection)?.label ??
+    selectedConnection;
 
   const activeCount =
     selectedStatuses.length +
@@ -96,6 +107,7 @@ export function FilterChips({
     (selectedDatabase ? 1 : 0) +
     (selectedAgent ? 1 : 0) +
     (selectedToken ? 1 : 0) +
+    (selectedConnection ? 1 : 0) +
     (search ? 1 : 0);
 
   return (
@@ -165,6 +177,22 @@ export function FilterChips({
                 label: t.label,
                 href: buildUrl({
                   tokenId: selectedToken === t.id ? null : t.id,
+                  cursor: null,
+                }),
+              }))}
+            />
+          )}
+          {connections.length > 0 && (
+            <FacetedFilter
+              label="connection"
+              allHref={buildUrl({ connectionId: null, cursor: null })}
+              selectedValue={selectedConnection}
+              selectedLabel={selectedConnectionLabel}
+              options={connections.map((c) => ({
+                value: c.id,
+                label: c.label,
+                href: buildUrl({
+                  connectionId: selectedConnection === c.id ? null : c.id,
                   cursor: null,
                 }),
               }))}
@@ -256,6 +284,14 @@ export function FilterChips({
               ariaLabel="Remove token filter"
             />
           )}
+          {selectedConnection && (
+            <RemovePill
+              prefix="connection"
+              value={selectedConnectionLabel ?? selectedConnection}
+              href={buildUrl({ connectionId: null, cursor: null })}
+              ariaLabel="Remove connection filter"
+            />
+          )}
           {search && (
             <RemovePill
               prefix="search"
@@ -271,6 +307,7 @@ export function FilterChips({
               database: null,
               agentName: null,
               tokenId: null,
+              connectionId: null,
               search: null,
               cursor: null,
             })}
