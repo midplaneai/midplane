@@ -120,6 +120,19 @@ export function DashboardFreshnessProvider({
   children: React.ReactNode;
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(() => fromInitial(initial));
+  // Re-seed from the server snapshot whenever it changes. useState's
+  // initializer runs only on mount, so without this a Server Action that
+  // calls revalidatePath("/dashboard") — pause/resume, rename, add-db —
+  // streams a fresh `initial` that we'd otherwise ignore until the next
+  // 60s poll. Consumers prefer the live snapshot over their initial* props
+  // (so cross-surface polling wins), which means the snapshot must track
+  // revalidations or a just-paused connection keeps reading "live" until a
+  // manual refresh. `initial` only gets a new reference on a server
+  // re-render — client-side poll updates re-render via setSnapshot without
+  // touching the prop, so this doesn't clobber freshly polled data.
+  useEffect(() => {
+    setSnapshot(fromInitial(initial));
+  }, [initial]);
   // Hold the latest setSnapshot in a ref so the polling loop never
   // closes over a stale handle even if React's state batching shifts.
   const inFlightRef = useRef<AbortController | null>(null);
