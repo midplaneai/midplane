@@ -27,6 +27,7 @@ import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 import { normalizeName } from "./connection-name.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
+import { EVENT_TYPES } from "./audit.ts";
 import {
   countActiveTokensByConnection,
   countUsableTokens,
@@ -1410,9 +1411,12 @@ export async function renameDatabase(
  *  own lastQueryAt from audit_events_index), plus the indexer cursor
  *  that drives the connection-level freshness dot. */
 export type DashboardDatabase = SafeConnectionDatabase & {
-  /** Most recent ts on `audit_events_index` for this DB name within the
-   *  customer's region. NULL when the agent has never queried this DB —
-   *  the dashboard renders this as "awaiting first query".
+  /** Most recent ts of an actual agent query (ATTEMPTED/DECIDED/EXECUTED/
+   *  FAILED) on `audit_events_index` for this DB name within the customer's
+   *  region — control-plane rows (policy / token / pause-resume) are
+   *  excluded so a config action never reads as "last query". NULL when the
+   *  agent has never queried this DB — the dashboard renders this as
+   *  "awaiting first query".
    *
    *  KNOWN LIMITATION: audit_events_index has no `connection_id` column
    *  today, so the max-ts aggregate fan-ins across same-named DBs in
@@ -1464,6 +1468,13 @@ async function lastQueryByDatabase(
       and(
         eq(auditEventsIndex.customerId, customer.id),
         eq(auditEventsIndex.region, customer.region),
+        // "Last query" means an actual agent query — only the OSS per-query
+        // lifecycle events count. Control-plane rows ride in the same table
+        // (POLICY_CHANGED, TOKEN_CREATED/REVOKED, CONNECTION_PAUSED/RESUMED)
+        // and several are stamped database="main" with ts=now(); without
+        // this filter, pausing a connection would make its "main" DB read
+        // "last query: just now" with no query ever sent.
+        inArray(auditEventsIndex.eventType, [...EVENT_TYPES]),
         since ? gte(auditEventsIndex.ts, since) : undefined,
       ),
     )
