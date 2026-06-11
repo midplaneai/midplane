@@ -11,7 +11,11 @@
 // delete per table + cross-tenant select per scoped table. Extensions
 // are additive.
 
-import type { TenantScopeConfig } from "@midplane-cloud/db/policy";
+import type {
+  AccessLevel,
+  TableAccessPolicy,
+  TenantScopeConfig,
+} from "@midplane-cloud/db/policy";
 
 /** Synthetic tenant bound by the engine during dry-run. Nothing
  *  executes, so no real tenant value is ever needed. */
@@ -82,6 +86,39 @@ export function buildProbeMatrix(
     totalTables: unique.length,
     truncated: unique.length > included.length,
   };
+}
+
+/** The level governing a table: an explicit override, else the default. */
+export function effectiveLevel(
+  table: string,
+  policy: TableAccessPolicy,
+): AccessLevel {
+  return policy.tables[table] ?? policy.default;
+}
+
+/** What the policy-as-configured *should* decide for a probe — the naive
+ *  cloud-side model the engine's live verdict is reconciled against. A
+ *  disagreement means the engine isn't enforcing what the editor shows:
+ *  a policy that never reached the engine, a parse surprise, or scoping
+ *  that didn't bind. select is allowed at read+; writes only at
+ *  read_write; a cross-tenant read is denied wherever scoping binds
+ *  (the predicate keeps one tenant from reading another's rows). */
+export function expectedDecision(
+  probe: Probe,
+  policy: TableAccessPolicy,
+  scope: TenantScopeConfig,
+): "allow" | "deny" {
+  const level = effectiveLevel(probe.table, policy);
+  if (probe.cross_tenant) {
+    // Only emitted for scoped tables; denied unless the base select was
+    // already denied by level — either way the answer is deny.
+    return "deny";
+  }
+  if (probe.action === "select") {
+    return level === "deny" ? "deny" : "allow";
+  }
+  // insert / update / delete
+  return level === "read_write" ? "allow" : "deny";
 }
 
 /** Human label for a probe row — mono, lowercase, reads like the SQL
