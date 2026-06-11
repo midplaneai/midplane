@@ -134,6 +134,13 @@
       "when": 1777644000012,
       "tag": "0018_mcp_tokens_cleanup",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1777644000013,
+      "tag": "0019_pausable_connections",
+      "breakpoints": true
     }
   ]
 }

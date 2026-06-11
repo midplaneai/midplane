@@ -27,6 +27,7 @@ import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 import { normalizeName } from "./connection-name.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
+import { EVENT_TYPES } from "./audit.ts";
 import {
   countActiveTokensByConnection,
   countUsableTokens,
@@ -87,7 +88,12 @@ export async function emitConfigAuditRow(
   row: {
     tenantId: string;
     database: string;
-    eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED" | "REGION_CHANGED";
+    eventType:
+      | "POLICY_CHANGED"
+      | "TENANT_SCOPE_CHANGED"
+      | "REGION_CHANGED"
+      | "CONNECTION_PAUSED"
+      | "CONNECTION_RESUMED";
     payload: Record<string, unknown>;
     actorClerkUserId: string;
   },
@@ -375,6 +381,49 @@ export async function deleteConnection(
       .where(eq(indexerCursors.connectionId, row.id));
     return { id: row.id };
   });
+}
+
+// Pause a connection — the reversible kill switch. Sets `paused_at` so the
+// resolver rejects agent requests with a distinct 403 while tokens, URLs,
+// and policy stay intact. Customer-gated (the WHERE pins customer_id so a
+// foreign id is a no-op) and idempotent: COALESCE keeps the original
+// pause instant if the connection is already paused, so a re-pause doesn't
+// move "paused since" — it returns the owned row either way, and null only
+// when the id isn't this customer's.
+//
+// Tearing down the running container (registry.invalidate) is the caller's
+// job — same split as deleteConnection, which returns the id and lets the
+// route/action stop the sidecar. Without that step the OSS container lingers
+// (still serving the now-paused connection) until its 30-minute idle timer.
+export async function pauseConnection(
+  customer: Customer,
+  id: string,
+): Promise<{ id: string } | null> {
+  const db = getDb(customer.region);
+  const updated = await db
+    .update(connections)
+    .set({ pausedAt: sql`COALESCE(${connections.pausedAt}, now())` })
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .returning({ id: connections.id });
+  return updated[0] ?? null;
+}
+
+// Resume a paused connection — clears `paused_at` so the resolver admits
+// agent requests again on the next call. No container teardown needed: the
+// next request spawns a fresh engine with the current policy. Customer-gated
+// and idempotent (clearing an already-active connection is a no-op that
+// still returns the owned row; null only for a foreign/unknown id).
+export async function resumeConnection(
+  customer: Customer,
+  id: string,
+): Promise<{ id: string } | null> {
+  const db = getDb(customer.region);
+  const updated = await db
+    .update(connections)
+    .set({ pausedAt: null })
+    .where(and(eq(connections.id, id), eq(connections.customerId, customer.id)))
+    .returning({ id: connections.id });
+  return updated[0] ?? null;
 }
 
 // Dependencies rotateConnection needs to invalidate the in-memory layers.
@@ -1362,9 +1411,12 @@ export async function renameDatabase(
  *  own lastQueryAt from audit_events_index), plus the indexer cursor
  *  that drives the connection-level freshness dot. */
 export type DashboardDatabase = SafeConnectionDatabase & {
-  /** Most recent ts on `audit_events_index` for this DB name within the
-   *  customer's region. NULL when the agent has never queried this DB —
-   *  the dashboard renders this as "awaiting first query".
+  /** Most recent ts of an actual agent query (ATTEMPTED/DECIDED/EXECUTED/
+   *  FAILED) on `audit_events_index` for this DB name within the customer's
+   *  region — control-plane rows (policy / token / pause-resume) are
+   *  excluded so a config action never reads as "last query". NULL when the
+   *  agent has never queried this DB — the dashboard renders this as
+   *  "awaiting first query".
    *
    *  KNOWN LIMITATION: audit_events_index has no `connection_id` column
    *  today, so the max-ts aggregate fan-ins across same-named DBs in
@@ -1416,6 +1468,13 @@ async function lastQueryByDatabase(
       and(
         eq(auditEventsIndex.customerId, customer.id),
         eq(auditEventsIndex.region, customer.region),
+        // "Last query" means an actual agent query — only the OSS per-query
+        // lifecycle events count. Control-plane rows ride in the same table
+        // (POLICY_CHANGED, TOKEN_CREATED/REVOKED, CONNECTION_PAUSED/RESUMED)
+        // and several are stamped database="main" with ts=now(); without
+        // this filter, pausing a connection would make its "main" DB read
+        // "last query: just now" with no query ever sent.
+        inArray(auditEventsIndex.eventType, [...EVENT_TYPES]),
         since ? gte(auditEventsIndex.ts, since) : undefined,
       ),
     )
@@ -1557,6 +1616,10 @@ export async function getConnectionHomeData(
 export interface DashboardFreshnessSnapshot {
   connections: Array<{
     id: string;
+    /** Non-null = paused. Carried on the poll so the dashboard's freshness
+     *  dots reflect the kill switch (amber "paused") instead of the stale
+     *  indexer-derived live/down — see resolveFreshness. */
+    pausedAt: Date | null;
     cursor: {
       lastIndexedAt: Date | null;
       lastErrorAt: Date | null;
@@ -1577,6 +1640,7 @@ export async function getDashboardFreshness(
     db
       .select({
         id: connections.id,
+        pausedAt: connections.pausedAt,
         lastIndexedAt: indexerCursors.lastIndexedAt,
         lastErrorAt: indexerCursors.lastErrorAt,
       })
@@ -1617,6 +1681,7 @@ export async function getDashboardFreshness(
   return {
     connections: parents.map((p) => ({
       id: p.id,
+      pausedAt: p.pausedAt ?? null,
       cursor: {
         lastIndexedAt: p.lastIndexedAt,
         lastErrorAt: p.lastErrorAt,

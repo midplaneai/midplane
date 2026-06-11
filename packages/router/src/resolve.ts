@@ -26,6 +26,20 @@ export interface ResolvedConnection {
   databases: ConnectionDatabase[];
 }
 
+/** Discriminated outcome of {@link resolveByToken}.
+ *
+ *  `{ ok: false, reason }` lets the two token-auth callers (the MCP proxy
+ *  and the /mcp/<token>/health probe) map a paused connection to a distinct
+ *  403 ("connection paused by owner") instead of a token-not-found 404 —
+ *  without each having to remember the check. Centralizing the gate here,
+ *  next to the `status='active'` filter, means no future caller can forget
+ *  it. `not_found` keeps the existing leakage-avoidance contract: malformed
+ *  input, bad CRC, unknown/revoked/expired token, and wrong-region all
+ *  collapse to the same opaque outcome. */
+export type ResolveResult =
+  | ({ ok: true } & ResolvedConnection)
+  | { ok: false; reason: "not_found" | "paused" };
+
 /** Resolve a plaintext MCP token to the (token_id, connection, databases)
  *  triple the proxy needs to forward a request.
  *
@@ -40,11 +54,16 @@ export interface ResolvedConnection {
  *    3. Load the parent connection + child databases for the matched
  *       connection_id, ordered by name (stable spawn-time YAML order).
  *
- *  Returns `null` for every non-matching shape: malformed input, bad
- *  CRC, unknown hash, revoked/expired row, wrong-region request (the
- *  pepper is per-region; an EU token presented to the US regional DB
- *  yields no match). The caller turns null into a 404 — never a 401,
- *  to avoid leaking existence of valid tokens via timing.
+ *  Returns `{ ok: false, reason: "not_found" }` for every non-matching
+ *  shape: malformed input, bad CRC, unknown hash, revoked/expired row,
+ *  wrong-region request (the pepper is per-region; an EU token presented to
+ *  the US regional DB yields no match). The caller turns not_found into a
+ *  404 — never a 401, to avoid leaking existence of valid tokens via timing.
+ *
+ *  Returns `{ ok: false, reason: "paused" }` when the token is valid but its
+ *  parent connection is paused — the caller turns this into a distinct 403.
+ *  The token still exists and resolves; only the connection is gated, so
+ *  this is deliberately NOT folded into not_found.
  *
  *  Note on the `peppers` shape: V1 has exactly one pepper per region
  *  (`v1-eu` / `v1-us`); rotation introduces additional kids and the
@@ -54,13 +73,13 @@ export async function resolveByToken(
   plaintext: string,
   region: Region,
   peppers: Map<string, Buffer>,
-): Promise<ResolvedConnection | null> {
+): Promise<ResolveResult> {
   // Format gate before anything else — keeps malformed inputs from ever
   // touching Postgres or the HMAC path, and keeps the timing surface
   // smaller (parser + CRC are O(token length), constant-time).
   const parsed = parseToken(plaintext);
-  if (!parsed) return null;
-  if (!validateChecksum(parsed)) return null;
+  if (!parsed) return { ok: false, reason: "not_found" };
+  if (!validateChecksum(parsed)) return { ok: false, reason: "not_found" };
 
   // Hash lookup against mcp_tokens. We try each pepper kid in the map;
   // V1 always has exactly one, but pepper rotation introduces a window
@@ -87,7 +106,7 @@ export async function resolveByToken(
       break;
     }
   }
-  if (!tokenId || !connectionId) return null;
+  if (!tokenId || !connectionId) return { ok: false, reason: "not_found" };
 
   // Region passed in is the regional process's bootRegion(); a cross-
   // region presentation would already have missed at the hash step
@@ -105,16 +124,21 @@ export async function resolveByToken(
   if (!connection) {
     // mcp_tokens FK ON DELETE CASCADE means this is unreachable under
     // normal operation — a token can't outlive its connection. Bail
-    // null defensively in case a partial write or future migration
-    // leaves a torn pair.
-    return null;
+    // defensively in case a partial write or future migration leaves a
+    // torn pair.
+    return { ok: false, reason: "not_found" };
   }
+  // Pause gate — the reversible kill switch. A valid token resolved, but the
+  // owner has paused the connection: reject before spawning/forwarding so no
+  // agent request reaches the engine. Distinct from not_found so the caller
+  // can return a 403 ("paused by owner") rather than a token-not-found 404.
+  if (connection.pausedAt) return { ok: false, reason: "paused" };
   const dbRows = await db
     .select()
     .from(connectionDatabases)
     .where(eq(connectionDatabases.connectionId, connection.id))
     .orderBy(asc(connectionDatabases.name));
-  return { tokenId, connection, databases: dbRows };
+  return { ok: true, tokenId, connection, databases: dbRows };
 }
 
 /** Truncate length-bound user-agent. The mcp_tokens.last_used_ua column

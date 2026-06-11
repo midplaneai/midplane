@@ -134,7 +134,16 @@ export async function proxyMcp(
 
   const db = getDb(region);
   const resolved = await resolveByToken(db, token, region, peppers);
-  if (!resolved) {
+  if (!resolved.ok) {
+    // Paused → distinct 403 so the agent (and our logs) can tell "owner
+    // hit the kill switch" apart from a bad/unknown token (404). The token
+    // and its URL are intact; resuming the connection restores service.
+    if (resolved.reason === "paused") {
+      return Response.json(
+        { ok: false, error: "connection_paused" },
+        { status: 403 },
+      );
+    }
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }
   const { connection, databases, tokenId } = resolved;

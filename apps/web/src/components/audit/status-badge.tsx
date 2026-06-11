@@ -107,6 +107,11 @@ export function eventSummary(status: QueryStatus, payload: unknown): string {
       return reason ? `token revoked — ${reason}` : "token revoked";
     }
     default:
+      // Pause/resume ride in the POLICY_RELOAD bucket (same as REGION_CHANGED)
+      // but carry an `action` marker so the list reads the real event rather
+      // than a generic "policy reloaded".
+      if (p?.action === "paused") return "connection paused by owner";
+      if (p?.action === "resumed") return "connection resumed by owner";
       return policyReloadSummary(payload);
   }
 }

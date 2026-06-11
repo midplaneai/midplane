@@ -9,7 +9,7 @@ export type { ResolveDsnDeps, ResolveDsnResult } from "./decrypt.ts";
 export { loadRegions, mintMcpUrl } from "./region.ts";
 export type { RegionConfig } from "./region.ts";
 export { resolveByToken, bumpLastUsed } from "./resolve.ts";
-export type { Db, ResolvedConnection } from "./resolve.ts";
+export type { Db, ResolvedConnection, ResolveResult } from "./resolve.ts";
 export { ContainerRegistry } from "./spawner.ts";
 export type {
   ActiveContainer,
