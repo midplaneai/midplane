@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 // Types + probe builder are pure TS from the /policy subpath and
 // lib/probe-matrix — never the root @midplane-cloud/db entrypoint in a
 // client component (see CLAUDE.md).
 import type {
   AccessLevel,
+  GuardrailsConfig,
   TableAccessPolicy,
   TenantScopeConfig,
 } from "@midplane-cloud/db/policy";
@@ -14,10 +15,14 @@ import type {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  buildGuardrailProbes,
   buildProbeMatrix,
   expectedDecision,
+  pickGuardrailTable,
   probeLabel,
+  reconcileGuardrails,
   type Probe,
+  type ReconciledGuardrail,
 } from "@/lib/probe-matrix";
 
 // Policy test panel — the trust surface. Now that the editor matrix shows
@@ -49,6 +54,9 @@ export interface TestPanelDatabase {
    *  engine's live answer is reconciled against. */
   policy: TableAccessPolicy;
   tenantScope: TenantScopeConfig;
+  /** Dangerous-statement guardrails. Flags that are ON get a literal
+   *  dangerous-SQL probe (expected deny) riding along with the matrix. */
+  guardrails: GuardrailsConfig;
 }
 
 interface Verdict {
@@ -69,6 +77,10 @@ interface ReconciledProbe {
   matched_rule: string;
 }
 
+// ReconciledGuardrail comes from lib/probe-matrix — the zip is pure and
+// unit-tested there (missing verdicts reconcile to failed checks; a deny
+// caught by an earlier rule doesn't get credited to the guardrail).
+
 type RunMode = "probes" | "sql";
 
 type PanelState =
@@ -77,6 +89,7 @@ type PanelState =
   | {
       kind: "probe-result";
       reconciled: ReconciledProbe[];
+      guardrails: ReconciledGuardrail[];
       shownTables: number;
       totalTables: number;
       unlistedCount: number;
@@ -88,11 +101,13 @@ type PanelState =
   // check must not silently switch back to the probe matrix).
   | { kind: "error"; message: string; retryable: boolean; mode: RunMode };
 
-// Covers the server's true worst case, not just the engine call: a
-// cold Fly boot (spawner bootTimeoutMs 60s) + policy push + the 30s
-// /admin/dry-run timeout. A shorter client abort burned a probe slot
-// on requests that were about to succeed (review finding).
-const CLIENT_TIMEOUT_MS = 100_000;
+// Covers the server's true worst case, derived from its own budgets: a
+// cold Fly boot (spawner bootTimeoutMs 60s) + policy push + a SEQUENCE
+// of up to six /admin/dry-run calls, each with its own 30s server
+// timeout (60 + 6×30 = 240s), plus overhead. A shorter client abort
+// burned a probe slot on requests that were about to succeed (review
+// finding, twice now) — if the server budgets change, re-derive this.
+const CLIENT_TIMEOUT_MS = 250_000;
 
 export function TestPolicyPanel({
   connectionId,
@@ -112,6 +127,23 @@ export function TestPolicyPanel({
   const [sql, setSql] = useState("");
 
   const db = databases.find((d) => d.name === dbName) ?? databases[0];
+
+  // A result is only meaningful against the config it ran under. After a
+  // save (permission grid / tenant scope / guardrails) the page
+  // revalidates and this prop changes — drop the old verdicts instead of
+  // leaving a stale "✓ engine enforces your policy" next to the control
+  // that just invalidated it. The run token also invalidates results from
+  // a run that was IN FLIGHT when the config changed: its setState lands
+  // after the reset and would otherwise resurrect the stale verdicts.
+  const configFingerprint = JSON.stringify(
+    db ? { p: db.policy, t: db.tenantScope, g: db.guardrails } : null,
+  );
+  const runTokenRef = useRef(0);
+  useEffect(() => {
+    runTokenRef.current += 1;
+    setState((s) => (s.kind === "idle" ? s : { kind: "idle" }));
+  }, [configFingerprint]);
+
   if (!db) return null;
   const running = state.kind === "running";
 
@@ -167,6 +199,10 @@ export function TestPolicyPanel({
 
   async function runProbes() {
     if (running || !db) return;
+    const token = runTokenRef.current;
+    const apply = (s: PanelState) => {
+      if (runTokenRef.current === token) setState(s);
+    };
     setState({ kind: "running", mode: "probes" });
 
     // Table source: live introspection ∪ policy entries. Introspection
@@ -198,7 +234,7 @@ export function TestPolicyPanel({
       db.tenantScope,
     );
     if (matrix.probes.length === 0) {
-      setState({
+      apply({
         kind: "error",
         message:
           "no tables found — add tables to the policy or check the database is reachable",
@@ -208,12 +244,26 @@ export function TestPolicyPanel({
       return;
     }
 
+    // Guardrail checks ride along as literal dangerous statements (the
+    // engine's probe vocabulary can't express them — its DML probes are
+    // WHERE-qualified by design). One representative table is enough:
+    // guardrails are per-DB, not per-table. Prefer a writable table so
+    // the guardrail (not table_access) is what the deny proves. Only ON
+    // flags get probes, so every expected verdict is deny.
+    const guardrailProbes = buildGuardrailProbes(
+      pickGuardrailTable(matrix.tables, db.policy),
+      db.guardrails,
+    );
+
     const result = await postDryRun({
       database: db.name,
       probes: matrix.probes,
+      ...(guardrailProbes.length > 0
+        ? { guardrail_sqls: guardrailProbes.map((g) => g.sql) }
+        : {}),
     });
     if (!result.ok) {
-      setState({
+      apply({
         kind: "error",
         message: result.message,
         retryable: result.retryable,
@@ -236,12 +286,24 @@ export function TestPolicyPanel({
           matched_rule: v.matched_rule,
         };
       });
+    // Guardrail verdicts come back after the matrix, in guardrail_sqls
+    // order (the route fans them out sequentially) — zip by position.
+    // reconcileGuardrails fails CLOSED: a probe with no verdict surfaces
+    // as a failed check rather than silently vanishing from the headline.
+    // `!v.probe` guards the discriminator: if the engine ever echoes the
+    // compiled SQL on probe verdicts, matrix rows must not leak into the
+    // guardrail zip and misattribute every result after them.
+    const sqlVerdicts = result.verdicts.filter(
+      (v) => typeof v.sql === "string" && !v.probe,
+    );
+    const guardrails = reconcileGuardrails(guardrailProbes, sqlVerdicts);
     const listed = new Set(policyTables);
     const unlistedCount = matrix.tables.filter((t) => !listed.has(t)).length;
 
-    setState({
+    apply({
       kind: "probe-result",
       reconciled,
+      guardrails,
       shownTables: matrix.tables.length,
       totalTables: matrix.totalTables,
       unlistedCount,
@@ -253,10 +315,14 @@ export function TestPolicyPanel({
   async function checkSql() {
     const statement = sql.trim();
     if (running || !db || statement.length === 0) return;
+    const token = runTokenRef.current;
+    const apply = (s: PanelState) => {
+      if (runTokenRef.current === token) setState(s);
+    };
     setState({ kind: "running", mode: "sql" });
     const result = await postDryRun({ database: db.name, sql: statement });
     if (!result.ok) {
-      setState({
+      apply({
         kind: "error",
         message: result.message,
         retryable: result.retryable,
@@ -264,7 +330,7 @@ export function TestPolicyPanel({
       });
       return;
     }
-    setState({ kind: "sql-result", verdicts: result.verdicts });
+    apply({ kind: "sql-result", verdicts: result.verdicts });
   }
 
   return (
@@ -411,7 +477,10 @@ function ProbeReconciliation({
   const guarantees = reconciled.filter(
     (r) => r.probe.cross_tenant && r.match && r.actual === "deny",
   );
-  const ok = mismatches.length === 0;
+  const guardrailMisses = state.guardrails.filter((g) => !g.match);
+  const guardrailHolds = state.guardrails.filter((g) => g.match);
+  const mismatchCount = mismatches.length + guardrailMisses.length;
+  const ok = mismatchCount === 0;
 
   return (
     <div className="space-y-3">
@@ -441,7 +510,7 @@ function ProbeReconciliation({
         >
           {ok
             ? "✓ engine enforces your policy"
-            : `✗ ${mismatches.length} ${mismatches.length === 1 ? "mismatch" : "mismatches"} — reality differs from your policy`}
+            : `✗ ${mismatchCount} ${mismatchCount === 1 ? "mismatch" : "mismatches"} — reality differs from your policy`}
         </span>
         <span className="text-xs text-muted-foreground">
           {shownTables} {shownTables === 1 ? "table" : "tables"} checked
@@ -450,8 +519,10 @@ function ProbeReconciliation({
       </div>
 
       {/* Mismatches — the bugs. Each shows what the engine actually did
-          against what the policy says it should. */}
-      {mismatches.length > 0 ? (
+          against what the policy says it should. A guardrail miss is the
+          worst kind: a statement the net should have caught came back
+          allow. */}
+      {mismatchCount > 0 ? (
         <ul className="divide-y divide-border overflow-hidden rounded-md border border-[hsl(var(--deny)/0.4)] bg-background">
           {mismatches.map((r, i) => (
             <li
@@ -474,6 +545,33 @@ function ProbeReconciliation({
               </Badge>
             </li>
           ))}
+          {guardrailMisses.map((g, i) => (
+            <li
+              key={`g-${i}`}
+              className="flex items-center gap-3 bg-[hsl(var(--deny)/0.06)] px-3 py-2"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-xs text-foreground">
+                  {g.probe.label}
+                </span>
+                <span
+                  className="block truncate text-xs text-muted-foreground"
+                  title={
+                    g.verdict
+                      ? `${g.verdict.reason} (${g.verdict.matched_rule})`
+                      : "the engine returned no verdict for this check"
+                  }
+                >
+                  {g.verdict
+                    ? `guardrail is on — expected deny — ${g.verdict.reason}`
+                    : "guardrail is on — the engine returned no verdict for this check"}
+                </span>
+              </span>
+              <Badge variant={g.verdict?.decision === "allow" ? "allow" : "warn"}>
+                {g.verdict?.decision === "allow" ? "ALLOW" : "NO VERDICT"}
+              </Badge>
+            </li>
+          ))}
         </ul>
       ) : null}
 
@@ -486,6 +584,32 @@ function ProbeReconciliation({
           {unlistedCount === 1 ? "table is" : "tables are"} writable under your
           default — add overrides to lock them down.
         </p>
+      ) : null}
+
+      {/* Guardrail guarantee — like the cross-tenant deny, a categorical
+          block isn't expressible in the deny/read/write matrix, so the
+          confirmation that the net catches a live dangerous statement is
+          always worth showing. */}
+      {guardrailHolds.length > 0 ? (
+        <ul className="space-y-1">
+          {guardrailHolds.map((g, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+            >
+              <span className="text-[hsl(var(--allow))]">✓</span>
+              <span className="font-mono text-foreground">{g.probe.label}</span>
+              {/* Credit the deny honestly: when table_access (or another
+                  earlier rule) caught the statement first, the guardrail
+                  itself wasn't what decided — don't claim it did. */}
+              <span>
+                {g.byGuardrail
+                  ? "denied by guardrail"
+                  : `denied by ${g.verdict?.matched_rule ?? "policy"}`}
+              </span>
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {/* Tenant guarantee — the cross-tenant deny isn't expressible in the
@@ -508,7 +632,7 @@ function ProbeReconciliation({
       {/* Full detail, folded — the curious can still see every check. */}
       <details className="text-xs">
         <summary className="cursor-pointer list-none font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
-          ▸ all {reconciled.length} checks
+          ▸ all {reconciled.length + state.guardrails.length} checks
         </summary>
         <ul className="mt-2 divide-y divide-border overflow-hidden rounded-md border border-border bg-background">
           {reconciled.map((r, i) => (
@@ -520,6 +644,15 @@ function ProbeReconciliation({
               decision={r.actual}
             />
           ))}
+          {state.guardrails.map((g, i) => (
+            <ReasonRow
+              key={`g-${i}`}
+              label={g.probe.label}
+              reason={g.verdict?.reason ?? "no verdict returned"}
+              matchedRule={g.verdict?.matched_rule ?? "missing"}
+              decision={g.verdict?.decision ?? "missing"}
+            />
+          ))}
         </ul>
       </details>
     </div>
@@ -527,7 +660,10 @@ function ProbeReconciliation({
 }
 
 // One verdict line: statement/probe label over its reason, with the
-// decision badge. Deny rows carry the subtle blush tint (DESIGN.md).
+// decision badge. Deny rows carry the subtle blush tint (DESIGN.md);
+// "missing" (a check the engine returned no verdict for) keeps the
+// failure tint but wears the warn NO VERDICT pill — rendering it as a
+// DENY would read as a pass in the guardrail rows.
 function ReasonRow({
   label,
   reason,
@@ -537,14 +673,14 @@ function ReasonRow({
   label: string;
   reason: string;
   matchedRule: string;
-  decision: "allow" | "deny";
+  decision: "allow" | "deny" | "missing";
 }) {
   return (
     <li
       className={
-        decision === "deny"
-          ? "flex items-center gap-3 bg-[hsl(var(--deny)/0.06)] px-3 py-2"
-          : "flex items-center gap-3 px-3 py-2"
+        decision === "allow"
+          ? "flex items-center gap-3 px-3 py-2"
+          : "flex items-center gap-3 bg-[hsl(var(--deny)/0.06)] px-3 py-2"
       }
     >
       <span className="min-w-0 flex-1">
@@ -558,8 +694,16 @@ function ReasonRow({
           {reason}
         </span>
       </span>
-      <Badge variant={decision === "allow" ? "allow" : "deny"}>
-        {decision === "allow" ? "ALLOW" : "DENY"}
+      <Badge
+        variant={
+          decision === "allow" ? "allow" : decision === "deny" ? "deny" : "warn"
+        }
+      >
+        {decision === "allow"
+          ? "ALLOW"
+          : decision === "deny"
+            ? "DENY"
+            : "NO VERDICT"}
       </Badge>
     </li>
   );

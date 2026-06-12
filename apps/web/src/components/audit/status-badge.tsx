@@ -76,10 +76,10 @@ export function policyReloadSummary(payload: unknown): string {
   if (sections.length === 0 || databases.length === 0) {
     return ARIA_MAP.POLICY_RELOAD;
   }
-  const sectionList = sections
-    .map((s) => (s === "tenant_scope" ? "tenant_scope" : "table_access"))
-    .join(" + ");
-  return `${sectionList} updated on ${databases.join(", ")}`;
+  // Section names pass through as the engine emits them (table_access,
+  // tenant_scope, and guardrails since 0.9.0) — collapsing unknowns to
+  // table_access would mislabel future sections.
+  return `${sections.join(" + ")} updated on ${databases.join(", ")}`;
 }
 
 function stringArray(v: unknown): string[] {
@@ -112,6 +112,24 @@ export function eventSummary(status: QueryStatus, payload: unknown): string {
       // than a generic "policy reloaded".
       if (p?.action === "paused") return "connection paused by owner";
       if (p?.action === "resumed") return "connection resumed by owner";
+      // Engine POLICY_RELOADED rows must dispatch BEFORE the guardrails
+      // sniff: since OSS 0.9.0 every hot-swap payload carries a
+      // `guardrails` posture object alongside sections_changed, so the
+      // bare-key check below would relabel every engine reload as a
+      // cloud guardrails edit. The cloud's own GUARDRAILS_CHANGED payload
+      // never has sections_changed.
+      if (Array.isArray(p?.sections_changed)) {
+        return policyReloadSummary(payload);
+      }
+      // GUARDRAILS_CHANGED rows carry the resulting flags — say where each
+      // landed, since an opt-out is the part a reviewer cares about. SQL
+      // keywords / acronyms keep their caps inside the lowercase prose
+      // (same code-vs-label split as the guardrails card).
+      if (p?.guardrails && typeof p.guardrails === "object") {
+        const g = p.guardrails as Record<string, unknown>;
+        const state = (v: unknown) => (v === false ? "allowed" : "blocked");
+        return `guardrails updated — DML with no WHERE ${state(g.block_unqualified_dml)}, DDL ${state(g.block_ddl)}`;
+      }
       return policyReloadSummary(payload);
   }
 }

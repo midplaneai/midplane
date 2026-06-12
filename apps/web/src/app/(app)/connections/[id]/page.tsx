@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import {
+  parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
 } from "@midplane-cloud/db";
@@ -20,6 +21,7 @@ import { FreshnessDot } from "@/components/dashboard/freshness-dot";
 import { RenameConnectionInline } from "@/components/dashboard/rename-connection-inline";
 import { DeleteConnectionButton } from "@/components/delete-connection-button";
 import { PauseConnectionButton } from "@/components/connections/pause-connection-button";
+import { GuardrailsToggles } from "@/components/guardrails-toggles";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/connections/rename-database-control";
@@ -48,6 +50,7 @@ import {
   renameDatabase,
   resumeConnection,
   rotateConnection,
+  setGuardrails,
   setTableAccess,
   setTenantScope,
 } from "@/lib/connections";
@@ -324,6 +327,35 @@ export default async function ConnectionWorkspace({
     revalidatePath(`/connections/${id}`);
   }
 
+  async function guardrailsAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await auth();
+    if (!userId) redirect("/");
+    if (!selectedName) notFound();
+    const raw = formData.get("guardrails");
+    if (typeof raw !== "string") throw new Error("missing guardrails");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("guardrails is not valid JSON");
+    }
+    const config = parseGuardrailsOrThrow(parsed);
+    const ctx = getMcpProxyContext();
+    const result = await setGuardrails(
+      customer,
+      id,
+      config,
+      ctx,
+      userId,
+      selectedName,
+    );
+    if (!result) notFound();
+    revalidatePath(`/connections/${id}`);
+  }
+
   async function scopeAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
@@ -506,11 +538,35 @@ export default async function ConnectionWorkspace({
           so the new policy takes effect on the next agent request.
         </p>
         <div className="pt-3">
+          {/* key: the editors hold form state in useState — without a
+              remount on ?db= switch, React keeps the PREVIOUS database's
+              values and dirty baseline at the same tree position, and
+              Save would post them to the newly selected db. */}
           <PermissionGrid
+            key={selDb.name}
             connectionId={conn.id}
             dbName={selDb.name}
             initialPolicy={parsePolicyOrThrow(selDb.tableAccess)}
             action={policyAction}
+          />
+        </div>
+      </section>
+
+      <section className={CARD}>
+        <h2 className="text-base font-medium text-foreground">Guardrails</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Categorical blocks for destructive statements,{" "}
+          <strong className="font-medium text-foreground">
+            enforced regardless of the table permissions above
+          </strong>
+          . An agent with write access still can&apos;t wipe a table or drop
+          the schema unless you allow it here.
+        </p>
+        <div className="pt-3">
+          <GuardrailsToggles
+            key={selDb.name}
+            initialConfig={parseGuardrailsOrThrow(selDb.guardrails)}
+            action={guardrailsAction}
           />
         </div>
       </section>
@@ -528,6 +584,7 @@ export default async function ConnectionWorkspace({
         </p>
         <div className="pt-3">
           <TenantScopeEditor
+            key={selDb.name}
             connectionId={conn.id}
             initialConfig={parseTenantScopeOrThrow(selDb.tenantScope)}
             action={scopeAction}
@@ -543,6 +600,7 @@ export default async function ConnectionWorkspace({
             name: selDb.name,
             policy: parsePolicyOrThrow(selDb.tableAccess),
             tenantScope: parseTenantScopeOrThrow(selDb.tenantScope),
+            guardrails: parseGuardrailsOrThrow(selDb.guardrails),
           },
         ]}
         reachabilitySlot={
