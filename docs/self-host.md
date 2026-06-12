@@ -96,7 +96,15 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 
 ## Authoring the policy file
 
-`MIDPLANE_POLICY_FILE` is a YAML file, but you don't have to write it blind. The same `midplane` binary ships a `policy` CLI that scaffolds, validates, lints, and dry-runs a policy.
+`MIDPLANE_POLICY_FILE` is a YAML file, but you don't have to write it blind.
+
+The fastest path is the interactive wizard — it connects to your database (read-only), detects likely tenant columns (`tenant_id`, `org_id`, … shown with how many tables carry each), lets you pick per-table write grants and denies, and writes a validated, linted policy file plus the docker/agent commands to finish:
+
+```bash
+midplane init
+```
+
+(`init` needs a terminal; everything below is the flag-driven equivalent for scripts and CI.) The same `midplane` binary ships a `policy` CLI that scaffolds, validates, lints, and dry-runs a policy.
 
 ```bash
 # Scaffold from a live database: lists every table in the `public` schema and
@@ -119,17 +127,55 @@ midplane policy lint policy.yaml
 # Dry-run a query against the policy — no DB connection. Prints ALLOW/DENY,
 # the rule, and the exact message the agent would see on a denial.
 midplane policy test policy.yaml --sql "DELETE FROM users WHERE tenant_id = 'acme'" --tenant-id acme
+
+# Same question, asked of the RUNNING server's currently-loaded policy via
+# POST /admin/dry-run. The file on disk and the loaded policy can differ
+# (edited but not pushed/restarted) — this checks the live one. Requires
+# the server's INDEXER_TOKEN.
+midplane policy test --server --token "$INDEXER_TOKEN" --sql "DELETE FROM users"
 ```
 
 `validate` and `lint` are good CI gates — both exit nonzero on a bad/dangerous policy. Run `midplane policy help` for the full reference.
 
-## Reading the audit log
+## Verifying the install
 
-The container ships a `midplane audit` CLI that wraps the local SQLite log. No SQL required.
+`midplane doctor` runs the checks in boot order — env config, policy file (validate + lint), database connectivity (`SELECT 1` per configured DB, DSN never echoed), audit store, `/health`, and an end-to-end MCP canary. Any failure exits nonzero; the text output is what to paste into a GitHub issue.
 
 ```bash
-# Live JSON-lines stream (Ctrl-C to stop). Backfills the last 10 events first.
-docker exec midplane midplane audit tail
+docker exec midplane midplane doctor
+```
+
+`midplane query` sends one statement through the running server **exactly as an agent would** — same MCP `query` tool, same policy, same audit row (stamped `agent_name=midplane-cli`), same deny message. If this works, point your agent at the same URL.
+
+```bash
+# The smoke test: end-to-end ALLOW.
+docker exec midplane midplane query --sql "SELECT 1"
+
+# Verify the policy actually blocks what you think it blocks — exits 1 on DENY
+# and prints the exact message the agent would read.
+docker exec midplane midplane query --sql "DELETE FROM users" --intent "verify the write block"
+
+# stdio-transport setups (no HTTP listener): spawn a child server instead.
+midplane query --stdio --sql "SELECT 1"
+```
+
+It's deliberately not a database client — one shot, no REPL; use `psql` for actual SQL work.
+
+## Reading the audit log
+
+The container ships a `midplane audit` CLI that wraps the local SQLite log. No SQL required. `tail`/`since`/`denies`/`show` print human-readable (aligned, colored) output on a TTY and JSON lines when piped — `--json` / `--pretty` force either; `stats` prints its text summary either way (`--json` for the machine shape). Color respects `NO_COLOR`.
+
+```bash
+# Live stream (Ctrl-C to stop). Backfills the last 10 events first.
+docker exec -it midplane midplane audit tail
+
+# The question you actually ask: what got denied, and why? Each denial shows
+# the blocked SQL, the rule, the agent-facing reason, and the agent's intent.
+docker exec -it midplane midplane audit denies --since 1h
+
+# Forensics on one query: agent, intent, full SQL, and the
+# ATTEMPTED → DECIDED → EXECUTED/FAILED chain. Takes the qid=... from any line.
+docker exec -it midplane midplane audit show <query_id>
 
 # One-shot dump of everything in the last hour. Accepts 30m, 7d, 1d12h, etc.
 docker exec midplane midplane audit since 1h
@@ -139,7 +185,7 @@ docker exec midplane midplane audit stats
 docker exec midplane midplane audit stats --since 7d --json
 ```
 
-Each `tail` / `since` line is a single JSON object — pipe through `jq` for filtering:
+Piped output is one JSON object per line — `jq` filters compose as expected:
 
 ```bash
 docker exec midplane midplane audit tail \

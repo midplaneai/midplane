@@ -1,6 +1,6 @@
 {
   "name": "@midplane/mcp-server",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Midplane MCP server. Wraps @midplane/engine with stdio + Streamable HTTP transports.",
   "license": "MIT",
@@ -10,7 +10,11 @@
     "midplane": "./src/cli.ts",
     "midplane-mcp-server": "./src/index.ts"
   },
+  "scripts": {
+    "qa:wizard": "bun scripts/qa/drive-init-wizard.ts"
+  },
   "dependencies": {
+    "@clack/prompts": "^1.5.1",
     "@midplane/engine": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "js-yaml": "^4.1.0",

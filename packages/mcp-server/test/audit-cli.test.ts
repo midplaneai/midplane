@@ -91,7 +91,9 @@ async function runCli(
   opts: { db?: string; timeoutMs?: number } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn(["bun", CLI_PATH, ...args], {
-    env: { ...process.env, DB_PATH: opts.db ?? dbPath },
+    // NO_COLOR pins --pretty output to plain text so assertions don't have
+    // to strip ANSI escapes.
+    env: { ...process.env, DB_PATH: opts.db ?? dbPath, NO_COLOR: "1" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -402,6 +404,264 @@ describe("midplane audit on a pre-migration audit DB", () => {
     // intent_source column was dropped in 0.4.0; the CLI's row JSON no
     // longer includes the key at all.
     expect(parsed).not.toHaveProperty("intent_source");
+  });
+});
+
+describe("midplane audit denies", () => {
+  beforeEach(async () => {
+    const now = Date.now();
+    // Q1: a denied UPDATE (ATTEMPTED + DECIDED/DENY share query_id Q1).
+    // Explicit ids — writeEvent derives both id and query_id from `n`, and
+    // two events on one query must share the query_id but not the PK.
+    await writeEvent({ event_type: "ATTEMPTED" }, 1, now - 60_000, id(11));
+    await writeEvent(
+      {
+        event_type: "DECIDED",
+        payload: {
+          decision: "DENY",
+          policy_rule: "table_access",
+          reason: "writes to public.users are not permitted",
+          statement_type: "UPDATE",
+        } as never,
+      },
+      1,
+      now - 60_000,
+      id(12),
+    );
+    // Q2: an allowed SELECT — must not appear in denies output.
+    await writeEvent({ event_type: "ATTEMPTED" }, 2, now - 30_000, id(21));
+    await writeEvent(
+      {
+        event_type: "DECIDED",
+        payload: { decision: "ALLOW", statement_type: "SELECT", tables_touched: ["t"] } as never,
+      },
+      2,
+      now - 30_000,
+      id(22),
+    );
+  });
+
+  test("JSONL output (piped) joins the blocked SQL onto the denial", async () => {
+    const r = await runCli(["audit", "denies"]);
+    expect(r.exitCode).toBe(0);
+    const lines = r.stdout.trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const row = JSON.parse(lines[0]!);
+    expect(row.query_id).toBe("Q1");
+    expect(row.payload.policy_rule).toBe("table_access");
+    // The SQL comes off the joined ATTEMPTED row.
+    expect(row.sql_raw).toBe("SELECT 1");
+  });
+
+  test("--pretty renders a human block with sql/reason/agent", async () => {
+    const r = await runCli(["audit", "denies", "--pretty"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("DENIED");
+    expect(r.stdout).toContain("table_access");
+    expect(r.stdout).toContain("sql:    SELECT 1");
+    expect(r.stdout).toContain("reason: writes to public.users are not permitted");
+    expect(r.stdout).toContain("qid=Q1");
+    expect(r.stdout).toMatch(/1 denial in the last 24h/);
+  });
+
+  test("--since excludes denials older than the window", async () => {
+    const r = await runCli(["audit", "denies", "--since", "30s"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe("");
+  });
+
+  test("invalid --since exits 2", async () => {
+    const r = await runCli(["audit", "denies", "--since", "banana"]);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toMatch(/invalid duration/);
+  });
+
+  test("--limit keeps the LATEST denials, oldest-first, and announces truncation", async () => {
+    // Add two more denials newer than the Q1 one from beforeEach.
+    const now = Date.now();
+    for (const [n, ts] of [[5, now - 20_000], [6, now - 10_000]] as const) {
+      await writeEvent(
+        {
+          event_type: "DECIDED",
+          payload: { decision: "DENY", policy_rule: "multi_statement", reason: "nope" } as never,
+        },
+        n,
+        ts,
+        id(n * 10),
+      );
+    }
+    const r = await runCli(["audit", "denies", "--limit", "2"]);
+    const rows = r.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(rows.map((x) => x.query_id)).toEqual(["Q5", "Q6"]); // latest two, oldest first
+    const pretty = await runCli(["audit", "denies", "--limit", "2", "--pretty"]);
+    expect(pretty.stdout).toContain("showing latest 2");
+  });
+
+  test("pretty zero-case says so instead of printing nothing", async () => {
+    const r = await runCli(["audit", "denies", "--since", "1s", "--pretty"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("No denials in the last 1s");
+  });
+
+  test("a denial whose ATTEMPTED row was pruned still surfaces", async () => {
+    await writeEvent(
+      {
+        event_type: "DECIDED",
+        payload: { decision: "DENY", policy_rule: "multi_statement", reason: "nope" } as never,
+      },
+      3,
+      Date.now() - 10_000,
+    );
+    const r = await runCli(["audit", "denies"]);
+    const rows = r.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const orphan = rows.find((x) => x.query_id === "Q3");
+    expect(orphan).toBeDefined();
+    expect(orphan.sql_raw).toBeNull();
+  });
+});
+
+describe("midplane audit show", () => {
+  beforeEach(async () => {
+    const now = Date.now();
+    await writeEvent({ event_type: "ATTEMPTED" }, 1, now - 60_000, id(11));
+    await writeEvent(
+      {
+        event_type: "DECIDED",
+        payload: { decision: "ALLOW", statement_type: "SELECT", tables_touched: ["t"] } as never,
+      },
+      1,
+      now - 59_000,
+      id(12),
+    );
+    await writeEvent({ event_type: "EXECUTED" }, 1, now - 58_000, id(13));
+    // Unrelated query that must not bleed into Q1's chain.
+    await writeEvent({ event_type: "ATTEMPTED" }, 2, now - 30_000, id(21));
+  });
+
+  test("dumps the full chain for a query_id as JSONL when piped", async () => {
+    const r = await runCli(["audit", "show", "Q1"]);
+    expect(r.exitCode).toBe(0);
+    const rows = r.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(3);
+    expect(rows.every((x) => x.query_id === "Q1")).toBe(true);
+    expect(rows.map((x) => x.event_type)).toEqual(["ATTEMPTED", "DECIDED", "EXECUTED"]);
+  });
+
+  test("accepts an individual event id and resolves its chain", async () => {
+    const r = await runCli(["audit", "show", id(11)]);
+    expect(r.exitCode).toBe(0);
+    const rows = r.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(rows.every((x) => x.query_id === "Q1")).toBe(true);
+  });
+
+  test("--pretty prints header, full SQL, and the event chain", async () => {
+    const r = await runCli(["audit", "show", "Q1", "--pretty"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("query Q1 — 3 events");
+    expect(r.stdout).toContain("agent:   test-agent@0.0.1");
+    expect(r.stdout).toContain("SELECT 1");
+    expect(r.stdout).toContain("ALLOWED");
+    expect(r.stdout).toContain("OK");
+  });
+
+  test("unknown id exits 1 with a message", async () => {
+    const r = await runCli(["audit", "show", "Q999"]);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/no events for/);
+  });
+
+  test("missing arg exits 2 with usage", async () => {
+    const r = await runCli(["audit", "show"]);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toMatch(/usage/);
+  });
+
+  // Regression: --json is a boolean flag and must never consume the qid.
+  test("flag order doesn't matter: show --json <qid> still resolves", async () => {
+    const r = await runCli(["audit", "show", "--json", "Q1"]);
+    expect(r.exitCode).toBe(0);
+    const rows = r.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(3);
+    expect(rows.every((x) => x.query_id === "Q1")).toBe(true);
+  });
+
+  test("--pretty truncates a >10k SQL and indents the forensic block", async () => {
+    const bigSql = "SELECT " + "x".repeat(11_000);
+    await writer.write({
+      id: id(31),
+      query_id: "Q9",
+      tenant_id: "__self_host__",
+      database: "__default__",
+      agent_name: "test-agent",
+      agent_version: "0.0.1",
+      agent_intent: null,
+      mcp_token_id: null,
+      ts: Date.now() - 1000,
+      schema_version: 3,
+      event_type: "ATTEMPTED",
+      payload: { sql_raw: bigSql, sql_fingerprint: "0123456789abcdef" },
+    });
+    const r = await runCli(["audit", "show", "Q9", "--pretty"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("… (truncated)");
+    expect(r.stdout).not.toContain("x".repeat(10_500));
+  });
+});
+
+describe("midplane audit with a corrupt payload row", () => {
+  // Forensic tooling must degrade per-row: one truncated/garbage payload
+  // (disk damage, partial repair) must not crash the readers.
+  test("since surfaces the bad row instead of crashing", async () => {
+    const now = Date.now();
+    await writeEvent({ event_type: "ATTEMPTED" }, 1, now - 60_000, id(11));
+    await writeEvent({ event_type: "ATTEMPTED" }, 2, now - 30_000, id(21));
+    // Corrupt one payload directly (the writer would never produce this).
+    const raw = new Database(dbPath);
+    raw.run("UPDATE audit_events SET payload = '{truncated' WHERE id = ?", [id(11)]);
+    raw.close();
+
+    const r = await runCli(["audit", "since", "1h"]);
+    expect(r.exitCode).toBe(0);
+    const rows = r.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(2);
+    const bad = rows.find((x) => x.id === id(11));
+    expect(bad.payload._unparseable_payload).toContain("{truncated");
+    const good = rows.find((x) => x.id === id(21));
+    expect(good.payload.sql_raw).toBe("SELECT 1");
+  });
+});
+
+describe("midplane audit tail across a retention prune", () => {
+  // Regression for the rowid-reuse blind spot: the /audit/before retention
+  // prune can empty the table, after which SQLite hands out rowids from 1
+  // again. A tail cursor parked at the old MAX(rowid) would skip every new
+  // event forever; the poll loop must detect the regression and re-park.
+  test("events written after a prune-to-empty still stream", async () => {
+    const now = Date.now();
+    for (let i = 1; i <= 3; i++) {
+      await writeEvent({ event_type: "ATTEMPTED" }, i, now - 5000 + i, id(40 + i));
+    }
+    const proc = Bun.spawn(["bun", CLI_PATH, "audit", "tail", "--backfill", "0"], {
+      env: { ...process.env, DB_PATH: dbPath, NO_COLOR: "1", MIDPLANE_AUDIT_TAIL_POLL_MS: "50" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await Bun.sleep(250); // let it park its cursor at MAX(rowid)=3
+
+    // Prune EVERYTHING (deleteThrough takes an id high-water mark; ULIDs
+    // sort below "Z"*26), then write fresh events that reuse rowids 1..2.
+    writer.deleteThrough("Z".repeat(26));
+    await writeEvent({ event_type: "ATTEMPTED" }, 8, Date.now(), id(81));
+    await writeEvent({ event_type: "ATTEMPTED" }, 9, Date.now(), id(91));
+    await Bun.sleep(300);
+
+    proc.kill();
+    await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    const ids = stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l).id);
+    expect(ids).toContain(id(81));
+    expect(ids).toContain(id(91));
   });
 });
 

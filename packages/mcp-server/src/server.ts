@@ -25,6 +25,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 import type { EngineContext } from "@midplane/engine";
 import type { EngineHandle } from "./engine-factory.ts";
 import type { TelemetryHandle } from "./telemetry/index.ts";
@@ -75,7 +76,7 @@ const NOOP_TELEMETRY: TelemetryHandle = {
 export function buildServer(opts: BuildServerOptions): McpServer {
   const server = new McpServer({
     name: "midplane-mcp-server",
-    version: "0.9.0",
+    version: PACKAGE_VERSION,
   });
 
   const telemetry = opts.telemetry ?? NOOP_TELEMETRY;

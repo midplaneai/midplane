@@ -127,6 +127,32 @@ When N ≥ 2, `query` and `describe_table` require a `database` arg, `list_table
 
 When `databases:` is absent, the `DATABASE_URL` env var + top-level `table_access` / `tenant_scope` shape from 0.1.x keeps working byte-for-byte.
 
+## The CLI
+
+OSS Midplane has no web UI — the `midplane` binary is the operator surface, and it's built to make that a feature, not an absence. Output is human-readable on a TTY and JSON lines when piped (jq-friendly); everything has flags for CI.
+
+```bash
+midplane init           # interactive setup: introspects your DB, detects the tenant
+                        # column (tenant_id/org_id/... with table coverage), writes a
+                        # validated policy file + the exact docker/agent commands
+
+midplane query --sql "DELETE FROM users"   # send one query through the server
+                        # EXACTLY as an agent would: same MCP tool, same policy, same
+                        # audit row, same deny message. Exit 1 on deny.
+
+midplane doctor         # preflight in boot order: config, policy (validate+lint),
+                        # DB connectivity, audit store, /health, end-to-end canary
+
+midplane audit denies --since 1h   # what got blocked and why: SQL, rule,
+                        # agent-facing reason, agent intent
+midplane audit show <query_id>     # forensics: one query's full event chain
+
+midplane policy init|validate|lint|test    # author/check a policy file offline
+midplane policy test --server --sql "..."  # ask the RUNNING server's loaded policy
+```
+
+`query` is a verification harness, not a database client — one shot, no REPL; psql exists. Details in [self-host.md](./docs/self-host.md).
+
 ## How it works
 
 1. Agent sends a SQL query via MCP.

@@ -21,12 +21,17 @@ import yaml from "js-yaml";
 export const TransportSchema = z.enum(["stdio", "http"]);
 export type Transport = z.infer<typeof TransportSchema>;
 
+// Canonical default port — exported so the CLI subcommands' "where is the
+// server" fallbacks (query/doctor/policy test --server) can never drift from
+// what the server actually binds.
+export const DEFAULT_PORT = 8080;
+
 export const ConfigSchema = z.object({
   // Optional in 0.2.0: a YAML `databases:` block can supply the DSN(s).
   // The loader (loadConfig) checks below that at least one of
   // DATABASE_URL or `databases:` is present at boot.
   databaseUrl: z.string().min(1).optional(),
-  port: z.coerce.number().int().min(1).max(65535).default(8080),
+  port: z.coerce.number().int().min(1).max(65535).default(DEFAULT_PORT),
   // HTTP bind host. Defaults to 0.0.0.0 (IPv4 any) so self-host/local boots
   // unchanged. The hosted control plane reaches each engine over Fly's 6PN
   // private network (IPv6-only) and sets MIDPLANE_HOST=:: for dual-stack

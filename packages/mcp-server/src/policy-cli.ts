@@ -34,7 +34,9 @@ import {
   type Dialect,
   type EngineContext,
 } from "@midplane/engine";
-import { PolicyFileSchema, parsePolicyYaml, type DatabaseSpec } from "./config.ts";
+import { DEFAULT_PORT, PolicyFileSchema, parsePolicyYaml, type DatabaseSpec } from "./config.ts";
+import { parseArgs } from "./argv.ts";
+import { ensureHttpScheme, isLoopbackHost, newCliPgClient, scrub } from "./dsn.ts";
 
 export async function runPolicy(argv: string[]): Promise<void> {
   const [sub, ...rest] = argv;
@@ -103,10 +105,10 @@ async function init(args: string[]): Promise<void> {
 // close. Returns the bare table names (no schema prefix). Connection failures
 // exit nonzero with a terse message — never echoing the DSN.
 async function introspectPublicTables(url: string): Promise<string[]> {
-  // Imported lazily: the static (no --url) path shouldn't pay for pg at all,
-  // and `policy validate/lint/test` never touch it.
-  const pgMod = (await import("pg")).default;
-  const client = new pgMod.Client({ connectionString: url });
+  // Shared CLI client: lazy `pg` (the static no-`--url` path never pays for
+  // it), the bounded connect timeout, and the sslmode warning filter — one
+  // copy, so doctor/init/policy can't disagree.
+  const client = await newCliPgClient(url);
   try {
     await client.connect();
   } catch (err) {
@@ -135,6 +137,12 @@ export interface ScaffoldOpts {
   tables: string[] | null;
   tenantColumn: string | undefined;
   introspected: boolean;
+  // Wizard extensions (`midplane init`). Absent on the flag-driven path, so
+  // `policy init` output is byte-identical to pre-wizard releases.
+  // Per-table levels by BARE table name; unlisted tables render `read`.
+  grants?: Record<string, "read" | "read_write" | "deny">;
+  // tenant_scope.exempt entries. Defaults to the audit_log example.
+  exempt?: string[];
 }
 
 // Exported for tests: the YAML-generation half of `init`, decoupled from the
@@ -185,21 +193,38 @@ export function scaffold(opts: ScaffoldOpts): string {
     w("  tables:");
     const keys = opts.tables.map((t) => yamlKey(`public.${t}`));
     const pad = Math.max(...keys.map((k) => k.length));
-    for (const k of keys) {
-      w(`    ${(k + ":").padEnd(pad + 1)} read   # → read_write to allow writes`);
+    for (let i = 0; i < keys.length; i++) {
+      const level = opts.grants?.[opts.tables[i]!] ?? "read";
+      // The flip hint only makes sense on the default level; an explicit
+      // grant/deny is already a decision.
+      const hint = level === "read" ? "   # → read_write to allow writes" : "";
+      w(`    ${(keys[i]! + ":").padEnd(pad + 1)} ${level}${hint}`);
     }
   }
 
   if (opts.tenantColumn) {
+    // The column flows in from a flag or from introspected information_schema
+    // metadata — route it through the YAML serializer like the table keys, so
+    // a YAML-sensitive identifier can't break out of its value position (and
+    // strip newlines for the comment line, which yamlKey can't protect).
+    const col = yamlKey(opts.tenantColumn);
+    const colComment = opts.tenantColumn.replace(/\s+/g, " ");
     w();
     w("tenant_scope:");
     w("  # Strict mode: every queried table must carry a literal");
-    w(`  # \`${opts.tenantColumn} = <tenant_id>\` predicate, or the query is denied.`);
+    w(`  # \`${colComment} = <tenant_id>\` predicate, or the query is denied.`);
     w("  enabled: true");
-    w(`  column: ${opts.tenantColumn}`);
-    w("  exempt:");
-    w("    # Tables that legitimately span tenants (audit trails, lookup tables).");
-    w("    - audit_log");
+    w(`  column: ${col}`);
+    const exempt = opts.exempt ?? ["audit_log"];
+    if (exempt.length === 0) {
+      w("  # Tables that legitimately span tenants (audit trails, lookup tables)");
+      w("  # go here; strict mode denies their queries otherwise.");
+      w("  exempt: []");
+    } else {
+      w("  exempt:");
+      w("    # Tables that legitimately span tenants (audit trails, lookup tables).");
+      for (const e of exempt) w(`    - ${yamlKey(e)}`);
+    }
   } else {
     w();
     w("# tenant_scope: (disabled)");
@@ -266,8 +291,8 @@ function validate(args: string[]): void {
 
 // ── lint ────────────────────────────────────────────────────────────────────
 
-type Severity = "error" | "warn" | "info";
-interface Finding {
+export type Severity = "error" | "warn" | "info";
+export interface Finding {
   severity: Severity;
   message: string;
 }
@@ -306,8 +331,30 @@ function lint(args: string[]): void {
     process.exit(2);
   }
 
+  const findings = collectLintFindings(parsed.data);
+
+  // Report.
+  if (findings.length === 0) {
+    process.stdout.write("OK — no findings\n");
+    return;
+  }
+  const order: Severity[] = ["error", "warn", "info"];
+  findings.sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
+  for (const f of findings) {
+    process.stdout.write(`${tag(f.severity)} ${f.message}\n`);
+  }
+  const errors = findings.filter((f) => f.severity === "error").length;
+  if (errors > 0) {
+    process.stdout.write(`\n${errors} error-level finding${errors === 1 ? "" : "s"} — exiting nonzero.\n`);
+    process.exit(1);
+  }
+}
+
+// The finding computation, separated from lint()'s printing/exit so doctor
+// can fold the same security-posture review into its report. One source of
+// truth for what "a posture problem" means.
+export function collectLintFindings(cfg: z.infer<typeof PolicyFileSchema>): Finding[] {
   const findings: Finding[] = [];
-  const cfg = parsed.data;
 
   // Each lintable unit is a (label, table_access, tenant_scope) triple — one
   // for the legacy single-DB shape, or one per `databases:` entry.
@@ -430,21 +477,7 @@ function lint(args: string[]): void {
     }
   }
 
-  // Report.
-  if (findings.length === 0) {
-    process.stdout.write("OK — no findings\n");
-    return;
-  }
-  const order: Severity[] = ["error", "warn", "info"];
-  findings.sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
-  for (const f of findings) {
-    process.stdout.write(`${tag(f.severity)} ${f.message}\n`);
-  }
-  const errors = findings.filter((f) => f.severity === "error").length;
-  if (errors > 0) {
-    process.stdout.write(`\n${errors} error-level finding${errors === 1 ? "" : "s"} — exiting nonzero.\n`);
-    process.exit(1);
-  }
+  return findings;
 }
 
 function tag(s: Severity): string {
@@ -476,9 +509,21 @@ function bare(name: string): string {
 async function test(args: string[]): Promise<void> {
   const { positionals, flags: opts } = parseArgs(args);
   const file = positionals[0];
-  if (!file) {
+  // Two modes: <file> evaluates a policy FILE offline; --server asks a
+  // RUNNING server's /admin/dry-run about its currently-loaded policy. The
+  // two can disagree (file edited but not pushed/restarted) — that gap is
+  // exactly why the second mode exists, and why mixing them is an error
+  // rather than a silent pick-one.
+  if (opts.server !== undefined && file) {
     process.stderr.write(
-      'usage: midplane policy test <file> --sql "<query>" [--tenant-id <id>] [--db <name>] [--json]\n',
+      "midplane policy test: pass a <file> (offline) OR --server (the running server's loaded policy), not both\n",
+    );
+    process.exit(2);
+  }
+  if (!file && opts.server === undefined) {
+    process.stderr.write(
+      'usage: midplane policy test <file> --sql "<query>" [--tenant-id <id>] [--db <name>] [--json]\n' +
+        '       midplane policy test --server [url] --sql "<query>" [--token <INDEXER_TOKEN>] [--tenant-id <id>] [--db <name>] [--json]\n',
     );
     process.exit(2);
   }
@@ -491,6 +536,10 @@ async function test(args: string[]): Promise<void> {
   // tenant_scope rule compares predicate literals against THIS id, so we print
   // it in the verdict to keep the dry-run unambiguous.
   const tenantId = opts["tenant-id"] ?? "__self_host__";
+
+  if (opts.server !== undefined) {
+    return testAgainstServer(opts, sql, tenantId);
+  }
 
   // Resolve the file through the loader (reuses the schema + semantic checks).
   // offlineEnv() supplies placeholders for any ${VAR} in databases[].url so a
@@ -587,6 +636,178 @@ async function test(args: string[]): Promise<void> {
   }
 }
 
+// ── test --server (live dry-run) ────────────────────────────────────────────
+
+// Wire shape of one /admin/dry-run verdict (dry-run.ts owns the contract;
+// declared structurally here so the CLI doesn't import transport code).
+interface WireVerdict {
+  sql?: string;
+  decision: "allow" | "deny";
+  reason: string;
+  matched_rule: string;
+  tables: string[];
+  action: string;
+}
+
+async function testAgainstServer(
+  opts: Record<string, string>,
+  sql: string,
+  tenantId: string,
+): Promise<void> {
+  const base = serverBaseUrl(opts.server);
+  // The dry-run route rides the same bearer as the other admin endpoints. No
+  // token, no dry-run — say so precisely instead of letting the 404 confuse.
+  const token =
+    opts.token && opts.token !== "true" ? opts.token : process.env.INDEXER_TOKEN;
+  if (!token) {
+    process.stderr.write(
+      "midplane policy test: /admin/dry-run requires the server's INDEXER_TOKEN " +
+        "(pass --token <token> or set INDEXER_TOKEN). Without one, test the policy " +
+        "file offline: midplane policy test <file> --sql ...\n",
+    );
+    process.exit(2);
+  }
+  const db = opts.db ?? "__default__";
+
+  // INDEXER_TOKEN is the bearer for the WHOLE admin surface — a passive
+  // observer who reads it off plaintext http can hot-swap policy. Loopback
+  // is fine (the token never leaves the machine); anything else fails
+  // closed unless the operator explicitly opts in (private docker/LAN nets
+  // are legitimate, but that's their call to make, not a default).
+  const baseUrl = new URL(base);
+  if (baseUrl.protocol === "http:" && !isLoopbackHost(baseUrl.hostname)) {
+    if (opts["allow-http"] !== "true") {
+      process.stderr.write(
+        `midplane policy test: refusing to send INDEXER_TOKEN over plaintext http to ${baseUrl.hostname} ` +
+          `(it grants admin access — /admin/policy hot-swap included). Use https, or pass --allow-http ` +
+          `if this is a trusted private network.\n`,
+      );
+      process.exit(2);
+    }
+    process.stderr.write(
+      `(warning: sending INDEXER_TOKEN over plaintext http to ${baseUrl.hostname})\n`,
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${base}/admin/dry-run`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        database: db,
+        sql,
+        tenant_context: { value: tenantId },
+      }),
+      // A wedged server (accepts TCP, never answers) must not hang the CLI.
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    process.stderr.write(
+      `midplane policy test: cannot reach ${base} — is the server running? (\`midplane doctor\` checks this)\n`,
+    );
+    process.exit(1);
+  }
+
+  if (res.status === 404) {
+    // The route 404s when the server booted without INDEXER_TOKEN — the
+    // admin surface is opt-in and reveals nothing when off.
+    process.stderr.write(
+      `midplane policy test: ${base} has no admin endpoints (server running without INDEXER_TOKEN?)\n`,
+    );
+    process.exit(1);
+  }
+  if (res.status === 401) {
+    process.stderr.write("midplane policy test: unauthorized — wrong INDEXER_TOKEN\n");
+    process.exit(1);
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    const errMsg = body?.error ?? "unknown error";
+    process.stderr.write(
+      `midplane policy test: server returned ${res.status}: ${errMsg}\n`,
+    );
+    // Multi-DB servers never register the synthetic single-DB name; the
+    // default only fits the legacy shape. Make the fix obvious — the server
+    // already listed its real names in the error.
+    if (!opts.db && /Unknown database "__default__"/.test(errMsg)) {
+      process.stderr.write(
+        "  (this server runs a multi-database config — pass --db <name> with one of the names above)\n",
+      );
+    }
+    process.exit(1);
+  }
+
+  // Don't dereference a shape we didn't verify — a version-skewed server (or
+  // anything else answering 200 on that path) must produce a precise error,
+  // not an uncaught TypeError.
+  const data = (await res.json().catch(() => null)) as
+    | { verdicts?: WireVerdict[]; policy_hash?: string }
+    | null;
+  const v = Array.isArray(data?.verdicts) ? data.verdicts[0] : undefined;
+  if (!v) {
+    process.stderr.write(
+      `midplane policy test: unexpected response from ${base}/admin/dry-run (no verdicts) — server version mismatch?\n`,
+    );
+    process.exit(1);
+  }
+  const allowed = v.decision === "allow";
+
+  if (opts.json === "true") {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          decision: allowed ? "ALLOW" : "DENY",
+          server: base,
+          database: db,
+          tenant_id: tenantId,
+          matched_rule: v.matched_rule,
+          reason: v.reason,
+          statement_type: v.action,
+          tables_touched: v.tables,
+          policy_hash: data.policy_hash,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    if (!allowed) process.exit(1);
+    return;
+  }
+
+  const out = process.stdout;
+  out.write(`${allowed ? "ALLOW" : "DENY"}\n`);
+  out.write(`  server:    ${base} (loaded policy ${data.policy_hash})\n`);
+  out.write(`  database:  ${db}\n`);
+  out.write(`  tenant_id: ${tenantId}\n`);
+  if (allowed) {
+    out.write(`  statement: ${v.action}\n`);
+    if (v.tables.length > 0) out.write(`  tables:    ${v.tables.join(", ")}\n`);
+    out.write("  → would be sent to the database\n");
+  } else {
+    out.write(`  rule:      ${v.matched_rule}\n`);
+    out.write(`  reason:    ${v.reason}\n`);
+    out.write("  → blocked; the query never reaches the database\n");
+    process.exit(1);
+  }
+}
+
+// `--server` accepts a bare flag (default localhost), host:port, or a full
+// URL; only the origin is kept — the dry-run path is fixed. A value that
+// won't parse as a URL is a usage error, not a stack trace.
+function serverBaseUrl(raw: string | undefined): string {
+  if (!raw || raw === "true") return `http://localhost:${process.env.PORT ?? DEFAULT_PORT}`;
+  try {
+    return new URL(ensureHttpScheme(raw)).origin;
+  } catch {
+    process.stderr.write(`midplane policy test: invalid --server URL "${raw}"\n`);
+    process.exit(2);
+  }
+}
+
 function pickDatabase(databases: DatabaseSpec[], db: string | undefined): DatabaseSpec | undefined {
   if (db) return databases.find((d) => d.name === db);
   return databases[0];
@@ -617,13 +838,9 @@ function loadYamlOrExit(file: string): unknown {
 
 // Strip the "Policy schema error from file X:" / "Policy YAML ... :" prefix the
 // loader bakes into thrown errors so CLI output isn't doubly redundant.
-function stripPrefix(msg: string): string {
+// Exported for doctor, which reports the same loader errors.
+export function stripPrefix(msg: string): string {
   return msg.replace(/^Policy (?:schema|YAML)[^:]*:\s*/, "");
-}
-
-// Remove any occurrence of the DSN from a driver error before printing.
-function scrub(msg: string, url: string): string {
-  return url ? msg.split(url).join("<dsn>") : msg;
 }
 
 // An env that never throws on `${VAR}` interpolation: real vars pass through,
@@ -664,54 +881,6 @@ function yamlKey(s: string): string {
   return yaml.dump(s, { lineWidth: -1 }).trimEnd();
 }
 
-// Hand-rolled argv parser, same shape as audit-cli.ts's parseFlags but split
-// into positionals (the <file>) and flags in a SINGLE pass — so a flag VALUE
-// (`--sql "SELECT ..."`) is never mistaken for the positional, regardless of
-// flag order. Supports `--key value`, `--key=value`, `--flag` (→ "true"), and
-// the `-o value` short alias for init's output path.
-interface ParsedArgs {
-  positionals: string[];
-  flags: Record<string, string>;
-}
-
-function parseArgs(args: string[]): ParsedArgs {
-  const positionals: string[] = [];
-  const flags: Record<string, string> = {};
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "-o") {
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("-")) {
-        flags.o = next;
-        i++;
-      } else {
-        flags.o = "true";
-      }
-      continue;
-    }
-    if (!a.startsWith("--")) {
-      positionals.push(a);
-      continue;
-    }
-    const eq = a.indexOf("=");
-    if (eq >= 0) {
-      flags[a.slice(2, eq)] = a.slice(eq + 1);
-      continue;
-    }
-    const key = a.slice(2);
-    const next = args[i + 1];
-    if (next !== undefined && !next.startsWith("-")) {
-      // Consumes the next token as this flag's value, so it won't be read as a
-      // positional. (`--flag --other` and `--flag -o x` leave `--flag` boolean.)
-      flags[key] = next;
-      i++;
-    } else {
-      flags[key] = "true";
-    }
-  }
-  return { positionals, flags };
-}
-
 export function printPolicyHelp(stream: NodeJS.WriteStream = process.stdout): void {
   stream.write(`midplane policy — author, validate, and dry-run a MIDPLANE_POLICY_FILE
 
@@ -738,5 +907,13 @@ Usage:
       Run a query through the engine's real policy evaluation against the
       file's policy — no DB connection. Prints ALLOW/DENY, the rule, and the
       exact agent-facing message a denial would return. Exit nonzero on DENY.
+
+  midplane policy test --server [url] --sql "<query>" [--token <t>] [--tenant-id <id>] [--db <name>] [--json]
+      Same question, asked of a RUNNING server's currently-LOADED policy via
+      POST /admin/dry-run (default url http://localhost:\$PORT). The file on
+      disk and the loaded policy can differ — this is how you check the live
+      one. Requires the server's INDEXER_TOKEN (--token or env). Multi-DB
+      servers: --db <name> (default __default__). The token is only sent over
+      https or to localhost; --allow-http opts in for trusted private nets.
 `);
 }
