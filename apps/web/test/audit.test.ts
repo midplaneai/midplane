@@ -215,6 +215,17 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql).toContain("'TENANT_SCOPE_CHANGED'");
   });
 
+  it("admits cloud-emitted GUARDRAILS_CHANGED in the policy_events CTE", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    const sel = lastSelect(handle.queries);
+    // Without this, the actor-stamped row from setGuardrails is invisible
+    // in /audit — "who turned the destructive-statement net off?" would
+    // have no answer.
+    expect(sel.sql).toContain("'GUARDRAILS_CHANGED'");
+  });
+
   it("admits credential events (TOKEN_CREATED / TOKEN_REVOKED) and classifies them by type", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
@@ -528,6 +539,15 @@ describe("countByStatus", () => {
     expect(sel.sql).toContain("'TOKEN_CREATED'");
     expect(sel.sql).toContain("'TOKEN_REVOKED'");
     expect(sel.sql.toLowerCase()).toContain("group by 1");
+  });
+
+  it("counts GUARDRAILS_CHANGED rows (they ride the POLICY_RELOAD chip bucket)", async () => {
+    handle.setNextResult([]);
+    const { countByStatus } = await import("../src/lib/audit.ts");
+    await countByStatus(VALID_CUSTOMER_ID, "eu");
+    // Must be admitted by the event branch's IN list or the POLICY_RELOAD
+    // chip undercounts vs. the list rows the same filter shows.
+    expect(lastSelect(handle.queries).sql).toContain("'GUARDRAILS_CHANGED'");
   });
 
   it("scopes both branches to a connection when connectionId is passed", async () => {

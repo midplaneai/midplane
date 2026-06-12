@@ -210,7 +210,7 @@ export type EventType = (typeof EVENT_TYPES)[number];
 // reviewer needs one place to see everything that touched the boundary:
 //   - POLICY_RELOAD   — config change (the engine's POLICY_RELOADED on a
 //                       hot-swap, plus the cloud's actor-stamped
-//                       POLICY_CHANGED / TENANT_SCOPE_CHANGED / REGION_CHANGED)
+//                       POLICY_CHANGED / TENANT_SCOPE_CHANGED / GUARDRAILS_CHANGED / REGION_CHANGED)
 //   - TOKEN_CREATED   — an MCP credential was minted
 //   - TOKEN_REVOKED   — an MCP credential was killed (a security event)
 // They carry a NULL query_id and no SQL; the status pill marks each
@@ -451,7 +451,7 @@ export async function listAuditQueries(
     // policy_events is unioned in alongside the query aggregation so the
     // non-query singletons (no lifecycle) keep showing up in the audit
     // log: config changes (POLICY_RELOADED + the cloud's actor-stamped
-    // POLICY_CHANGED / TENANT_SCOPE_CHANGED / REGION_CHANGED) and
+    // POLICY_CHANGED / TENANT_SCOPE_CHANGED / GUARDRAILS_CHANGED / REGION_CHANGED) and
     // credential events (TOKEN_CREATED / TOKEN_REVOKED). Operators rely on
     // this list to verify a hot-swap landed and to see who minted/killed a
     // token. Both CTEs project the same column shape with explicit NULL
@@ -547,7 +547,7 @@ export async function listAuditQueries(
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
-          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
+          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'GUARDRAILS_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
           ${retentionClause}
           ${tenantClause}
           ${databaseClause}
@@ -1053,7 +1053,7 @@ export async function countByStatus(
       FROM audit_events_index
       WHERE customer_id = ${customerId}
         AND region = ${region}
-        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
+        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'GUARDRAILS_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
         ${retentionClause}
         ${connectionClause}
       GROUP BY 1

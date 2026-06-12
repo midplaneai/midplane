@@ -58,10 +58,21 @@ interface McpProxyContext {
     databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult>;
   /** Engine policy dry-run (acquire → push → /admin/dry-run) for the
-   *  test panel. engine_unavailable when `INDEXER_TOKEN` is unset —
-   *  the engine's admin surface is 404 in that mode, so there is no
-   *  verdict to be had (laptop dev without token plumbing). */
-  dryRun(spawn: SpawnOptions, request: DryRunRequest): Promise<DryRunOutcome>;
+   *  test panel. The engine takes exactly one of `probes` | `sql` per
+   *  POST, so a run that needs both (probe matrix + guardrail SQL
+   *  checks) passes the sequence and pays acquire + push once; verdicts
+   *  come back concatenated in request order. engine_unavailable when
+   *  `INDEXER_TOKEN` is unset — the engine's admin surface is 404 in
+   *  that mode, so there is no verdict to be had (laptop dev without
+   *  token plumbing). */
+  dryRun(
+    spawn: SpawnOptions,
+    requests: readonly DryRunRequest[],
+    /** Re-read of the policy entries right before the push — see
+     *  DryRunDeps.freshEntries (a cold spawn makes the request-start
+     *  snapshot stale enough to overwrite a concurrent save). */
+    freshEntries?: () => Promise<DatabaseEntry[]>,
+  ): Promise<DryRunOutcome>;
 }
 
 const GLOBAL_KEY = "__midplane_mcp_proxy__";
@@ -158,7 +169,8 @@ export function getMcpProxyContext(): McpProxyContext {
 
   const dryRun = async (
     spawn: SpawnOptions,
-    request: DryRunRequest,
+    requests: readonly DryRunRequest[],
+    freshEntries?: () => Promise<DatabaseEntry[]>,
   ): Promise<DryRunOutcome> => {
     if (!indexerToken) {
       return {
@@ -167,7 +179,11 @@ export function getMcpProxyContext(): McpProxyContext {
         detail: "INDEXER_TOKEN unset — engine admin surface disabled",
       };
     }
-    return dryRunPolicy(spawn, request, { registry, indexerToken });
+    return dryRunPolicy(spawn, requests, {
+      registry,
+      indexerToken,
+      freshEntries,
+    });
   };
 
   const ctx: McpProxyContext = {

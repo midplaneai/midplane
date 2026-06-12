@@ -16,7 +16,10 @@ import {
   dryRunKey,
   resetRateLimits,
 } from "../src/lib/rate-limit.ts";
-import { PROBE_TENANT_VALUE } from "../src/lib/probe-matrix.ts";
+import {
+  MAX_GUARDRAIL_PROBES,
+  PROBE_TENANT_VALUE,
+} from "../src/lib/probe-matrix.ts";
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -219,21 +222,105 @@ describe("POST /api/connections/[id]/dry-run", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ verdicts: [], truncated: false });
 
-    const [spawn, request] = dryRunMock.mock.calls[0] as unknown as [
+    const [spawn, requests] = dryRunMock.mock.calls[0] as unknown as [
       {
         connectionId: string;
         region: string;
-        databases: Array<{ name: string; dsn: string }>;
+        databases: Array<{ name: string; dsn: string; guardrails?: unknown }>;
       },
-      { database: string; tenant_context?: { value: string } },
+      Array<{ database: string; tenant_context?: { value: string } }>,
     ];
     expect(spawn.connectionId).toBe(CONN.id);
     expect(spawn.databases.map((d) => d.name)).toEqual(["analytics", "main"]);
     expect(spawn.databases.every((d) => d.dsn === "postgres://decrypted")).toBe(
       true,
     );
-    expect(request.database).toBe("main");
-    expect(request.tenant_context).toEqual({ value: PROBE_TENANT_VALUE });
+    // A row predating the guardrails column resolves to the default-ON
+    // posture (mirrors the engine's omitted-section default).
+    expect(spawn.databases[0]!.guardrails).toEqual({
+      block_unqualified_dml: true,
+      block_ddl: true,
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.database).toBe("main");
+    expect(requests[0]!.tenant_context).toEqual({ value: PROBE_TENANT_VALUE });
+  });
+
+  it("fans guardrail_sqls out as single-statement sql requests after the probe matrix", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(
+      jsonRequest({
+        ...PROBES_BODY,
+        guardrail_sqls: ["delete from orders", "drop table orders"],
+      }),
+      params,
+    );
+    expect(res.status).toBe(200);
+
+    const [, requests] = dryRunMock.mock.calls[0] as unknown as [
+      unknown,
+      Array<{
+        database: string;
+        tenant_context?: { value: string };
+        probes?: unknown[];
+        sql?: string;
+      }>,
+    ];
+    expect(requests).toHaveLength(3);
+    expect(requests[0]!.probes).toHaveLength(1);
+    expect(requests[0]!.sql).toBeUndefined();
+    expect(requests[1]).toMatchObject({
+      database: "main",
+      sql: "delete from orders",
+    });
+    expect(requests[2]).toMatchObject({
+      database: "main",
+      sql: "drop table orders",
+    });
+    // Every engine call carries the synthetic tenant — guardrail
+    // statements still bind the dry-run context.
+    expect(
+      requests.every((r) => r.tenant_context?.value === PROBE_TENANT_VALUE),
+    ).toBe(true);
+  });
+
+  it("400 when guardrail_sqls is sent without probes (it rides the matrix run only)", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(
+      jsonRequest({
+        database: "main",
+        sql: "select 1",
+        guardrail_sqls: ["delete from orders"],
+      }),
+      params,
+    );
+    expect(res.status).toBe(400);
+    expect(dryRunMock).not.toHaveBeenCalled();
+  });
+
+  it("400 when guardrail_sqls is empty or exceeds MAX_GUARDRAIL_PROBES", async () => {
+    const { POST } = await loadRoute();
+    // min(1): an empty array is a caller bug, not "no guardrail checks" —
+    // omit the field for that.
+    const empty = await POST(
+      jsonRequest({ ...PROBES_BODY, guardrail_sqls: [] }),
+      params,
+    );
+    expect(empty.status).toBe(400);
+    // max(MAX_GUARDRAIL_PROBES): the ceiling is sized to the worst-case
+    // buildGuardrailProbes output; anything larger is fan-out abuse.
+    const over = await POST(
+      jsonRequest({
+        ...PROBES_BODY,
+        guardrail_sqls: Array.from(
+          { length: MAX_GUARDRAIL_PROBES + 1 },
+          () => "drop table orders",
+        ),
+      }),
+      params,
+    );
+    expect(over.status).toBe(400);
+    expect(dryRunMock).not.toHaveBeenCalled();
   });
 
   it("maps engine_rejected → 400 with the engine body verbatim", async () => {

@@ -9,11 +9,13 @@ import {
   EMPTY_TENANT_SCOPE,
   getDb,
   indexerCursors,
+  validateGuardrails,
   validatePolicy,
   validateTenantScope,
   type AccessLevel,
   type Customer,
   type DatabaseEntry,
+  type GuardrailsConfig,
   type TableAccessPolicy,
   type TenantScopeConfig,
 } from "@midplane-cloud/db";
@@ -66,6 +68,7 @@ const SAFE_DATABASE_COLUMNS = {
   name: connectionDatabases.name,
   tableAccess: connectionDatabases.tableAccess,
   tenantScope: connectionDatabases.tenantScope,
+  guardrails: connectionDatabases.guardrails,
   rotatedAt: connectionDatabases.rotatedAt,
   lastKmsSuccessAt: connectionDatabases.lastKmsSuccessAt,
   createdAt: connectionDatabases.createdAt,
@@ -78,6 +81,7 @@ export type SafeConnectionDatabase = Pick<
   | "name"
   | "tableAccess"
   | "tenantScope"
+  | "guardrails"
   | "rotatedAt"
   | "lastKmsSuccessAt"
   | "createdAt"
@@ -91,6 +95,7 @@ export async function emitConfigAuditRow(
     eventType:
       | "POLICY_CHANGED"
       | "TENANT_SCOPE_CHANGED"
+      | "GUARDRAILS_CHANGED"
       | "REGION_CHANGED"
       | "CONNECTION_PAUSED"
       | "CONNECTION_RESUMED";
@@ -503,25 +508,177 @@ export class EnginePolicyRejected extends Error {
   }
 }
 
-// Replace the table_access policy on one DB of a connection. Preferred
-// path is hot-reload via POST /admin/policy on the running engine — the
-// agent's MCP session stays alive and a POLICY_RELOADED audit event is
-// emitted. If no container is running OR the engine doesn't expose the
-// endpoint, the Postgres write alone is enough; the next spawn reads
-// the new policy from PG. On a 5xx/401/network failure we fall back to
+// One config block on one DB of a connection — the shared spine of
+// setTableAccess / setTenantScope / setGuardrails. Preferred path is
+// hot-reload via POST /admin/policy on the running engine — the agent's
+// MCP session stays alive and a POLICY_RELOADED audit event is emitted.
+// If no container is running OR the engine doesn't expose the endpoint,
+// the Postgres write alone is enough; the next spawn reads the new
+// config from PG. On a 5xx/401/network failure we fall back to
 // stop-and-respawn (matches rotateConnection's fail-soft posture). On
 // 400 we do NOT fall back — engine kept the old policy, so the running
-// session is fine; respawn would re-read the now-rejected policy from
-// PG and fail the spawn. Caller surfaces the engine's validator
-// message to the user.
-//
-// `dbName` defaults to "main" so existing single-DB callers keep
-// working; multi-DB callers pass the agent-facing alias explicitly.
+// session is fine; respawn would re-read the now-rejected config from
+// PG and fail the spawn. Caller surfaces the engine's validator message
+// to the user.
 //
 // Returns null when the id is unknown OR owned by another customer OR
 // the named child does not exist (mirrors the leakage-avoidance shape
 // of rotateConnection / delete — caller can't distinguish from "id
 // unknown").
+interface PolicyConfigChange {
+  /** Column patch for the named child row, e.g. { tableAccess: value }.
+   *  Values are VALIDATED — the public setters gate before delegating. */
+  update: Partial<
+    Pick<
+      typeof connectionDatabases.$inferInsert,
+      "tableAccess" | "tenantScope" | "guardrails"
+    >
+  >;
+  eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED" | "GUARDRAILS_CHANGED";
+  /** Event-specific payload fields; connection_id / database_name are
+   *  stamped by the helper. */
+  payload: Record<string, unknown>;
+  /** e.g. "[setTableAccess]" — keeps logs greppable per setter. */
+  logPrefix: string;
+}
+
+async function applyPolicyConfigChange(
+  customer: Customer,
+  id: string,
+  deps: PolicyPushDeps,
+  actorClerkUserId: string,
+  dbName: string,
+  change: PolicyConfigChange,
+): Promise<{ id: string } | null> {
+  const db = getDb(customer.region);
+  // Three-step in a txn: ownership check on the parent (so we don't leak
+  // existence by writing through to a foreign customer's DB), update the
+  // named child's config column, then snapshot every DB on the connection
+  // (post-update) for the hot-reload body. RETURNING on the child write
+  // distinguishes "child not found" from "wrote but no change" and keeps
+  // the leakage-avoidance shape (null for both cases).
+  //
+  // Sibling DBs ride along because OSS hot-reload drops any DB absent
+  // from the body — we have to re-state every DB to keep them registered.
+  //
+  // FOR UPDATE on the parent serializes concurrent config edits on the
+  // same connection (any mix of the three setters, or add/remove/rename):
+  // without it, two parallel edits each read their own snapshot of
+  // siblings and the engine ends up with the loser's stale view of the
+  // winner's DB. NOTE: a narrower race remains between commit-of-T1 and
+  // pushPolicy-of-T1 vs T2 — the engine converges on the next edit since
+  // each push sends full state, but a per-connection push mutex would
+  // close it fully.
+  const result = await db.transaction(async (tx) => {
+    const parent = await tx
+      .select({ id: connections.id })
+      .from(connections)
+      .where(
+        and(eq(connections.id, id), eq(connections.customerId, customer.id)),
+      )
+      .for("update")
+      .limit(1);
+    if (parent.length === 0) return null;
+    const updated = await tx
+      .update(connectionDatabases)
+      .set(change.update)
+      .where(
+        and(
+          eq(connectionDatabases.connectionId, id),
+          eq(connectionDatabases.name, dbName),
+        ),
+      )
+      .returning({ id: connectionDatabases.id });
+    if (updated.length === 0) return null;
+    const siblings = await tx
+      .select({
+        id: connectionDatabases.id,
+        name: connectionDatabases.name,
+        tableAccess: connectionDatabases.tableAccess,
+        tenantScope: connectionDatabases.tenantScope,
+        guardrails: connectionDatabases.guardrails,
+      })
+      .from(connectionDatabases)
+      .where(eq(connectionDatabases.connectionId, id));
+    return { id: parent[0]!.id, siblings };
+  });
+
+  if (!result) return null;
+
+  const databases: DatabaseEntry[] = result.siblings.map((s) => ({
+    name: s.name,
+    connectionDatabaseId: s.id,
+    tableAccess: s.tableAccess,
+    tenantScope: s.tenantScope ?? EMPTY_TENANT_SCOPE,
+    guardrails: s.guardrails,
+  }));
+
+  try {
+    const pushResult = await deps.pushPolicy(result.id, databases);
+    if ("rejected" in pushResult) {
+      // Engine kept the previous policy. Don't fall back — respawn
+      // would re-read this same (rejected) config from PG and fail to
+      // boot. Surface the engine's message to the caller. We also skip
+      // the audit row: the connection_databases update is committed
+      // (validator drift is unreachable in practice; if it happens,
+      // engine state stays put and the dashboard surfaces the error),
+      // but recording "config changed" would be a lie.
+      console.error(
+        `${change.logPrefix} engine rejected policy (validator drift)`,
+        pushResult.rejected,
+      );
+      throw new EnginePolicyRejected(pushResult.rejected.body);
+    }
+    // delivered=true → engine swapped in place; delivered=false → no
+    // active container, next spawn reads from PG. Either way we're done.
+  } catch (err) {
+    if (err instanceof EnginePolicyRejected) throw err;
+    // 5xx / 401 / network — fall back to invalidate so the next agent
+    // request respawns with the new config from PG. Same fail-soft
+    // posture as rotateConnection.
+    console.error(
+      `${change.logPrefix} hot reload failed; falling back to respawn`,
+      err,
+    );
+    await deps.registry.invalidate(result.id).catch(() => undefined);
+  }
+
+  // Cloud-emitted audit row, distinct from the engine's POLICY_RELOADED:
+  // this one carries actor_clerk_user_id, so the audit log answers "who
+  // changed the policy?" without needing the OSS engine to thread an
+  // actor through /admin/policy. tenant_id = connection_id so a future
+  // per-connection audit view can filter on it for free; database =
+  // dbName so the column-level filter on /audit attributes the change to
+  // the right child (default 'main' would misattribute non-main edits).
+  // Best-effort: failure to write audit shouldn't undo the durable
+  // config change (already committed in PG and pushed to the engine).
+  try {
+    await emitConfigAuditRow(customer, {
+      tenantId: id,
+      database: dbName,
+      eventType: change.eventType,
+      payload: {
+        connection_id: id,
+        database_name: dbName,
+        ...change.payload,
+      },
+      actorClerkUserId,
+    });
+  } catch (err) {
+    console.error(
+      `${change.logPrefix} ${change.eventType} audit write failed`,
+      err,
+    );
+  }
+
+  return { id: result.id };
+}
+
+// Replace the table_access policy on one DB of a connection. See
+// applyPolicyConfigChange for the hot-reload / fallback semantics.
+//
+// `dbName` defaults to "main" so existing single-DB callers keep
+// working; multi-DB callers pass the agent-facing alias explicitly.
 //
 // Validation runs here AND at the spawner boundary; the dashboard form
 // also validates before submitting, so a malformed policy reaches this
@@ -541,130 +698,15 @@ export async function setTableAccess(
       .join("; ");
     throw new Error(`invalid policy: ${summary}`);
   }
-
-  const db = getDb(customer.region);
-  // Three-step in a txn: ownership check on the parent (so we don't leak
-  // existence by writing through to a foreign customer's DB), update the
-  // named child's tableAccess, then snapshot every DB on the connection
-  // (post-update) for the hot-reload body. RETURNING on the child write
-  // distinguishes "child not found" from "wrote but no policy change"
-  // and keeps the leakage-avoidance shape (null for both cases).
-  //
-  // Sibling DBs ride along because OSS hot-reload drops any DB absent
-  // from the body — we have to re-state every DB to keep them registered.
-  //
-  // FOR UPDATE on the parent serializes concurrent setTableAccess calls
-  // on the same connection: without it, two parallel edits to different
-  // DBs each read their own snapshot of siblings and the engine ends up
-  // with the loser's stale view of the winner's DB. Same posture as
-  // addDatabase/removeDatabase/renameDatabase below. NOTE: a narrower
-  // race remains between commit-of-T1 and pushPolicy-of-T1 vs T2 — the
-  // engine converges on the next edit since each push sends full state,
-  // but a per-connection push mutex would close it fully.
-  const result = await db.transaction(async (tx) => {
-    const parent = await tx
-      .select({ id: connections.id })
-      .from(connections)
-      .where(
-        and(eq(connections.id, id), eq(connections.customerId, customer.id)),
-      )
-      .for("update")
-      .limit(1);
-    if (parent.length === 0) return null;
-    const updated = await tx
-      .update(connectionDatabases)
-      .set({ tableAccess: validation.value })
-      .where(
-        and(
-          eq(connectionDatabases.connectionId, id),
-          eq(connectionDatabases.name, dbName),
-        ),
-      )
-      .returning({ id: connectionDatabases.id });
-    if (updated.length === 0) return null;
-    const siblings = await tx
-      .select({
-        id: connectionDatabases.id,
-        name: connectionDatabases.name,
-        tableAccess: connectionDatabases.tableAccess,
-        tenantScope: connectionDatabases.tenantScope,
-      })
-      .from(connectionDatabases)
-      .where(eq(connectionDatabases.connectionId, id));
-    return { id: parent[0]!.id, siblings };
+  return applyPolicyConfigChange(customer, id, deps, actorClerkUserId, dbName, {
+    update: { tableAccess: validation.value },
+    eventType: "POLICY_CHANGED",
+    payload: { policy: validation.value },
+    logPrefix: "[setTableAccess]",
   });
-
-  if (!result) return null;
-
-  const databases: DatabaseEntry[] = result.siblings.map((s) => ({
-    name: s.name,
-    connectionDatabaseId: s.id,
-    tableAccess: s.tableAccess,
-    tenantScope: s.tenantScope,
-  }));
-
-  try {
-    const pushResult = await deps.pushPolicy(result.id, databases);
-    if ("rejected" in pushResult) {
-      // Engine kept the previous policy. Don't fall back — respawn
-      // would re-read this same (rejected) policy from PG and fail to
-      // boot. Surface the engine's message to the caller. We also skip
-      // the POLICY_CHANGED audit row: the connections-row update is
-      // committed (validator drift is unreachable in practice; if it
-      // happens, engine state stays put and the dashboard surfaces the
-      // error), but recording "policy changed" would be a lie.
-      console.error(
-        "[setTableAccess] engine rejected policy (validator drift)",
-        pushResult.rejected,
-      );
-      throw new EnginePolicyRejected(pushResult.rejected.body);
-    }
-    // delivered=true → engine swapped in place; delivered=false → no
-    // active container, next spawn reads from PG. Either way we're done.
-  } catch (err) {
-    if (err instanceof EnginePolicyRejected) throw err;
-    // 5xx / 401 / network — fall back to invalidate so the next agent
-    // request respawns with the new policy from PG. Same fail-soft
-    // posture as rotateConnection.
-    console.error(
-      "[setTableAccess] hot reload failed; falling back to respawn",
-      err,
-    );
-    await deps.registry.invalidate(result.id).catch(() => undefined);
-  }
-
-  // Cloud-emitted audit row, distinct from the engine's POLICY_RELOADED:
-  // this one carries actor_clerk_user_id, so the audit log answers "who
-  // changed the policy?" without needing the OSS engine to thread an
-  // actor through /admin/policy. tenant_id = connection_id so a future
-  // per-connection audit view can filter on it for free; database = dbName
-  // so the column-level filter on /audit attributes the change to the
-  // right child (default 'main' would misattribute non-main edits).
-  // Best-effort: failure to write audit shouldn't undo the durable policy
-  // change (which is already committed in PG and pushed to engine).
-  try {
-    await emitConfigAuditRow(customer, {
-      tenantId: id,
-      database: dbName,
-      eventType: "POLICY_CHANGED",
-      payload: {
-        connection_id: id,
-        database_name: dbName,
-        policy: validation.value,
-      },
-      actorClerkUserId,
-    });
-  } catch (err) {
-    console.error("[setTableAccess] POLICY_CHANGED audit write failed", err);
-  }
-
-  return result;
 }
 
-// Replace the tenant_scope config on one DB of a connection. Same shape
-// as setTableAccess: validate cloud-side, FOR UPDATE on the parent, write
-// the named child, snapshot every sibling for the full multi-DB body,
-// push to OSS hot-reload.
+// Replace the tenant_scope config on one DB of a connection.
 //
 // OSS 0.5.0 semantics: `column` is the universal default tenant column;
 // setting it scopes every queried table unless overridden or exempted.
@@ -675,12 +717,8 @@ export async function setTableAccess(
 // EMPTY_TENANT_SCOPE = tenant_scope disabled for the DB; serializer
 // omits the block entirely.
 //
-// `dbName` defaults to "main" so existing single-DB callers keep working;
-// multi-DB callers pass the agent-facing alias explicitly.
-//
-// Returns null when the id is unknown OR owned by another customer OR the
-// named child does not exist (matches setTableAccess / rotateConnection
-// leakage-avoidance shape — caller can't distinguish).
+// TENANT_SCOPE_CHANGED records "who reconfigured tenant isolation on
+// which DB?" — directly relevant to row-level security audits.
 export async function setTenantScope(
   customer: Customer,
   id: string,
@@ -700,102 +738,48 @@ export async function setTenantScope(
       .join("; ");
     throw new Error(`invalid tenant_scope: ${summary}`);
   }
-
-  const db = getDb(customer.region);
-  // Same three-step txn as setTableAccess: ownership check on the parent
-  // (so we don't leak existence by writing through to a foreign customer's
-  // DB), update the named child's tenantScope, then snapshot every DB on
-  // the connection (post-update) for the hot-reload body. RETURNING on
-  // the child write distinguishes "child not found" from "wrote but no
-  // config change" and keeps the leakage-avoidance shape (null for both).
-  //
-  // FOR UPDATE on the parent serializes concurrent edits on this same
-  // connection (whether the concurrent edit is another setTenantScope, a
-  // setTableAccess, or any add/remove/rename). Without it, two parallel
-  // edits each read their own snapshot of siblings and the engine ends
-  // up with the loser's stale view of the winner's DB.
-  const result = await db.transaction(async (tx) => {
-    const parent = await tx
-      .select({ id: connections.id })
-      .from(connections)
-      .where(
-        and(eq(connections.id, id), eq(connections.customerId, customer.id)),
-      )
-      .for("update")
-      .limit(1);
-    if (parent.length === 0) return null;
-    const updated = await tx
-      .update(connectionDatabases)
-      .set({ tenantScope: validation.value })
-      .where(
-        and(
-          eq(connectionDatabases.connectionId, id),
-          eq(connectionDatabases.name, dbName),
-        ),
-      )
-      .returning({ id: connectionDatabases.id });
-    if (updated.length === 0) return null;
-    const siblings = await tx
-      .select({
-        id: connectionDatabases.id,
-        name: connectionDatabases.name,
-        tableAccess: connectionDatabases.tableAccess,
-        tenantScope: connectionDatabases.tenantScope,
-      })
-      .from(connectionDatabases)
-      .where(eq(connectionDatabases.connectionId, id));
-    return { id: parent[0]!.id, siblings };
+  return applyPolicyConfigChange(customer, id, deps, actorClerkUserId, dbName, {
+    update: { tenantScope: validation.value },
+    eventType: "TENANT_SCOPE_CHANGED",
+    payload: { config: validation.value },
+    logPrefix: "[setTenantScope]",
   });
+}
 
-  if (!result) return null;
-
-  const databases: DatabaseEntry[] = result.siblings.map((s) => ({
-    name: s.name,
-    connectionDatabaseId: s.id,
-    tableAccess: s.tableAccess,
-    tenantScope: s.tenantScope ?? EMPTY_TENANT_SCOPE,
-  }));
-
-  try {
-    const pushResult = await deps.pushPolicy(result.id, databases);
-    if ("rejected" in pushResult) {
-      // Engine kept the previous policy. Don't fall back — respawn would
-      // re-read the same (rejected) config from PG and fail to boot.
-      console.error(
-        "[setTenantScope] engine rejected policy (validator drift)",
-        pushResult.rejected,
-      );
-      throw new EnginePolicyRejected(pushResult.rejected.body);
-    }
-  } catch (err) {
-    if (err instanceof EnginePolicyRejected) throw err;
-    console.error(
-      "[setTenantScope] hot reload failed; falling back to respawn",
-      err,
-    );
-    await deps.registry.invalidate(result.id).catch(() => undefined);
+// Replace the dangerous-statement guardrails on one DB of a connection.
+//
+// OSS 0.9.0 semantics: both flags fire regardless of table_access /
+// tenant_scope; an omitted YAML section defaults BOTH on. The cloud
+// always emits the section explicitly, so turning a flag off here is
+// what makes the opt-out reach the engine.
+//
+// GUARDRAILS_CHANGED records "who turned the destructive-statement net
+// off (or back on)?" — an opt-out is exactly the kind of change an
+// audit reviewer wants attributed. The payload key is `guardrails` (not
+// the generic `config`) so the audit list's eventSummary can recognize
+// the row by shape — all cloud config events share the POLICY_RELOAD
+// status bucket.
+export async function setGuardrails(
+  customer: Customer,
+  id: string,
+  config: GuardrailsConfig,
+  deps: PolicyPushDeps,
+  actorClerkUserId: string,
+  dbName: string = DEFAULT_DATABASE_NAME,
+): Promise<{ id: string } | null> {
+  const validation = validateGuardrails(config);
+  if (!validation.ok) {
+    const summary = validation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`invalid guardrails: ${summary}`);
   }
-
-  // Cloud-emitted audit row, same shape as POLICY_CHANGED (see setTableAccess
-  // for the rationale). TENANT_SCOPE_CHANGED records "who reconfigured tenant
-  // isolation on which DB?" — directly relevant to row-level security audits.
-  try {
-    await emitConfigAuditRow(customer, {
-      tenantId: id,
-      database: dbName,
-      eventType: "TENANT_SCOPE_CHANGED",
-      payload: {
-        connection_id: id,
-        database_name: dbName,
-        config: validation.value,
-      },
-      actorClerkUserId,
-    });
-  } catch (err) {
-    console.error("[setTenantScope] TENANT_SCOPE_CHANGED audit write failed", err);
-  }
-
-  return { id: result.id };
+  return applyPolicyConfigChange(customer, id, deps, actorClerkUserId, dbName, {
+    update: { guardrails: validation.value },
+    eventType: "GUARDRAILS_CHANGED",
+    payload: { guardrails: validation.value },
+    logPrefix: "[setGuardrails]",
+  });
 }
 
 // Rotate one DB's DSN on a connection: re-encrypt with the customer's

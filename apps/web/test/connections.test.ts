@@ -123,15 +123,17 @@ function makeFakeDb(): FakeDbHandle {
           // Child updates on connection_databases set the credential
           // columns (rotateConnection), the policy column
           // (setTableAccess), the alias column (renameDatabase via
-          // {name}), or the tenant_scope config. Parent updates on
-          // connections only set {name} via renameConnection — but
-          // since the test never exercises that simultaneously with a
-          // child rename, prefer childUpdate when populated.
+          // {name}), the tenant_scope config, or the guardrails config.
+          // Parent updates on connections only set {name} via
+          // renameConnection — but since the test never exercises that
+          // simultaneously with a child rename, prefer childUpdate when
+          // populated.
           if (
             set &&
             ("encryptedDsn" in set ||
               "tableAccess" in set ||
-              "tenantScope" in set)
+              "tenantScope" in set ||
+              "guardrails" in set)
           ) {
             return Promise.resolve(childUpdate);
           }
@@ -1409,6 +1411,213 @@ describe("setTenantScope", () => {
     );
     expect(audit, "audit row must NOT be written for rejected configs").toBeUndefined();
     errorSpy.mockRestore();
+  });
+});
+
+describe("setGuardrails", () => {
+  const optOut = { block_unqualified_dml: true, block_ddl: false };
+  // Post-update sibling row — post-0021 rows always carry guardrails.
+  const mainSibling = {
+    id: "cdb-main-1",
+    name: "main",
+    tableAccess: { default: "read", tables: {} },
+    tenantScope: inertScope,
+    guardrails: optOut,
+  };
+
+  it("happy path: writes Postgres, hot-reloads engine with guardrails in the multi-DB body", async () => {
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { connectionDatabases } = await import("@midplane-cloud/db");
+    const { setGuardrails } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    const result = await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+
+    expect(result).toMatchObject({ id: "conn-1" });
+    expect(deps.pushPolicy).toHaveBeenCalledWith("conn-1", [
+      {
+        name: "main",
+        connectionDatabaseId: "cdb-main-1",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: inertScope,
+        guardrails: optOut,
+      },
+    ]);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+
+    // The opt-out must land on the child row exactly as validated — an
+    // omitted `false` would silently revert to the engine's default-ON.
+    const childUpdate = handle.calls.find(
+      (c) => c.op === "update" && c.table === connectionDatabases,
+    );
+    const set = childUpdate?.set as { guardrails: typeof optOut } | undefined;
+    expect(set?.guardrails).toEqual(optOut);
+  });
+
+  it("multi-DB connection: restates every sibling's guardrails so OSS doesn't drop them", async () => {
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([
+      mainSibling,
+      {
+        id: "cdb-analytics-1",
+        name: "analytics",
+        tableAccess: { default: "deny", tables: {} },
+        tenantScope: inertScope,
+        guardrails: { block_unqualified_dml: true, block_ddl: true },
+      },
+    ]);
+    const { setGuardrails } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+
+    expect(deps.pushPolicy).toHaveBeenCalledWith("conn-1", [
+      {
+        name: "main",
+        connectionDatabaseId: "cdb-main-1",
+        tableAccess: { default: "read", tables: {} },
+        tenantScope: inertScope,
+        guardrails: optOut,
+      },
+      {
+        name: "analytics",
+        connectionDatabaseId: "cdb-analytics-1",
+        tableAccess: { default: "deny", tables: {} },
+        tenantScope: inertScope,
+        guardrails: { block_unqualified_dml: true, block_ddl: true },
+      },
+    ]);
+  });
+
+  it("rejected (400): throws EnginePolicyRejected and does NOT fall back to invalidate", async () => {
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setGuardrails, EnginePolicyRejected } = await import(
+      "../src/lib/connections.ts"
+    );
+    const { auditEventsIndex } = await import("@midplane-cloud/db");
+    const deps = makePolicyDeps({
+      rejected: { status: 400, body: "guardrails.block_ddl: must be boolean" },
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      setGuardrails(customer, "conn-1", optOut, deps, ACTOR),
+    ).rejects.toBeInstanceOf(EnginePolicyRejected);
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+    // Same convention the sibling setters pin: recording "guardrails
+    // changed" for a config the engine refused would be a lie.
+    const audit = handle.calls.find(
+      (c) => c.op === "insert" && c.table === auditEventsIndex,
+    );
+    expect(audit, "audit row must NOT be written for rejected configs").toBeUndefined();
+    errorSpy.mockRestore();
+  });
+
+  it("network failure: falls back to registry.invalidate (fail-soft)", async () => {
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setGuardrails } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps(() => {
+      throw new Error("ECONNREFUSED");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+    expect(result).toMatchObject({ id: "conn-1" });
+    expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
+    errorSpy.mockRestore();
+  });
+
+  it("dbName not found / foreign owner: returns null and skips push", async () => {
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.setChildUpdateResult([]); // 0 rows matched the dbName
+    const { setGuardrails } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    const result = await setGuardrails(
+      customer,
+      "conn-1",
+      optOut,
+      deps,
+      ACTOR,
+      "ghost-db",
+    );
+
+    expect(result).toBeNull();
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+  });
+
+  it("404 path: returns null and skips push/invalidate when ownership mismatches", async () => {
+    handle.queueSelect([]); // parent ownership check returns no row
+    const { setGuardrails } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    const result = await setGuardrails(
+      customer,
+      "conn-other",
+      optOut,
+      deps,
+      ACTOR,
+    );
+
+    expect(result).toBeNull();
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-boolean flags before touching Postgres", async () => {
+    const { setGuardrails } = await import("../src/lib/connections.ts");
+    const deps = makePolicyDeps();
+
+    await expect(
+      setGuardrails(
+        customer,
+        "conn-1",
+        { block_unqualified_dml: "yes", block_ddl: true } as never,
+        deps,
+        ACTOR,
+      ),
+    ).rejects.toThrow(/invalid guardrails/);
+    expect(handle.calls).toHaveLength(0);
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+  });
+
+  it("emits GUARDRAILS_CHANGED audit row stamped with the actor and the resulting flags", async () => {
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { setGuardrails } = await import("../src/lib/connections.ts");
+    const { auditEventsIndex } = await import("@midplane-cloud/db");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+
+    const audit = handle.calls.find(
+      (c) => c.op === "insert" && c.table === auditEventsIndex,
+    );
+    expect(audit, "GUARDRAILS_CHANGED audit row must be inserted").toBeDefined();
+    const row = audit?.set as
+      | {
+          eventType: string;
+          tenantId: string;
+          actorClerkUserId: string;
+          payload: {
+            connection_id: string;
+            database_name: string;
+            guardrails: typeof optOut;
+          };
+        }
+      | undefined;
+    expect(row?.eventType).toBe("GUARDRAILS_CHANGED");
+    expect(row?.tenantId).toBe("conn-1");
+    expect(row?.actorClerkUserId).toBe(ACTOR);
+    expect(row?.payload.guardrails).toEqual(optOut);
   });
 });
 

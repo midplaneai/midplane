@@ -50,6 +50,11 @@ interface MachineGetResponse {
   id: string;
   state: string;
   private_ip: string;
+  /** Image the machine is actually running (from config.image on the
+   *  list response). Undefined when Fly omits config — the adoption
+   *  image check is skipped then (fail-open keeps the session alive;
+   *  the realistic skew path always carries config). */
+  image?: string;
 }
 
 export class FlyMachineSpawner implements Spawner {
@@ -66,7 +71,7 @@ export class FlyMachineSpawner implements Spawner {
     this.token = opts.apiToken;
     this.indexerToken = opts.indexerToken;
     this.apiBase = opts.apiBase ?? "https://api.machines.dev";
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.8.0";
+    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.9.0";
     this.regions = opts.regions;
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 60_000;
     this.fetchFn = opts.fetch ?? fetch;
@@ -88,19 +93,71 @@ export class FlyMachineSpawner implements Spawner {
     // that entry, so we'd blind-create and Fly would 409 "already_exists".
     // Adopting the live machine makes spawn idempotent against both.
     let machine = await this.createMachine(app, regionCfg.flyRegion, opts);
-    const created = machine !== null;
+    let created = machine !== null;
     if (!machine) {
-      machine = await this.getMachineByName(app, name);
-      if (!machine) {
+      const adopted = await this.getMachineByName(app, name);
+      if (!adopted) {
         throw new Error(
           `fly machine ${name} reported existing on create but absent on lookup`,
         );
       }
-      // Idle machines auto_stop=suspend. We reach the engine directly over
-      // 6PN, which does NOT trip Fly's auto_start (that's edge-traffic only),
-      // so an adopted-but-suspended machine must be woken before /health.
-      if (machine.state !== "started") {
-        await this.startMachine(app, machine.id);
+      if (adopted.image !== undefined && imageIsStale(adopted.image, this.image)) {
+        // Stale-image guard: a machine created under an older engine pin
+        // survives web redeploys (it's adopted by name, never recreated).
+        // That's not just version drift — pre-0.9.0 engine schemas are
+        // non-strict and silently STRIP policy sections they don't know,
+        // so a stale engine acks the new YAML while enforcing none of it
+        // (the UI would claim guardrails are on; the engine wouldn't
+        // know they exist). Recreate on mismatch so the pinned image is
+        // what actually enforces. imageIsStale is ONE-DIRECTIONAL: an
+        // instance never destroys a machine running a NEWER tag than its
+        // own pin — during a bluegreen web deploy, mixed instances would
+        // otherwise ping-pong the same engine machine, killing live
+        // sessions on every flip.
+        await this.destroy(app, adopted.id);
+        // Fly's DELETE is async — the dying machine can hold the name for
+        // a few seconds, so the create may keep 409ing. Retry briefly;
+        // a concurrent spawn may also recreate it first, in which case we
+        // adopt that one (if it's not stale too).
+        const recreateDeadline = Date.now() + 10_000;
+        for (;;) {
+          machine = await this.createMachine(app, regionCfg.flyRegion, opts);
+          if (machine) {
+            created = true;
+            break;
+          }
+          const recreated = await this.getMachineByName(app, name);
+          if (
+            recreated &&
+            !(
+              recreated.image !== undefined &&
+              imageIsStale(recreated.image, this.image)
+            ) &&
+            recreated.id !== adopted.id
+          ) {
+            // Someone else recreated it on an acceptable image.
+            machine = recreated;
+            created = false;
+            if (machine.state !== "started") {
+              await this.startMachine(app, machine.id);
+            }
+            break;
+          }
+          if (Date.now() >= recreateDeadline) {
+            throw new Error(
+              `fly machine ${name} could not be recreated after destroying its stale image (want ${this.image})`,
+            );
+          }
+          await sleep(500);
+        }
+      } else {
+        machine = adopted;
+        // Idle machines auto_stop=suspend. We reach the engine directly over
+        // 6PN, which does NOT trip Fly's auto_start (that's edge-traffic only),
+        // so an adopted-but-suspended machine must be woken before /health.
+        if (machine.state !== "started") {
+          await this.startMachine(app, machine.id);
+        }
       }
     }
 
@@ -123,6 +180,33 @@ export class FlyMachineSpawner implements Spawner {
       // idle-suspends and gets recreated on a later request.
       if (created) await this.destroy(app, machine.id).catch(() => undefined);
       throw err;
+    }
+
+    if (!created) {
+      // Adopted machines keep the policy FILE they were created with, and
+      // nothing else pushes after adoption: the hot-reload path resolves
+      // engines via an in-memory registry that every web redeploy wipes,
+      // so a config saved while the registry was cold reports
+      // delivered:false ("next spawn reads from PG") — but this adoption
+      // IS that next spawn, and without a push the persistent engine
+      // keeps enforcing the old policy while PG and the UI say otherwise.
+      // Push the spawn-time policy (read fresh from PG by the caller) so
+      // adoption and creation leave the engine in the same state.
+      try {
+        await this.pushPolicyToMachine(machine.private_ip, opts);
+      } catch (err) {
+        // A machine that REFUSED the push would serve stale config
+        // indefinitely — that's the silent-skew hazard, not a blip:
+        // destroy it; the next request recreates with a fresh policy
+        // file. A transient network failure is different — the machine
+        // may be serving another instance's live session, so fail this
+        // spawn WITHOUT destroying (the caller retries; teardown on a
+        // blip would kill a working engine).
+        if (!(err instanceof TransientPushError)) {
+          await this.destroy(app, machine.id).catch(() => undefined);
+        }
+        throw err;
+      }
     }
 
     const fetchFn = this.fetchFn;
@@ -163,10 +247,16 @@ export class FlyMachineSpawner implements Spawner {
     }
     const machines = (await res.json()) as Array<MachineGetResponse & {
       name?: string;
+      config?: { image?: string };
     }>;
     const m = machines.find((x) => x.name === name);
     return m
-      ? { id: m.id, state: m.state, private_ip: m.private_ip }
+      ? {
+          id: m.id,
+          state: m.state,
+          private_ip: m.private_ip,
+          image: m.config?.image,
+        }
       : null;
   }
 
@@ -200,6 +290,7 @@ export class FlyMachineSpawner implements Spawner {
         connectionDatabaseId: db.connectionDatabaseId,
         tableAccess: db.tableAccess,
         tenantScope: db.tenantScope,
+        guardrails: db.guardrails,
       })),
     );
     const res = await this.fetchFn(`${this.apiBase}/v1/apps/${app}/machines`, {
@@ -341,9 +432,115 @@ export class FlyMachineSpawner implements Spawner {
     );
   }
 
+  // Hot-swap the policy on an adopted machine via the engine's
+  // POST /admin/policy (same body shape pushPolicy in admin.ts sends).
+  // Skipped without an indexerToken — the engine's admin surface is 404
+  // in that mode (laptop dev); hosted always has the token.
+  private async pushPolicyToMachine(
+    privateIp: string,
+    opts: SpawnOptions,
+  ): Promise<void> {
+    if (!this.indexerToken) return;
+    const body = serializeMultiDbPolicyToYaml(
+      opts.databases.map((db) => ({
+        name: db.name,
+        connectionDatabaseId: db.connectionDatabaseId,
+        tableAccess: db.tableAccess,
+        tenantScope: db.tenantScope,
+        guardrails: db.guardrails,
+      })),
+    );
+    let res: Response;
+    try {
+      res = await this.fetchFn(`http://[${privateIp}]:8080/admin/policy`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.indexerToken}`,
+          "content-type": "text/yaml",
+        },
+        body,
+      });
+    } catch (err) {
+      // Network-level failure — the caller must NOT destroy on this.
+      throw new TransientPushError(
+        `adopted machine policy push failed (network): ${String(err)}`,
+      );
+    }
+    if (!res.ok) {
+      throw new Error(
+        `adopted machine rejected policy push: ${res.status} ${await res
+          .text()
+          .catch(() => "")}`,
+      );
+    }
+  }
+
   private async destroy(app: string, id: string): Promise<void> {
     await destroyMachine(this.fetchFn, this.apiBase, this.token, app, id);
   }
+}
+
+/** Thrown when the adoption policy push failed at the NETWORK level —
+ *  the machine may be healthy and serving another instance's session,
+ *  so the spawn fails without tearing it down. */
+export class TransientPushError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransientPushError";
+  }
+}
+
+/** Compare image refs by repo:tag, ignoring registry-host prefixes and
+ *  digest suffixes Fly may normalize in (`registry-1.docker.io/...`,
+ *  `...@sha256:`). A raw string compare would read every adoption as a
+ *  mismatch the moment Fly normalizes — destroying live machines on each
+ *  registry-cache miss and throwing on the re-adopt path. Exported for
+ *  tests. */
+export function sameImageRef(a: string, b: string): boolean {
+  return normalizeImageRef(a) === normalizeImageRef(b);
+}
+
+function normalizeImageRef(ref: string): string {
+  let r = ref.split("@")[0]!; // drop digest
+  // Drop a registry-host prefix (contains "." or ":" before the first
+  // slash — `docker.io/`, `registry-1.docker.io/`, `localhost:5000/`).
+  const firstSlash = r.indexOf("/");
+  if (firstSlash > 0) {
+    const head = r.slice(0, firstSlash);
+    if (head.includes(".") || head.includes(":")) r = r.slice(firstSlash + 1);
+  }
+  return r;
+}
+
+/** ONE-DIRECTIONAL staleness: true only when `adopted` should be torn
+ *  down in favor of `pinned`. When both tags parse as semver, only an
+ *  OLDER adopted machine is stale — an instance still on last release's
+ *  pin must never destroy a machine a newer instance just created, or a
+ *  mixed-pin bluegreen deploy ping-pongs the same engine machine (each
+ *  flip killing live MCP sessions). Non-semver differences fall back to
+ *  trusting the pin (recreate). Exported for tests. */
+export function imageIsStale(adoptedRef: string, pinnedRef: string): boolean {
+  if (sameImageRef(adoptedRef, pinnedRef)) return false;
+  const adopted = parseTagSemver(adoptedRef);
+  const pinned = parseTagSemver(pinnedRef);
+  if (adopted && pinned) {
+    for (let i = 0; i < 3; i++) {
+      if (adopted[i]! < pinned[i]!) return true;
+      if (adopted[i]! > pinned[i]!) return false;
+    }
+    // Same numeric version but refs differ (different repo/name) — not
+    // an age question; trust the pin and recreate.
+    return true;
+  }
+  return true;
+}
+
+function parseTagSemver(ref: string): [number, number, number] | null {
+  const tag = normalizeImageRef(ref).split(":")[1];
+  if (!tag) return null;
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(tag);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
 async function destroyMachine(
