@@ -197,6 +197,83 @@ export function tenantScopeIsActive(config: TenantScopeConfig): boolean {
   return config.column !== null || Object.keys(config.overrides).length > 0;
 }
 
+// --- guardrails --------------------------------------------------------------
+//
+// Dangerous-statement guardrails — OSS 0.9.0's `guardrails` YAML block.
+// Categorical blocks that fire REGARDLESS of table_access / tenant_scope:
+//
+//   block_unqualified_dml   DELETE / UPDATE with no WHERE clause
+//   block_ddl               DROP / TRUNCATE / ALTER (CREATE stays allowed —
+//                           agents running migrations need it; revisit if
+//                           that proves wrong)
+//
+// The engine defaults BOTH flags on when the section is omitted, and the
+// cloud stores the same default for every row — so the JSONB at rest, the
+// emitted YAML, and the engine's resolved posture agree. Keys mirror the
+// YAML 1:1, same convention as TableAccessPolicy.
+
+export interface GuardrailsConfig {
+  block_unqualified_dml: boolean;
+  block_ddl: boolean;
+}
+
+/** Mirror of the engine's default-ON posture for an omitted `guardrails`
+ *  section. Used as the column default for new connection_databases rows
+ *  and as the fallback when validating a null/undefined JSONB read. */
+export const DEFAULT_GUARDRAILS: GuardrailsConfig = {
+  block_unqualified_dml: true,
+  block_ddl: true,
+};
+
+export interface GuardrailsValidationError {
+  path: string;
+  message: string;
+}
+export type GuardrailsValidationResult =
+  | { ok: true; value: GuardrailsConfig }
+  | { ok: false; errors: GuardrailsValidationError[] };
+
+// Validate untrusted input into a typed GuardrailsConfig. Mirrors the
+// engine's Zod schema: each flag is a boolean defaulting to true, and an
+// absent section resolves to DEFAULT_GUARDRAILS — a row created before
+// the guardrails column existed reads as protected, same as the engine
+// treats a YAML with no `guardrails:` block.
+export function validateGuardrails(input: unknown): GuardrailsValidationResult {
+  // Spread, never the shared object: a caller mutating its result must
+  // not poison the module-level default for the whole process.
+  if (input == null) return { ok: true, value: { ...DEFAULT_GUARDRAILS } };
+  if (typeof input !== "object" || Array.isArray(input)) {
+    return {
+      ok: false,
+      errors: [{ path: "", message: "guardrails must be an object" }],
+    };
+  }
+  const obj = input as Record<string, unknown>;
+  const errors: GuardrailsValidationError[] = [];
+  const value: GuardrailsConfig = { ...DEFAULT_GUARDRAILS };
+  for (const key of ["block_unqualified_dml", "block_ddl"] as const) {
+    const v = obj[key];
+    if (v === undefined) continue; // engine-side .default(true)
+    if (typeof v !== "boolean") {
+      errors.push({ path: key, message: "must be a boolean" });
+      continue;
+    }
+    value[key] = v;
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value };
+}
+
+/** Strict variant for code paths that must not see invalid config (the
+ *  spawner / hot-reload boundary). Fail closed rather than start an OSS
+ *  container with a degraded guardrails posture. */
+export function parseGuardrailsOrThrow(input: unknown): GuardrailsConfig {
+  const r = validateGuardrails(input);
+  if (r.ok) return r.value;
+  const summary = r.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+  throw new Error(`invalid guardrails: ${summary}`);
+}
+
 export interface DatabaseEntry {
   name: string;
   /** Connection-database id used to derive the DSN env var name. ULIDs
@@ -208,6 +285,11 @@ export interface DatabaseEntry {
    *  for this DB; the YAML omits the block entirely (OSS treats absent
    *  block as disabled). */
   tenantScope: TenantScopeConfig;
+  /** Dangerous-statement guardrails (OSS 0.9.0). ALWAYS emitted into the
+   *  YAML — the engine would default an omitted section to both-on, but
+   *  stating it keeps /etc/midplane/policy.yaml self-describing and pins
+   *  the posture even if the engine default ever moves. */
+  guardrails: GuardrailsConfig;
 }
 
 // Mirrors OSS ENV_INTERP_RE so the cloud refuses to derive an env var name
@@ -272,6 +354,15 @@ export function serializeMultiDbPolicyToYaml(
       }
     }
     emitTenantScope(lines, db.tenantScope);
+    // Unconditional (unlike tenant_scope): both-on is the engine's omitted-
+    // section default, so emitting it changes nothing today — but an
+    // explicit block keeps the file readable as the whole policy and is
+    // what makes an operator's opt-out (`false`) expressible at all.
+    lines.push(`    guardrails:`);
+    lines.push(
+      `      block_unqualified_dml: ${db.guardrails.block_unqualified_dml}`,
+    );
+    lines.push(`      block_ddl: ${db.guardrails.block_ddl}`);
   }
   return lines.join("\n") + "\n";
 }

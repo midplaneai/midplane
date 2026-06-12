@@ -8,11 +8,14 @@ import { describe, expect, it } from "vitest";
 import {
   ACCESS_LEVELS,
   DB_NAME_RE,
+  DEFAULT_GUARDRAILS,
   DEFAULT_POLICY,
   dsnEnvVarFor,
   isValidDbName,
+  parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   serializeMultiDbPolicyToYaml,
+  validateGuardrails,
   validatePolicy,
   type DatabaseEntry,
   type TableAccessPolicy,
@@ -160,6 +163,72 @@ describe("cloud ⇄ engine validator parity", () => {
   }
 });
 
+// Mirrors the engine 0.9.0 GuardrailsSchema: each flag a boolean
+// defaulting to true, the whole section defaulting to both-on when
+// omitted. The omitted-section default matters most — a JSONB null
+// (row predating the 0021 column) must read as protected, not off.
+describe("validateGuardrails", () => {
+  it("null/undefined resolve to the default-ON posture", () => {
+    for (const input of [null, undefined]) {
+      const r = validateGuardrails(input);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.value).toEqual(DEFAULT_GUARDRAILS);
+    }
+  });
+
+  it("a missing flag defaults to true (engine-side .default(true))", () => {
+    const r = validateGuardrails({ block_ddl: false });
+    expect(r.ok).toBe(true);
+    if (r.ok)
+      expect(r.value).toEqual({ block_unqualified_dml: true, block_ddl: false });
+  });
+
+  it("accepts explicit opt-out of both flags", () => {
+    const r = validateGuardrails({
+      block_unqualified_dml: false,
+      block_ddl: false,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok)
+      expect(r.value).toEqual({
+        block_unqualified_dml: false,
+        block_ddl: false,
+      });
+  });
+
+  it("rejects non-boolean flags (engine parity: z.boolean())", () => {
+    for (const bad of ["true", 1, {}, []]) {
+      const r = validateGuardrails({ block_ddl: bad });
+      expect(r.ok, `should reject block_ddl=${JSON.stringify(bad)}`).toBe(false);
+      if (!r.ok) expect(r.errors[0]?.path).toBe("block_ddl");
+    }
+  });
+
+  it("rejects non-object input", () => {
+    for (const bad of [42, "on", []]) {
+      expect(validateGuardrails(bad).ok).toBe(false);
+    }
+  });
+
+  it("ignores unknown keys (engine parity: non-strict z.object)", () => {
+    const r = validateGuardrails({ block_ddl: false, block_create: true });
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("parseGuardrailsOrThrow", () => {
+  it("returns the typed value on success", () => {
+    const v = parseGuardrailsOrThrow({ block_unqualified_dml: false });
+    expect(v).toEqual({ block_unqualified_dml: false, block_ddl: true });
+  });
+
+  it("throws with a useful message on failure", () => {
+    expect(() => parseGuardrailsOrThrow({ block_ddl: "yes" })).toThrow(
+      /invalid guardrails/,
+    );
+  });
+});
+
 describe("parsePolicyOrThrow", () => {
   it("returns the typed value on success", () => {
     const v = parsePolicyOrThrow({ default: "read", tables: { x: "deny" } });
@@ -241,11 +310,12 @@ describe("serializeMultiDbPolicyToYaml", () => {
       connectionDatabaseId: "01HXYZ123ABC456DEF789GHI01",
       tableAccess: { default: "read", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
+      guardrails: { block_unqualified_dml: true, block_ddl: true },
       ...overrides,
     };
   }
 
-  it("emits a single-DB entry with table_access, no tenant_scope when config is inert", () => {
+  it("emits a single-DB entry with table_access + guardrails, no tenant_scope when config is inert", () => {
     const yaml = serializeMultiDbPolicyToYaml([entry()]);
     expect(yaml).toBe(
       [
@@ -255,9 +325,22 @@ describe("serializeMultiDbPolicyToYaml", () => {
         "    table_access:",
         "      default: read",
         "      tables: {}",
+        "    guardrails:",
+        "      block_unqualified_dml: true",
+        "      block_ddl: true",
         "",
       ].join("\n"),
     );
+  });
+
+  it("emits guardrails opt-outs literally — false must reach the engine, since an omitted section defaults ON", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        guardrails: { block_unqualified_dml: false, block_ddl: false },
+      }),
+    ]);
+    expect(yaml).toContain("      block_unqualified_dml: false");
+    expect(yaml).toContain("      block_ddl: false");
   });
 
   it("emits OSS 0.5.0 strict-mode shape: column + overrides + exempt, each sorted", () => {
@@ -293,6 +376,9 @@ describe("serializeMultiDbPolicyToYaml", () => {
       "      exempt:",
       "        - audit_log",
       "        - regions",
+      "    guardrails:",
+      "      block_unqualified_dml: true",
+      "      block_ddl: true",
       "",
     ].join("\n");
     expect(yaml).toBe(expected);

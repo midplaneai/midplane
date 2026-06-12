@@ -24,7 +24,11 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
-import { type TableAccessPolicy, type TenantScopeConfig } from "./policy.ts";
+import {
+  type GuardrailsConfig,
+  type TableAccessPolicy,
+  type TenantScopeConfig,
+} from "./policy.ts";
 
 // --- Region -----------------------------------------------------------------
 
@@ -158,6 +162,17 @@ export const connectionDatabases = pgTable(
       .notNull()
       .default(
         sql`'{"column":null,"overrides":{},"exempt":[]}'::jsonb`,
+      ),
+    // Per-DB dangerous-statement guardrails (OSS 0.9.0): categorical
+    // blocks for no-WHERE DML and DDL that fire regardless of
+    // table_access. Default both-on mirrors the engine's omitted-section
+    // posture, so a row that predates an explicit save is protected.
+    // Hot-swappable via /admin/policy alongside the other two blocks.
+    guardrails: jsonb("guardrails")
+      .$type<GuardrailsConfig>()
+      .notNull()
+      .default(
+        sql`'{"block_unqualified_dml":true,"block_ddl":true}'::jsonb`,
       ),
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),
     // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse
