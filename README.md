@@ -335,7 +335,7 @@ docker build -t midplane-web -f apps/web/Dockerfile \
 
 ## Testing
 
-`bun test` runs the vitest unit suite. Live end-to-end suites under `e2e/` are gated on `E2E_LIVE=1` and require Docker + a Neon dev branch:
+`bun run test` runs the vitest unit suite (not bare `bun test` — see the quick-start note). Live end-to-end suites under `e2e/` are gated on `E2E_LIVE=1` and require Docker + a Neon dev branch:
 
 ```bash
 bun run test:e2e:live                          # all live suites

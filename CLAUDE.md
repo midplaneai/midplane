@@ -61,21 +61,30 @@ catches and renders inline.
 ## OSS image version pin sites
 
 The OSS engine image version (`midplane/midplane:X.Y.Z`) is pinned in
-seven places. Bumping requires updating all of them or the dev loop and
-prod deploys diverge from what the cloud was tested against:
+thirteen places. Bumping requires updating all of them or the dev loop
+and prod deploys diverge from what the cloud was tested against:
 
 - `scripts/dev-image.sh` — local build tag
 - `scripts/bootstrap.sh` — one-shot setup script
 - `.env.example` — documented default
 - `packages/router/src/spawner-docker.ts` — fallback when env unset
 - `packages/router/src/spawner-fly.ts` — fallback when env unset
-- `fly-eu.toml` (and any sibling regional `fly-*.toml`) — production
+- `fly-eu.toml` / `fly-us.toml` — production runtime apps
+- `fly-web-eu.toml` / `fly-web-us.toml` — `MIDPLANE_OSS_IMAGE` example
+  comments in the secrets blocks
+- `.github/workflows/deploy-fly.yml` — workflow input default; a bare
+  version number (`"0.9.0"`), so the grep below does NOT catch it
 - `README.md` — docs
+- `e2e/hot-policy-reload.live.e2e.ts` / `e2e/mcp-proxy.live.e2e.ts` —
+  prerequisite comments
 
-Plus the test fixture in `packages/router/test/spawner-docker.test.ts`
-asserts on the tag, so it gets re-pinned to match.
+Plus the test fixtures in `packages/router/test/spawner-docker.test.ts`
+and `packages/router/test/spawner-fly.test.ts` assert on the tag (the
+fly suite's stale-image/`sameImageRef` cases use the current pin as the
+"fresh" side), so they get re-pinned to match.
 
-Sanity-check grep before declaring a bump done:
+Sanity-check grep before declaring a bump done — then check
+`deploy-fly.yml` by hand, since its default is a bare version number:
 `rg 'midplane/midplane:[0-9]' --hidden -g '!node_modules' -g '!bun.lock'`
 
 ## Skill routing
