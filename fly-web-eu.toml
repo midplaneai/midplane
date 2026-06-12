@@ -63,7 +63,7 @@ primary_region = "fra"
 #   FLY_APP_EU="midplane-eu"
 #   FLY_REGION_EU="fra"
 #   MIDPLANE_PUBLIC_HOST_EU               # e.g. "eu.midplane.ai"
-#   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.8.0"
+#   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.9.0"
 #   INDEXER_TOKEN                         # shared with regional containers
 #   MIDPLANE_STAFF_USER_IDS               # comma-separated Clerk user IDs (staff allowlist)
 

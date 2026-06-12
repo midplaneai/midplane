@@ -22,8 +22,10 @@
 import { z } from "zod";
 
 import {
+  parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
+  type DatabaseEntry,
 } from "@midplane-cloud/db";
 import type { DryRunRequest } from "@midplane-cloud/router";
 
@@ -31,6 +33,7 @@ import { getConnectionWithDatabasesAndCredentials } from "@/lib/connections";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import {
+  MAX_GUARDRAIL_PROBES,
   MAX_PROBES_PER_RUN,
   PROBE_ACTIONS,
   PROBE_TENANT_VALUE,
@@ -52,9 +55,23 @@ const Body = z
     database: z.string().min(1).max(64),
     probes: z.array(Probe).min(1).max(MAX_PROBES_PER_RUN).optional(),
     sql: z.string().min(1).max(10_000).optional(),
+    // Guardrail checks riding along with a probe run: literal dangerous
+    // statements (the engine's probe vocabulary can't express them — its
+    // DML probes are deliberately WHERE-qualified). Each becomes one
+    // engine `sql` call inside this single cloud request, so a panel run
+    // stays one rate-limit unit. Same trust posture as `sql`: arbitrary
+    // strings are fine, nothing executes.
+    guardrail_sqls: z
+      .array(z.string().min(1).max(10_000))
+      .min(1)
+      .max(MAX_GUARDRAIL_PROBES)
+      .optional(),
   })
   .refine((b) => (b.probes === undefined) !== (b.sql === undefined), {
     message: "exactly one of probes | sql",
+  })
+  .refine((b) => b.guardrail_sqls === undefined || b.probes !== undefined, {
+    message: "guardrail_sqls requires probes",
   });
 
 // 503 details the client may see. dryRunPolicy's other details carry
@@ -68,6 +85,7 @@ const SAFE_UNAVAILABLE_DETAILS = new Set([
   "engine image does not support dry-run yet",
   "engine timed out",
   "malformed dry-run response",
+  "policy changed mid-run",
 ]);
 
 export async function POST(
@@ -146,9 +164,11 @@ export async function POST(
     }
     let tableAccess;
     let tenantScope;
+    let guardrails;
     try {
       tableAccess = parsePolicyOrThrow(cdb.tableAccess);
       tenantScope = parseTenantScopeOrThrow(cdb.tenantScope);
+      guardrails = parseGuardrailsOrThrow(cdb.guardrails);
     } catch (err) {
       console.error("[dry-run] invalid stored policy", err);
       return Response.json(
@@ -162,14 +182,41 @@ export async function POST(
       dsn: decrypt.plaintext,
       tableAccess,
       tenantScope,
+      guardrails,
     });
   }
 
-  const request: DryRunRequest = {
+  // One engine call per request: the probe matrix (or custom statement)
+  // first, then each guardrail statement as its own single-statement
+  // `sql` request. The router pays acquire + push once for the sequence
+  // and returns the verdicts concatenated in this order.
+  const base = {
     database: parsed.data.database,
     tenant_context: { value: PROBE_TENANT_VALUE },
-    ...(parsed.data.probes ? { probes: parsed.data.probes } : {}),
-    ...(parsed.data.sql ? { sql: parsed.data.sql } : {}),
+  };
+  const requests: DryRunRequest[] = [
+    {
+      ...base,
+      ...(parsed.data.probes ? { probes: parsed.data.probes } : {}),
+      ...(parsed.data.sql ? { sql: parsed.data.sql } : {}),
+    },
+    ...(parsed.data.guardrail_sqls ?? []).map((sql) => ({ ...base, sql })),
+  ];
+
+  // Re-read of the policy entries right before the router's push. The
+  // snapshot above can be a minute old by push time (cold spawn), and a
+  // save committed in that window must not be overwritten on the live
+  // engine by our older view. No decryption — push entries carry no DSN.
+  const freshEntries = async (): Promise<DatabaseEntry[]> => {
+    const fresh = await getConnectionWithDatabasesAndCredentials(customer, id);
+    if (!fresh) throw new Error("connection disappeared during dry-run");
+    return fresh.databases.map((cdb) => ({
+      name: cdb.name,
+      connectionDatabaseId: cdb.id,
+      tableAccess: parsePolicyOrThrow(cdb.tableAccess),
+      tenantScope: parseTenantScopeOrThrow(cdb.tenantScope),
+      guardrails: parseGuardrailsOrThrow(cdb.guardrails),
+    }));
   };
 
   const outcome = await ctx.dryRun(
@@ -178,7 +225,8 @@ export async function POST(
       region: conn.region,
       databases: spawnDatabases,
     },
-    request,
+    requests,
+    freshEntries,
   );
 
   if (outcome.ok) {

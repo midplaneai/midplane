@@ -32,6 +32,7 @@
 import { bumpLastUsed, resolveByToken } from "@midplane-cloud/router";
 import {
   getDb,
+  parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
 } from "@midplane-cloud/db";
@@ -192,6 +193,7 @@ export async function proxyMcp(
     }
     let tableAccess;
     let tenantScope;
+    let guardrails;
     try {
       // Validate at the boundary — Postgres should never hold malformed
       // policy (validatePolicy gates every write), but if it somehow does,
@@ -199,8 +201,11 @@ export async function proxyMcp(
       // parseTenantScopeOrThrow normalizes legacy 0.4.x flat-map rows that
       // slipped past the 0012 backfill, so a pre-migration row reads as
       // { column: null, overrides: <old map>, exempt: [] }.
+      // parseGuardrailsOrThrow resolves a null row (pre-0021) to the
+      // default-ON posture, matching the engine's omitted-section default.
       tableAccess = parsePolicyOrThrow(cdb.tableAccess);
       tenantScope = parseTenantScopeOrThrow(cdb.tenantScope);
+      guardrails = parseGuardrailsOrThrow(cdb.guardrails);
     } catch (err) {
       console.error("invalid policy at spawn", err);
       return Response.json(
@@ -218,6 +223,7 @@ export async function proxyMcp(
       dsn: decrypt.plaintext,
       tableAccess,
       tenantScope,
+      guardrails,
     });
   }
 

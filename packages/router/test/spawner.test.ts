@@ -37,6 +37,7 @@ const opts = (connectionId = "01HXYZCONN000000000000000A"): SpawnOptions => ({
       dsn: "postgres://x",
       tableAccess: { default: "deny", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
+      guardrails: { block_unqualified_dml: true, block_ddl: true },
     },
   ],
 });

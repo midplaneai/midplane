@@ -9,12 +9,16 @@ import { describe, expect, it } from "vitest";
 import type { TableAccessPolicy } from "@midplane-cloud/db/policy";
 
 import {
+  buildGuardrailProbes,
   buildProbeMatrix,
   expectedDecision,
   isTenantScoped,
+  MAX_GUARDRAIL_PROBES,
   MAX_PROBES_PER_RUN,
+  pickGuardrailTable,
   PROBE_TABLE_CAP,
   probeLabel,
+  reconcileGuardrails,
 } from "../src/lib/probe-matrix.ts";
 
 const NO_SCOPE = { column: null, overrides: {}, exempt: [] };
@@ -150,6 +154,181 @@ describe("expectedDecision", () => {
         SCOPED,
       ),
     ).toBe("deny");
+  });
+});
+
+describe("buildGuardrailProbes", () => {
+  const BOTH_ON = { block_unqualified_dml: true, block_ddl: true };
+
+  it("emits 2 DML + 3 DDL statements when both flags are on", () => {
+    const probes = buildGuardrailProbes("orders", BOTH_ON);
+    expect(probes.map((p) => p.kind)).toEqual([
+      "unqualified_delete",
+      "unqualified_update",
+      "ddl_drop",
+      "ddl_truncate",
+      "ddl_alter",
+    ]);
+    // DML probes must be genuinely unqualified — a WHERE would test
+    // table_access instead of the guardrail.
+    expect(probes[0]!.sql).toBe('delete from "orders"');
+    expect(probes[0]!.sql).not.toMatch(/where/i);
+    expect(probes[1]!.sql).not.toMatch(/where/i);
+    expect(probes[2]!.sql).toBe('drop table "orders"');
+  });
+
+  it("emits probes only for flags that are ON (an OFF flag has no cloud-side expectation)", () => {
+    const dmlOnly = buildGuardrailProbes("orders", {
+      block_unqualified_dml: true,
+      block_ddl: false,
+    });
+    expect(dmlOnly.map((p) => p.kind)).toEqual([
+      "unqualified_delete",
+      "unqualified_update",
+    ]);
+    const ddlOnly = buildGuardrailProbes("orders", {
+      block_unqualified_dml: false,
+      block_ddl: true,
+    });
+    expect(ddlOnly.map((p) => p.kind)).toEqual([
+      "ddl_drop",
+      "ddl_truncate",
+      "ddl_alter",
+    ]);
+    expect(
+      buildGuardrailProbes("orders", {
+        block_unqualified_dml: false,
+        block_ddl: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("emits nothing without a representative table", () => {
+    expect(buildGuardrailProbes(undefined, BOTH_ON)).toEqual([]);
+  });
+
+  it("quotes identifiers so reserved-word tables don't 400 the whole run", () => {
+    // `delete from user` fails the engine's parser, and a parse failure on
+    // the custom-sql path is a 400 that kills the ENTIRE panel run —
+    // unlike matrix probes, which degrade to a parse_error verdict row.
+    const probes = buildGuardrailProbes("user", BOTH_ON);
+    expect(probes[0]!.sql).toBe('delete from "user"');
+    expect(probes[2]!.sql).toBe('drop table "user"');
+    // Labels keep the bare name — they're display text, not SQL.
+    expect(probes[0]!.label).toBe("DELETE FROM user with no WHERE");
+  });
+
+  it("quotes schema-qualified names per part and escapes embedded quotes", () => {
+    const qualified = buildGuardrailProbes("public.orders", BOTH_ON);
+    expect(qualified[0]!.sql).toBe('delete from "public"."orders"');
+    const hostile = buildGuardrailProbes('we"ird', BOTH_ON);
+    expect(hostile[0]!.sql).toBe('delete from "we""ird"');
+  });
+
+  it("worst case stays within MAX_GUARDRAIL_PROBES (the dry-run route's validator ceiling)", () => {
+    expect(buildGuardrailProbes("orders", BOTH_ON).length).toBe(
+      MAX_GUARDRAIL_PROBES,
+    );
+  });
+
+  it("labels read like the risk they stand for — keywords UPPERCASE, identifiers + prose lowercase", () => {
+    // All-lowercase made "with no where" read as English prose; the caps
+    // mark which tokens are SQL and set statement rows apart from the
+    // matrix's lowercase action labels.
+    const probes = buildGuardrailProbes("orders", BOTH_ON);
+    expect(probes[0]!.label).toBe("DELETE FROM orders with no WHERE");
+    expect(probes[1]!.label).toBe("UPDATE orders with no WHERE");
+    expect(probes[2]!.label).toBe("DROP TABLE orders");
+    // The statements themselves stay lowercase — they're real SQL for the
+    // engine, not display text.
+    expect(probes[0]!.sql).toBe('delete from "orders"');
+  });
+});
+
+describe("pickGuardrailTable", () => {
+  it("prefers a writable table — the only place a deny proves the guardrail", () => {
+    const policy: TableAccessPolicy = {
+      default: "deny",
+      tables: { orders: "read_write", users: "read" },
+    };
+    expect(pickGuardrailTable(["users", "orders", "audit"], policy)).toBe(
+      "orders",
+    );
+  });
+
+  it("falls back to the first table when nothing is writable (default-deny everywhere)", () => {
+    const policy: TableAccessPolicy = { default: "deny", tables: {} };
+    expect(pickGuardrailTable(["users", "orders"], policy)).toBe("users");
+    expect(pickGuardrailTable([], policy)).toBeUndefined();
+  });
+
+  it("a writable default makes the first table the pick", () => {
+    const policy: TableAccessPolicy = { default: "read_write", tables: {} };
+    expect(pickGuardrailTable(["users", "orders"], policy)).toBe("users");
+  });
+});
+
+describe("reconcileGuardrails", () => {
+  const BOTH_ON = { block_unqualified_dml: true, block_ddl: true };
+  const denied = (rule: string) => ({
+    decision: "deny" as const,
+    reason: "Denied.",
+    matched_rule: rule,
+  });
+
+  it("zips probes to verdicts in order and credits the dangerous_statement rule", () => {
+    const probes = buildGuardrailProbes("orders", {
+      block_unqualified_dml: true,
+      block_ddl: false,
+    });
+    const r = reconcileGuardrails(probes, [
+      denied("dangerous_statement"),
+      denied("dangerous_statement"),
+    ]);
+    expect(r).toHaveLength(2);
+    expect(r.every((g) => g.match && g.byGuardrail)).toBe(true);
+  });
+
+  it("fails CLOSED: a probe with no verdict is a failed check, not a silent pass", () => {
+    // Four review specialists flagged the original slice()-zip for
+    // dropping unanswered probes — which let the headline read
+    // "✓ engine enforces your policy" over an unverified guardrail.
+    const probes = buildGuardrailProbes("orders", {
+      block_unqualified_dml: true,
+      block_ddl: false,
+    }); // 2 probes
+    const r = reconcileGuardrails(probes, [denied("dangerous_statement")]);
+    expect(r).toHaveLength(2);
+    expect(r[0]!.match).toBe(true);
+    expect(r[1]!.verdict).toBeNull();
+    expect(r[1]!.match).toBe(false);
+  });
+
+  it("a deny via an earlier rule still holds but is NOT credited to the guardrail", () => {
+    // table_access(deny) fires before dangerous_statement in the engine's
+    // chain — the statement is denied either way, but the row must not
+    // claim the guardrail decided it.
+    const probes = buildGuardrailProbes("secrets", BOTH_ON);
+    const r = reconcileGuardrails(
+      probes,
+      probes.map(() => denied("table_access")),
+    );
+    expect(r.every((g) => g.match)).toBe(true);
+    expect(r.every((g) => !g.byGuardrail)).toBe(true);
+  });
+
+  it("an allow verdict is a mismatch", () => {
+    const probes = buildGuardrailProbes("orders", {
+      block_unqualified_dml: false,
+      block_ddl: true,
+    });
+    const r = reconcileGuardrails(probes, [
+      { decision: "allow", reason: "write allowed", matched_rule: "table_access" },
+      denied("dangerous_statement"),
+      denied("dangerous_statement"),
+    ]);
+    expect(r[0]!.match).toBe(false);
+    expect(r[1]!.match).toBe(true);
   });
 });
 

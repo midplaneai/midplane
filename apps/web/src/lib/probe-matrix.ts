@@ -13,6 +13,7 @@
 
 import type {
   AccessLevel,
+  GuardrailsConfig,
   TableAccessPolicy,
   TenantScopeConfig,
 } from "@midplane-cloud/db/policy";
@@ -119,6 +120,171 @@ export function expectedDecision(
   }
   // insert / update / delete
   return level === "read_write" ? "allow" : "deny";
+}
+
+// --- guardrail probes --------------------------------------------------------
+//
+// The engine's probe schema is a closed (table, action) vocabulary, and
+// 0.9.0 deliberately WHERE-qualifies every DML probe so the matrix tests
+// table_access, not guardrails. Guardrail checks therefore travel as
+// literal dangerous statements through the dry-run `sql` path — one
+// statement per engine call, batched into the same cloud request as the
+// probe matrix (one rate-limit unit, one engine acquire).
+//
+// Guardrails are per-DB, not per-table, so ONE representative table is
+// enough — callers pass the first table of the built matrix. Probes are
+// only emitted for flags that are ON: expected verdict is always deny,
+// and the engine's actual answer reconciles against that. An OFF flag
+// has no cloud-side expectation worth asserting (the statement falls
+// through to table_access, whose DDL semantics the panel doesn't model).
+
+export type GuardrailProbeKind =
+  | "unqualified_delete"
+  | "unqualified_update"
+  | "ddl_drop"
+  | "ddl_truncate"
+  | "ddl_alter";
+
+export interface GuardrailProbe {
+  /** Single dangerous statement for the dry-run `sql` path. Never executed. */
+  sql: string;
+  /** Row label — mono, SQL keywords UPPERCASE against lowercase
+   *  identifiers + prose (DESIGN.md voice-split carve-out). */
+  label: string;
+  kind: GuardrailProbeKind;
+}
+
+/** Ceiling for the dry-run route's request validator: both flags on
+ *  emits 2 DML + 3 DDL statements. */
+export const MAX_GUARDRAIL_PROBES = 5;
+
+/** Throwaway column for the unqualified-update SET clause — only parsed,
+ *  never resolved against the real schema. */
+const GUARDRAIL_PROBE_COLUMN = "midplane_probe";
+
+/** Double-quote each part of a (possibly schema-qualified) identifier so
+ *  the generated statement parses even when the table name is a reserved
+ *  word — `delete from user` fails the engine's parser, and the dry-run
+ *  custom-sql path turns a parse failure into a 400 that kills the WHOLE
+ *  panel run (unlike structured matrix probes, which degrade to a
+ *  parse_error verdict row). Introspection returns actual catalog names,
+ *  so quoting preserves resolution; labels keep the bare name. */
+function quoteIdent(table: string): string {
+  return table
+    .split(".")
+    .map((part) => `"${part.replace(/"/g, '""')}"`)
+    .join(".");
+}
+
+/** Representative table for the guardrail probes. Prefer one whose
+ *  effective level is read_write: there table_access permits the write,
+ *  so the guardrail is the ONLY thing standing between the statement and
+ *  the data — a deny proves the net. On a deny/read table the statement
+ *  is denied by table_access before the guardrail is consulted, which
+ *  verifies nothing about it (the panel labels those honestly, but a
+ *  default-deny policy would otherwise never exercise the guardrail). */
+export function pickGuardrailTable(
+  tables: readonly string[],
+  policy: TableAccessPolicy,
+): string | undefined {
+  return (
+    tables.find((t) => effectiveLevel(t, policy) === "read_write") ?? tables[0]
+  );
+}
+
+export function buildGuardrailProbes(
+  table: string | undefined,
+  guardrails: GuardrailsConfig,
+): GuardrailProbe[] {
+  if (!table) return [];
+  const ident = quoteIdent(table);
+  const probes: GuardrailProbe[] = [];
+  // Labels put SQL keywords in UPPERCASE against lowercase identifiers +
+  // prose: all-lowercase made "with no where" read as English, and the
+  // caps also set these statement rows apart from the matrix's lowercase
+  // action labels ("delete from orders" — which IS where-qualified under
+  // the hood). The sql sent to the engine stays lowercase like every
+  // other generated statement; the parser doesn't care.
+  if (guardrails.block_unqualified_dml) {
+    probes.push(
+      {
+        sql: `delete from ${ident}`,
+        label: `DELETE FROM ${table} with no WHERE`,
+        kind: "unqualified_delete",
+      },
+      {
+        sql: `update ${ident} set ${GUARDRAIL_PROBE_COLUMN} = null`,
+        label: `UPDATE ${table} with no WHERE`,
+        kind: "unqualified_update",
+      },
+    );
+  }
+  if (guardrails.block_ddl) {
+    probes.push(
+      {
+        sql: `drop table ${ident}`,
+        label: `DROP TABLE ${table}`,
+        kind: "ddl_drop",
+      },
+      {
+        sql: `truncate ${ident}`,
+        label: `TRUNCATE ${table}`,
+        kind: "ddl_truncate",
+      },
+      {
+        sql: `alter table ${ident} add column ${GUARDRAIL_PROBE_COLUMN} int`,
+        label: `ALTER TABLE ${table}`,
+        kind: "ddl_alter",
+      },
+    );
+  }
+  return probes;
+}
+
+// --- guardrail reconciliation ------------------------------------------------
+//
+// Pure so it gets unit coverage — four review specialists independently
+// flagged the original inline positional zip for failing OPEN: a verdict
+// the engine never returned would silently vanish from both the mismatch
+// and the holds list, letting the headline read "✓ engine enforces your
+// policy" over an unverified guardrail. Here a missing verdict is a
+// failure (`verdict: null`, `match: false`), never an omission.
+
+/** The slice of an engine dry-run verdict the reconciliation needs. */
+export interface GuardrailVerdictLike {
+  decision: "allow" | "deny";
+  reason: string;
+  matched_rule: string;
+}
+
+export interface ReconciledGuardrail {
+  probe: GuardrailProbe;
+  /** null = the engine returned no verdict for this probe. Rendered as a
+   *  failed check, never dropped. */
+  verdict: GuardrailVerdictLike | null;
+  /** The net held: the statement came back denied (by any rule). */
+  match: boolean;
+  /** Denied specifically by the dangerous_statement rule. False when an
+   *  earlier rule (e.g. table_access deny) caught the statement first —
+   *  still a deny, but the row must not claim the guardrail did it. */
+  byGuardrail: boolean;
+}
+
+/** Zip probes to verdicts by position (the engine answers the sequence in
+ *  request order). Length mismatches reconcile to failed checks. */
+export function reconcileGuardrails(
+  probes: readonly GuardrailProbe[],
+  verdicts: readonly GuardrailVerdictLike[],
+): ReconciledGuardrail[] {
+  return probes.map((probe, i) => {
+    const verdict = verdicts[i] ?? null;
+    return {
+      probe,
+      verdict,
+      match: verdict?.decision === "deny",
+      byGuardrail: verdict?.matched_rule === "dangerous_statement",
+    };
+  });
 }
 
 /** Human label for a probe row — mono, lowercase, reads like the SQL

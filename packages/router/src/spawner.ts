@@ -22,7 +22,11 @@
 // to the Spawner backend via env injection (Docker -e, Fly machine config)
 // and held in process memory only as long as the container is alive.
 
-import type { TableAccessPolicy, TenantScopeConfig } from "@midplane-cloud/db";
+import type {
+  GuardrailsConfig,
+  TableAccessPolicy,
+  TenantScopeConfig,
+} from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
 
 export interface SpawnedContainer {
@@ -47,6 +51,9 @@ export interface SpawnDatabase {
    *  (`column: null` + empty `overrides`) yield no tenant_scope block
    *  in the rendered YAML. */
   tenantScope: TenantScopeConfig;
+  /** Dangerous-statement guardrails (OSS 0.9.0): no-WHERE DML + DDL
+   *  blocks. Always emitted into the YAML, opt-outs included. */
+  guardrails: GuardrailsConfig;
 }
 
 export interface SpawnOptions {

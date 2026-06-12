@@ -31,7 +31,7 @@ describe("DockerSpawner", () => {
     ) as unknown as typeof fetch;
 
     const spawner = new DockerSpawner({
-      image: "midplane/midplane:0.8.0",
+      image: "midplane/midplane:0.9.0",
       exec,
       fetch: fetchFn,
       bootTimeoutMs: 1000,
@@ -47,6 +47,7 @@ describe("DockerSpawner", () => {
           dsn: "postgres://example",
           tableAccess: { default: "read", tables: { users: "deny" } },
           tenantScope: { column: null, overrides: {}, exempt: [] },
+          guardrails: { block_unqualified_dml: true, block_ddl: true },
         },
       ],
     });
@@ -56,7 +57,7 @@ describe("DockerSpawner", () => {
     expect(exec).toHaveBeenCalled();
 
     const runArgs = exec.mock.calls[0]?.[1] ?? [];
-    expect(runArgs).toContain("midplane/midplane:0.8.0");
+    expect(runArgs).toContain("midplane/midplane:0.9.0");
     // Multi-DB: DSN is injected as a per-DB env var (MIDPLANE_DSN_<id>),
     // never as a top-level DATABASE_URL — the YAML's `url:` references
     // the env via ${...} interpolation.
@@ -85,6 +86,9 @@ describe("DockerSpawner", () => {
         "      default: read",
         "      tables:",
         "        users: deny",
+        "    guardrails:",
+        "      block_unqualified_dml: true",
+        "      block_ddl: true",
         "",
       ].join("\n"),
     );
@@ -121,6 +125,7 @@ describe("DockerSpawner", () => {
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
+            guardrails: { block_unqualified_dml: true, block_ddl: true },
           },
         ],
       }),

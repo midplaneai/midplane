@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { FlyMachineSpawner } from "../src/spawner-fly.ts";
+import { FlyMachineSpawner, imageIsStale, sameImageRef } from "../src/spawner-fly.ts";
 
 const regions = {
   eu: { publicHost: "eu.midplane.ai", flyApp: "midplane-eu", flyRegion: "fra" },
@@ -68,6 +68,9 @@ describe("FlyMachineSpawner", () => {
             "      default: read",
             "      tables:",
             "        orders: read_write",
+            "    guardrails:",
+            "      block_unqualified_dml: true",
+            "      block_ddl: true",
             "",
           ].join("\n"),
         );
@@ -114,6 +117,7 @@ describe("FlyMachineSpawner", () => {
           dsn: "postgres://example",
           tableAccess: { default: "read", tables: { orders: "read_write" } },
           tenantScope: { column: null, overrides: {}, exempt: [] },
+          guardrails: { block_unqualified_dml: true, block_ddl: true },
         },
       ],
     });
@@ -162,6 +166,7 @@ describe("FlyMachineSpawner", () => {
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
+            guardrails: { block_unqualified_dml: true, block_ddl: true },
           },
         ],
       }),
@@ -222,6 +227,7 @@ describe("FlyMachineSpawner", () => {
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
+            guardrails: { block_unqualified_dml: true, block_ddl: true },
           },
         ],
       }),
@@ -236,6 +242,7 @@ describe("FlyMachineSpawner", () => {
     // spawner must look the machine up by name, wake it if suspended, and
     // reuse it — NOT 502 and NOT destroy it (another instance may be using it).
     const calls: string[] = [];
+    let adoptedPolicyBody = "";
     const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       const method = init?.method ?? "GET";
@@ -257,6 +264,8 @@ describe("FlyMachineSpawner", () => {
               name: "mcp-01hxyzconnabcdef",
               state: "suspended",
               private_ip: "fdaa:0:7::7",
+              // Same image as the pin — adoption must NOT recreate.
+              config: { image: "midplane/midplane:0.9.0" },
             },
           ]),
           { status: 200 },
@@ -274,6 +283,10 @@ describe("FlyMachineSpawner", () => {
       if (url === "http://[fdaa:0:7::7]:8080/health") {
         return new Response("ok", { status: 200 });
       }
+      if (url === "http://[fdaa:0:7::7]:8080/admin/policy" && method === "POST") {
+        adoptedPolicyBody = String(init?.body ?? "");
+        return new Response("ok", { status: 200 });
+      }
       throw new Error(`unexpected fetch: ${url}`);
     }) as unknown as typeof fetch;
 
@@ -281,6 +294,7 @@ describe("FlyMachineSpawner", () => {
       apiToken: "fo-test",
       regions,
       bootTimeoutMs: 5000,
+      indexerToken: "idx-tok",
       fetch: fetchFn,
     });
 
@@ -294,6 +308,7 @@ describe("FlyMachineSpawner", () => {
           dsn: "postgres://x",
           tableAccess: { default: "read", tables: {} },
           tenantScope: { column: null, overrides: {}, exempt: [] },
+          guardrails: { block_unqualified_dml: true, block_ddl: false },
         },
       ],
     });
@@ -305,6 +320,98 @@ describe("FlyMachineSpawner", () => {
       calls.some((s) => s === "POST https://api.machines.dev/v1/apps/midplane-eu/machines/mach-x/start"),
     ).toBe(true);
     expect(calls.some((s) => s.startsWith("DELETE "))).toBe(false);
+    // An adopted machine keeps its creation-time policy FILE; the spawn
+    // must hot-push the current policy so saves made while the registry
+    // was cold (delivered:false) actually reach this persistent engine.
+    expect(adoptedPolicyBody).toContain("block_ddl: false");
+  });
+
+  it("recreates an adopted machine whose image predates the pin (stale-engine skew)", () => {
+    // A machine created under an older pin survives redeploys via name
+    // adoption — and pre-0.9.0 engine schemas silently STRIP unknown
+    // policy sections, so a stale engine acks the guardrails YAML while
+    // enforcing none of it. Adoption must compare images and recreate.
+    const calls: string[] = [];
+    let createCount = 0;
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url}`);
+      if (method === "POST" && url.endsWith("/machines")) {
+        createCount += 1;
+        if (createCount === 1) {
+          // First create: name collision with the stale machine.
+          return new Response(
+            JSON.stringify({ error: "already_exists" }),
+            { status: 409 },
+          );
+        }
+        // Recreate after the stale machine was destroyed.
+        return new Response(
+          JSON.stringify({ id: "mach-new", private_ip: "fdaa:0:8::8", state: "starting" }),
+          { status: 200 },
+        );
+      }
+      if (method === "GET" && url.endsWith("/machines")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "mach-stale",
+              name: "mcp-01hxyzconnabcdef",
+              state: "started",
+              private_ip: "fdaa:0:7::7",
+              config: { image: "midplane/midplane:0.8.0" },
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (method === "DELETE" && url.includes("/machines/mach-stale")) {
+        return new Response("", { status: 200 });
+      }
+      if (url.endsWith("/machines/mach-new")) {
+        return new Response(
+          JSON.stringify({ id: "mach-new", state: "started", private_ip: "fdaa:0:8::8" }),
+          { status: 200 },
+        );
+      }
+      if (url === "http://[fdaa:0:8::8]:8080/health") {
+        return new Response("ok", { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const spawner = new FlyMachineSpawner({
+      apiToken: "fo-test",
+      regions,
+      bootTimeoutMs: 5000,
+      fetch: fetchFn,
+    });
+
+    return spawner
+      .spawn({
+        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        region: "eu",
+        databases: [
+          {
+            name: "main",
+            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            dsn: "postgres://x",
+            tableAccess: { default: "read", tables: {} },
+            tenantScope: { column: null, overrides: {}, exempt: [] },
+            guardrails: { block_unqualified_dml: true, block_ddl: true },
+          },
+        ],
+      })
+      .then((c) => {
+        // The stale machine was destroyed and the connection now runs
+        // the pinned image.
+        expect(
+          calls.some((s) => s.startsWith("DELETE ") && s.includes("mach-stale")),
+        ).toBe(true);
+        expect(createCount).toBe(2);
+        expect(c.host).toBe("[fdaa:0:8::8]");
+      });
   });
 
   it("throws if apiToken missing", () => {
@@ -315,5 +422,70 @@ describe("FlyMachineSpawner", () => {
           regions,
         }),
     ).toThrow(/apiToken required/);
+  });
+});
+
+describe("sameImageRef", () => {
+  it("matches bare refs exactly", () => {
+    expect(sameImageRef("midplane/midplane:0.9.0", "midplane/midplane:0.9.0")).toBe(true);
+    expect(sameImageRef("midplane/midplane:0.8.0", "midplane/midplane:0.9.0")).toBe(false);
+  });
+
+  it("ignores registry-host prefixes Fly may normalize in", () => {
+    // A raw string compare here would read every adoption as a mismatch —
+    // destroying live machines after each web deploy.
+    for (const host of ["docker.io", "registry-1.docker.io", "index.docker.io"]) {
+      expect(
+        sameImageRef(`${host}/midplane/midplane:0.9.0`, "midplane/midplane:0.9.0"),
+      ).toBe(true);
+    }
+  });
+
+  it("ignores digest suffixes but still catches tag mismatches", () => {
+    expect(
+      sameImageRef(
+        "registry-1.docker.io/midplane/midplane:0.9.0@sha256:abc123",
+        "midplane/midplane:0.9.0",
+      ),
+    ).toBe(true);
+    expect(
+      sameImageRef(
+        "registry-1.docker.io/midplane/midplane:0.8.0@sha256:abc123",
+        "midplane/midplane:0.9.0",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not strip a plain org prefix (no dot/colon = not a registry host)", () => {
+    expect(sameImageRef("midplane/midplane:0.9.0", "other/midplane:0.9.0")).toBe(false);
+  });
+});
+
+describe("imageIsStale", () => {
+  it("an older adopted tag is stale; an identical one is not", () => {
+    expect(imageIsStale("midplane/midplane:0.8.0", "midplane/midplane:0.9.0")).toBe(true);
+    expect(imageIsStale("midplane/midplane:0.9.0", "midplane/midplane:0.9.0")).toBe(false);
+  });
+
+  it("ONE-DIRECTIONAL: a NEWER adopted machine is never stale to an older pin", () => {
+    // Mixed-pin bluegreen: the old web instance must not destroy the
+    // machine the new instance just created — that ping-pong kills live
+    // sessions on every flip.
+    expect(imageIsStale("midplane/midplane:0.9.0", "midplane/midplane:0.8.0")).toBe(false);
+    expect(imageIsStale("midplane/midplane:0.10.0", "midplane/midplane:0.9.0")).toBe(false);
+  });
+
+  it("non-semver or cross-repo differences trust the pin (stale)", () => {
+    expect(imageIsStale("midplane/midplane:dev", "midplane/midplane:0.9.0")).toBe(true);
+    expect(imageIsStale("other/midplane:0.9.0", "midplane/midplane:0.9.0")).toBe(true);
+  });
+
+  it("registry-host and digest normalization applies before comparing", () => {
+    expect(
+      imageIsStale(
+        "registry-1.docker.io/midplane/midplane:0.9.0@sha256:abc",
+        "midplane/midplane:0.9.0",
+      ),
+    ).toBe(false);
   });
 });

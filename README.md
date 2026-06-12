@@ -41,10 +41,10 @@ bun run test:e2e             # Playwright smoke (E2E_LIVE=1 for live)
 
 ## OSS image dependency
 
-The router spawns `midplane/midplane:0.8.0` (published on Docker Hub). For local dev against an unreleased OSS branch, override the tag and build from source:
+The router spawns `midplane/midplane:0.9.0` (published on Docker Hub). For local dev against an unreleased OSS branch, override the tag and build from source:
 
 ```bash
-docker build -t midplane/midplane:0.8.0 /path/to/midplaneai/midplane
+docker build -t midplane/midplane:0.9.0 /path/to/midplaneai/midplane
 ```
 
 Or use the convenience script (auto-detects `~/dev/midplane`, override with `OSS_REPO=...`):
@@ -114,7 +114,7 @@ fly secrets set --app midplane-web \
   FLY_APP_EU='midplane-eu' \
   FLY_REGION_EU='fra' \
   MIDPLANE_PUBLIC_HOST_EU='eu.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.8.0' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.9.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
   MIDPLANE_STAFF_USER_IDS='user_...'
 
@@ -132,7 +132,7 @@ fly secrets set --app midplane-web-us \
   FLY_APP_US='midplane-us' \
   FLY_REGION_US='iad' \
   MIDPLANE_PUBLIC_HOST_US='us.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.8.0' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.9.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
   MIDPLANE_STAFF_USER_IDS='user_...'
 
@@ -335,7 +335,7 @@ docker build -t midplane-web -f apps/web/Dockerfile \
 
 ## Testing
 
-`bun test` runs the vitest unit suite. Live end-to-end suites under `e2e/` are gated on `E2E_LIVE=1` and require Docker + a Neon dev branch:
+`bun run test` runs the vitest unit suite (not bare `bun test` — see the quick-start note). Live end-to-end suites under `e2e/` are gated on `E2E_LIVE=1` and require Docker + a Neon dev branch:
 
 ```bash
 bun run test:e2e:live                          # all live suites

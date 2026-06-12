@@ -35,6 +35,7 @@ const databases: readonly DatabaseEntry[] = [
     connectionDatabaseId: "01HXYZMAIN0000000000000000",
     tableAccess: { default: "read", tables: { users: "deny" } },
     tenantScope: { column: null, overrides: {}, exempt: [] },
+    guardrails: { block_unqualified_dml: true, block_ddl: true },
   },
 ];
 
@@ -51,6 +52,7 @@ const opts = (connectionId = CONN_A): SpawnOptions => ({
       dsn: "postgres://x",
       tableAccess: { default: "deny", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
+      guardrails: { block_unqualified_dml: true, block_ddl: true },
     },
   ],
 });

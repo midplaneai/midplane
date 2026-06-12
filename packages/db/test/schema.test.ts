@@ -96,6 +96,7 @@ describe("connection_databases (0008 child)", () => {
       "kmsKeyId",
       "tableAccess",
       "tenantScope",
+      "guardrails",
       "rotatedAt",
       "lastKmsSuccessAt",
       "createdAt",
