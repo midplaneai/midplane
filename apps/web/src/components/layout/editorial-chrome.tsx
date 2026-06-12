@@ -22,9 +22,16 @@ export async function EditorialTopbar() {
         <Link href="/#policy">Policy</Link>
         <Link href="/#audit">Audit</Link>
         <Link href="/#pricing">Pricing</Link>
+        <a href="https://midplane.ai/docs">Docs</a>
       </nav>
       <div className="topright">
-        <a href="https://github.com/midplaneai/midplane">GitHub</a>
+        <a
+          href="https://github.com/midplaneai/midplane"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          GitHub
+        </a>
         {isSignedIn ? (
           <a className="ebtn fill" href="/dashboard">
             Dashboard →
@@ -55,10 +62,15 @@ export function EditorialFooter() {
         <Link href="/#audit">Audit</Link>
         <Link href="/#policy">Policy</Link>
         <Link href="/#pricing">Pricing</Link>
+        <a href="https://midplane.ai/docs">Docs</a>
       </div>
       <div>
         <h5>Open</h5>
-        <a href="https://github.com/midplaneai/midplane">
+        <a
+          href="https://github.com/midplaneai/midplane"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           github.com/midplaneai/midplane
         </a>
       </div>

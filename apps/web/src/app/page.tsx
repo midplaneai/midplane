@@ -50,17 +50,12 @@ export default async function Landing() {
             <span className="dot" aria-hidden />
             <span>Access layer for your existing Postgres</span>
             <span className="sep" aria-hidden />
-            <a
-              className="yc-badge"
-              href="https://www.ycombinator.com/companies/midplane"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <span className="yc-badge">
               <span className="yc-mark" aria-hidden>
                 Y
               </span>
               <span>Backed by Y Combinator</span>
-            </a>
+            </span>
           </div>
 
           <h1 className="pri-h1">
