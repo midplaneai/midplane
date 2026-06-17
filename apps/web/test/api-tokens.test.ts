@@ -113,7 +113,7 @@ function formRequest(method: string, fields: Record<string, string>): Request {
 }
 
 describe("GET /api/connections/[id]/tokens", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { GET } = await loadCollectionRoute();
     const res = await GET(jsonRequest("GET"), {
@@ -291,7 +291,7 @@ describe("POST /api/connections/[id]/tokens", () => {
 });
 
 describe("DELETE /api/connections/[id]/tokens/[tokenId]", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { DELETE } = await loadItemRoute();
     const res = await DELETE(jsonRequest("DELETE"), {

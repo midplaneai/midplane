@@ -5,8 +5,8 @@
 // delete). This endpoint refuses cross-region writes with a 400 + V2
 // message; staff who need that flow have to wait for V2.
 //
-// Auth: env var allowlist MIDPLANE_STAFF_USER_IDS (comma-separated Clerk
-// user IDs). Midplane staff are not customer org members, so org-role
+// Auth: env var allowlist MIDPLANE_STAFF_USER_IDS (comma-separated user
+// IDs). Midplane staff are not customer org members, so org-role
 // checks don't apply — user-level allowlist is correct. Fail-closed
 // (env var unset or empty → no staff identity exists, every call 403s).
 //
@@ -16,9 +16,9 @@
 // Rate limit: 10 changes / hour / staff actor. In-process Map, bounded
 // by actor count; sufficient for a single-machine regional control plane.
 //
-// Session refresh: best-effort revokeSession enumeration across the
-// target org's members. Clerk has no atomic org-wide revoke; race window
-// for in-flight sessions is acceptable for this rare audited action.
+// Session refresh: best-effort session revocation across the target org's
+// members. There's no atomic org-wide revoke; the race window for in-flight
+// sessions is acceptable for this rare audited action.
 
 import { eq } from "drizzle-orm";
 import { z } from "zod";

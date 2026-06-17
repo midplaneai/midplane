@@ -15,8 +15,9 @@
 // trust posture: paste a DSN, get an MCP endpoint, an agent talks to it,
 // and an audit row lands in the OSS container's SQLite.
 //
-// Clerk signup is NOT exercised here — it requires either testing-token
-// plumbing or mock-email handling that's out of scope for PR #2. The
+// Signup is NOT exercised here — this suite seeds the cloud DB directly and
+// drives the proxy/container pipeline. The signup → first MCP request path is
+// covered end-to-end by signup.live.e2e.ts. The
 // programmatic createConnection path uses the same encryption code that
 // the Server Action behind the paste-DSN form uses, so the cryptographic
 // trust posture is identical to what a real signup would produce.

@@ -34,7 +34,7 @@ import { activeOrgId, cleanup, freshTestEmail, signUp } from "./_auth-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
-  "set E2E_LIVE=1 to run live signup E2E (requires Docker + Neon + Clerk dev keys)",
+  "set E2E_LIVE=1 to run live signup E2E (requires Docker + Neon + the auth secrets)",
 );
 
 const PG_NAME = `midplane-e2e-pg-signup-${Date.now()}`;
@@ -69,7 +69,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   // Kill containers first; DB cleanup happens regardless of whether the
-  // Clerk user existed yet (test could fail before signUp).
+  // user existed yet (test could fail before signUp).
   try {
     execSync(`docker rm -f ${PG_NAME}`, { stdio: "ignore" });
   } catch {}

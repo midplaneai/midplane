@@ -1,5 +1,5 @@
 // Anti-clickjacking + hardening headers must apply to every route. This
-// origin serves the marketing landing, the Clerk sign-in/sign-up flows, AND
+// origin serves the marketing landing, the sign-in/sign-up flows, AND
 // the authenticated dashboard, so a missing frame-ancestors directive is a
 // clickjacking primitive against the auth surface — not just the brochure.
 //

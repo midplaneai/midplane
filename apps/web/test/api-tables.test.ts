@@ -87,7 +87,7 @@ function get(query: string): Request {
 }
 
 describe("GET /api/connections/[id]/tables (per-db)", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { GET } = await loadRoute();
     expect((await GET(get("?q=ord"), params)).status).toBe(401);

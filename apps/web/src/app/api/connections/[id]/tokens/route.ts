@@ -2,7 +2,7 @@
 // POST /api/connections/:id/tokens          — mint a new token
 //
 // Security posture (matches /api/connections/[id]/route.ts):
-//   - The Clerk session is the ONLY authentication path. No service-token
+//   - The session is the ONLY authentication path. No service-token
 //     shortcut.
 //   - 404 — not 401/403 — when the connection is unknown OR belongs to a
 //     different customer. Mirrors the lib's leakage-avoidance shape:

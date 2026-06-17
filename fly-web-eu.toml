@@ -7,9 +7,10 @@
 # getDb('us') call throws at the env-var read.
 #
 # Sibling fly-web-us.toml is the US control-plane app (midplane-web-us
-# in iad). Both apps share the same Clerk instance and the same image;
-# they're distinguished by region-pinned secrets (MIDPLANE_REGION,
-# DATABASE_URL_<REGION>, MIDPLANE_KMS_KEY_<REGION>).
+# in iad). Both apps share the same image; they're distinguished by
+# region-pinned secrets (MIDPLANE_REGION, DATABASE_URL_<REGION>,
+# MIDPLANE_KMS_KEY_<REGION>). Auth is region-resident — each app has its own
+# Better Auth tables in its regional DB, NOT a shared central instance.
 #
 # Why on Fly: FlyMachineSpawner returns IPv6 6PN private addresses that
 # only same-org Fly apps can reach. Hosting the control plane elsewhere
@@ -19,8 +20,7 @@
 # Deploy:
 #   fly apps create midplane-web --org <org>
 #   fly secrets set --app midplane-web ...   # see comment below
-#   fly deploy --config fly-web-eu.toml \
-#     --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_...
+#   fly deploy --config fly-web-eu.toml
 #
 # Three TLS certs are needed on this app (Fly matches by SNI; the cert
 # for eu.app.midplane.ai does NOT cover app.midplane.ai):
@@ -52,8 +52,8 @@ primary_region = "fra"
 #   MIDPLANE_REGION="eu"                  # region pin — required
 #   DATABASE_URL_EU                       # Neon prod project in eu-central-1
 #   MIDDLEWARE_ENFORCE="false"            # "true" after 24h shadow window
-#   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY     # also pass via --build-arg
-#   CLERK_SECRET_KEY
+#   BETTER_AUTH_SECRET                    # 32+ bytes (signs sessions); `openssl rand -base64 32`
+#   MIDPLANE_REGION_COOKIE_SECRET         # 32+ bytes; MUST match across apex + both web apps (signed region cookie)
 #   MIDPLANE_KMS_MODE                     # "env" or "kms"
 #   MIDPLANE_KMS_DEV_KEY_EU               # env-mode only: 32-byte hex
 #   MIDPLANE_KMS_KEY_EU                   # kms-mode only: CMK ARN/alias in eu-central-1
@@ -65,7 +65,7 @@ primary_region = "fra"
 #   MIDPLANE_PUBLIC_HOST_EU               # e.g. "eu.midplane.ai"
 #   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.9.0"
 #   INDEXER_TOKEN                         # shared with regional containers
-#   MIDPLANE_STAFF_USER_IDS               # comma-separated Clerk user IDs (staff allowlist)
+#   MIDPLANE_STAFF_USER_IDS               # comma-separated user IDs (staff allowlist)
 
 [http_service]
   internal_port = 3000

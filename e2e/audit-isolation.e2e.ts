@@ -11,7 +11,7 @@
 //      hence layer #1 carries the load today — see audit.ts comment).
 //   2. The filter logic interacts correctly with WHERE clauses the
 //      dashboard uses (event_type, tenant_id, search, cursor pagination).
-//   3. The /audit HTTP route exists and the Clerk middleware protects
+//   3. The /audit HTTP route exists and the middleware protects
 //      unauthenticated visitors from seeing audit data.
 //
 // Why query logic is inlined instead of imported from
@@ -229,7 +229,7 @@ test("pagination cursor stays within the bound customer", async () => {
   }
 });
 
-test("/audit HTTP route exists and the Clerk middleware protects it", async ({
+test("/audit HTTP route exists and the middleware protects it", async ({
   page,
 }) => {
   const res = await page.goto("/audit");

@@ -22,9 +22,9 @@ export default async function BillingPage() {
   if (!customer) redirect("/signup/region");
 
   const { plan } = await resolvePlan();
-  // Single feature-gating seam: hasEntitlement maps "sso" -> the org-scoped
-  // Clerk feature in lib/plan.ts, so P2's auth swap touches that one module,
-  // not this page.
+  // Single feature-gating seam in lib/plan.ts: hasEntitlement("sso") is the
+  // only SSO gate, so wiring SSO entitlement later touches that module, not
+  // this page. No billing wired yet, so it's false today.
   const hasSso = await hasEntitlement("sso");
 
   return (

@@ -7,14 +7,14 @@
 #
 # Sibling fly-web-eu.toml is the EU control-plane app (midplane-web in
 # fra) and ALSO serves apex app.midplane.ai. Both apps share the same
-# Clerk instance and the same image; they're distinguished by
-# region-pinned secrets.
+# image; they're distinguished by region-pinned secrets. Auth is
+# region-resident — each app has its own Better Auth tables in its
+# regional DB, NOT a shared central instance.
 #
 # Deploy:
 #   fly apps create midplane-web-us --org <org>
 #   fly secrets set --app midplane-web-us ...   # see comment below
-#   fly deploy --config fly-web-us.toml \
-#     --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_...
+#   fly deploy --config fly-web-us.toml
 #
 # TLS:
 #   fly certs add us.app.midplane.ai --app midplane-web-us
@@ -35,8 +35,8 @@ primary_region = "iad"
 #   MIDPLANE_REGION="us"                  # region pin — required
 #   DATABASE_URL_US                       # Neon prod project in us-east-2
 #   MIDDLEWARE_ENFORCE="false"            # "true" after 24h shadow window
-#   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY     # also pass via --build-arg
-#   CLERK_SECRET_KEY
+#   BETTER_AUTH_SECRET                    # 32+ bytes (signs sessions); `openssl rand -base64 32`
+#   MIDPLANE_REGION_COOKIE_SECRET         # 32+ bytes; MUST match across apex + both web apps (signed region cookie)
 #   MIDPLANE_KMS_MODE                     # "env" or "kms"
 #   MIDPLANE_KMS_DEV_KEY_US               # env-mode only: 32-byte hex
 #   MIDPLANE_KMS_KEY_US                   # kms-mode only: CMK ARN/alias in us-east-2
@@ -48,7 +48,7 @@ primary_region = "iad"
 #   MIDPLANE_PUBLIC_HOST_US               # e.g. "us.midplane.ai"
 #   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.9.0"
 #   INDEXER_TOKEN                         # shared with regional containers
-#   MIDPLANE_STAFF_USER_IDS               # comma-separated Clerk user IDs (staff allowlist)
+#   MIDPLANE_STAFF_USER_IDS               # comma-separated user IDs (staff allowlist)
 
 [http_service]
   internal_port = 3000

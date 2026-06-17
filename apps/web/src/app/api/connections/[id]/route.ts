@@ -5,7 +5,7 @@
 //  - 404 (not 401/403) when the row exists but belongs to another customer.
 //    Mirrors deleteConnection's leakage shape: the API never confirms or
 //    denies the existence of someone else's connection.
-//  - The Clerk session is the ONLY authentication path. There is no
+//  - The session is the ONLY authentication path. There is no
 //    service-token shortcut, no "internal" header bypass.
 //
 // Rotation is the high-stakes verb here. A customer paste-rotates because

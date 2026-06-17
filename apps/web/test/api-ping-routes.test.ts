@@ -123,7 +123,7 @@ async function loadPerConnRoute() {
 }
 
 describe("POST /api/connections/test-dsn", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { POST } = await loadTestDsnRoute();
     const res = await POST(jsonRequest({ dsn: GOOD_DSN }));

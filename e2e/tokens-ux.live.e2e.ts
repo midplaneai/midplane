@@ -32,7 +32,7 @@ import { activeOrgId, cleanup, freshTestEmail, signUp } from "./_auth-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
-  "set E2E_LIVE=1 to run live tokens-ux E2E (requires Neon + Clerk dev keys)",
+  "set E2E_LIVE=1 to run live tokens-ux E2E (requires Neon + the auth secrets)",
 );
 
 let testEmail = "";

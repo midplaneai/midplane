@@ -127,7 +127,7 @@ const PROBES_BODY = {
 };
 
 describe("POST /api/connections/[id]/dry-run", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { POST } = await loadRoute();
     expect((await POST(jsonRequest(PROBES_BODY), params)).status).toBe(401);

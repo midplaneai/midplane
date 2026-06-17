@@ -12,7 +12,7 @@
 #   5. Boot localhost:3000.
 #
 # After this finishes:
-#   - Sign up via Clerk in the browser
+#   - Sign up in the browser
 #   - Pick a region
 #   - Paste a Postgres URL
 #   - Hit GET on the returned MCP URL + /health → expect 200
