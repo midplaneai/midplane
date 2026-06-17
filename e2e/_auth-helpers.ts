@@ -87,6 +87,26 @@ export async function activeOrgId(page: Page): Promise<string> {
   return orgId;
 }
 
+// Drive the region picker to completion: accept the prefilled workspace name,
+// pick the region card, submit. Creates the org + customer and lands on
+// /dashboard. Returns the active org id.
+//
+// The region MUST be selected explicitly: tests carry no geo header, so nothing
+// is pre-checked, and the radio is `required` (submitting without a pick is
+// blocked by native validation). Pick the region matching this app
+// (MIDPLANE_REGION) so the cross-region redirect never fires. Clicking the card
+// selects its visually-hidden radio.
+export async function onboard(
+  page: Page,
+  region: "eu" | "us" = testRegion(),
+): Promise<{ orgId: string }> {
+  await page.goto("/signup/region");
+  await page.getByText(region === "eu" ? /eu-central-1/i : /us-east-2/i).click();
+  await page.getByRole("button", { name: /continue/i }).click();
+  await page.waitForURL("**/dashboard", { timeout: 15_000 });
+  return { orgId: await activeOrgId(page) };
+}
+
 // Best-effort delete of the auth rows (user + org). FK cascades remove the
 // session / account / member rows. The customer / connection / audit rows are
 // the suite's own cleanup. Failures here don't fail the test.

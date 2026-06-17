@@ -28,7 +28,7 @@ import {
   indexerCursors,
 } from "@midplane-cloud/db";
 
-import { activeOrgId, cleanup, freshTestEmail, signUp } from "./_auth-helpers";
+import { cleanup, freshTestEmail, onboard, signUp } from "./_auth-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -79,11 +79,8 @@ test("create connection → mint second token → revoke default → list reflec
   });
 
   // Onboard: the region picker creates the org + customer (Better Auth doesn't
-  // auto-create one). The workspace name is prefilled; accept it.
-  await page.goto("/signup/region");
-  await page.getByRole("button", { name: /continue/i }).click();
-  await page.waitForURL("**/dashboard", { timeout: 15_000 });
-  orgId = await activeOrgId(page);
+  // auto-create one) and lands on /dashboard.
+  ({ orgId } = await onboard(page));
 
   // A throwaway DSN; we never dial it. createConnection encrypts at
   // rest and auto-mints the default token — that's the only behavior

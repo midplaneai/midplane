@@ -30,7 +30,7 @@ import {
   indexerCursors,
 } from "@midplane-cloud/db";
 
-import { activeOrgId, cleanup, freshTestEmail, signUp } from "./_auth-helpers";
+import { cleanup, freshTestEmail, onboard, signUp } from "./_auth-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -126,14 +126,8 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   expect(result.userId).toBe(userId);
 
   // 2. Onboard — the region picker Server Action creates the org + customer
-  // (Better Auth doesn't auto-create one). The workspace name is prefilled.
-  await page.goto("/signup/region");
-  await expect(
-    page.getByRole("heading", { name: /set up your workspace/i }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: /continue/i }).click();
-  await page.waitForURL("**/dashboard", { timeout: 15_000 });
-  orgId = await activeOrgId(page);
+  // (Better Auth doesn't auto-create one) and lands on /dashboard.
+  orgId = (await onboard(page)).orgId;
 
   // 3. Connect Postgres — real Server Action runs encryptDsn + inserts
   // connection row. host.docker.internal lets the spawned OSS container
