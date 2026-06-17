@@ -83,6 +83,7 @@ export default async function SsoSettingsPage() {
       providerId: ssoProvider.providerId,
       domain: ssoProvider.domain,
       issuer: ssoProvider.issuer,
+      domainVerified: ssoProvider.domainVerified,
     })
     .from(ssoProvider)
     .where(eq(ssoProvider.organizationId, customer.orgId))

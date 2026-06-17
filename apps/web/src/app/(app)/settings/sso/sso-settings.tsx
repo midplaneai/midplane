@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,14 +12,24 @@ import { removeSsoProvider } from "./actions";
 
 // SAML SSO configuration for the active organization. Thin UI over the
 // @better-auth/sso plugin: register() mints the org's provider (the plugin
-// enforces owner/admin since organizationId is supplied), and the remove server
-// action deletes it. The Service-Provider URLs below are what the admin pastes
-// into their identity provider (Okta, Azure AD, …).
+// enforces owner/admin since organizationId is supplied; the server also gates
+// register on the sso entitlement), and the remove server action deletes it.
+// The Service-Provider URLs below are what the admin pastes into their identity
+// provider (Okta, Azure AD, …). A provider stays INACTIVE until the org proves
+// DNS control of the domain (the verify flow below) — that's what stops an org
+// claiming a domain it doesn't own.
+
+// Must match SSO_DOMAIN_TOKEN_PREFIX in ee/sso/index.ts — core can't import ee/,
+// so the DNS verification host format is duplicated here. The plugin verifies a
+// TXT record at `_<prefix>-<providerId>.<domain>` containing
+// `_<prefix>-<providerId>=<token>`.
+const SSO_DOMAIN_TOKEN_PREFIX = "mp";
 
 export interface SsoProviderView {
   providerId: string;
   domain: string;
   issuer: string;
+  domainVerified: boolean | null;
 }
 
 /** A read-only field the admin copies into their IdP. */
@@ -57,6 +67,57 @@ export function SsoSettings({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [removing, startRemove] = useTransition();
+  const [token, setToken] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+
+  const needsVerify = Boolean(current && !current.domainVerified);
+  const identifier = `_${SSO_DOMAIN_TOKEN_PREFIX}-${providerId}`;
+  const txt =
+    needsVerify && current && token
+      ? { host: `${identifier}.${current.domain}`, value: `${identifier}=${token}` }
+      : null;
+
+  // Fetch (or regenerate) the DNS verification token for an unverified provider
+  // so we can render the TXT record the admin must publish. The domain-
+  // verification endpoints aren't on the ssoClient's typed surface, so we hit
+  // them through the client's generic $fetch (resolves under /api/auth).
+  // request-domain-verification returns the active token or mints a fresh one.
+  useEffect(() => {
+    if (!needsVerify) return;
+    let active = true;
+    authClient
+      .$fetch<{ domainVerificationToken: string }>(
+        "/sso/request-domain-verification",
+        { method: "POST", body: { providerId } },
+      )
+      .then(({ data }) => {
+        if (active && data?.domainVerificationToken) {
+          setToken(data.domainVerificationToken);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [needsVerify, providerId]);
+
+  async function onVerify() {
+    setError(null);
+    setVerifying(true);
+    const { error: vErr } = await authClient.$fetch("/sso/verify-domain", {
+      method: "POST",
+      body: { providerId },
+    });
+    setVerifying(false);
+    if (vErr) {
+      setError(
+        vErr.message ??
+          "Couldn’t verify the domain yet — DNS records can take time to propagate. Try again shortly.",
+      );
+      return;
+    }
+    router.refresh();
+  }
 
   async function onAdd(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -121,16 +182,54 @@ export function SsoSettings({
       </div>
 
       {current ? (
-        <div className="space-y-3 border-t border-border pt-6">
+        <div className="space-y-4 border-t border-border pt-6">
           <div className="text-sm">
             <p className="text-foreground">
-              SAML is active for{" "}
-              <strong className="font-medium">{current.domain}</strong>.
+              SAML is configured for{" "}
+              <strong className="font-medium">{current.domain}</strong>
+              {current.domainVerified ? (
+                <span className="text-[hsl(var(--allow))]"> — domain verified.</span>
+              ) : (
+                <span className="text-[hsl(var(--warn))]">
+                  {" "}
+                  — pending domain verification.
+                </span>
+              )}
             </p>
             <p className="mt-1 break-all text-muted-foreground">
               Issuer: <span className="font-mono text-xs">{current.issuer}</span>
             </p>
           </div>
+
+          {needsVerify && (
+            <div className="space-y-3 border border-border bg-secondary px-4 py-4">
+              <p className="text-sm text-foreground">
+                <strong className="font-medium">Verify domain ownership.</strong>{" "}
+                SSO stays inactive until you prove control of{" "}
+                <span className="font-mono text-xs">{current.domain}</span>. Add
+                this DNS TXT record at your DNS provider, then verify.
+              </p>
+              {txt ? (
+                <div className="space-y-3">
+                  <CopyableUrl label="TXT host" value={txt.host} />
+                  <CopyableUrl label="TXT value" value={txt.value} />
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Loading DNS record…
+                </p>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                onClick={onVerify}
+                disabled={verifying || !txt}
+              >
+                {verifying ? "Verifying…" : "Verify domain"}
+              </Button>
+            </div>
+          )}
+
           {error && (
             <p role="alert" className="text-sm text-[hsl(var(--deny))]">
               {error}
