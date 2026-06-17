@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
-import { organization } from "better-auth/plugins";
+import { mcp, organization } from "better-auth/plugins";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { ulid } from "ulid";
 
@@ -27,6 +27,13 @@ import { isSelfHost, SELF_HOST_CUSTOMER_ID, SELF_HOST_ORG_ID } from "./self-host
 function createAuth() {
   return betterAuth({
     appName: "midplane",
+    // The OAuth 2.1 issuer for the MCP plugin's discovery metadata. The mcp
+    // plugin throws "invalid_issuer" if options.baseURL isn't a concrete string
+    // (it can't infer the issuer from a request the way cookie/callback URLs
+    // are). Each regional app sets BETTER_AUTH_URL to its own origin (e.g.
+    // https://eu.app.midplane.ai), self-host to its host — the same value
+    // Better Auth already used for cookies/callbacks, now pinned explicitly.
+    baseURL: process.env.BETTER_AUTH_URL,
     database: drizzleAdapter(getDb(bootRegion()), {
       provider: "pg",
       schema: { ...authSchema },
@@ -143,6 +150,32 @@ function createAuth() {
         // resolve the org's plan → seat cap (lib/seats.ts); Better Auth enforces
         // it on the invite/add path. Otherwise it's a single static number.
         membershipLimit: (_user, organization) => seatCapForOrg(organization.id),
+      }),
+      // MCP OAuth 2.1 provider (P6). Turns this app into the authorization
+      // server MCP clients (Claude, Cursor) authenticate against: discovery
+      // metadata, Dynamic Client Registration, authorization-code + PKCE, token
+      // issuance. The /mcp resource server (lib/proxy.ts withMcpAuth) validates
+      // the issued bearer. loginPage is where an unauthenticated authorize
+      // bounces; consentPage renders our coarse v1 grant screen (only when the
+      // client requests prompt=consent). requirePKCE enforces OAuth 2.1 PKCE at
+      // the authorize step, not just at the public-client token exchange.
+      //
+      // Placed AFTER organization() and BEFORE nextCookies() — nextCookies must
+      // stay last to flush Set-Cookie from server-action auth flows.
+      mcp({
+        loginPage: "/sign-in",
+        oidcConfig: {
+          // loginPage is also required on the OIDCOptions type; the plugin
+          // overrides it with the top-level value, so keep them the same.
+          loginPage: "/sign-in",
+          consentPage: "/oauth/consent",
+          requirePKCE: true,
+          // Coarse v1 scope: a single `mcp` capability (full MCP access to a
+          // connection the authenticated user owns; the URL path selects which,
+          // the proxy enforces ownership). Listed alongside the plugin defaults
+          // (openid/profile/email/offline_access) so a client may request it.
+          scopes: ["mcp"],
+        },
       }),
       // nextCookies MUST stay last: it flushes Set-Cookie from server-action
       // auth flows through Next's cookies() helper.

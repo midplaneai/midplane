@@ -144,6 +144,85 @@ export const invitation = pgTable("invitation", {
     .notNull(),
 });
 
+// --- mcp plugin (OAuth 2.1 provider, shared OIDC-provider schema) ------------
+//
+// Backs the Better Auth `mcp` plugin (lib/auth.ts): the OAuth 2.1 / OIDC tables
+// an MCP client (Claude, Cursor) drives — Dynamic Client Registration writes
+// `oauthApplication`; the authorization-code+PKCE flow issues `oauthAccessToken`
+// rows; `oauthConsent` records a user's grant. The plugin's internal model
+// names are exactly these camelCase keys (oauthApplication / oauthAccessToken /
+// oauthConsent), so the drizzleAdapter resolves them by key; columns stay
+// snake_case to match the rest of the schema. DDL lives in
+// migrations/0026_mcp_oauth.sql.
+//
+// `required` flags mirror better-auth/plugins/oidc-provider/schema: columns
+// the plugin doesn't always populate (name/icon/metadata/client_secret/user_id)
+// are nullable so Dynamic Client Registration can't fail on an omitted field.
+
+export const oauthApplication = pgTable("oauth_application", {
+  id: text("id").primaryKey(),
+  // DCR `client_name` is optional, so this can be absent.
+  name: text("name"),
+  icon: text("icon"),
+  // JSON-as-text bag the plugin manages.
+  metadata: text("metadata"),
+  clientId: text("client_id").notNull().unique(),
+  // Empty string for public (PKCE) clients; a secret for confidential ones.
+  clientSecret: text("client_secret"),
+  redirectUrls: text("redirect_urls").notNull(),
+  type: text("type").notNull(),
+  disabled: boolean("disabled").notNull().default(false),
+  userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const oauthAccessToken = pgTable("oauth_access_token", {
+  id: text("id").primaryKey(),
+  accessToken: text("access_token").notNull().unique(),
+  refreshToken: text("refresh_token").notNull().unique(),
+  accessTokenExpiresAt: timestamp("access_token_expires_at", {
+    withTimezone: true,
+  }).notNull(),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+    withTimezone: true,
+  }).notNull(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthApplication.clientId, { onDelete: "cascade" }),
+  userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+  // Space-separated granted scopes.
+  scopes: text("scopes").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const oauthConsent = pgTable("oauth_consent", {
+  id: text("id").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthApplication.clientId, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  scopes: text("scopes").notNull(),
+  consentGiven: boolean("consent_given").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
 // --- types -------------------------------------------------------------------
 
 export type AuthUser = typeof user.$inferSelect;
@@ -152,3 +231,6 @@ export type AuthAccount = typeof account.$inferSelect;
 export type AuthOrganization = typeof organization.$inferSelect;
 export type AuthMember = typeof member.$inferSelect;
 export type AuthInvitation = typeof invitation.$inferSelect;
+export type AuthOAuthApplication = typeof oauthApplication.$inferSelect;
+export type AuthOAuthAccessToken = typeof oauthAccessToken.$inferSelect;
+export type AuthOAuthConsent = typeof oauthConsent.$inferSelect;

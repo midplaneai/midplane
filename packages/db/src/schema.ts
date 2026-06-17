@@ -37,7 +37,11 @@ export type Region = (typeof REGIONS)[number];
 
 // --- bytea (encrypted DSN, HMAC token hashes) -------------------------------
 
-const bytea = customType<{ data: Buffer; notNull: true; default: false }>({
+// notNull is FALSE at the type level so a bytea column is nullable-on-insert by
+// default; columns that must be present (encrypted_dsn) opt back in with the
+// builder's .notNull(). mcp_tokens.token_hash is genuinely nullable (kind='oauth'
+// rows carry no HMAC), so it relies on this default.
+const bytea = customType<{ data: Buffer; notNull: false; default: false }>({
   dataType() {
     return "bytea";
   },
@@ -416,30 +420,50 @@ export const indexerCursors = pgTable(
 export const MCP_TOKEN_STATUSES = ["active", "revoked", "expired"] as const;
 export type McpTokenStatus = (typeof MCP_TOKEN_STATUSES)[number];
 
+// How a token authenticates the agent. 'url' is the HMAC plaintext-URL token
+// (the show-once `mp_(live|test)_…` bearer). 'oauth' is an attribution-only row
+// minted per (connection, OAuth client) by the MCP-OAuth path (0026): it carries
+// no HMAC secret (token_hash/pepper_kid are NULL) and never resolves via the URL
+// proxy, but its id is what the engine stamps as mcp_token_id so per-agent audit
+// attribution survives the URL→OAuth switch. See lib/proxy.ts proxyMcpOAuth.
+export const MCP_TOKEN_KINDS = ["url", "oauth"] as const;
+export type McpTokenKind = (typeof MCP_TOKEN_KINDS)[number];
+
 export const mcpTokens = pgTable(
   "mcp_tokens",
   {
     id: text("id").primaryKey(), // ULID
     connectionId: text("connection_id").notNull(),
     // User-supplied label, unique within the connection. Mirrors how
-    // connection_databases.name is scoped.
+    // connection_databases.name is scoped. OAuth rows use `oauth:<clientId>`.
     name: text("name").notNull(),
     // "mp_live" or "mp_test" — the env prefix from the plaintext token,
     // copied here for dashboard rendering and scanner identification.
+    // OAuth attribution rows carry the sentinel 'mp_oauth'.
     prefix: text("prefix").notNull(),
     // Last 4 chars of the 32-hex entropy portion (NOT the trailing CRC).
     // Surfaced on the dashboard list so users can recognize their tokens
-    // without storing plaintext.
+    // without storing plaintext. OAuth rows carry the last 4 of the client id.
     last4: text("last4").notNull(),
     // HMAC-SHA256(pepper, plaintext) — 32 bytes. Unique so a future
     // pepper-rotation conflict (same plaintext hashes to the same value
     // under the same kid) surfaces as a write error rather than silent
-    // collision.
-    tokenHash: bytea("token_hash").notNull(),
+    // collision. NULL for kind='oauth' rows (no plaintext secret); Postgres
+    // unique allows many NULLs, and a NULL hash never matches the proxy lookup.
+    tokenHash: bytea("token_hash"),
     // Kid of the pepper used to hash this row's token_hash. V1 always
     // "v1-<region>"; rotation introduces "v2-..." and the lookup tries
-    // each kid in the in-memory map.
-    pepperKid: text("pepper_kid").notNull(),
+    // each kid in the in-memory map. NULL for kind='oauth' rows.
+    pepperKid: text("pepper_kid"),
+    // Auth mechanism (0026). Defaults to 'url' so every pre-OAuth row is the
+    // HMAC URL token unchanged. 'oauth' marks the attribution-only rows the
+    // MCP-OAuth path mints; they're excluded from plan-cap counts, the
+    // dashboard token list, and the URL resolver.
+    kind: text("kind", { enum: MCP_TOKEN_KINDS }).notNull().default("url"),
+    // OAuth client (oauth_application.client_id) this attribution row belongs
+    // to. NULL for kind='url'. The (connection_id, client_id) partial-unique
+    // index (migration 0026) is what makes the mint-or-get idempotent.
+    clientId: text("client_id"),
     // User id of the actor who minted the token. Distinct from customer scope
     // (the org) — this is the user inside that org.
     createdByUserId: text("created_by_user_id").notNull(),
@@ -476,6 +500,15 @@ export const mcpTokens = pgTable(
     ),
     // See header comment — the partial predicate lives in the migration.
     expiresAtIdx: index("mcp_tokens_expires_at_idx").on(t.expiresAt),
+    // Read-side mirror of the UNIQUE PARTIAL index (WHERE kind='oauth') the
+    // 0026 migration owns — Drizzle can't express the predicate. It's what
+    // makes "mint-or-get one attribution row per (connection, OAuth client)"
+    // race-safe; the uniqueness is enforced by the migration's index, not this
+    // declaration.
+    oauthClientIdx: index("mcp_tokens_oauth_client_idx").on(
+      t.connectionId,
+      t.clientId,
+    ),
     tokenHashUq: unique("mcp_tokens_token_hash_uq").on(t.tokenHash),
     nameUq: unique("mcp_tokens_name_per_connection_uq").on(
       t.connectionId,
