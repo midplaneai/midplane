@@ -41,21 +41,40 @@ function createAuth() {
     }),
     emailAndPassword: { enabled: true },
     hooks: {
-      // Always show our branded consent screen on the MCP OAuth authorize.
-      // Better Auth only renders the consent page when the authorize request
-      // carries prompt=consent, and MCP clients don't reliably send it — which
-      // would skip our approval step and jump straight to the client's own
-      // callback. Forcing it guarantees the user explicitly approves each agent
-      // before it can reach their databases (the security-forward posture), and
-      // makes our consent screen the consistent branded moment in the flow.
+      // Shape every MCP OAuth authorize request before the plugin handles it:
       //
-      // It rides through the login-resume path too: authorizeMCPOAuth stores
-      // this query in the oidc_login_prompt cookie before bouncing to /sign-in,
-      // so the post-login resume sees prompt=consent as well.
+      //  - prompt=consent: Better Auth only renders the consent page when the
+      //    request carries it, and MCP clients don't reliably send it — which
+      //    would skip our approval step and jump straight to the client's own
+      //    callback. Forcing it guarantees the user explicitly approves each
+      //    agent before it can reach their databases, and makes our consent
+      //    screen the consistent branded moment.
+      //  - scope ⊇ mcp: the proxy REQUIRES the `mcp` scope on the access token
+      //    (lib/proxy.ts proxyMcpOAuth) so a token minted for some other purpose
+      //    can't reach a database. Injecting it here means a compliant client
+      //    always gets a usable token regardless of which scopes it requested,
+      //    while the proxy still rejects tokens that lack it.
+      //
+      // Both ride the login-resume path too: authorizeMCPOAuth stores this query
+      // in the oidc_login_prompt cookie before bouncing to /sign-in, so the
+      // post-login resume sees the same prompt + scope.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== "/mcp/authorize") return;
+        const scopes = new Set(
+          String(ctx.query?.scope ?? "")
+            .split(" ")
+            .filter(Boolean),
+        );
+        scopes.add("mcp");
         return {
-          context: { ...ctx, query: { ...ctx.query, prompt: "consent" } },
+          context: {
+            ...ctx,
+            query: {
+              ...ctx.query,
+              prompt: "consent",
+              scope: Array.from(scopes).join(" "),
+            },
+          },
         };
       }),
     },

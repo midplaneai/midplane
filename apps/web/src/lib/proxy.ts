@@ -187,16 +187,17 @@ export interface OAuthMcpSession {
 /** MCP-OAuth ingress: the agent presented an OAuth 2.1 bearer (already validated
  *  by withMcpAuth) and reached `/mcp/<connectionId>`. The bearer authenticates
  *  the user + OAuth client; the path selects the connection. We:
- *    1. map the OAuth user → their Midplane customer (the tenant),
- *    2. resolve the connection ONLY if that customer owns it (else 404),
- *    3. mint-or-get the (connection, client) attribution token so the engine
+ *    1. require the `mcp` scope on the token (else 403 insufficient_scope),
+ *    2. map the OAuth user → their Midplane customer (the tenant),
+ *    3. resolve the connection ONLY if that customer owns it (else 404),
+ *    4. mint-or-get the (connection, client) attribution token so the engine
  *       still stamps a per-agent mcp_token_id on every audit row,
- *    4. forward to the engine through the SAME spawn/forward core as the URL
+ *    5. forward to the engine through the SAME spawn/forward core as the URL
  *       path — same decrypt, same policy validation, same response filtering.
  *
- *  Coarse v1 scope model: a valid bearer for a user who owns the connection
- *  grants full MCP access to it; per-connection policy/guardrails still apply
- *  in the engine exactly as for URL tokens. */
+ *  Coarse v1 scope model: an `mcp`-scoped bearer for a user who owns the
+ *  connection grants full MCP access to it; per-connection policy/guardrails
+ *  still apply in the engine exactly as for URL tokens. */
 export async function proxyMcpOAuth(
   req: Request,
   connectionId: string,
@@ -212,6 +213,26 @@ export async function proxyMcpOAuth(
     // malformed/forged record slipped through. Refuse without confirming the
     // connection exists.
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  // Scope gate. The bearer is valid (withMcpAuth), but validity alone is NOT
+  // authorization to reach a database — a token minted for some other purpose
+  // (a future OAuth-protected resource, or a client that requested only
+  // openid/profile) must not grant MCP access. Require the `mcp` capability
+  // scope before touching any connection. Our authorize before-hook forces this
+  // scope onto every flow we issue (lib/auth.ts), so compliant clients always
+  // carry it; this check is the defense-in-depth that rejects tokens that don't.
+  const scopes = new Set((session.scopes ?? "").split(" ").filter(Boolean));
+  if (!scopes.has("mcp")) {
+    return Response.json(
+      { ok: false, error: "insufficient_scope" },
+      {
+        status: 403,
+        headers: {
+          "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="mcp"',
+        },
+      },
+    );
   }
 
   const customerId = await resolveCustomerIdForUser(db, userId, region);
