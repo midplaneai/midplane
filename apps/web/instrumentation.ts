@@ -31,9 +31,12 @@ export async function register() {
 
   // Self-host: seed the implicit org + customer the single-tenant build binds
   // every customer_id-scoped transaction against, before the first request can
-  // reach a bind. Dynamic import so the cloud boot path never loads the db
-  // client — keeping this module (and the liveness path) db-free in the cloud.
-  if (isSelfHost()) {
+  // reach a bind. The NEXT_RUNTIME guard is REQUIRED: register() runs in both
+  // the Node.js and Edge runtimes, and customer.ts pulls node:async_hooks /
+  // node:crypto (via getDb), which the Edge bundle can't load. Guarding on
+  // 'nodejs' keeps that import out of the Edge compilation entirely. The
+  // dynamic import also keeps the cloud boot path db-free.
+  if (process.env.NEXT_RUNTIME === "nodejs" && isSelfHost()) {
     const { ensureImplicitCustomer } = await import("./src/lib/customer.ts");
     await ensureImplicitCustomer();
   }
