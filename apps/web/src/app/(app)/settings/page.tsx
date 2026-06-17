@@ -1,9 +1,14 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gt } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { getDb } from "@midplane-cloud/db";
-import { organization } from "@midplane-cloud/db/auth-schema";
+import {
+  invitation,
+  member,
+  organization,
+  user,
+} from "@midplane-cloud/db/auth-schema";
 
 import { PageContainer, Topbar } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -11,9 +16,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { RegionBadge } from "@/components/ui/region-badge";
 import { currentCustomer } from "@/lib/customer";
+import { getOrgContext } from "@/lib/org-context";
 import { bootRegion } from "@/lib/region-context";
 import { isSelfHost } from "@/lib/self-host";
 
+import {
+  MembersCard,
+  type MemberView,
+  type PendingInviteView,
+} from "./members-card";
 import { RenameWorkspaceForm } from "./rename-workspace-form";
 
 // Workspace settings. Today: rename + the (immutable) data region. The future
@@ -36,6 +47,70 @@ export default async function SettingsPage() {
   // the link is hidden there. The /settings/sso page itself gates on the Team
   // entitlement (and shows an upgrade notice for plans without it).
   const showSso = !isSelfHost();
+
+  // Members + invites. Self-host only for now — the cloud invite model
+  // (existing users with their own orgs) is a follow-up; here it's the single
+  // implicit org. List current members, surface the invite link the owner
+  // shares out-of-band, and let an owner/admin revoke pending invites.
+  let membersData: {
+    members: MemberView[];
+    pending: PendingInviteView[];
+    canManage: boolean;
+  } | null = null;
+  if (isSelfHost()) {
+    const { userId } = await getOrgContext();
+    const memberRows = await db
+      .select({
+        userId: member.userId,
+        role: member.role,
+        email: user.email,
+        name: user.name,
+      })
+      .from(member)
+      .innerJoin(user, eq(member.userId, user.id))
+      .where(eq(member.organizationId, customer.orgId))
+      .orderBy(member.createdAt);
+
+    const myRole = memberRows.find((r) => r.userId === userId)?.role;
+    const canManage = myRole === "owner" || myRole === "admin";
+
+    const pendingRows = canManage
+      ? await db
+          .select({
+            id: invitation.id,
+            email: invitation.email,
+            expiresAt: invitation.expiresAt,
+          })
+          .from(invitation)
+          .where(
+            and(
+              eq(invitation.organizationId, customer.orgId),
+              eq(invitation.status, "pending"),
+              gt(invitation.expiresAt, new Date()),
+            ),
+          )
+          .orderBy(desc(invitation.createdAt))
+      : [];
+
+    membersData = {
+      canManage,
+      members: memberRows.map((r) => ({
+        email: r.email,
+        name: r.name,
+        role: r.role,
+        isYou: r.userId === userId,
+      })),
+      pending: pendingRows.map((r) => ({
+        id: r.id,
+        email: r.email,
+        expiresLabel: `expires ${r.expiresAt.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })}`,
+      })),
+    };
+  }
 
   return (
     <>
@@ -72,6 +147,21 @@ export default async function SettingsPage() {
               </span>
             </CardContent>
           </Card>
+
+          {membersData && (
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle>members</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <MembersCard
+                  members={membersData.members}
+                  pending={membersData.pending}
+                  canManage={membersData.canManage}
+                />
+              </CardContent>
+            </Card>
+          )}
 
           {showSso && (
             <Card className="mt-4">
