@@ -36,6 +36,7 @@ function customerWith(planOverride: Customer["planOverride"]): Customer {
     email: "u@e.test",
     region: "eu",
     planOverride,
+    ownerEmail: null,
     createdAt: new Date(),
   };
 }

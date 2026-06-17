@@ -169,6 +169,13 @@
       "when": 1777644000017,
       "tag": "0023_provider_neutral_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1777644000018,
+      "tag": "0024_self_host_owner",
+      "breakpoints": true
     }
   ]
 }
