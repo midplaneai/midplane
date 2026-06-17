@@ -89,6 +89,36 @@ support is genuinely useful. Drop the *connection object*, not the capability.
 Target user model: a customer has **databases** (flat, each guardrailed); one
 OAuth endpoint; **consent/scope picks which databases** an agent may touch.
 
+**Why the name is also wrong (not just the object).** "Connection" had a
+defensible origin from the agent's POV — the thing your agent connects through —
+but it grew into a *policied group of databases* with a kill-switch and an audit
+lens. That is a **project/workspace** in every comparable tool, while a
+"connection/data source" elsewhere means a **single** datasource. midplane
+borrowed the word from one column and built the object from the other:
+
+- single datasource = "connection"/"data source": hoop.dev, Retool, Metabase;
+- group-of-databases + governance = "project": Bytebase (project → databases +
+  members/roles), Supabase, Neon;
+- access-broker = "resources + roles": StrongDM, Teleport (databases are
+  resources; *roles* grant access — the grant, not the resource, is the grouping).
+
+So the hybrid matches neither convention, which is the friction. Flattening to
+**databases + scoped access** dissolves the naming problem outright: both terms
+are unambiguous and there's no hybrid object to explain.
+
+**The "project" fallback (org/governance wedge, demand-pulled — NOT v1).** The
+multi-team case — a DBA partitioning many databases and giving each team a
+different scope — is the *paid governance* wedge, and the current connection
+serves it badly (per-team access to a shared DB means duplicated connections;
+the policy lives on the connection). The right shape there is **RBAC + per-grant
+scope** (the ee band — that IS the monetization), optionally grouped by a
+**project** (Bytebase's proven model: project → databases + members/roles).
+Crucially: the **org/customer is already the top-level workspace** (one org = one
+customer), so v1 needs *no* grouping object at all — flat databases under the org.
+Reintroduce a grouping only if a real org buyer pulls for it, and call it a
+**project**, not a "connection". Do not pre-build it. (No usage data exists
+pre-launch; this is reasoned from the model, not observed behavior.)
+
 ### C. Headless credential shape
 
 - **Today:** `…/mcp/<token>` (token in the URL path) works now, no browser. Wart:
@@ -108,8 +138,12 @@ OAuth endpoint; **consent/scope picks which databases** an agent may touch.
 3. **Then:** put API tokens in a header + give them a DB scope (C) — the headless
    half of the same scope mechanism.
 4. **Then:** retire the user-facing "connection" object once the picker makes it
-   vestigial (B) — collapse the UI to a flat database list; one container per
-   customer. No big-bang migration; it falls away.
+   vestigial (B) — collapse the UI to a flat **database** list under the org;
+   one container per customer. The name goes away with the object (no rename to
+   ship — you just talk about databases + access). No big-bang migration; it
+   falls away. A **project** grouping returns only later, demand-pulled by the
+   org/governance wedge (Bytebase-style: project → databases + members/roles),
+   alongside ee RBAC — not as a v1 primitive.
 
 ## Out of scope (for now)
 
