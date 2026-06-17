@@ -7,8 +7,9 @@
 // and count rows in Postgres ourselves. When billing lands, only resolvePlan()/
 // hasEntitlement() change; callers thread `caps` down unchanged.
 //
-// Seats are NOT in this map — a per-plan seat cap is enforced separately on the
-// invite path (Better Auth organization.membershipLimit is static, not per-plan).
+// Seats ARE in this map (the per-plan seat cap). They're enforced on the invite
+// path via Better Auth organization.membershipLimit (lib/seats.ts) — which is
+// otherwise a single static number, not per-plan.
 
 export type Plan = "free" | "pro" | "team";
 
@@ -23,9 +24,13 @@ export interface PlanCaps {
    *  visibility window, NOT storage deletion (old rows persist; pruning is
    *  a follow-up — see TODOS.md). */
   auditRetentionDays: number;
-  /** Whether SSO/SAML is entitled. Mirrors a Clerk `sso` feature on the
-   *  Team plan; we gate the in-app SSO surface on this. */
+  /** Whether SSO/SAML is entitled. Gated on the Team plan; we gate the in-app
+   *  SSO surface on this. */
   sso: boolean;
+  /** Max org members (seats). Infinity = unlimited (Team). Enforced on the
+   *  invite/add path via Better Auth organization.membershipLimit (see
+   *  lib/seats.ts) — it's otherwise a single static number, not per-plan. */
+  seats: number;
 }
 
 export const CAPS: Record<Plan, PlanCaps> = {
@@ -38,10 +43,11 @@ export const CAPS: Record<Plan, PlanCaps> = {
   //      hygiene — the N+1 floor, not a pricing lever.
   //   2. The headline demo is many agents on ONE connection, each with its own
   //      identity in the audit log. With one token you cannot even show it.
-  // Free stays gated on connections (1) / retention (7d) / SSO, so a generous
-  // token count there sells the multi-agent story without cannibalizing Pro.
-  free: { connections: 1, tokens: 5, auditRetentionDays: 7, sso: false },
-  pro: { connections: 10, tokens: 50, auditRetentionDays: 30, sso: false },
+  // Free stays gated on connections (1) / retention (7d) / seats (1) / SSO, so
+  // a generous token count there sells the multi-agent story without
+  // cannibalizing Pro.
+  free: { connections: 1, tokens: 5, auditRetentionDays: 7, sso: false, seats: 1 },
+  pro: { connections: 10, tokens: 50, auditRetentionDays: 30, sso: false, seats: 10 },
   team: {
     connections: Infinity,
     tokens: Infinity,
@@ -51,6 +57,7 @@ export const CAPS: Record<Plan, PlanCaps> = {
     // visibility clamp, not storage deletion (old rows already persist).
     auditRetentionDays: 90,
     sso: true,
+    seats: Infinity,
   },
 };
 

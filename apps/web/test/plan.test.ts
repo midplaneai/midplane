@@ -50,18 +50,21 @@ describe("CAPS", () => {
       tokens: 5,
       auditRetentionDays: 7,
       sso: false,
+      seats: 1,
     });
     expect(CAPS.pro).toEqual({
       connections: 10,
       tokens: 50,
       auditRetentionDays: 30,
       sso: false,
+      seats: 10,
     });
     expect(CAPS.team).toEqual({
       connections: Infinity,
       tokens: Infinity,
       auditRetentionDays: 90,
       sso: true,
+      seats: Infinity,
     });
   });
 

@@ -7,6 +7,7 @@ import { getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
 
 import { bootRegion } from "./region-context";
+import { seatCapForOrg } from "./seats";
 
 // Better Auth instance for the CLOUD build.
 //
@@ -19,11 +20,6 @@ import { bootRegion } from "./region-context";
 // bootRegion()/getDb() only run when a request actually reaches /api/auth/*,
 // never at `next build` or module-eval (getDb throws when DATABASE_URL_<REGION>
 // is unset, which is the normal state during build and in some dev/test runs).
-//
-// Foundation only: this stands the instance up ALONGSIDE the still-live Clerk
-// integration. Swapping middleware / provider / sign-in pages onto it — and
-// wiring the per-plan seat cap (organization.membershipLimit is static, not
-// per-plan) — are later steps.
 function createAuth() {
   return betterAuth({
     appName: "midplane",
@@ -33,7 +29,12 @@ function createAuth() {
     }),
     emailAndPassword: { enabled: true },
     plugins: [
-      organization(),
+      organization({
+        // Per-plan seat cap. membershipLimit accepts a per-org function, so we
+        // resolve the org's plan → seat cap (lib/seats.ts); Better Auth enforces
+        // it on the invite/add path. Otherwise it's a single static number.
+        membershipLimit: (_user, organization) => seatCapForOrg(organization.id),
+      }),
       // nextCookies MUST stay last: it flushes Set-Cookie from server-action
       // auth flows through Next's cookies() helper.
       nextCookies(),

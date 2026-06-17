@@ -494,6 +494,7 @@ describe("createConnection plan caps", () => {
       tokens: 1,
       auditRetentionDays: 30,
       sso: false,
+      seats: 10,
     };
     handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
     handle.queueSelect([{ id: "c1" }]); // connection count → 1 < 5 ✓
