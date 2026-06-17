@@ -39,7 +39,9 @@ interface StripeEnv {
   teamPriceId: string;
 }
 
-function readStripeEnv(env: NodeJS.ProcessEnv = process.env): Partial<StripeEnv> {
+type EnvLike = Record<string, string | undefined>;
+
+function readStripeEnv(env: EnvLike = process.env): Partial<StripeEnv> {
   return {
     secretKey: env.STRIPE_SECRET_KEY,
     webhookSecret: env.STRIPE_WEBHOOK_SECRET,
@@ -53,7 +55,7 @@ function readStripeEnv(env: NodeJS.ProcessEnv = process.env): Partial<StripeEnv>
  *  plugin stays unloaded and no Stripe key is required to boot. Keyless cloud
  *  dev is also false, so a laptop with no Stripe vars boots and runs the rest of
  *  the app untouched (the /billing page degrades to "talk to us"). */
-export function isBillingConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+export function isBillingConfigured(env: EnvLike = process.env): boolean {
   if (isSelfHost()) return false;
   const e = readStripeEnv(env);
   return Boolean(e.secretKey && e.webhookSecret && e.proPriceId && e.teamPriceId);
