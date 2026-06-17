@@ -73,10 +73,20 @@ export const customers = pgTable(
     orgId: text("org_id").notNull().unique(),
     email: text("email").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
-    // Founder / internal plan override. NULL = resolve normally (free until
-    // billing is wired). A value forces that tier's caps — the manual upgrade
-    // lever while the Stripe webhook becomes the future source of truth.
+    // Founder / internal plan override. NULL = resolve normally (defer to the
+    // subscription-backed `plan` below). A value forces that tier's caps and
+    // BEATS the subscription — the manual upgrade lever (comp accounts, support
+    // grants) that always wins in resolvePlan().
     planOverride: text("plan_override", { enum: ["free", "pro", "team"] }),
+    // Subscription-backed plan: the single source of truth the Stripe webhook
+    // writes (via the @better-auth/stripe subscription lifecycle hooks — see
+    // apps/web/src/lib/billing.ts) and resolvePlan() reads when no planOverride
+    // is set. Defaults to 'free' (no subscription). Downgrades flip this back to
+    // 'free'; we never clawback already-created resources, only gate new creates.
+    // TS enum only (no DB CHECK), mirroring plan_override and region.
+    plan: text("plan", { enum: ["free", "pro", "team"] })
+      .notNull()
+      .default("free"),
     // Self-host single-owner claim. NULL until the first signup atomically
     // claims it on the implicit customer row (see lib/auth.ts). Unused in the
     // cloud (no implicit customer there) — stays NULL on every cloud row.
