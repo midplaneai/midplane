@@ -38,14 +38,23 @@ const PUBLIC_EXACT = new Set([
 // Public path prefixes — the route itself plus any subpath. Covers the auth UI
 // (/sign-in, /sign-up), Better Auth's own API (/api/auth/*) which must never be
 // gated, the agent-facing MCP endpoint (/mcp/*, token-authed not session-authed),
-// and the unauthenticated health check (/api/health — Fly's http_service.checks
-// polls it with no session).
+// the unauthenticated health check (/api/health — Fly's http_service.checks
+// polls it with no session), and the teammate invite-accept landing
+// (/accept-invitation/<id>) which an invited, not-yet-signed-up user must reach
+// pre-auth to sign up + accept (the page validates the invite itself).
 //
 // The Stripe webhook is /api/auth/stripe/webhook (the @better-auth/stripe plugin
 // mounts it inside Better Auth's handler), so it's already public via /api/auth
 // — no separate entry. It arrives without a session cookie and verifies its own
 // Stripe signature, so it MUST stay outside the session gate.
-const PUBLIC_PREFIXES = ["/sign-in", "/sign-up", "/mcp", "/api/auth", "/api/health"];
+const PUBLIC_PREFIXES = [
+  "/sign-in",
+  "/sign-up",
+  "/accept-invitation",
+  "/mcp",
+  "/api/auth",
+  "/api/health",
+];
 
 function isPublic(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;
