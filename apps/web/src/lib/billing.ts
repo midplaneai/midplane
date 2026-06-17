@@ -1,5 +1,5 @@
 import { stripe as stripePlugin } from "@better-auth/stripe";
-import { and, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import Stripe from "stripe";
 
 import { customers, getDb } from "@midplane-cloud/db";
@@ -99,6 +99,17 @@ export function billingPlans(): BillingPlan[] {
     { tier: "pro", label: "Pro", priceId: e.proPriceId },
     { tier: "team", label: "Team", priceId: e.teamPriceId },
   ];
+}
+
+/** The org's current member count, the per-seat checkout quantity (min 1). The
+ *  billing page passes it to the upgrade call so a team is billed for its size;
+ *  the Customer Portal handles later adjustments and reconcileOrgPlan re-aligns. */
+export async function orgSeatCount(orgId: string): Promise<number> {
+  const rows = await getDb(bootRegion())
+    .select({ n: count() })
+    .from(member)
+    .where(eq(member.organizationId, orgId));
+  return Math.max(1, rows[0]?.n ?? 1);
 }
 
 // --- status → tier mapping (pure) -------------------------------------------
