@@ -38,7 +38,10 @@ const introspectionUrl =
   process.env.DATABASE_URL_EU ?? process.env.DATABASE_URL_US ?? "";
 
 export default defineConfig({
-  schema: "./src/schema.ts",
+  // Both schema modules. NB: the drizzle-kit snapshot is frozen at 0006 —
+  // migrations since are hand-written + journal-registered — so `generate`
+  // drifts and isn't used; this keeps `studio` and any introspection honest.
+  schema: ["./src/schema.ts", "./src/auth-schema.ts"],
   out: "./migrations",
   dialect: "postgresql",
   dbCredentials: {

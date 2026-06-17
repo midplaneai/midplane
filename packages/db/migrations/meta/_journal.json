@@ -155,6 +155,13 @@
       "when": 1777644000015,
       "tag": "0021_guardrails",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1777644000016,
+      "tag": "0022_better_auth",
+      "breakpoints": true
     }
   ]
 }
