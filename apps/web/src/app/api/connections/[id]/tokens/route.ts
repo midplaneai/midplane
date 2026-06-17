@@ -2,7 +2,7 @@
 // POST /api/connections/:id/tokens          — mint a new token
 //
 // Security posture (matches /api/connections/[id]/route.ts):
-//   - The Clerk session is the ONLY authentication path. No service-token
+//   - The session is the ONLY authentication path. No service-token
 //     shortcut.
 //   - 404 — not 401/403 — when the connection is unknown OR belongs to a
 //     different customer. Mirrors the lib's leakage-avoidance shape:
@@ -12,7 +12,7 @@
 //     It is never logged, persisted in a server-side session, or returned
 //     to GET. The caller is responsible for surfacing it.
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
@@ -86,7 +86,7 @@ export async function POST(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   if (!userId) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
@@ -135,7 +135,7 @@ export async function POST(
       {
         name: parsed.data.name,
         expiresAt,
-        actorClerkUserId: userId,
+        actorUserId: userId,
         env: tokenEnvFromConfig(process.env),
         planLimit: { tokenCap: caps.tokens, plan },
       },

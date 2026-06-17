@@ -1,0 +1,72 @@
+import { eq } from "drizzle-orm";
+import { redirect } from "next/navigation";
+
+import { getDb } from "@midplane-cloud/db";
+import { organization } from "@midplane-cloud/db/auth-schema";
+
+import { PageContainer, Topbar } from "@/components/layout/app-shell";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
+import { RegionBadge } from "@/components/ui/region-badge";
+import { currentCustomer } from "@/lib/customer";
+import { bootRegion } from "@/lib/region-context";
+
+import { RenameWorkspaceForm } from "./rename-workspace-form";
+
+// Workspace settings. Today: rename + the (immutable) data region. The future
+// home for members / invites — the seat cap is already enforced on the invite
+// path (lib/seats.ts) via the org plugin's membershipLimit.
+export default async function SettingsPage() {
+  const customer = await currentCustomer();
+  if (!customer) redirect("/signup/region");
+
+  const db = getDb(bootRegion());
+  const orgRow = (
+    await db
+      .select({ name: organization.name })
+      .from(organization)
+      .where(eq(organization.id, customer.orgId))
+  )[0];
+  const currentName = orgRow?.name ?? "";
+
+  return (
+    <>
+      <Topbar>
+        <Breadcrumb items={[{ label: "Settings" }]} />
+      </Topbar>
+      <PageContainer>
+        <div className="mx-auto max-w-[760px]">
+          <PageHeader
+            title="Workspace"
+            subtitle="Your workspace name and where its data lives."
+          />
+
+          <Card>
+            <CardHeader>
+              <CardTitle>name</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <RenameWorkspaceForm
+                orgId={customer.orgId}
+                currentName={currentName}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>region</CardTitle>
+            </CardHeader>
+            <CardContent className="flex items-center gap-3 text-sm text-muted-foreground">
+              <RegionBadge region={customer.region} />
+              <span>
+                Permanent — your audit log and encrypted credentials live here.
+              </span>
+            </CardContent>
+          </Card>
+        </div>
+      </PageContainer>
+    </>
+  );
+}

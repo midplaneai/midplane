@@ -1,9 +1,8 @@
-import { OrganizationSwitcher } from "@clerk/nextjs";
-
 import { LegalMenu } from "@/components/layout/legal-menu";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { UserMenuButton } from "@/components/layout/user-menu-button";
+import { WorkspaceLabel } from "@/components/layout/workspace-label";
 import { RegionBadge } from "@/components/ui/region-badge";
 import type { Region } from "@midplane-cloud/kms";
 
@@ -34,22 +33,7 @@ export function AppShell({ region, children }: AppShellProps) {
         <div className="px-[18px] pb-5">
           <div className="flex items-center gap-2.5 py-[7px]">
             <WorkspaceMark />
-            <OrganizationSwitcher
-              hidePersonal
-              afterCreateOrganizationUrl="/signup/region"
-              afterSelectOrganizationUrl="/dashboard"
-              appearance={{
-                elements: {
-                  rootBox: "min-w-0 flex-1",
-                  organizationSwitcherTrigger:
-                    "w-full justify-between gap-2 px-0 py-0 hover:bg-transparent",
-                  organizationPreview: "min-w-0 gap-0",
-                  organizationPreviewAvatarBox: "hidden",
-                  organizationPreviewMainIdentifier:
-                    "truncate text-sm font-normal text-foreground",
-                },
-              }}
-            />
+            <WorkspaceLabel />
           </div>
         </div>
         <SidebarNav />

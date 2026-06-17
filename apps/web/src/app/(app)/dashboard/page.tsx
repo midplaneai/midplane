@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
@@ -364,7 +364,7 @@ async function deleteAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/");
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
 
   const id = formData.get("id");
   if (typeof id !== "string" || id.length === 0) {
@@ -395,7 +395,7 @@ async function pauseAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/");
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   const id = formData.get("id");
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
@@ -415,7 +415,7 @@ async function pauseAction(formData: FormData) {
         database: "main",
         eventType: "CONNECTION_PAUSED",
         payload: { connection_id: result.id, action: "paused" },
-        actorClerkUserId: userId,
+        actorUserId: userId,
       });
     } catch (err) {
       console.error("[dashboard.pauseAction] CONNECTION_PAUSED audit write failed", err);
@@ -437,7 +437,7 @@ async function resumeAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/");
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   const id = formData.get("id");
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
@@ -453,7 +453,7 @@ async function resumeAction(formData: FormData) {
         database: "main",
         eventType: "CONNECTION_RESUMED",
         payload: { connection_id: result.id, action: "resumed" },
-        actorClerkUserId: userId,
+        actorUserId: userId,
       });
     } catch (err) {
       console.error("[dashboard.resumeAction] CONNECTION_RESUMED audit write failed", err);

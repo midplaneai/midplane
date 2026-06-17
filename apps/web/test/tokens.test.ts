@@ -169,9 +169,10 @@ const customer = {
   // ULID literal — emitTokenAuditRow validates customer.id matches the
   // ULID alphabet before SET LOCAL inlines it.
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
-  clerkOrgId: "org_clerk-1",
+  orgId: "org_clerk-1",
   email: "u@e.test",
   region: "eu" as const,
+  planOverride: null,
   createdAt: new Date(),
 };
 
@@ -191,7 +192,7 @@ describe("createToken", () => {
       {
         name: "laptop",
         expiresAt: null,
-        actorClerkUserId: "user_clerk_1",
+        actorUserId: "user_clerk_1",
         env: "test",
       },
       pepper,
@@ -229,7 +230,7 @@ describe("createToken", () => {
     const auditRow = auditInsert!.set as Record<string, unknown>;
     expect(auditRow.eventType).toBe("TOKEN_CREATED");
     expect(auditRow.mcpTokenId).toBe(row.id);
-    expect(auditRow.actorClerkUserId).toBe("user_clerk_1");
+    expect(auditRow.actorUserId).toBe("user_clerk_1");
   });
 
   it("issues the parent SELECT … FOR UPDATE before the sibling pre-check", async () => {
@@ -242,7 +243,7 @@ describe("createToken", () => {
       {
         name: "ci",
         expiresAt: null,
-        actorClerkUserId: "user_clerk_1",
+        actorUserId: "user_clerk_1",
         env: "test",
       },
       pepper,
@@ -264,7 +265,7 @@ describe("createToken", () => {
       {
         name: "x",
         expiresAt: null,
-        actorClerkUserId: "user_clerk_1",
+        actorUserId: "user_clerk_1",
         env: "test",
         planLimit: { tokenCap: 1, plan: "free" },
       },
@@ -289,7 +290,7 @@ describe("createToken", () => {
       {
         name: "ok",
         expiresAt: null,
-        actorClerkUserId: "user_clerk_1",
+        actorUserId: "user_clerk_1",
         env: "test",
         planLimit: { tokenCap: 5, plan: "pro" },
       },
@@ -319,7 +320,7 @@ describe("createToken", () => {
         {
           name: "laptop",
           expiresAt: null,
-          actorClerkUserId: "u",
+          actorUserId: "u",
           env: "test",
         },
         pepper,
@@ -346,7 +347,7 @@ describe("createToken", () => {
         {
           name: "racer",
           expiresAt: null,
-          actorClerkUserId: "u",
+          actorUserId: "u",
           env: "test",
         },
         pepper,
@@ -365,7 +366,7 @@ describe("createToken", () => {
         {
           name: "laptop",
           expiresAt: new Date(Date.now() - 60_000),
-          actorClerkUserId: "u",
+          actorUserId: "u",
           env: "test",
         },
         pepper,
@@ -382,7 +383,7 @@ describe("createToken", () => {
       {
         name: "x",
         expiresAt: null,
-        actorClerkUserId: "u",
+        actorUserId: "u",
         env: "test",
       },
       pepper,
@@ -437,7 +438,7 @@ describe("revokeToken", () => {
     const { revokeToken } = await import("../src/lib/tokens.ts");
     const result = await revokeToken(customer, "conn-1", "tok-1", {
       reason: "user_action",
-      actorClerkUserId: "u",
+      actorUserId: "u",
     });
     expect(result).toEqual({ id: "tok-1" });
 
@@ -468,7 +469,7 @@ describe("revokeToken", () => {
     const { revokeToken } = await import("../src/lib/tokens.ts");
     const result = await revokeToken(customer, "conn-1", "tok-1", {
       reason: "user_action",
-      actorClerkUserId: "u",
+      actorUserId: "u",
     });
     expect(result).toEqual({ id: "tok-1" });
     expect(
@@ -486,7 +487,7 @@ describe("revokeToken", () => {
     const { revokeToken } = await import("../src/lib/tokens.ts");
     const result = await revokeToken(customer, "foreign", "tok-x", {
       reason: "user_action",
-      actorClerkUserId: "u",
+      actorUserId: "u",
     });
     expect(result).toBeNull();
   });
@@ -497,7 +498,7 @@ describe("revokeToken", () => {
     const { revokeToken } = await import("../src/lib/tokens.ts");
     const result = await revokeToken(customer, "conn-1", "missing-tok", {
       reason: "user_action",
-      actorClerkUserId: "u",
+      actorUserId: "u",
     });
     expect(result).toBeNull();
   });

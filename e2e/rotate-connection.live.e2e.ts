@@ -172,7 +172,7 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
   // plaintext, even though the row was updated.
   const customer = {
     id: customerId,
-    clerkOrgId: `org_e2e-${customerId}`,
+    orgId: `org_e2e-${customerId}`,
     email: `e2e-${customerId}@example.test`,
     region: "eu" as const,
     createdAt: new Date(),

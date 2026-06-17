@@ -109,7 +109,7 @@ describe("connection_databases (0008 child)", () => {
 describe("customers", () => {
   it("carries Clerk linkage and an immutable region", () => {
     const cols = Object.keys(customers);
-    for (const col of ["id", "clerkOrgId", "email", "region"]) {
+    for (const col of ["id", "orgId", "email", "region"]) {
       expect(cols).toContain(col);
     }
   });

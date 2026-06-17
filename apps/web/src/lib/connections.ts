@@ -100,7 +100,7 @@ export async function emitConfigAuditRow(
       | "CONNECTION_PAUSED"
       | "CONNECTION_RESUMED";
     payload: Record<string, unknown>;
-    actorClerkUserId: string;
+    actorUserId: string;
   },
 ): Promise<void> {
   if (!CUSTOMER_ID_ULID_RE.test(customer.id)) {
@@ -124,7 +124,7 @@ export async function emitConfigAuditRow(
       ts: new Date(),
       eventType: row.eventType,
       payload: row.payload,
-      actorClerkUserId: row.actorClerkUserId,
+      actorUserId: row.actorUserId,
       // Every config event passes the connection id as tenantId (see the
       // setTableAccess comment — "tenant_id = connection_id so a future
       // per-connection audit view can filter on it for free"). Stamp the
@@ -169,7 +169,7 @@ export async function createConnection(
   dsn: string,
   name: string | null = null,
   defaultAccess: AccessLevel = "read",
-  actorClerkUserId: string,
+  actorUserId: string,
   // Resolved plan + caps for the org (from resolvePlan() at the call site).
   // Enforced under a customers-row lock before the connection is inserted;
   // throws PlanLimitError when the connection cap is reached OR there is no
@@ -273,7 +273,7 @@ export async function createConnection(
         id: defaultTokenId,
         connectionId: id,
         name: "default",
-        createdByUserId: actorClerkUserId,
+        createdByUserId: actorUserId,
         expiresAt,
         env: tokenEnvFromConfig(process.env),
       },
@@ -295,7 +295,7 @@ export async function createConnection(
         token_name: "default",
         expires_at: expiresAt.toISOString(),
       },
-      actorClerkUserId,
+      actorUserId,
     });
   } catch (err) {
     console.error("[createConnection] default TOKEN_CREATED audit failed", err);
@@ -546,7 +546,7 @@ async function applyPolicyConfigChange(
   customer: Customer,
   id: string,
   deps: PolicyPushDeps,
-  actorClerkUserId: string,
+  actorUserId: string,
   dbName: string,
   change: PolicyConfigChange,
 ): Promise<{ id: string } | null> {
@@ -662,7 +662,7 @@ async function applyPolicyConfigChange(
         database_name: dbName,
         ...change.payload,
       },
-      actorClerkUserId,
+      actorUserId,
     });
   } catch (err) {
     console.error(
@@ -688,7 +688,7 @@ export async function setTableAccess(
   id: string,
   policy: TableAccessPolicy,
   deps: PolicyPushDeps,
-  actorClerkUserId: string,
+  actorUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
 ): Promise<{ id: string } | null> {
   const validation = validatePolicy(policy);
@@ -698,7 +698,7 @@ export async function setTableAccess(
       .join("; ");
     throw new Error(`invalid policy: ${summary}`);
   }
-  return applyPolicyConfigChange(customer, id, deps, actorClerkUserId, dbName, {
+  return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
     update: { tableAccess: validation.value },
     eventType: "POLICY_CHANGED",
     payload: { policy: validation.value },
@@ -724,7 +724,7 @@ export async function setTenantScope(
   id: string,
   config: TenantScopeConfig,
   deps: PolicyPushDeps,
-  actorClerkUserId: string,
+  actorUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
 ): Promise<{ id: string } | null> {
   // Cloud-side validation before touching PG. The YAML emitter would also
@@ -738,7 +738,7 @@ export async function setTenantScope(
       .join("; ");
     throw new Error(`invalid tenant_scope: ${summary}`);
   }
-  return applyPolicyConfigChange(customer, id, deps, actorClerkUserId, dbName, {
+  return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
     update: { tenantScope: validation.value },
     eventType: "TENANT_SCOPE_CHANGED",
     payload: { config: validation.value },
@@ -764,7 +764,7 @@ export async function setGuardrails(
   id: string,
   config: GuardrailsConfig,
   deps: PolicyPushDeps,
-  actorClerkUserId: string,
+  actorUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
 ): Promise<{ id: string } | null> {
   const validation = validateGuardrails(config);
@@ -774,7 +774,7 @@ export async function setGuardrails(
       .join("; ");
     throw new Error(`invalid guardrails: ${summary}`);
   }
-  return applyPolicyConfigChange(customer, id, deps, actorClerkUserId, dbName, {
+  return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
     update: { guardrails: validation.value },
     eventType: "GUARDRAILS_CHANGED",
     payload: { guardrails: validation.value },

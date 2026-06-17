@@ -1,15 +1,15 @@
-// Plan resolution for Clerk-Billing-on-Organizations pricing.
+// Plan resolution + numeric caps. The single entitlement chokepoint.
 //
-// Source of truth is Clerk: the org's active subscription is read LIVE via
-// auth().has({ plan }) — no customers.plan column, no webhook (see the
-// pricing plan review, decision D2). The numeric caps below are OURS: Clerk
-// features are boolean entitlements, so "10 connections" is not something
-// Clerk can answer — we map the plan tier to caps here and count rows in
-// Postgres ourselves.
+// Stripe billing isn't wired yet, so resolvePlan() returns `free` unless the
+// customers.plan_override column is set (the founder/internal manual lever),
+// and hasEntitlement() returns false. The numeric caps below are OURS — boolean
+// entitlements can't answer "10 connections", so we map plan tier to caps here
+// and count rows in Postgres ourselves. When billing lands, only resolvePlan()/
+// hasEntitlement() change; callers thread `caps` down unchanged.
 //
-// Seats are NOT in this map: Clerk's seat-limit plans enforce per-org member
-// caps natively (dashboard config sets max_allowed_memberships; Clerk blocks
-// new members at the limit). We add zero seat-enforcement code.
+// Seats ARE in this map (the per-plan seat cap). They're enforced on the invite
+// path via Better Auth organization.membershipLimit (lib/seats.ts) — which is
+// otherwise a single static number, not per-plan.
 
 export type Plan = "free" | "pro" | "team";
 
@@ -24,9 +24,13 @@ export interface PlanCaps {
    *  visibility window, NOT storage deletion (old rows persist; pruning is
    *  a follow-up — see TODOS.md). */
   auditRetentionDays: number;
-  /** Whether SSO/SAML is entitled. Mirrors a Clerk `sso` feature on the
-   *  Team plan; we gate the in-app SSO surface on this. */
+  /** Whether SSO/SAML is entitled. Gated on the Team plan; we gate the in-app
+   *  SSO surface on this. */
   sso: boolean;
+  /** Max org members (seats). Infinity = unlimited (Team). Enforced on the
+   *  invite/add path via Better Auth organization.membershipLimit (see
+   *  lib/seats.ts) — it's otherwise a single static number, not per-plan. */
+  seats: number;
 }
 
 export const CAPS: Record<Plan, PlanCaps> = {
@@ -39,10 +43,11 @@ export const CAPS: Record<Plan, PlanCaps> = {
   //      hygiene — the N+1 floor, not a pricing lever.
   //   2. The headline demo is many agents on ONE connection, each with its own
   //      identity in the audit log. With one token you cannot even show it.
-  // Free stays gated on connections (1) / retention (7d) / SSO, so a generous
-  // token count there sells the multi-agent story without cannibalizing Pro.
-  free: { connections: 1, tokens: 5, auditRetentionDays: 7, sso: false },
-  pro: { connections: 10, tokens: 50, auditRetentionDays: 30, sso: false },
+  // Free stays gated on connections (1) / retention (7d) / seats (1) / SSO, so
+  // a generous token count there sells the multi-agent story without
+  // cannibalizing Pro.
+  free: { connections: 1, tokens: 5, auditRetentionDays: 7, sso: false, seats: 1 },
+  pro: { connections: 10, tokens: 50, auditRetentionDays: 30, sso: false, seats: 10 },
   team: {
     connections: Infinity,
     tokens: Infinity,
@@ -52,27 +57,9 @@ export const CAPS: Record<Plan, PlanCaps> = {
     // visibility clamp, not storage deletion (old rows already persist).
     auditRetentionDays: 90,
     sso: true,
+    seats: Infinity,
   },
 };
-
-// Clerk plan slugs that map to each paid tier, ORG-SCOPED.
-//
-// The `org:` prefix binds the entitlement to the ACTIVE ORGANIZATION. Without
-// it, has({ plan: 'pro' }) matches a user-scoped OR org-scoped plan with that
-// slug (Clerk merges both scopes — see @clerk/shared authorization.ts
-// checkForFeatureOrPlan): a member who personally subscribed to a 'pro' plan
-// would wrongly unlock Pro caps for whatever org they have active. `org:pro`
-// checks only the org's subscription. The dashboard plan slug stays `pro`;
-// `org:` is the scope, parsed off before the lookup.
-//
-// Kept as sets so adding an annual / grandfathered SKU later (e.g.
-// "org:pro_annual") is a one-line change here — NOT a schema migration.
-// IMPORTANT: every paid Clerk plan slug must appear (org-scoped) in exactly
-// one set, or resolvePlan() silently treats a paying org as Free. When you
-// add an org plan in the Clerk dashboard, add `org:<slug>` here (same
-// discipline as the OSS image pin sites in CLAUDE.md).
-const TEAM_SLUGS = ["org:team"] as const;
-const PRO_SLUGS = ["org:pro"] as const;
 
 /** Thrown by createConnection / createToken when a plan cap is hit. Caught
  *  at the call sites and translated to a 402 (JSON API) or inline upgrade
@@ -92,26 +79,6 @@ export class PlanLimitError extends Error {
 export interface ResolvedPlan {
   plan: Plan;
   caps: PlanCaps;
-}
-
-// Founder / internal plan override, read from the active org's (or user's)
-// Clerk PUBLIC METADATA surfaced into the session token as a `planOverride`
-// claim. Editable straight from the Clerk dashboard — no env var, no org-id
-// list to keep in sync, no customers.plan column (decision D2 stays intact),
-// and no network round-trip (it rides the JWT exactly like has()).
-//
-// One-time setup — Clerk dashboard → Sessions → Customize session token:
-//   { "planOverride": "{{org.public_metadata.plan_override}}" }
-// (swap `org` for `user` to flag a person regardless of the active org).
-// Then set that org's / user's public metadata to { "plan_override": "team" }.
-//
-// A valid slug here OVERRIDES the subscription, in either direction: set
-// "team" to test without limits, or "free"/"pro" to exercise the capped UI
-// on an account that actually pays for more. Anything else is ignored.
-function planFromOverrideClaim(value: unknown): Plan | null {
-  return value === "free" || value === "pro" || value === "team"
-    ? value
-    : null;
 }
 
 /** Which plan cap (if any) blocks creating ONE more connection right now.
@@ -160,64 +127,38 @@ export function planLimitBody(err: PlanLimitError): {
   };
 }
 
-/** Resolve the active organization's plan from the Clerk session, LIVE.
+/** Resolve the active organization's plan + caps.
  *
- *  Reads the session JWT claim via has() — no DB or network round-trip.
- *  Plan changes propagate on the next token refresh (Clerk refreshes ~60s;
- *  billing downgrades apply at cycle end). We do not clawback already-
- *  created resources on downgrade — only new creates are gated. Defaults to
- *  Free when no paid slug matches (including no active org).
+ *  Reads the founder/internal override from customers.plan_override; absent a
+ *  value, resolves `free` (Stripe billing is the future source of truth). Kept
+ *  async + called once per request so the later billing swap changes only this
+ *  body — callers thread `caps` down to the auth-free, unit-tested lib
+ *  enforcement functions unchanged. We never clawback already-created resources
+ *  on a downgrade; only new creates are gated.
  *
- *  Call once per request and thread `caps` down to the lib enforcement
- *  functions, which stay Clerk-free and unit-testable. */
+ *  Dynamic import keeps the top of this module dependency-free so the pure
+ *  exports (CAPS, PlanLimitError, types) stay importable by tokens.ts /
+ *  connections.ts + their unit tests without pulling auth/db into those paths. */
 export async function resolvePlan(): Promise<ResolvedPlan> {
-  // Dynamic import keeps the top of this module Clerk-free, so the pure
-  // exports (CAPS, PlanLimitError, types) can be imported by the lib
-  // enforcement functions (tokens.ts / connections.ts) and their unit
-  // tests without pulling @clerk/nextjs/server into those paths. Mirrors
-  // the dynamic-import pattern in clerk-users.ts / customer.ts.
-  const { auth } = await import("@clerk/nextjs/server");
-  const { has, sessionClaims } = await auth();
-  // Founder / internal override first — a planOverride claim (sourced from
-  // Clerk public metadata) wins over the subscription, so it applies even
-  // when no paid plan is attached and can also force a LOWER tier for
-  // testing the capped UI.
-  const override = planFromOverrideClaim(
-    (sessionClaims as { planOverride?: unknown } | null)?.planOverride,
-  );
+  const { currentCustomer } = await import("./customer.ts");
+  const override = (await currentCustomer())?.planOverride;
   if (override) {
     return { plan: override, caps: CAPS[override] };
-  }
-  if (TEAM_SLUGS.some((slug) => has({ plan: slug }))) {
-    return { plan: "team", caps: CAPS.team };
-  }
-  if (PRO_SLUGS.some((slug) => has({ plan: slug }))) {
-    return { plan: "pro", caps: CAPS.pro };
   }
   return { plan: "free", caps: CAPS.free };
 }
 
 /** App-level boolean entitlement features. Add a key here as each ee feature
- *  lands; hasEntitlement() maps it to the provider check so callers never hit
- *  the auth SDK directly. */
+ *  lands; hasEntitlement() maps it to the entitlement source so callers never
+ *  hit the auth/billing SDK directly. */
 export type EntitlementFeature = "sso";
 
-// Our feature key -> ORG-SCOPED Clerk feature slug. The `org:` prefix binds the
-// check to the ACTIVE org's subscription; an unscoped `sso` would also match a
-// user-scoped feature (Clerk merges both scopes) and wrongly entitle the org.
-const CLERK_FEATURE_SLUG: Record<EntitlementFeature, string> = {
-  sso: "org:sso",
-};
-
-/** Whether the active org is entitled to a boolean feature, LIVE from the
- *  session JWT (no DB round-trip). The single feature-gating seam: P2 swaps
- *  this body from Clerk to Better Auth in ONE place; callers use
- *  hasEntitlement(feature), never has() directly. Behavior-preserving — the
- *  same org-scoped check the billing page did inline. */
+/** Whether the active org is entitled to a boolean feature. The single
+ *  feature-gating seam. No billing/ee wired yet, so every feature is false;
+ *  the billing swap changes only this body — callers use hasEntitlement(
+ *  feature), never the auth SDK directly. */
 export async function hasEntitlement(
-  feature: EntitlementFeature,
+  _feature: EntitlementFeature,
 ): Promise<boolean> {
-  const { auth } = await import("@clerk/nextjs/server");
-  const { has } = await auth();
-  return has({ feature: CLERK_FEATURE_SLUG[feature] });
+  return false;
 }

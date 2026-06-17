@@ -6,7 +6,7 @@
 // state and re-renders only the freshness dots + meta lines; rename
 // / menu / sheet state are unaffected.
 //
-// Auth: Clerk session via currentCustomer. 401 when not signed in;
+// Auth: session via currentCustomer. 401 when not signed in;
 // scoped to the customer's own data, no leakage shape needed.
 //
 // Cache: no-store. The route exists to deliver fresher-than-page-cache

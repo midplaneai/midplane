@@ -17,16 +17,20 @@ import { checkRateLimit, resetRateLimits } from "../src/lib/rate-limit.ts";
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
-  clerkOrgId: "org_clerk-1",
+  orgId: "org_clerk-1",
   email: "u@e.test",
   region: "eu" as const,
   createdAt: new Date(),
 };
 
 let currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-let authMock = vi.fn(async () => ({ userId: "user_clerk_1" }) as {
-  userId: string | null;
-});
+let getOrgContextMock = vi.fn(
+  async () =>
+    ({ userId: "user_1", orgId: "org_1" }) as {
+      userId: string | null;
+      orgId: string | null;
+    },
+);
 let pingGuardedMock = vi.fn(async () => ({ ok: true }) as {
   ok: boolean;
   error?: string;
@@ -40,9 +44,11 @@ vi.mock("@/lib/customer", () => ({
   },
 }));
 
-vi.mock("@clerk/nextjs/server", () => ({
-  get auth() {
-    return authMock;
+// The routes read identity through the getOrgContext seam (Better Auth under
+// the hood); mock the seam, not the provider.
+vi.mock("@/lib/org-context", () => ({
+  get getOrgContext() {
+    return getOrgContextMock;
   },
 }));
 
@@ -87,7 +93,7 @@ vi.mock("@midplane-cloud/db", async () => {
 beforeEach(() => {
   resetRateLimits();
   currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-  authMock = vi.fn(async () => ({ userId: "user_clerk_1" }));
+  getOrgContextMock = vi.fn(async () => ({ userId: "user_1", orgId: "org_1" }));
   pingGuardedMock = vi.fn(async () => ({ ok: true }));
   ownedRows = [{ id: "conn-1" }];
 });
@@ -117,7 +123,7 @@ async function loadPerConnRoute() {
 }
 
 describe("POST /api/connections/test-dsn", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { POST } = await loadTestDsnRoute();
     const res = await POST(jsonRequest({ dsn: GOOD_DSN }));

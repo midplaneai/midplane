@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -142,7 +142,7 @@ async function createAction(
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   if (!userId) redirect("/signup/region");
 
   const dsn = formData.get("dsn");

@@ -1,22 +1,37 @@
 "use client";
 
-import { useClerk, useUser } from "@clerk/nextjs";
-import { User } from "lucide-react";
+import { LogOut } from "lucide-react";
+import { useRouter } from "next/navigation";
 
+import { authClient, useSession } from "@/lib/auth-client";
+
+// Sidebar footer account control. Shows the signed-in user's name and signs
+// them out on click. (Clerk's <UserButton> opened a hosted profile/sign-out
+// menu; Better Auth has no hosted UI, so this is the direct sign-out — a
+// fuller account menu can land later.)
 export function UserMenuButton() {
-  const { user, isLoaded } = useUser();
-  const clerk = useClerk();
-  if (!isLoaded || !user) return null;
-  const name =
-    user.fullName ?? user.primaryEmailAddress?.emailAddress ?? "Account";
+  const { data: session, isPending } = useSession();
+  const router = useRouter();
+  if (isPending || !session) return null;
+  const name = session.user.name || session.user.email || "Account";
 
   return (
     <button
       type="button"
-      onClick={() => clerk.openUserProfile()}
+      title="Sign out"
+      onClick={() =>
+        authClient.signOut({
+          fetchOptions: {
+            onSuccess: () => {
+              router.push("/");
+              router.refresh();
+            },
+          },
+        })
+      }
       className="flex w-full items-center gap-2.5 text-sm text-foreground hover:text-foreground"
     >
-      <User
+      <LogOut
         aria-hidden
         className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
         strokeWidth={1.5}

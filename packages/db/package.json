@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
+    "./auth-schema": "./src/auth-schema.ts",
     "./policy": "./src/policy.ts",
     "./token-format": "./src/token-format.ts"
   },

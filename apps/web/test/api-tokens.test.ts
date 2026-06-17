@@ -14,14 +14,20 @@ const PEPPER_B64 = randomBytes(32).toString("base64");
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
-  clerkOrgId: "org_clerk-1",
+  orgId: "org_clerk-1",
   email: "u@e.test",
   region: "eu" as const,
   createdAt: new Date(),
 };
 
 let currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-let authMock = vi.fn(async () => ({ userId: "user_clerk_1", has: () => false }) as { userId: string | null; has: (p: { plan: string }) => boolean });
+let getOrgContextMock = vi.fn(
+  async () =>
+    ({ userId: "user_1", orgId: "org_1" }) as {
+      userId: string | null;
+      orgId: string | null;
+    },
+);
 let createTokenMock = vi.fn();
 let listTokensMock = vi.fn();
 let revokeTokenMock = vi.fn();
@@ -32,9 +38,11 @@ vi.mock("@/lib/customer", () => ({
   },
 }));
 
-vi.mock("@clerk/nextjs/server", () => ({
-  get auth() {
-    return authMock;
+// The route reads identity through the getOrgContext seam (Better Auth under
+// the hood); mock the seam, not the provider.
+vi.mock("@/lib/org-context", () => ({
+  get getOrgContext() {
+    return getOrgContextMock;
   },
 }));
 
@@ -58,9 +66,7 @@ vi.mock("@/lib/tokens", async () => {
 
 beforeEach(() => {
   currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-  // has() is read by resolvePlan() in the POST route — default to "no paid
-  // plan" so the route resolves Free and proceeds to the (mocked) createToken.
-  authMock = vi.fn(async () => ({ userId: "user_clerk_1", has: () => false }) as { userId: string | null; has: (p: { plan: string }) => boolean });
+  getOrgContextMock = vi.fn(async () => ({ userId: "user_1", orgId: "org_1" }));
   createTokenMock = vi.fn();
   listTokensMock = vi.fn();
   revokeTokenMock = vi.fn();
@@ -107,7 +113,7 @@ function formRequest(method: string, fields: Record<string, string>): Request {
 }
 
 describe("GET /api/connections/[id]/tokens", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { GET } = await loadCollectionRoute();
     const res = await GET(jsonRequest("GET"), {
@@ -285,7 +291,7 @@ describe("POST /api/connections/[id]/tokens", () => {
 });
 
 describe("DELETE /api/connections/[id]/tokens/[tokenId]", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { DELETE } = await loadItemRoute();
     const res = await DELETE(jsonRequest("DELETE"), {
@@ -313,7 +319,7 @@ describe("DELETE /api/connections/[id]/tokens/[tokenId]", () => {
     expect(await res.json()).toEqual({ id: "tok-1" });
     const args = revokeTokenMock.mock.calls[0]!;
     expect(args[3].reason).toBe("user_action");
-    expect(args[3].actorClerkUserId).toBe("user_clerk_1");
+    expect(args[3].actorUserId).toBe("user_1");
   });
 
   it("accepts an empty body without choking the JSON parser", async () => {

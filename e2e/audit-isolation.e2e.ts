@@ -11,7 +11,7 @@
 //      hence layer #1 carries the load today — see audit.ts comment).
 //   2. The filter logic interacts correctly with WHERE clauses the
 //      dashboard uses (event_type, tenant_id, search, cursor pagination).
-//   3. The /audit HTTP route exists and the Clerk middleware protects
+//   3. The /audit HTTP route exists and the middleware protects
 //      unauthenticated visitors from seeing audit data.
 //
 // Why query logic is inlined instead of imported from
@@ -21,11 +21,11 @@
 // SET LOCAL pattern under test is small and worth duplicating here;
 // vitest already covers the lib's exact SQL shape (audit.test.ts).
 //
-// Why we don't drive a real Clerk sign-in: Clerk dev sign-in from a
-// headless browser would need @clerk/testing + a long-lived test
-// user provisioned in the Clerk dashboard, not set up for V1. The
-// HTTP middleware check below catches the "/audit unprotected"
-// regression; the SET LOCAL queries below catch the "RLS broke"
+// Why we don't drive a real sign-in: this suite seeds the cloud DB
+// directly (customer + audit rows) and asserts RLS isolation at the SQL
+// layer, so it never needs a browser session. The HTTP middleware check
+// below catches the "/audit unprotected" regression; the SET LOCAL
+// queries below catch the "RLS broke"
 // regression. Together they cover the two ways isolation could fail.
 
 import { expect, test } from "@playwright/test";
@@ -61,13 +61,13 @@ test.beforeAll(async () => {
   await db.insert(customers).values([
     {
       id: custAId,
-      clerkOrgId: `org_e2e-audit-A-${custAId}`,
+      orgId: `org_e2e-audit-A-${custAId}`,
       email: `e2e-audit-A-${custAId}@example.test`,
       region: REGION,
     },
     {
       id: custBId,
-      clerkOrgId: `org_e2e-audit-B-${custBId}`,
+      orgId: `org_e2e-audit-B-${custBId}`,
       email: `e2e-audit-B-${custBId}@example.test`,
       region: REGION,
     },
@@ -229,7 +229,7 @@ test("pagination cursor stays within the bound customer", async () => {
   }
 });
 
-test("/audit HTTP route exists and the Clerk middleware protects it", async ({
+test("/audit HTTP route exists and the middleware protects it", async ({
   page,
 }) => {
   const res = await page.goto("/audit");

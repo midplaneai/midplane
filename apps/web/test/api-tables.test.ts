@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
-  clerkOrgId: "org_clerk-1",
+  orgId: "org_clerk-1",
   email: "u@e.test",
   region: "eu" as const,
   createdAt: new Date(),
@@ -87,7 +87,7 @@ function get(query: string): Request {
 }
 
 describe("GET /api/connections/[id]/tables (per-db)", () => {
-  it("401 when no Clerk session", async () => {
+  it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { GET } = await loadRoute();
     expect((await GET(get("?q=ord"), params)).status).toBe(401);

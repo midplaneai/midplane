@@ -1,29 +1,48 @@
-import { auth } from "@clerk/nextjs/server";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { getAuth } from "@/lib/auth";
+import { getOrgContext } from "@/lib/org-context";
 import { getPostHog } from "@/lib/posthog";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RegionBadge } from "@/components/ui/region-badge";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
+import { suggestWorkspaceName } from "@/lib/workspace-name";
+import {
+  APEX_HOST,
+  REGION_COOKIE,
+  REGION_HOST,
+  regionCookieOptions,
+  signRegionCookieValue,
+} from "@/lib/region-routing";
 import type { Region } from "@midplane-cloud/kms";
 
-// Region picker. Three entry points:
-//   - Apex (app.midplane.ai) unauth: show picker; submit redirects to the
-//     regional /sign-up so Clerk signup happens on the correct app.
-//   - Apex auth: middleware already redirected to the regional subdomain,
-//     so this branch is unreachable via apex when authenticated.
-//   - Regional subdomain auth (post-Clerk-signup): show picker; submit
-//     writes the customer row + Clerk org metadata against this regional
-//     app's DB, then redirects to /dashboard.
+// Region picker / signup-completion step. Two entry points:
+//   - Unauth: pick which regional app to sign up on; submit routes to /sign-up.
+//   - Authed (post-signup): the region is ALREADY fixed to the regional app the
+//     user signed up on (auth + data are region-resident — there's no way to
+//     move an authenticated session to the other region). So this just collects
+//     the workspace name, creates the org (Better Auth doesn't auto-create one)
+//     + writes the customer row in this region, then redirects to /dashboard.
 
 export default async function RegionPicker() {
-  const { userId } = await auth();
-
   const h = await headers();
+  // Read the session once: drives the auth/unauth branch AND the workspace-name
+  // suggestion (email domain → company, or the person's name for generic
+  // providers). Unauth visitors picked region before signup, so there's no
+  // session yet and no workspace field — the name is set on the authed pass.
+  const session = await getAuth().api.getSession({ headers: h });
+  const userId = session?.user.id ?? null;
+  const suggestedWorkspace = session
+    ? suggestWorkspaceName(session.user.email, session.user.name)
+    : "";
+
   // Vercel/Cloudflare-style country header, falls through to nothing in dev.
   const country =
     h.get("x-vercel-ip-country") ??
@@ -31,6 +50,8 @@ export default async function RegionPicker() {
     h.get("x-country") ??
     null;
   const suggested = defaultRegionForCountry(country);
+  // An authed user's region is fixed to the regional app they signed up on.
+  const appRegion = bootRegion();
 
   const action = userId ? pickRegionAuthed : pickRegionUnauth;
 
@@ -43,7 +64,7 @@ export default async function RegionPicker() {
       <section className="container mx-auto flex max-w-[760px] flex-1 flex-col items-center justify-center gap-8 px-4 py-16">
         <div className="space-y-3 text-center">
           <h1 className="text-3xl font-semibold tracking-[-0.025em] text-foreground">
-            Pick your data region
+            {userId ? "Set up your workspace" : "Pick your data region"}
           </h1>
           <p className="text-sm text-muted-foreground">
             Your audit log and encrypted credentials live in this region. This
@@ -55,8 +76,40 @@ export default async function RegionPicker() {
           action={action}
           className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2"
         >
-          <RegionCard region="eu" suggested={suggested} />
-          <RegionCard region="us" suggested={suggested} />
+          {userId ? (
+            <>
+              <div className="space-y-2 text-left sm:col-span-2">
+                <Label htmlFor="workspaceName">Workspace name</Label>
+                <Input
+                  id="workspaceName"
+                  name="workspaceName"
+                  defaultValue={suggestedWorkspace}
+                  maxLength={100}
+                  required
+                  autoComplete="organization"
+                />
+                <p className="text-xs text-muted-foreground">
+                  You can rename this later.
+                </p>
+              </div>
+              {/* Region is fixed to the app the user authenticated on — shown
+                  read-only, not a choice (region-resident auth). */}
+              <div className="space-y-2 text-left sm:col-span-2">
+                <Label>Data region</Label>
+                <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-4">
+                  <RegionBadge region={appRegion} />
+                  <span className="text-sm text-muted-foreground">
+                    {REGION_LABELS[appRegion]} — permanent.
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <RegionCard region="eu" suggested={suggested} />
+              <RegionCard region="us" suggested={suggested} />
+            </>
+          )}
           <Button type="submit" className="sm:col-span-2" size="lg">
             Continue
           </Button>
@@ -100,32 +153,34 @@ function RegionCard({
   );
 }
 
-// Auth path: user just completed Clerk sign-up on a regional subdomain (or
-// is correcting a missing publicMetadata.region claim). Write the customer
-// row + Clerk org metadata against this regional app's DB. If the picked
-// region doesn't match the app this request landed on (e.g. user wanted
-// US but submitted on EU), redirect them to the matching regional app's
-// picker instead of writing wrong-region data.
+// Auth path: user just completed sign-up. Create the org (if needed) + write
+// the customer row in THIS region. The region is authoritative — it's the
+// regional app the user authenticated on; auth + data are region-resident, so
+// there's no cross-region move (the old redirect stranded the session, which
+// the destination app — reading its own regional auth DB — saw as unauthed).
 async function pickRegionAuthed(formData: FormData) {
   "use server";
-  const region = formData.get("region");
-  if (region !== "eu" && region !== "us") {
-    throw new Error("invalid region");
-  }
-  const appRegion = bootRegion();
-  if (region !== appRegion) {
-    // Cross-region pick on the wrong regional app — redirect to the
-    // matching app's picker with the choice preserved. The destination
-    // app's middleware will gate auth (Clerk session is .midplane.ai-
-    // scoped so it carries across subdomains).
-    const target =
-      region === "eu"
-        ? "https://eu.app.midplane.ai/signup/region"
-        : "https://us.app.midplane.ai/signup/region";
-    redirect(target);
-  }
-  const { userId } = await auth();
-  const customer = await upsertCustomerRegion(region);
+  const region = bootRegion();
+  // Workspace name from the form (prefilled with a smart default, editable).
+  // Blank → upsertCustomerRegion derives one. Capped to a sane length.
+  const workspaceName = formData.get("workspaceName");
+  const orgName =
+    typeof workspaceName === "string"
+      ? workspaceName.trim().slice(0, 100)
+      : "";
+
+  const { userId } = await getOrgContext();
+  const customer = await upsertCustomerRegion(region, orgName || undefined);
+
+  // Set the signed region cookie alongside the DB write — this is the routing
+  // fast-path the middleware reads to send the user to their regional subdomain
+  // (and bounce cross-region requests) with no DB lookup.
+  const cookieStore = await cookies();
+  cookieStore.set(
+    REGION_COOKIE,
+    await signRegionCookieValue(region),
+    regionCookieOptions(),
+  );
 
   const posthog = getPostHog();
   if (posthog && userId) {
@@ -147,19 +202,23 @@ async function pickRegionAuthed(formData: FormData) {
   redirect("/dashboard");
 }
 
-// Unauth path: visitor on apex picked a region before signing up. Redirect
-// to the regional subdomain's /sign-up so Clerk signup runs on the right
-// app — after sign-up, Clerk's afterSignUpUrl lands them back on
-// /signup/region and the auth path above completes the write.
+// Unauth path: visitor picked a region before signing up. Route to /sign-up,
+// then back here (authed) to complete the write. Regional-subdomain routing
+// for the pre-auth pick returns with the signed region cookie in a later step;
+// for now the region is chosen on the authed pass.
 async function pickRegionUnauth(formData: FormData) {
   "use server";
   const region = formData.get("region");
   if (region !== "eu" && region !== "us") {
     throw new Error("invalid region");
   }
-  const target =
-    region === "eu"
-      ? "https://eu.app.midplane.ai/sign-up?redirect_url=/signup/region"
-      : "https://us.app.midplane.ai/sign-up?redirect_url=/signup/region";
-  redirect(target);
+  // On the apex, route to the chosen region's subdomain so signup (and its
+  // region-resident auth data) lands on the right app; the authed pass then
+  // writes the customer row + region cookie. On a regional app / dev single
+  // host, stay relative.
+  const host = (await headers()).get("host");
+  if (host === APEX_HOST) {
+    redirect(`https://${REGION_HOST[region]}/sign-up?redirect=/signup/region`);
+  }
+  redirect("/sign-up?redirect=/signup/region");
 }

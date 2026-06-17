@@ -2,7 +2,7 @@
 // suggestions for the permission-grid autocomplete on the per-DB page,
 // and the table source for the policy test panel's probe matrix.
 //
-// Auth: Clerk session via currentCustomer; ownership-checked against
+// Auth: session via currentCustomer; ownership-checked against
 // connections.customer_id. Same 404-on-foreign-row leakage shape as the
 // other connection routes — never confirm or deny existence.
 //

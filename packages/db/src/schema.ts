@@ -66,14 +66,17 @@ export const customers = pgTable(
   "customers",
   {
     id: text("id").primaryKey(), // ULID
-    // The Clerk organization this customer maps to. One-to-one: every
-    // Midplane customer IS one Clerk org, with org members as the actors
-    // who can sign in and act on its behalf. Org auto-creation is enabled
-    // in the Clerk dashboard so every signed-in user has an active org —
-    // currentCustomer() resolves via auth().orgId.
-    clerkOrgId: text("clerk_org_id").notNull().unique(),
+    // The organization this customer maps to. One-to-one: every Midplane
+    // customer IS one organization, with org members as the actors who can
+    // sign in and act on its behalf. currentCustomer() resolves via the
+    // session's active organization.
+    orgId: text("org_id").notNull().unique(),
     email: text("email").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
+    // Founder / internal plan override. NULL = resolve normally (free until
+    // billing is wired). A value forces that tier's caps — the manual upgrade
+    // lever while the Stripe webhook becomes the future source of truth.
+    planOverride: text("plan_override", { enum: ["free", "pro", "team"] }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -246,11 +249,11 @@ export const auditEventsIndex = pgTable(
     eventType: text("event_type").notNull(),
     payload: jsonb("payload").notNull(),
     schemaVersion: integer("schema_version").notNull().default(1),
-    // The Clerk user who triggered a cloud-driven event (e.g. POLICY_RELOADED
-    // via the dashboard). Null for engine-side query events — no human is
-    // in the loop. Customer/tenant scope is the org; this column adds the
-    // actor identity inside that scope.
-    actorClerkUserId: text("actor_clerk_user_id"),
+    // The user who triggered a cloud-driven event (e.g. POLICY_RELOADED via
+    // the dashboard). Null for engine-side query events — no human is in the
+    // loop. Customer/tenant scope is the org; this column adds the actor
+    // identity inside that scope.
+    actorUserId: text("actor_user_id"),
     // Per-token audit attribution. The OSS engine stamps this on every
     // audit row from a session via the X-Midplane-Token-Id header (wired
     // by PR2 of mcp_url_auth_security). Cloud-emitted TOKEN_CREATED /
@@ -433,8 +436,8 @@ export const mcpTokens = pgTable(
     // "v1-<region>"; rotation introduces "v2-..." and the lookup tries
     // each kid in the in-memory map.
     pepperKid: text("pepper_kid").notNull(),
-    // Clerk user id of the actor who minted the token. Distinct from
-    // customer scope (the org) — this is the user inside that org.
+    // User id of the actor who minted the token. Distinct from customer scope
+    // (the org) — this is the user inside that org.
     createdByUserId: text("created_by_user_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

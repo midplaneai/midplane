@@ -1,14 +1,14 @@
 // POST /api/connections/test-dsn — pre-create DSN reachability probe
 // for the new-connection form. Unlike the per-connection sibling
 // (/api/connections/:id/databases/test) there is no parent id yet, so
-// the gate is the Clerk session alone — which is exactly why this
+// the gate is the session alone — which is exactly why this
 // surface is rate-limited and SSRF-guarded: a signed-up account must
 // not get a free internal-network reachability oracle.
 //
 // Static route segment beats the [id] sibling, so "test-dsn" can never
 // be captured as a connection id.
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import { isValidDsn } from "@/lib/connections";
@@ -32,7 +32,7 @@ export async function POST(req: Request) {
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
 
   const limited = checkRateLimit(pingTestKey(customer.id), PING_TEST_RATE_LIMIT);
   if (!limited.ok) {

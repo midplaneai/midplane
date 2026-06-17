@@ -8,7 +8,7 @@ import {
   RevokeTokenButton,
   type RevokeTokenAction,
 } from "@/components/tokens/revoke-token-button";
-import { resolveClerkUsers } from "@/lib/clerk-users";
+import { resolveUsers } from "@/lib/users";
 import { formatRelativeLong } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { TokenSummary } from "@/lib/tokens";
@@ -68,7 +68,7 @@ export async function TokenList({
   });
 
   const creatorIds = Array.from(new Set(sorted.map((t) => t.createdByUserId)));
-  const creators = await resolveClerkUsers(creatorIds);
+  const creators = await resolveUsers(creatorIds);
 
   // No agents yet → lead with the quickstart: teach that this connection is
   // an MCP server, then a single prominent "Connect" CTA, with the setup

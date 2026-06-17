@@ -153,7 +153,7 @@ test("policy hot-reload preserves the agent's MCP session", async ({
   const ctx = getMcpProxyContext();
   const customer = {
     id: customerId,
-    clerkOrgId: `org_policy-e2e-${customerId}`,
+    orgId: `org_policy-e2e-${customerId}`,
     email: `policy-e2e-${customerId}@example.test`,
     region: "eu" as const,
     createdAt: new Date(),

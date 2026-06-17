@@ -29,7 +29,7 @@ import { hashToken, loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
 export interface SeededConnection {
   customerId: string;
-  clerkOrgId: string;
+  orgId: string;
   connectionId: string;
   connectionDatabaseId: string;
   /** Default token's plaintext — the value the agent pastes into Cursor
@@ -50,7 +50,7 @@ export async function seedConnection(opts: {
   databaseName?: string;
 }): Promise<SeededConnection> {
   const customerId = ulid();
-  const clerkOrgId = `org_e2e-${customerId}`;
+  const orgId = `org_e2e-${customerId}`;
   const connectionId = ulid();
   const connectionDatabaseId = ulid();
   const dbName = opts.databaseName ?? "main";
@@ -81,7 +81,7 @@ export async function seedConnection(opts: {
   const db = getDb(opts.region);
   await db.insert(customers).values({
     id: customerId,
-    clerkOrgId,
+    orgId,
     email: `e2e-${customerId}@example.test`,
     region: opts.region,
   });
@@ -111,7 +111,7 @@ export async function seedConnection(opts: {
 
   return {
     customerId,
-    clerkOrgId,
+    orgId,
     connectionId,
     connectionDatabaseId,
     tokenPlaintext: generated.plaintext,

@@ -15,7 +15,7 @@
 //   - E2E_LIVE=1
 //   - .env.local DATABASE_URL_<REGION> pointing at a Neon dev branch
 //   - .env.local MIDPLANE_TOKEN_PEPPER_<REGION>_V1 set
-//   - .env.local NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY
+//   - .env.local BETTER_AUTH_SECRET + MIDPLANE_REGION_COOKIE_SECRET
 
 import { expect, test } from "@playwright/test";
 import { eq } from "drizzle-orm";
@@ -28,32 +28,25 @@ import {
   indexerCursors,
 } from "@midplane-cloud/db";
 
-import {
-  cleanup as cleanupClerkUser,
-  freshTestEmail,
-  signUp,
-} from "./_clerk-helpers";
+import { cleanup, freshTestEmail, onboard, signUp } from "./_auth-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
-  "set E2E_LIVE=1 to run live tokens-ux E2E (requires Neon + Clerk dev keys)",
+  "set E2E_LIVE=1 to run live tokens-ux E2E (requires Neon + the auth secrets)",
 );
 
 let testEmail = "";
-let clerkUserId = "";
-let clerkOrgId = "";
+let userId = "";
+let orgId = "";
 let connectionId = "";
 
 test.afterAll(async () => {
-  if (clerkUserId) {
-    await cleanupClerkUser(clerkUserId);
-  }
-  if (clerkOrgId) {
+  if (orgId) {
     const db = getDb("eu");
     const customerRows = await db
       .select()
       .from(customers)
-      .where(eq(customers.clerkOrgId, clerkOrgId));
+      .where(eq(customers.orgId, orgId));
     const customerId = customerRows[0]?.id;
     if (customerId) {
       const conns = await db
@@ -74,20 +67,20 @@ test.afterAll(async () => {
       await db.delete(customers).where(eq(customers.id, customerId));
     }
   }
+  await cleanup({ userId, orgId });
 });
 
 test("create connection → mint second token → revoke default → list reflects state", async ({
   page,
 }) => {
   testEmail = freshTestEmail();
-  const result = await signUp(page, testEmail, (id) => {
-    clerkUserId = id;
+  await signUp(page, testEmail, (id) => {
+    userId = id;
   });
-  clerkOrgId = result.clerkOrgId;
 
-  await page.goto("/signup/region");
-  await page.getByRole("button", { name: /continue/i }).click();
-  await page.waitForURL("**/dashboard", { timeout: 15_000 });
+  // Onboard: the region picker creates the org + customer (Better Auth doesn't
+  // auto-create one) and lands on /dashboard.
+  ({ orgId } = await onboard(page));
 
   // A throwaway DSN; we never dial it. createConnection encrypts at
   // rest and auto-mints the default token — that's the only behavior
@@ -125,13 +118,17 @@ test("create connection → mint second token → revoke default → list reflec
   // token (named "default" by createConnection) must appear in the list.
   await page.getByTestId("saved-it").click();
   await page.waitForURL(`**/connections/${connectionId}`, { timeout: 10_000 });
+  // The connection page defaults to the Database section; tokens live under the
+  // Agents section. Go there directly.
+  await page.goto(`/connections/${connectionId}?section=agents`);
   const list = page.getByTestId("token-list");
   await expect(list).toBeVisible();
   const defaultRow = list.locator('[data-testid="token-row"]', {
     hasText: "default",
   });
   await expect(defaultRow).toBeVisible();
-  await expect(defaultRow.locator("[data-status]")).toHaveAttribute(
+  // data-status is on the token-row <li> itself, not a descendant.
+  await expect(defaultRow).toHaveAttribute(
     "data-status",
     /active|expiring|stale/,
   );
@@ -169,11 +166,9 @@ test("create connection → mint second token → revoke default → list reflec
   // Action calls revalidatePath; Next refreshes the Server Component
   // tree. The row stays in the list (history is preserved) — only the
   // badge / actions change.
-  await expect(defaultRow.locator("[data-status]")).toHaveAttribute(
-    "data-status",
-    "revoked",
-    { timeout: 10_000 },
-  );
+  await expect(defaultRow).toHaveAttribute("data-status", "revoked", {
+    timeout: 10_000,
+  });
   // Revoked rows lose the per-row revoke button.
   await expect(defaultRow.getByTestId("revoke-token")).toHaveCount(0);
 });

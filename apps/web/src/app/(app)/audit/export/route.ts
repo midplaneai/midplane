@@ -4,7 +4,7 @@
 // plan's retention). One row per logical query/event, capped at
 // EXPORT_MAX rows; the X-Audit-Truncated header flags when the cap hit.
 //
-// Auth: Clerk session via currentCustomer (401 when not signed in),
+// Auth: session via currentCustomer (401 when not signed in),
 // region-pinned + RLS-scoped through listAuditQueries — a customer can
 // only ever pull their own rows.
 

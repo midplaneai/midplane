@@ -35,12 +35,10 @@
 #       and, for the optional drain, list/destroy machines on the engine apps
 #       (midplane-eu, midplane-us). An org-scoped token covers all four.
 #       flyctl reads it from env.
-#   Variables (vars) — repo-level OR on the "production" Environment:
-#     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-#       Clerk PUBLISHABLE key (pk_live_... / pk_test_...). Public by design:
-#       it is baked into the web client bundle at build time (apps/web/Dockerfile
-#       ARG), so it lives in `vars`, not `secrets`. Both regional web apps share
-#       one Clerk instance, so one value covers both.
+#   No build-time variables: the Better Auth client is same-origin (nothing
+#   public is baked into the bundle). Runtime auth secrets (BETTER_AUTH_SECRET,
+#   MIDPLANE_REGION_COOKIE_SECRET) are persistent Fly secrets on each web app,
+#   set out-of-band via `flyctl secrets set` (see fly-web-*.toml).
 #
 # This is workflow_dispatch ONLY — there is intentionally no push/merge trigger.
 # The web app is built from whatever ref you dispatch from (default branch HEAD
@@ -131,7 +129,6 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       IMAGE_TAG: ${{ inputs.image_tag }}
       IMAGE_REF: "midplane/midplane:${{ inputs.image_tag }}"
-      CLERK_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
       REGION_INPUT: ${{ inputs.region }}
       DRAIN: ${{ inputs.drain_engines }}
     steps:
@@ -143,10 +140,6 @@ jobs:
           set -euo pipefail
           if [ -z "${FLY_API_TOKEN:-}" ]; then
             echo "::error::FLY_API_TOKEN is not set. Add it as a repo or 'production' Environment secret."
-            exit 1
-          fi
-          if [ -z "${CLERK_PUBLISHABLE_KEY:-}" ]; then
-            echo "::error::vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is empty. Set it as a repo or 'production' Environment variable — it is baked into the web client bundle at build time, so an empty value silently breaks Clerk in the browser."
             exit 1
           fi
 
@@ -200,13 +193,12 @@ jobs:
             echo "::group::[$region] Deploy web app $WEB_APP (bluegreen, health-gated)"
             # Builds apps/web/Dockerfile from the checked-out ref; the staged
             # secret is applied to the green machines and only cut over if
-            # /api/health passes. NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is a public
-            # build arg (baked into the client bundle), sourced from vars.
+            # /api/health passes. No build args — the Better Auth client is
+            # same-origin (nothing public baked into the bundle).
             flyctl deploy \
               --config "$WEB_CONFIG" \
               --app "$WEB_APP" \
-              --strategy bluegreen \
-              --build-arg "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$CLERK_PUBLISHABLE_KEY"
+              --strategy bluegreen
             echo "::endgroup::"
 
             # NOTE: we deliberately do NOT `fly deploy` the engine app

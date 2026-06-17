@@ -25,8 +25,8 @@ describe("GET /api/health", () => {
     expect(source).not.toMatch(/getDb\s*\(/);
   });
 
-  // Fly's [[http_service.checks]] polls /api/health with no auth header.
-  // Clerk's middleware would 404 it unless the route is explicitly listed
+  // Fly's [[http_service.checks]] polls /api/health with no session cookie.
+  // The middleware would redirect it to /sign-in unless the route is listed
   // in the public matcher, so guard the contract here — losing this lets
   // a deploy go red on every health interval.
   it("is listed as a public route in middleware", async () => {
