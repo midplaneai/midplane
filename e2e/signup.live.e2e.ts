@@ -1,7 +1,7 @@
 // Critical-path live E2E #1: brand-new sign-up → paste DSN → MCP endpoint →
 // first MCP query → audit row visible to the customer within 15s.
 //
-// This is the only suite that exercises the Clerk signup → first MCP request
+// This is the only suite that exercises the signup → first MCP request
 // boundary end to end. mcp-proxy.live.e2e.ts proves the proxy + container
 // pipeline composes; this proves the conversion path the dashboard
 // actually presents. If this is green, a real user pasting a DSN gets a
@@ -12,11 +12,10 @@
 //   - Docker (sidecar Postgres + OSS container spawn)
 //   - midplane/midplane image present (`bun run dev:image`)
 //   - .env.local DATABASE_URL pointing at a Neon dev branch
-//   - .env.local NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY
+//   - .env.local BETTER_AUTH_SECRET + MIDPLANE_REGION_COOKIE_SECRET
 //
-// Cleanup: Clerk dev instance has a user-count cap, so afterAll deletes the
-// test user via the Backend API. Sidecar pg + spawned container + DB rows
-// are torn down too.
+// Cleanup: afterAll deletes the test user + org + customer rows; the sidecar
+// pg + spawned container are torn down too.
 
 import { execSync } from "node:child_process";
 
@@ -31,11 +30,7 @@ import {
   indexerCursors,
 } from "@midplane-cloud/db";
 
-import {
-  cleanup as cleanupClerkUser,
-  freshTestEmail,
-  signUp,
-} from "./_clerk-helpers";
+import { activeOrgId, cleanup, freshTestEmail, signUp } from "./_auth-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -48,7 +43,7 @@ const PG_DB = "midplane_e2e_signup";
 
 let pgPort = 0;
 let testEmail = "";
-let clerkUserId = "";
+let userId = "";
 let orgId = "";
 let mcpToken = "";
 let connectionId = "";
@@ -84,13 +79,7 @@ test.afterAll(async () => {
     } catch {}
   }
 
-  if (clerkUserId) {
-    // Deleting the user cascades to org membership; the org row itself is
-    // cleaned by Clerk when it has no remaining members on dev instances.
-    await cleanupClerkUser(clerkUserId);
-  }
-
-  // Customer was created by the Server Action, addressable by clerk_org_id.
+  // Customer was created by the Server Action, addressable by the org id.
   // Delete dependent rows first to satisfy FKs.
   if (orgId) {
     const db = getDb("eu");
@@ -118,6 +107,7 @@ test.afterAll(async () => {
       await db.delete(customers).where(eq(customers.id, customerId));
     }
   }
+  await cleanup({ userId, orgId });
 });
 
 test("signup → paste DSN → MCP query → audit row visible within 15s", async ({
@@ -125,24 +115,25 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   request,
   baseURL,
 }) => {
-  // 1. Real Clerk user + session. The onUserCreated callback records the
-  // Clerk id the instant the Backend API returns, so afterAll() can still
-  // delete the user if any subsequent step (clerk.signIn, the region
-  // form, the connection form, the MCP request) throws — otherwise a
-  // mid-test failure leaks a Clerk row and gradually exhausts the dev
-  // instance's user cap.
+  // 1. Real user + browser session via the Better Auth sign-up API. The
+  // onUserCreated callback records the id the instant it's known, so
+  // afterAll() can still delete the user if any later step (the region form,
+  // the connection form, the MCP request) throws.
   testEmail = freshTestEmail();
   const result = await signUp(page, testEmail, (id) => {
-    clerkUserId = id;
+    userId = id;
   });
-  expect(result.clerkUserId).toBe(clerkUserId);
-  orgId = result.orgId;
+  expect(result.userId).toBe(userId);
 
-  // 2. Region picker — real Server Action upserts the customer row.
+  // 2. Onboard — the region picker Server Action creates the org + customer
+  // (Better Auth doesn't auto-create one). The workspace name is prefilled.
   await page.goto("/signup/region");
-  await expect(page.getByRole("heading", { name: /pick your data region/i })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /set up your workspace/i }),
+  ).toBeVisible();
   await page.getByRole("button", { name: /continue/i }).click();
   await page.waitForURL("**/dashboard", { timeout: 15_000 });
+  orgId = await activeOrgId(page);
 
   // 3. Connect Postgres — real Server Action runs encryptDsn + inserts
   // connection row. host.docker.internal lets the spawned OSS container
@@ -192,9 +183,8 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   // differs from the dev server. We hit the local /mcp route directly.
   await runMcpQuery(request, baseURL!, mcpToken);
 
-  // 6. Server Action created the cloud customer row, addressable by the
-  // Clerk org id we minted. Snapshot it for afterAll cleanup + indexer
-  // assertion.
+  // 6. Server Action created the cloud customer row, addressable by the org
+  // id. Snapshot it for afterAll cleanup + indexer assertion.
   const db = getDb("eu");
   const customerRows = await db
     .select()
@@ -351,5 +341,5 @@ async function waitForPgDb(deadlineMs = 30_000): Promise<void> {
 
 // testEmail is captured at top level so failures inside the test still leave
 // it visible to debug logs; afterAll doesn't need the value (cleanup keys off
-// clerkUserId). Acknowledge the read so strict TS configs don't flag it.
+// userId / orgId). Acknowledge the read so strict TS configs don't flag it.
 void testEmail;

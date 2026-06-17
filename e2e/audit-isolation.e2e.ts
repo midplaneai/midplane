@@ -21,11 +21,11 @@
 // SET LOCAL pattern under test is small and worth duplicating here;
 // vitest already covers the lib's exact SQL shape (audit.test.ts).
 //
-// Why we don't drive a real Clerk sign-in: Clerk dev sign-in from a
-// headless browser would need @clerk/testing + a long-lived test
-// user provisioned in the Clerk dashboard, not set up for V1. The
-// HTTP middleware check below catches the "/audit unprotected"
-// regression; the SET LOCAL queries below catch the "RLS broke"
+// Why we don't drive a real sign-in: this suite seeds the cloud DB
+// directly (customer + audit rows) and asserts RLS isolation at the SQL
+// layer, so it never needs a browser session. The HTTP middleware check
+// below catches the "/audit unprotected" regression; the SET LOCAL
+// queries below catch the "RLS broke"
 // regression. Together they cover the two ways isolation could fail.
 
 import { expect, test } from "@playwright/test";

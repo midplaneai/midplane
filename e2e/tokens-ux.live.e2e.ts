@@ -15,7 +15,7 @@
 //   - E2E_LIVE=1
 //   - .env.local DATABASE_URL_<REGION> pointing at a Neon dev branch
 //   - .env.local MIDPLANE_TOKEN_PEPPER_<REGION>_V1 set
-//   - .env.local NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY
+//   - .env.local BETTER_AUTH_SECRET + MIDPLANE_REGION_COOKIE_SECRET
 
 import { expect, test } from "@playwright/test";
 import { eq } from "drizzle-orm";
@@ -28,11 +28,7 @@ import {
   indexerCursors,
 } from "@midplane-cloud/db";
 
-import {
-  cleanup as cleanupClerkUser,
-  freshTestEmail,
-  signUp,
-} from "./_clerk-helpers";
+import { activeOrgId, cleanup, freshTestEmail, signUp } from "./_auth-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -40,14 +36,11 @@ test.skip(
 );
 
 let testEmail = "";
-let clerkUserId = "";
+let userId = "";
 let orgId = "";
 let connectionId = "";
 
 test.afterAll(async () => {
-  if (clerkUserId) {
-    await cleanupClerkUser(clerkUserId);
-  }
   if (orgId) {
     const db = getDb("eu");
     const customerRows = await db
@@ -74,20 +67,23 @@ test.afterAll(async () => {
       await db.delete(customers).where(eq(customers.id, customerId));
     }
   }
+  await cleanup({ userId, orgId });
 });
 
 test("create connection → mint second token → revoke default → list reflects state", async ({
   page,
 }) => {
   testEmail = freshTestEmail();
-  const result = await signUp(page, testEmail, (id) => {
-    clerkUserId = id;
+  await signUp(page, testEmail, (id) => {
+    userId = id;
   });
-  orgId = result.orgId;
 
+  // Onboard: the region picker creates the org + customer (Better Auth doesn't
+  // auto-create one). The workspace name is prefilled; accept it.
   await page.goto("/signup/region");
   await page.getByRole("button", { name: /continue/i }).click();
   await page.waitForURL("**/dashboard", { timeout: 15_000 });
+  orgId = await activeOrgId(page);
 
   // A throwaway DSN; we never dial it. createConnection encrypts at
   // rest and auto-mints the default token — that's the only behavior
