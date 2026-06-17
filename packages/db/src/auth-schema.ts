@@ -20,7 +20,14 @@
 // registered in meta/_journal.json — the drizzle-kit snapshot is frozen at
 // 0006, so this schema is the read-side mirror, not the migration source).
 
-import { boolean, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
 
 // --- core --------------------------------------------------------------------
 
@@ -30,6 +37,11 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  // @better-auth/stripe: the user's Stripe customer id. NULL for cloud orgs
+  // (we bill the ORGANIZATION, not the user — see organization.stripeCustomerId
+  // below) and always NULL in self-host (the stripe plugin isn't loaded). The
+  // plugin's drizzle adapter still requires the field to exist on `user`.
+  stripeCustomerId: text("stripe_customer_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -108,6 +120,11 @@ export const organization = pgTable("organization", {
   // Arbitrary JSON-as-text bag Better Auth manages. We'll stash region here
   // in a later step (org metadata), distinct from the signed region cookie.
   metadata: text("metadata"),
+  // @better-auth/stripe (organization mode): the org's Stripe customer id,
+  // created the first time the org subscribes. One Midplane customer == one
+  // organization, so billing is keyed here (customer-per-org). Always NULL in
+  // self-host (the stripe plugin isn't loaded).
+  stripeCustomerId: text("stripe_customer_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -223,6 +240,53 @@ export const oauthConsent = pgTable("oauth_consent", {
     .notNull(),
 });
 
+// --- stripe plugin -----------------------------------------------------------
+//
+// @better-auth/stripe's `subscription` model. The plugin owns every read/write
+// here via the drizzle adapter; this declaration is the read-side mirror so the
+// adapter resolves the model and our schema-shape stays honest (the migration
+// 0025_stripe_billing.sql owns the DDL). Field PROPERTY KEYS are the Better Auth
+// field names (camelCase); columns stay snake_case like the rest of the schema.
+//
+// referenceId is the Midplane orgId (customer-per-org, customerType
+// "organization"). It is deliberately NOT unique and NOT a foreign key: the
+// plugin reuses the same referenceId across a cancel→resubscribe cycle, and the
+// column is polymorphic by design (user id in the default mode). The
+// subscription is the plugin's bookkeeping; the entitlement source of truth the
+// app reads is customers.plan, written from the plugin's subscription lifecycle
+// hooks (see apps/web/src/lib/billing.ts).
+export const subscription = pgTable(
+  "subscription",
+  {
+    id: text("id").primaryKey(),
+    // Plan name as defined in the stripe plugin config ("pro" | "team").
+    plan: text("plan").notNull(),
+    // The Midplane orgId this subscription belongs to. Not unique (resubscribe).
+    referenceId: text("reference_id").notNull(),
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeSubscriptionId: text("stripe_subscription_id"),
+    // active | trialing | past_due | canceled | incomplete | ... (Stripe status).
+    status: text("status").notNull().default("incomplete"),
+    periodStart: timestamp("period_start", { withTimezone: true }),
+    periodEnd: timestamp("period_end", { withTimezone: true }),
+    trialStart: timestamp("trial_start", { withTimezone: true }),
+    trialEnd: timestamp("trial_end", { withTimezone: true }),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false),
+    cancelAt: timestamp("cancel_at", { withTimezone: true }),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    seats: integer("seats"),
+    billingInterval: text("billing_interval"),
+    stripeScheduleId: text("stripe_schedule_id"),
+  },
+  (t) => ({
+    referenceIdx: index("subscription_reference_id_idx").on(t.referenceId),
+    stripeSubIdx: index("subscription_stripe_subscription_id_idx").on(
+      t.stripeSubscriptionId,
+    ),
+  }),
+);
+
 // --- types -------------------------------------------------------------------
 
 export type AuthUser = typeof user.$inferSelect;
@@ -234,3 +298,4 @@ export type AuthInvitation = typeof invitation.$inferSelect;
 export type AuthOAuthApplication = typeof oauthApplication.$inferSelect;
 export type AuthOAuthAccessToken = typeof oauthAccessToken.$inferSelect;
 export type AuthOAuthConsent = typeof oauthConsent.$inferSelect;
+export type AuthSubscription = typeof subscription.$inferSelect;

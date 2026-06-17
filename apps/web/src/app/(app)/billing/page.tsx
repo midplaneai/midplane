@@ -1,19 +1,27 @@
 import { redirect } from "next/navigation";
 
+import { BillingActions } from "@/components/billing/billing-actions";
 import { PageContainer, Topbar } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { billingPlans, isBillingConfigured } from "@/lib/billing";
 import { currentCustomer } from "@/lib/customer";
+import { getOrgContext } from "@/lib/org-context";
 import { hasEntitlement, resolvePlan } from "@/lib/plan";
+import { isSelfHost } from "@/lib/self-host";
 
-// Plans & billing surface. Self-serve checkout (Stripe) lands in a later
-// phase; until then every org is on Free and plan changes are handled
-// manually. We show the current plan, the SSO entitlement row, and the
-// "talk to us" path for custom asks PRICING.md keeps off the self-serve matrix.
-//
-// Server component: plan resolution + feature gate resolve server-side via the
+// Plans & billing surface. Self-serve checkout + management run through Stripe's
+// hosted Checkout / Customer Portal via the @better-auth/stripe plugin (see
+// lib/billing.ts) — this page only decides what to offer and renders the
+// buttons. Plan resolution + feature gate resolve server-side via the
 // lib/plan.ts chokepoint.
+//
+// Three states for the plans card:
+//   - self-host:        uncapped, no billing (hidden from nav; notice here).
+//   - billing not set / plan_override set: current plan + "talk to us" (no
+//                       self-serve — keyless dev, or a manually-managed plan).
+//   - billing on:       Upgrade buttons (on free) or Manage billing (subscribed).
 
 const SALES_EMAIL = "sales@midplane.ai";
 
@@ -24,8 +32,35 @@ export default async function BillingPage() {
   const { plan } = await resolvePlan();
   // Single feature-gating seam in lib/plan.ts: hasEntitlement("sso") is the
   // only SSO gate, so wiring SSO entitlement later touches that module, not
-  // this page. No billing wired yet, so it's false today.
+  // this page.
   const hasSso = await hasEntitlement("sso");
+
+  const selfHost = isSelfHost();
+  const billingOn = isBillingConfigured();
+  // plan_override is the manual lever and beats the subscription; when set we
+  // don't offer self-serve actions (they'd be overridden / confusing).
+  const managedManually = Boolean(customer.planOverride);
+  // customers.plan is subscription-backed; non-free ⇒ an active subscription
+  // exists, so route changes/cancel through the Portal rather than a second
+  // checkout.
+  const hasActiveSub = customer.plan !== "free";
+
+  let actions: React.ReactNode = null;
+  if (billingOn && !selfHost && !managedManually) {
+    const { orgId } = await getOrgContext();
+    if (orgId) {
+      const upgradePlans = hasActiveSub
+        ? []
+        : billingPlans().map((p) => ({ tier: p.tier, label: p.label }));
+      actions = (
+        <BillingActions
+          orgId={orgId}
+          upgradePlans={upgradePlans}
+          canManage={hasActiveSub}
+        />
+      );
+    }
+  }
 
   return (
     <>
@@ -51,18 +86,44 @@ export default async function BillingPage() {
             <CardHeader>
               <CardTitle>plans</CardTitle>
             </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
-              <p>
-                Self-serve plans and checkout are coming soon. To change your
-                plan today,{" "}
-                <a
-                  href={`mailto:${SALES_EMAIL}`}
-                  className="font-medium text-foreground underline underline-offset-2"
-                >
-                  talk to us
-                </a>
-                .
-              </p>
+            <CardContent className="space-y-4 text-sm text-muted-foreground">
+              {selfHost ? (
+                <p>
+                  This is a self-hosted instance — uncapped, with no billing.
+                  Plans and limits apply to Midplane Cloud only.
+                </p>
+              ) : actions ? (
+                <>
+                  <p>
+                    Pro and Team are billed per seat. Checkout and billing
+                    management open securely on Stripe.
+                  </p>
+                  {actions}
+                </>
+              ) : managedManually ? (
+                <p>
+                  Your plan is managed directly by Midplane. To change it,{" "}
+                  <a
+                    href={`mailto:${SALES_EMAIL}`}
+                    className="font-medium text-foreground underline underline-offset-2"
+                  >
+                    talk to us
+                  </a>
+                  .
+                </p>
+              ) : (
+                <p>
+                  Self-serve checkout isn&apos;t enabled on this instance. To
+                  change your plan,{" "}
+                  <a
+                    href={`mailto:${SALES_EMAIL}`}
+                    className="font-medium text-foreground underline underline-offset-2"
+                  >
+                    talk to us
+                  </a>
+                  .
+                </p>
+              )}
             </CardContent>
           </Card>
 

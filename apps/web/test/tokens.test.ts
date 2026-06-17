@@ -173,6 +173,7 @@ const customer = {
   email: "u@e.test",
   region: "eu" as const,
   planOverride: null,
+  plan: "free" as const,
   ownerEmail: null,
   createdAt: new Date(),
 };

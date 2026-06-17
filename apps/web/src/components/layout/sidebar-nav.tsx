@@ -3,17 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { NAV_ITEMS } from "@/components/layout/nav-items";
+import { navItemsFor } from "@/components/layout/nav-items";
 import { cn } from "@/lib/utils";
 
-export function SidebarNav() {
+export function SidebarNav({ selfHost = false }: { selfHost?: boolean }) {
   const pathname = usePathname() ?? "";
   return (
     <nav className="space-y-1 py-2" aria-label="Workspace">
       <div className="px-[18px] pb-1 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
         workspace
       </div>
-      {NAV_ITEMS.map((item) => {
+      {navItemsFor(selfHost).map((item) => {
         const active = item.match(pathname);
         const Icon = item.icon;
         return (

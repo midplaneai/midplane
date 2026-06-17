@@ -9,6 +9,7 @@ import { ulid } from "ulid";
 import { customers, getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
 
+import { buildStripePlugins } from "./billing";
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
 import { isSelfHost, SELF_HOST_CUSTOMER_ID, SELF_HOST_ORG_ID } from "./self-host";
@@ -175,9 +176,9 @@ function createAuth() {
       // metadata, Dynamic Client Registration, authorization-code + PKCE, token
       // issuance. The /mcp resource server (lib/proxy.ts withMcpAuth) validates
       // the issued bearer. loginPage is where an unauthenticated authorize
-      // bounces; consentPage renders our coarse v1 grant screen (only when the
-      // client requests prompt=consent). requirePKCE enforces OAuth 2.1 PKCE at
-      // the authorize step, not just at the public-client token exchange.
+      // bounces; consentPage renders our grant screen (forced on every authorize
+      // by the prompt=consent before-hook above). requirePKCE enforces OAuth 2.1
+      // PKCE at the authorize step, not just at the public-client token exchange.
       //
       // Placed AFTER organization() and BEFORE nextCookies() — nextCookies must
       // stay last to flush Set-Cookie from server-action auth flows.
@@ -189,13 +190,20 @@ function createAuth() {
           loginPage: "/sign-in",
           consentPage: "/oauth/consent",
           requirePKCE: true,
-          // Coarse v1 scope: a single `mcp` capability (full MCP access to a
-          // connection the authenticated user owns; the URL path selects which,
-          // the proxy enforces ownership). Listed alongside the plugin defaults
-          // (openid/profile/email/offline_access) so a client may request it.
+          // The `mcp` capability scope — the proxy REQUIRES it on the access
+          // token before granting MCP access (lib/proxy.ts proxyMcpOAuth). Listed
+          // alongside the plugin defaults (openid/profile/email/offline_access)
+          // so a client may request it.
           scopes: ["mcp"],
         },
       }),
+      // Stripe billing (@better-auth/stripe). Conditionally loaded: [] in
+      // self-host and in keyless cloud dev, so neither requires Stripe env to
+      // boot; the configured plugin otherwise. Customer-per-org, referenceId =
+      // orgId, per-seat. MUST sit after organization() (it reads org membership)
+      // and before nextCookies(). It registers /api/auth/stripe/webhook —
+      // already public via the /api/auth middleware prefix.
+      ...buildStripePlugins(),
       // nextCookies MUST stay last: it flushes Set-Cookie from server-action
       // auth flows through Next's cookies() helper.
       nextCookies(),
