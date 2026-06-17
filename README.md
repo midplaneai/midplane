@@ -1,13 +1,38 @@
 # midplane-cloud
 
-Hosted Midplane. Sign up via Clerk, paste a Postgres URL, get an MCP endpoint that runs the locked OSS engine (`midplane/midplane`) with your encrypted credentials.
+Midplane is **AST-grade, safe-by-default SQL guardrails for AI agents**. An
+inspectable engine sits in the query path between an agent (Claude, Cursor, any
+MCP client) and your database and parses every statement with a real SQL AST
+(not regex) — enforcing declarative table-access policy, blocking no-WHERE DML
+and DDL, and writing an event-sourced audit log of which agent ran what.
 
-This repo CONSUMES the OSS image; it never reimplements the engine. Hosted/self-host parity is mechanically enforced by spawning the same Docker image self-host users run.
+This repository is the **control plane**: the dashboard, connection + policy
+management, audit views, agent-token issuance, and the hosted MCP proxy. The
+query-path engine ships separately as the MIT Docker image `midplane/midplane`
+([midplaneai/midplane](https://github.com/midplaneai/midplane)); this repo
+CONSUMES that image and never reimplements it, so hosted/self-host parity is
+mechanically enforced by spawning the same image self-hosters run.
+
+## Open core
+
+The control plane is open core, MIT, and self-hostable. Everything outside
+`apps/web/src/ee/` is the Community Edition — the whole single-tenant product
+(dashboard, policy editor, audit log, dry-run, every guardrail), uncapped when
+self-hosted. `apps/web/src/ee/` is the commercial Enterprise Edition (SSO/SAML
+today; the governance band over time); see [`LICENSE`](./LICENSE) and
+[`apps/web/src/ee/LICENSE`](./apps/web/src/ee/LICENSE). Deleting `ee/` leaves a
+working MIT build.
+
+Run it single-tenant with `MIDPLANE_SELF_HOST=1` (keyless, uncapped, one
+Postgres + a local engine) — see the SELF-HOST block in `.env.example`. The
+managed multi-region cloud is the same codebase and is the supported, paid path.
+Contributions: [`CONTRIBUTING.md`](./CONTRIBUTING.md). Security:
+[`SECURITY.md`](./SECURITY.md).
 
 ## Layout
 
 ```
-apps/web              Next.js dashboard + Clerk auth + connections API
+apps/web              Next.js dashboard + Better Auth + connections API
 apps/web/Dockerfile   Multi-stage bun + Next.js standalone build (control plane)
 packages/db           Drizzle schema (customers, connections, audit_events_index)
 packages/kms          encryptDsn / decryptDsn (env-mode dev, AWS KMS prod)
@@ -25,7 +50,7 @@ Multi-region is V1, not V1.5. Schema and URL format are multi-region from day on
 
 ```bash
 bun install
-cp .env.example .env.local   # fill in Clerk, Neon, KMS dev key
+cp .env.example .env.local   # fill in Better Auth, Postgres, KMS dev key
 bun db:generate              # generate drizzle migrations from schema
 bun migrate:eu               # apply migrations to your EU Neon dev branch
                              # (use migrate:us / migrate:all in prod; locally
