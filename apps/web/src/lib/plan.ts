@@ -11,6 +11,8 @@
 // path via Better Auth organization.membershipLimit (lib/seats.ts) — which is
 // otherwise a single static number, not per-plan.
 
+import { isSelfHost } from "./self-host.ts";
+
 export type Plan = "free" | "pro" | "team";
 
 export interface PlanCaps {
@@ -59,6 +61,21 @@ export const CAPS: Record<Plan, PlanCaps> = {
     sso: true,
     seats: Infinity,
   },
+};
+
+/** Uncapped self-host caps: it's your DB, your infra (the metering levers are a
+ *  cloud-billing construct). Unlimited connections / tokens / seats and full
+ *  audit history — auditRetentionDays = Infinity makes retentionSince() return
+ *  null, so reads apply no window clamp. `sso` stays FALSE: it's ee-gated and
+ *  the signed-license verifier is deferred (D3), so community runs uncapped-core
+ *  with NO license check (Neosync pattern) and the ee surface stays dark.
+ *  hasEntitlement() likewise stays false until an ee license lands. */
+export const SELF_HOST_CAPS: PlanCaps = {
+  connections: Infinity,
+  tokens: Infinity,
+  auditRetentionDays: Infinity,
+  sso: false,
+  seats: Infinity,
 };
 
 /** Thrown by createConnection / createToken when a plan cap is hit. Caught
@@ -140,6 +157,13 @@ export function planLimitBody(err: PlanLimitError): {
  *  exports (CAPS, PlanLimitError, types) stay importable by tokens.ts /
  *  connections.ts + their unit tests without pulling auth/db into those paths. */
 export async function resolvePlan(): Promise<ResolvedPlan> {
+  // Self-host is uncapped core. Returned before any DB read — keeps this the
+  // single entitlement seam without pulling customer.ts into the self-host
+  // path. Label as the closest existing tier ("team") for any UI that switches
+  // on plan; ee features stay gated via hasEntitlement().
+  if (isSelfHost()) {
+    return { plan: "team", caps: SELF_HOST_CAPS };
+  }
   const { currentCustomer } = await import("./customer.ts");
   const override = (await currentCustomer())?.planOverride;
   if (override) {
