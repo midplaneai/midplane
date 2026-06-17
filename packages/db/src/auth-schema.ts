@@ -287,6 +287,50 @@ export const subscription = pgTable(
   }),
 );
 
+// --- sso plugin (Enterprise Edition, @better-auth/sso) ------------------------
+//
+// Backs the Better Auth `sso` plugin (apps/web/src/ee/sso) — the per-org SAML/
+// OIDC federation table. The plugin's model name is `ssoProvider` (the default),
+// so the drizzleAdapter resolves it by THIS export key; columns stay snake_case
+// like the rest of the schema. The plugin owns every read/write. DDL lives in
+// migrations/0027_sso_provider.sql.
+//
+// Loaded ONLY in the ee build (MIDPLANE_EE=1); the table is harmless (empty)
+// everywhere else. `oidcConfig`/`samlConfig` are JSON-as-text bags the plugin
+// manages — exactly one is set per provider. `domainVerified` mirrors the
+// plugin's optional domain-verification field (off in V1). createdAt/updatedAt
+// are operational columns the plugin doesn't model (adapter-invisible).
+export const ssoProvider = pgTable(
+  "sso_provider",
+  {
+    id: text("id").primaryKey(),
+    issuer: text("issuer").notNull(),
+    domain: text("domain").notNull(),
+    oidcConfig: text("oidc_config"),
+    samlConfig: text("saml_config"),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    providerId: text("provider_id").notNull().unique(),
+    organizationId: text("organization_id").references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    domainVerified: boolean("domain_verified"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    domainIdx: index("sso_provider_domain_idx").on(t.domain),
+    organizationIdx: index("sso_provider_organization_id_idx").on(
+      t.organizationId,
+    ),
+  }),
+);
+
 // --- types -------------------------------------------------------------------
 
 export type AuthUser = typeof user.$inferSelect;
@@ -299,3 +343,4 @@ export type AuthOAuthApplication = typeof oauthApplication.$inferSelect;
 export type AuthOAuthAccessToken = typeof oauthAccessToken.$inferSelect;
 export type AuthOAuthConsent = typeof oauthConsent.$inferSelect;
 export type AuthSubscription = typeof subscription.$inferSelect;
+export type AuthSsoProvider = typeof ssoProvider.$inferSelect;

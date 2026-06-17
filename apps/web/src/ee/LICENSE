@@ -1,0 +1,33 @@
+Midplane Enterprise Edition License
+
+Copyright (c) 2026 Deekard GmbH. All rights reserved.
+
+This directory (`apps/web/src/ee/`) and everything in it (the "Enterprise
+Edition") is commercial, source-available software. It is NOT covered by the
+MIT license at the repository root, which governs the rest of this project (the
+"Community Edition").
+
+The source is published for transparency and ease of self-build. It is NOT open
+source and the following terms apply:
+
+1. License grant. Subject to a valid commercial agreement or subscription with
+   Deekard GmbH, you are granted a non-exclusive, non-transferable, revocable
+   right to use the Enterprise Edition in production. Without such an agreement,
+   you may view, compile, and run the Enterprise Edition only for the purposes
+   of evaluation, testing, and development.
+
+2. Restrictions. You may not, without a commercial agreement: use the
+   Enterprise Edition in production or for any commercial purpose; provide it to
+   third parties as a hosted or managed service; or remove, disable, or
+   circumvent any license or entitlement check.
+
+3. Separability. The Enterprise Edition is activated only when explicitly
+   enabled (the `MIDPLANE_EE` build switch). The Community Edition does not
+   depend on this directory: removing it leaves a complete, functional MIT
+   build with the Enterprise features simply absent.
+
+4. No warranty. THE ENTERPRISE EDITION IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+   ANY KIND. IN NO EVENT SHALL DEEKARD GMBH BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+   OTHER LIABILITY ARISING FROM ITS USE.
+
+For commercial licensing, contact sales@midplane.ai.

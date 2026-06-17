@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { ssoProvider } from "../src/auth-schema.ts";
 import {
   REGIONS,
   auditEventsIndex,
@@ -110,6 +111,25 @@ describe("customers", () => {
   it("carries Clerk linkage and an immutable region", () => {
     const cols = Object.keys(customers);
     for (const col of ["id", "orgId", "email", "region"]) {
+      expect(cols).toContain(col);
+    }
+  });
+});
+
+describe("ssoProvider (0027, ee/SSO)", () => {
+  it("mirrors the @better-auth/sso model — provider config keyed by org", () => {
+    const cols = Object.keys(ssoProvider);
+    // Better Auth ssoProvider model fields (the adapter resolves these keys).
+    for (const col of [
+      "id",
+      "issuer",
+      "domain",
+      "oidcConfig",
+      "samlConfig",
+      "userId",
+      "providerId",
+      "organizationId",
+    ]) {
       expect(cols).toContain(col);
     }
   });

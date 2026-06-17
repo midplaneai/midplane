@@ -10,6 +10,8 @@ import { customers, getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
 
 import { buildStripePlugins } from "./billing";
+import { getEeAuthPlugins } from "./ee-plugins";
+import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
 import { isSelfHost, SELF_HOST_CUSTOMER_ID, SELF_HOST_ORG_ID } from "./self-host";
@@ -41,41 +43,66 @@ function createAuth() {
     }),
     emailAndPassword: { enabled: true },
     hooks: {
-      // Shape every MCP OAuth authorize request before the plugin handles it:
-      //
-      //  - prompt=consent: Better Auth only renders the consent page when the
-      //    request carries it, and MCP clients don't reliably send it — which
-      //    would skip our approval step and jump straight to the client's own
-      //    callback. Forcing it guarantees the user explicitly approves each
-      //    agent before it can reach their databases, and makes our consent
-      //    screen the consistent branded moment.
-      //  - scope ⊇ mcp: the proxy REQUIRES the `mcp` scope on the access token
-      //    (lib/proxy.ts proxyMcpOAuth) so a token minted for some other purpose
-      //    can't reach a database. Injecting it here means a compliant client
-      //    always gets a usable token regardless of which scopes it requested,
-      //    while the proxy still rejects tokens that lack it.
-      //
-      // Both ride the login-resume path too: authorizeMCPOAuth stores this query
-      // in the oidc_login_prompt cookie before bouncing to /sign-in, so the
-      // post-login resume sees the same prompt + scope.
       before: createAuthMiddleware(async (ctx) => {
-        if (ctx.path !== "/mcp/authorize") return;
-        const scopes = new Set(
-          String(ctx.query?.scope ?? "")
-            .split(" ")
-            .filter(Boolean),
-        );
-        scopes.add("mcp");
-        return {
-          context: {
-            ...ctx,
-            query: {
-              ...ctx.query,
-              prompt: "consent",
-              scope: Array.from(scopes).join(" "),
+        // Entitlement gate (server-side, ee/SSO). Creating or modifying an SSO
+        // provider requires the `sso` entitlement (ee build AND the Team plan).
+        // The @better-auth/sso plugin only enforces org owner/admin on these
+        // endpoints, so WITHOUT this a Free/Pro org admin in an ee build could
+        // POST /api/auth/sso/register (or /sso/update-provider) directly and
+        // stand up a working provider, bypassing the UI gate. We gate only the
+        // CREATE/MODIFY paths — sign-in, the SAML callbacks, SP metadata, and
+        // domain verification of an already-created provider keep working (no
+        // clawback on a downgrade, matching the plan model). hasEntitlement()
+        // re-reads the session via /get-session, which doesn't match these
+        // paths, so there's no recursion. (No-op in keyless/self-host builds:
+        // the SSO plugin isn't loaded, so these paths never resolve.)
+        if (
+          ctx.path === "/sso/register" ||
+          ctx.path === "/sso/update-provider"
+        ) {
+          if (!(await hasEntitlement("sso"))) {
+            throw new APIError("FORBIDDEN", {
+              message: "Single sign-on isn’t available on your plan.",
+            });
+          }
+          return;
+        }
+
+        // Shape every MCP OAuth authorize request before the plugin handles it:
+        //
+        //  - prompt=consent: Better Auth only renders the consent page when the
+        //    request carries it, and MCP clients don't reliably send it — which
+        //    would skip our approval step and jump straight to the client's own
+        //    callback. Forcing it guarantees the user explicitly approves each
+        //    agent before it can reach their databases, and makes our consent
+        //    screen the consistent branded moment.
+        //  - scope ⊇ mcp: the proxy REQUIRES the `mcp` scope on the access token
+        //    (lib/proxy.ts proxyMcpOAuth) so a token minted for some other
+        //    purpose can't reach a database. Injecting it here means a compliant
+        //    client always gets a usable token regardless of which scopes it
+        //    requested, while the proxy still rejects tokens that lack it.
+        //
+        // Both ride the login-resume path too: authorizeMCPOAuth stores this
+        // query in the oidc_login_prompt cookie before bouncing to /sign-in, so
+        // the post-login resume sees the same prompt + scope.
+        if (ctx.path === "/mcp/authorize") {
+          const scopes = new Set(
+            String(ctx.query?.scope ?? "")
+              .split(" ")
+              .filter(Boolean),
+          );
+          scopes.add("mcp");
+          return {
+            context: {
+              ...ctx,
+              query: {
+                ...ctx.query,
+                prompt: "consent",
+                scope: Array.from(scopes).join(" "),
+              },
             },
-          },
-        };
+          };
+        }
       }),
     },
     databaseHooks: {
@@ -223,6 +250,13 @@ function createAuth() {
       // and before nextCookies(). It registers /api/auth/stripe/webhook —
       // already public via the /api/auth middleware prefix.
       ...buildStripePlugins(),
+      // Enterprise Edition plugins (SSO/SAML). Empty unless the ee build
+      // registered them at boot (lib/ee-plugins.ts ← src/ee/register.ts, wired
+      // by instrumentation under MIDPLANE_EE). Core never imports ee/ — it reads
+      // this neutral registry — so a keyless build or a deleted ee/ just yields
+      // []. Spread AFTER stripe and BEFORE nextCookies(): SSO org-provisioning
+      // relies on organization() (already above), and nextCookies must stay last.
+      ...getEeAuthPlugins(),
       // nextCookies MUST stay last: it flushes Set-Cookie from server-action
       // auth flows through Next's cookies() helper.
       nextCookies(),

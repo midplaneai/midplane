@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { getDb } from "@midplane-cloud/db";
@@ -11,6 +12,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { RegionBadge } from "@/components/ui/region-badge";
 import { currentCustomer } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
+import { isSelfHost } from "@/lib/self-host";
 
 import { RenameWorkspaceForm } from "./rename-workspace-form";
 
@@ -29,6 +31,11 @@ export default async function SettingsPage() {
       .where(eq(organization.id, customer.orgId))
   )[0];
   const currentName = orgRow?.name ?? "";
+
+  // SSO is a cloud (ee) feature; self-host has no plans and never loads it, so
+  // the link is hidden there. The /settings/sso page itself gates on the Team
+  // entitlement (and shows an upgrade notice for plans without it).
+  const showSso = !isSelfHost();
 
   return (
     <>
@@ -65,6 +72,25 @@ export default async function SettingsPage() {
               </span>
             </CardContent>
           </Card>
+
+          {showSso && (
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle>single sign-on</CardTitle>
+              </CardHeader>
+              <CardContent className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                <span>
+                  Connect your identity provider so your team signs in with SAML.
+                </span>
+                <Link
+                  href="/settings/sso"
+                  className="shrink-0 font-medium text-foreground underline underline-offset-2"
+                >
+                  Configure
+                </Link>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </PageContainer>
     </>

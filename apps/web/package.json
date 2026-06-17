@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@better-auth/sso": "^1.6.19",
     "@better-auth/stripe": "^1.6.19",
     "@midplane-cloud/db": "workspace:*",
     "@midplane-cloud/kms": "workspace:*",
