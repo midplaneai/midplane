@@ -196,3 +196,28 @@ export async function resolvePlan(): Promise<ResolvedPlan> {
   }
   return { plan: "free", caps: CAPS.free };
 }
+
+/** App-level boolean entitlement features. Add a key here as each ee feature
+ *  lands; hasEntitlement() maps it to the provider check so callers never hit
+ *  the auth SDK directly. */
+export type EntitlementFeature = "sso";
+
+// Our feature key -> ORG-SCOPED Clerk feature slug. The `org:` prefix binds the
+// check to the ACTIVE org's subscription; an unscoped `sso` would also match a
+// user-scoped feature (Clerk merges both scopes) and wrongly entitle the org.
+const CLERK_FEATURE_SLUG: Record<EntitlementFeature, string> = {
+  sso: "org:sso",
+};
+
+/** Whether the active org is entitled to a boolean feature, LIVE from the
+ *  session JWT (no DB round-trip). The single feature-gating seam: P2 swaps
+ *  this body from Clerk to Better Auth in ONE place; callers use
+ *  hasEntitlement(feature), never has() directly. Behavior-preserving — the
+ *  same org-scoped check the billing page did inline. */
+export async function hasEntitlement(
+  feature: EntitlementFeature,
+): Promise<boolean> {
+  const { auth } = await import("@clerk/nextjs/server");
+  const { has } = await auth();
+  return has({ feature: CLERK_FEATURE_SLUG[feature] });
+}
