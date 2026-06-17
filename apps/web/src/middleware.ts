@@ -40,6 +40,11 @@ const PUBLIC_EXACT = new Set([
 // gated, the agent-facing MCP endpoint (/mcp/*, token-authed not session-authed),
 // and the unauthenticated health check (/api/health — Fly's http_service.checks
 // polls it with no session).
+//
+// The Stripe webhook is /api/auth/stripe/webhook (the @better-auth/stripe plugin
+// mounts it inside Better Auth's handler), so it's already public via /api/auth
+// — no separate entry. It arrives without a session cookie and verifies its own
+// Stripe signature, so it MUST stay outside the session gate.
 const PUBLIC_PREFIXES = ["/sign-in", "/sign-up", "/mcp", "/api/auth", "/api/health"];
 
 function isPublic(pathname: string): boolean {
