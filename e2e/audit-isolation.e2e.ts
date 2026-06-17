@@ -39,9 +39,17 @@ import {
   type NewAuditEvent,
 } from "@midplane-cloud/db";
 
+// The same isolation suite runs in BOTH deploy modes (the P0 regression gate):
+//   - cloud:     DATABASE_URL_EU set; getDb("eu") hits the EU regional pool.
+//   - self-host: MIDPLANE_SELF_HOST=1 + DATABASE_URL set; getDb("eu") returns
+//                the single-DB pool (region ignored). REGION="eu" matches
+//                SELF_HOST_REGION, so rows stamp + filter consistently.
+const SELF_HOST = process.env.MIDPLANE_SELF_HOST === "1";
 test.skip(
-  !process.env.DATABASE_URL_EU,
-  "DATABASE_URL_EU must be set for the audit isolation suite (uses RLS against a real Postgres)",
+  SELF_HOST ? !process.env.DATABASE_URL : !process.env.DATABASE_URL_EU,
+  SELF_HOST
+    ? "DATABASE_URL must be set for the audit isolation suite in self-host mode"
+    : "DATABASE_URL_EU must be set for the audit isolation suite (uses RLS against a real Postgres)",
 );
 
 const REGION = "eu" as const;

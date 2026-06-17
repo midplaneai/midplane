@@ -1,20 +1,31 @@
-// Run pending Drizzle migrations against one region's DATABASE_URL.
-// Usage: bun run src/migrate.ts <eu|us>
+// Run pending Drizzle migrations against one target's database URL.
+//   bun run src/migrate.ts <eu|us>     → cloud region (DATABASE_URL_<REGION>)
+//   bun run src/migrate.ts self-host   → single-tenant self-host (DATABASE_URL)
 
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 
-const region = process.argv[2];
-if (region !== "eu" && region !== "us") {
-  console.error("usage: migrate.ts <eu|us>");
+const target = process.argv[2];
+let url: string | undefined;
+let label: string;
+if (target === "self-host") {
+  url = process.env.DATABASE_URL;
+  label = "self-host";
+} else if (target === "eu" || target === "us") {
+  url = process.env[target === "eu" ? "DATABASE_URL_EU" : "DATABASE_URL_US"];
+  label = target;
+} else {
+  console.error("usage: migrate.ts <eu|us|self-host>");
   process.exit(1);
 }
 
-const envVar = region === "eu" ? "DATABASE_URL_EU" : "DATABASE_URL_US";
-const url = process.env[envVar];
 if (!url) {
-  console.error(`${envVar} is not set`);
+  console.error(
+    target === "self-host"
+      ? "DATABASE_URL is not set"
+      : `DATABASE_URL_${(target as string).toUpperCase()} is not set`,
+  );
   process.exit(1);
 }
 
@@ -23,5 +34,5 @@ const db = drizzle(sql);
 
 await migrate(db, { migrationsFolder: "./migrations" });
 
-console.log(`[${region}] migrations applied`);
+console.log(`[${label}] migrations applied`);
 await sql.end();
