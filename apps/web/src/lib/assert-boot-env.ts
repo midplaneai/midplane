@@ -96,6 +96,18 @@ export function assertBootEnv(env: EnvLike = process.env): void {
     }
   }
 
+  // --- MCP OAuth issuer (P6) ---
+  // The Better Auth `mcp` plugin builds its OAuth 2.1 discovery metadata
+  // (issuer + authorize/token endpoints) from BETTER_AUTH_URL. It must be a
+  // concrete origin or the discovery + agent OAuth flow fail at request time.
+  if (!env.BETTER_AUTH_URL) {
+    issues.push({
+      var: "BETTER_AUTH_URL",
+      reason:
+        "required as the OAuth issuer for MCP discovery (this app's origin, e.g. https://eu.app.midplane.ai)",
+    });
+  }
+
   // Hosted shape: FLY_API_TOKEN set means the indexer must be reachable.
   // Same check the mcp-proxy makes on first request — surfacing it earlier
   // so a missing INDEXER_TOKEN on a fresh Fly app doesn't wait for the
@@ -148,6 +160,16 @@ function selfHostIssues(env: EnvLike): Issue[] {
     issues.push({
       var: "DATABASE_URL",
       reason: "required in self-host (single Postgres; getDb ignores region)",
+    });
+  }
+
+  // MCP OAuth issuer (P6): same requirement as cloud — the `mcp` plugin's
+  // discovery metadata needs a concrete origin for the self-host instance.
+  if (!env.BETTER_AUTH_URL) {
+    issues.push({
+      var: "BETTER_AUTH_URL",
+      reason:
+        "required as the OAuth issuer for MCP discovery (this instance's origin)",
     });
   }
 

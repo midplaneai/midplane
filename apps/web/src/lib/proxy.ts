@@ -29,17 +29,29 @@
 //     with a 5-min debounce — the request must not block on this write
 //     and must not fail because of it.
 
-import { bumpLastUsed, resolveByToken } from "@midplane-cloud/router";
 import {
+  bumpLastUsed,
+  resolveByToken,
+  resolveConnectionForCustomer,
+} from "@midplane-cloud/router";
+import {
+  customers,
   getDb,
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
+  type Connection,
+  type ConnectionDatabase,
+  type Region,
 } from "@midplane-cloud/db";
+import { member } from "@midplane-cloud/db/auth-schema";
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
+import { and, eq } from "drizzle-orm";
 
 import { getMcpProxyContext } from "./mcp-proxy.ts";
 import { bootRegion } from "./region-context.ts";
+import { isSelfHost, SELF_HOST_CUSTOMER_ID } from "./self-host.ts";
+import { ensureOAuthAttributionToken } from "./tokens.ts";
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -147,6 +159,158 @@ export async function proxyMcp(
     }
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }
+  // Fire-and-forget last-used bump (HMAC path). The 5-min debounce predicate
+  // lives in SQL so concurrent in-window requests collapse at the row level.
+  // Errors are logged but never block / fail the forwarded request.
+  const ip = extractIp(req);
+  const ua = req.headers.get("user-agent");
+  void bumpLastUsed(db, resolved.tokenId, ip, ua).catch((err) => {
+    console.error("[proxyMcp] bumpLastUsed failed", err);
+  });
+
+  return forwardResolved(req, {
+    connection: resolved.connection,
+    databases: resolved.databases,
+    tokenId: resolved.tokenId,
+  });
+}
+
+// Minimal structural view of the OAuth access-token record withMcpAuth passes
+// to the handler (better-auth's oauthAccessToken row). We read only the three
+// fields the proxy needs; userId can be null on the record's type so we guard.
+export interface OAuthMcpSession {
+  userId?: string | null;
+  clientId?: string | null;
+  scopes?: string | null;
+}
+
+/** MCP-OAuth ingress: the agent presented an OAuth 2.1 bearer (already validated
+ *  by withMcpAuth) and reached `/mcp/<connectionId>`. The bearer authenticates
+ *  the user + OAuth client; the path selects the connection. We:
+ *    1. require the `mcp` scope on the token (else 403 insufficient_scope),
+ *    2. map the OAuth user → their Midplane customer (the tenant),
+ *    3. resolve the connection ONLY if that customer owns it (else 404),
+ *    4. mint-or-get the (connection, client) attribution token so the engine
+ *       still stamps a per-agent mcp_token_id on every audit row,
+ *    5. forward to the engine through the SAME spawn/forward core as the URL
+ *       path — same decrypt, same policy validation, same response filtering.
+ *
+ *  Coarse v1 scope model: an `mcp`-scoped bearer for a user who owns the
+ *  connection grants full MCP access to it; per-connection policy/guardrails
+ *  still apply in the engine exactly as for URL tokens. */
+export async function proxyMcpOAuth(
+  req: Request,
+  connectionId: string,
+  session: OAuthMcpSession,
+): Promise<Response> {
+  const region = bootRegion();
+  const db = getDb(region);
+
+  const userId = session.userId ?? null;
+  const clientId = session.clientId ?? null;
+  if (!userId || !clientId) {
+    // A well-formed access token always carries both; absence means a
+    // malformed/forged record slipped through. Refuse without confirming the
+    // connection exists.
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  // Scope gate. The bearer is valid (withMcpAuth), but validity alone is NOT
+  // authorization to reach a database — a token minted for some other purpose
+  // (a future OAuth-protected resource, or a client that requested only
+  // openid/profile) must not grant MCP access. Require the `mcp` capability
+  // scope before touching any connection. Our authorize before-hook forces this
+  // scope onto every flow we issue (lib/auth.ts), so compliant clients always
+  // carry it; this check is the defense-in-depth that rejects tokens that don't.
+  const scopes = new Set((session.scopes ?? "").split(" ").filter(Boolean));
+  if (!scopes.has("mcp")) {
+    return Response.json(
+      { ok: false, error: "insufficient_scope" },
+      {
+        status: 403,
+        headers: {
+          "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="mcp"',
+        },
+      },
+    );
+  }
+
+  const customerId = await resolveCustomerIdForUser(db, userId, region);
+  if (!customerId) {
+    // Authenticated user with no Midplane customer (e.g. signed up but never
+    // picked a region). Nothing they can own — 403, not a connection-probing
+    // 404/401.
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+
+  const resolved = await resolveConnectionForCustomer(db, connectionId, customerId);
+  if (!resolved.ok) {
+    if (resolved.reason === "paused") {
+      return Response.json(
+        { ok: false, error: "connection_paused" },
+        { status: 403 },
+      );
+    }
+    return Response.json({ ok: false, error: "not_found" }, { status: 404 });
+  }
+
+  // Per-agent attribution: one mcp_tokens row per (connection, OAuth client).
+  // Its id is what the engine stamps as mcp_token_id — so the OAuth flow keeps
+  // the SAME audit attribution shape the URL token had.
+  const tokenId = await ensureOAuthAttributionToken(db, {
+    connectionId: resolved.connection.id,
+    clientId,
+    userId,
+  });
+
+  // Last-used surface, same debounce as the URL path (forensics + dashboard
+  // parity for the attribution row).
+  const ip = extractIp(req);
+  const ua = req.headers.get("user-agent");
+  void bumpLastUsed(db, tokenId, ip, ua).catch((err) => {
+    console.error("[proxyMcpOAuth] bumpLastUsed failed", err);
+  });
+
+  return forwardResolved(req, {
+    connection: resolved.connection,
+    databases: resolved.databases,
+    tokenId,
+  });
+}
+
+/** Map an OAuth-authenticated user to the Midplane customer (tenant) they act
+ *  as. Self-host: any authed user resolves to the single implicit customer
+ *  (mirrors currentCustomer()). Cloud: the user's org → its customer, pinned to
+ *  this regional DB. Returns null when the user has no customer yet. */
+async function resolveCustomerIdForUser(
+  db: ReturnType<typeof getDb>,
+  userId: string,
+  region: Region,
+): Promise<string | null> {
+  if (isSelfHost()) return SELF_HOST_CUSTOMER_ID;
+  const rows = await db
+    .select({ id: customers.id })
+    .from(customers)
+    .innerJoin(member, eq(member.organizationId, customers.orgId))
+    .where(and(eq(member.userId, userId), eq(customers.region, region)))
+    .limit(1);
+  return rows[0]?.id ?? null;
+}
+
+/** The shared engine spawn + forward core, reached by BOTH the URL-token path
+ *  (proxyMcp) and the OAuth path (proxyMcpOAuth) once a connection + databases
+ *  + attribution token id are resolved. Decrypts each DSN, validates policy at
+ *  the boundary, spawns/reuses the container, forwards the Streamable HTTP
+ *  request, and streams the filtered response back. The ONLY auth-method-
+ *  specific input is the tokenId stamped on X-Midplane-Token-Id. */
+async function forwardResolved(
+  req: Request,
+  resolved: {
+    connection: Connection;
+    databases: ConnectionDatabase[];
+    tokenId: string;
+  },
+): Promise<Response> {
   const { connection, databases, tokenId } = resolved;
   if (databases.length === 0) {
     // Connection without children is a torn migration / data corruption —
@@ -154,19 +318,10 @@ export async function proxyMcp(
     // leaking the row's existence; the underlying issue surfaces in logs.
     // Log with tokenId only, never the plaintext token.
     console.error(
-      `proxyMcp: connection ${connection.id} has no databases (tokenId=${tokenId})`,
+      `forwardResolved: connection ${connection.id} has no databases (tokenId=${tokenId})`,
     );
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }
-
-  // Fire-and-forget last-used bump. The 5-min debounce predicate lives
-  // in SQL so concurrent in-window requests collapse at the row level.
-  // Errors are logged but never block / fail the forwarded request.
-  const ip = extractIp(req);
-  const ua = req.headers.get("user-agent");
-  void bumpLastUsed(db, tokenId, ip, ua).catch((err) => {
-    console.error("[proxyMcp] bumpLastUsed failed", err);
-  });
 
   const ctx = getMcpProxyContext();
 
@@ -255,7 +410,8 @@ export async function proxyMcp(
   // session-freezes the value, and stamps it on every audit row from
   // the session. Safe to send on every request: post-initialize the
   // engine ignores re-sends. NEVER log the plaintext token; only tokenId
-  // appears here.
+  // appears here. For the OAuth path this is the (connection, client)
+  // attribution row id, so per-agent audit attribution is identical.
   headers.set("X-Midplane-Token-Id", tokenId);
 
   const init: RequestInit = {

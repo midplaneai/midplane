@@ -11,6 +11,7 @@ function envMode(region: "eu" | "us"): Record<string, string | undefined> {
   return {
     MIDPLANE_REGION: region,
     MIDPLANE_KMS_MODE: "env",
+    BETTER_AUTH_URL: "http://localhost:3000",
     [`DATABASE_URL_${upper}`]: "postgres://localhost/x",
     [`MIDPLANE_KMS_DEV_KEY_${upper}`]: KEY_HEX,
     [`MIDPLANE_TOKEN_PEPPER_${upper}_V1`]: PEPPER_B64,
@@ -62,7 +63,14 @@ describe("assertBootEnv", () => {
     expect(err!.message).toMatch(/DATABASE_URL_EU/);
     expect(err!.message).toMatch(/MIDPLANE_KMS_DEV_KEY_EU/);
     expect(err!.message).toMatch(/MIDPLANE_TOKEN_PEPPER_EU_V1/);
-    expect(err!.message).toMatch(/3 issues/);
+    expect(err!.message).toMatch(/BETTER_AUTH_URL/);
+    expect(err!.message).toMatch(/4 issues/);
+  });
+
+  it("requires BETTER_AUTH_URL (the MCP OAuth issuer)", () => {
+    const env = envMode("eu");
+    delete env.BETTER_AUTH_URL;
+    expect(() => assertBootEnv(env)).toThrow(/BETTER_AUTH_URL/);
   });
 
   it("skips derived-var checks when region itself is invalid", () => {
@@ -95,6 +103,7 @@ describe("assertBootEnv", () => {
     const env: Record<string, string | undefined> = {
       MIDPLANE_REGION: "eu",
       MIDPLANE_KMS_MODE: "kms",
+      BETTER_AUTH_URL: "http://localhost:3000",
       DATABASE_URL_EU: "postgres://localhost/x",
       MIDPLANE_KMS_KEY_EU: "arn:aws:kms:eu-central-1:...:key/abc",
       MIDPLANE_TOKEN_PEPPER_CT_EU_V1: "base64ciphertext==",
@@ -148,6 +157,7 @@ describe("assertBootEnv", () => {
         MIDPLANE_SELF_HOST: "1",
         DATABASE_URL: "postgres://localhost/x",
         MIDPLANE_KMS_MODE: "env",
+        BETTER_AUTH_URL: "http://localhost:3000",
         MIDPLANE_KMS_DEV_KEY_EU: KEY_HEX,
         MIDPLANE_TOKEN_PEPPER_EU_V1: PEPPER_B64,
         // A stray Stripe var must NOT pull in the all-or-nothing cloud check.
@@ -163,6 +173,7 @@ describe("assertBootEnv", () => {
         MIDPLANE_SELF_HOST: "1",
         DATABASE_URL: "postgres://localhost/x",
         MIDPLANE_KMS_MODE: "env",
+        BETTER_AUTH_URL: "http://localhost:3000",
         MIDPLANE_KMS_DEV_KEY_EU: KEY_HEX,
         MIDPLANE_TOKEN_PEPPER_EU_V1: PEPPER_B64,
       };
@@ -198,6 +209,12 @@ describe("assertBootEnv", () => {
       const env = selfHostEnv();
       env.MIDPLANE_KMS_MODE = "kms";
       expect(() => assertBootEnv(env)).toThrow(/MIDPLANE_KMS_MODE/);
+    });
+
+    it("requires BETTER_AUTH_URL (the MCP OAuth issuer)", () => {
+      const env = selfHostEnv();
+      delete env.BETTER_AUTH_URL;
+      expect(() => assertBootEnv(env)).toThrow(/BETTER_AUTH_URL/);
     });
   });
 });

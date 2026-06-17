@@ -605,3 +605,63 @@ describe("countUsableTokens", () => {
     expect(n).toBe(3);
   });
 });
+
+describe("ensureOAuthAttributionToken", () => {
+  const args = {
+    connectionId: "conn-oauth",
+    clientId: "CLIENTABCDEFGH1234",
+    userId: "user_oauth_1",
+  };
+
+  it("returns the existing row id without inserting when one is present", async () => {
+    handle.queueSelect([{ id: "tok-existing" }]); // findExisting hit
+    const { ensureOAuthAttributionToken } = await import("../src/lib/tokens.ts");
+    const id = await ensureOAuthAttributionToken(
+      handle.db as unknown as Parameters<typeof ensureOAuthAttributionToken>[0],
+      args,
+    );
+    expect(id).toBe("tok-existing");
+    expect(handle.calls.some((c) => c.op === "insert")).toBe(false);
+  });
+
+  it("mints a kind='oauth' attribution row (no HMAC, sentinel prefix) when absent", async () => {
+    handle.queueSelect([]); // findExisting miss
+    const { mcpTokens } = await import("@midplane-cloud/db");
+    const { ensureOAuthAttributionToken } = await import("../src/lib/tokens.ts");
+    const id = await ensureOAuthAttributionToken(
+      handle.db as unknown as Parameters<typeof ensureOAuthAttributionToken>[0],
+      args,
+    );
+    // A fresh ULID is returned + stamped on the row.
+    expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+
+    const insert = handle.calls.find(
+      (c) => c.op === "insert" && c.table === mcpTokens,
+    );
+    expect(insert).toBeDefined();
+    const row = insert!.set as Record<string, unknown>;
+    expect(row.id).toBe(id);
+    expect(row.kind).toBe("oauth");
+    expect(row.clientId).toBe(args.clientId);
+    expect(row.connectionId).toBe(args.connectionId);
+    expect(row.createdByUserId).toBe(args.userId);
+    expect(row.name).toBe(`oauth:${args.clientId}`);
+    expect(row.prefix).toBe("mp_oauth");
+    expect(row.last4).toBe(args.clientId.slice(-4));
+    // No HMAC secret on an OAuth attribution row.
+    expect(row.tokenHash).toBeUndefined();
+    expect(row.pepperKid).toBeUndefined();
+  });
+
+  it("re-reads the winner's id when a concurrent insert races (unique violation)", async () => {
+    handle.queueSelect([]); // findExisting miss
+    handle.failNextInsert({ code: "23505" }); // partial-unique rejected the race
+    handle.queueSelect([{ id: "tok-raced" }]); // re-read after the catch
+    const { ensureOAuthAttributionToken } = await import("../src/lib/tokens.ts");
+    const id = await ensureOAuthAttributionToken(
+      handle.db as unknown as Parameters<typeof ensureOAuthAttributionToken>[0],
+      args,
+    );
+    expect(id).toBe("tok-raced");
+  });
+});

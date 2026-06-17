@@ -95,6 +95,7 @@ export async function resolveByToken(
       .from(mcpTokens)
       .where(
         sql`${mcpTokens.tokenHash} = ${hash}
+            AND ${mcpTokens.kind} = 'url'
             AND ${mcpTokens.status} = 'active'
             AND (${mcpTokens.expiresAt} IS NULL
                  OR ${mcpTokens.expiresAt} > NOW())`,
@@ -139,6 +140,50 @@ export async function resolveByToken(
     .where(eq(connectionDatabases.connectionId, connection.id))
     .orderBy(asc(connectionDatabases.name));
   return { ok: true, tokenId, connection, databases: dbRows };
+}
+
+/** Outcome of {@link resolveConnectionForCustomer}: the same connection +
+ *  databases triple as a token resolve, minus the token id (the OAuth path
+ *  mints/looks up its own attribution token separately). Shares the not_found /
+ *  paused discrimination so the proxy maps the same statuses. */
+export type ConnectionResolveResult =
+  | { ok: true; connection: Connection; databases: ConnectionDatabase[] }
+  | { ok: false; reason: "not_found" | "paused" };
+
+/** Resolve a connection by id for the MCP-OAuth proxy path, ownership-gated on
+ *  the customer the OAuth bearer mapped to.
+ *
+ *  The OAuth flow authenticates the agent's USER (and OAuth client); the URL
+ *  path selects which connection. This loads that connection ONLY if it belongs
+ *  to the resolved customer — an unowned or unknown id collapses to `not_found`
+ *  (same leakage-avoidance shape as resolveByToken; the caller returns 404,
+ *  never a 403/401 that would confirm the id exists). A paused connection
+ *  resolves to `{ ok: false, reason: "paused" }` so the caller returns the
+ *  distinct 403, exactly as the token path does.
+ *
+ *  No HMAC, no pepper: the bearer was already validated by withMcpAuth. */
+export async function resolveConnectionForCustomer(
+  db: Db,
+  connectionId: string,
+  customerId: string,
+): Promise<ConnectionResolveResult> {
+  const connRows = await db
+    .select()
+    .from(connections)
+    .where(
+      sql`${connections.id} = ${connectionId}
+          AND ${connections.customerId} = ${customerId}`,
+    )
+    .limit(1);
+  const connection = connRows[0];
+  if (!connection) return { ok: false, reason: "not_found" };
+  if (connection.pausedAt) return { ok: false, reason: "paused" };
+  const dbRows = await db
+    .select()
+    .from(connectionDatabases)
+    .where(eq(connectionDatabases.connectionId, connection.id))
+    .orderBy(asc(connectionDatabases.name));
+  return { ok: true, connection, databases: dbRows };
 }
 
 /** Truncate length-bound user-agent. The mcp_tokens.last_used_ua column

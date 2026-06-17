@@ -35,3 +35,17 @@ export function mintMcpUrl(region: Region, token: string, env: NodeJS.ProcessEnv
   const scheme = host.startsWith("localhost") || host.endsWith(".local") ? "http" : "https";
   return `${scheme}://${host}/mcp/${token}`;
 }
+
+/** The OAuth MCP endpoint for a connection: <scheme>://<host>/mcp/<connectionId>.
+ *
+ *  Unlike mintMcpUrl, the path segment is the connection id — NOT a secret. The
+ *  agent authenticates with an OAuth bearer (interactive sign-in), so the URL is
+ *  just an address: safe to display, copy, and keep on the dashboard. Same host
+ *  + scheme resolution as the token URL. */
+export function mcpConnectionUrl(
+  region: Region,
+  connectionId: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  return mintMcpUrl(region, connectionId, env);
+}

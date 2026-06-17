@@ -1,8 +1,8 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
-import { organization } from "better-auth/plugins";
+import { mcp, organization } from "better-auth/plugins";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { ulid } from "ulid";
 
@@ -28,11 +28,56 @@ import { isSelfHost, SELF_HOST_CUSTOMER_ID, SELF_HOST_ORG_ID } from "./self-host
 function createAuth() {
   return betterAuth({
     appName: "midplane",
+    // The OAuth 2.1 issuer for the MCP plugin's discovery metadata. The mcp
+    // plugin throws "invalid_issuer" if options.baseURL isn't a concrete string
+    // (it can't infer the issuer from a request the way cookie/callback URLs
+    // are). Each regional app sets BETTER_AUTH_URL to its own origin (e.g.
+    // https://eu.app.midplane.ai), self-host to its host — the same value
+    // Better Auth already used for cookies/callbacks, now pinned explicitly.
+    baseURL: process.env.BETTER_AUTH_URL,
     database: drizzleAdapter(getDb(bootRegion()), {
       provider: "pg",
       schema: { ...authSchema },
     }),
     emailAndPassword: { enabled: true },
+    hooks: {
+      // Shape every MCP OAuth authorize request before the plugin handles it:
+      //
+      //  - prompt=consent: Better Auth only renders the consent page when the
+      //    request carries it, and MCP clients don't reliably send it — which
+      //    would skip our approval step and jump straight to the client's own
+      //    callback. Forcing it guarantees the user explicitly approves each
+      //    agent before it can reach their databases, and makes our consent
+      //    screen the consistent branded moment.
+      //  - scope ⊇ mcp: the proxy REQUIRES the `mcp` scope on the access token
+      //    (lib/proxy.ts proxyMcpOAuth) so a token minted for some other purpose
+      //    can't reach a database. Injecting it here means a compliant client
+      //    always gets a usable token regardless of which scopes it requested,
+      //    while the proxy still rejects tokens that lack it.
+      //
+      // Both ride the login-resume path too: authorizeMCPOAuth stores this query
+      // in the oidc_login_prompt cookie before bouncing to /sign-in, so the
+      // post-login resume sees the same prompt + scope.
+      before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== "/mcp/authorize") return;
+        const scopes = new Set(
+          String(ctx.query?.scope ?? "")
+            .split(" ")
+            .filter(Boolean),
+        );
+        scopes.add("mcp");
+        return {
+          context: {
+            ...ctx,
+            query: {
+              ...ctx.query,
+              prompt: "consent",
+              scope: Array.from(scopes).join(" "),
+            },
+          },
+        };
+      }),
+    },
     databaseHooks: {
       user: {
         create: {
@@ -144,6 +189,32 @@ function createAuth() {
         // resolve the org's plan → seat cap (lib/seats.ts); Better Auth enforces
         // it on the invite/add path. Otherwise it's a single static number.
         membershipLimit: (_user, organization) => seatCapForOrg(organization.id),
+      }),
+      // MCP OAuth 2.1 provider (P6). Turns this app into the authorization
+      // server MCP clients (Claude, Cursor) authenticate against: discovery
+      // metadata, Dynamic Client Registration, authorization-code + PKCE, token
+      // issuance. The /mcp resource server (lib/proxy.ts withMcpAuth) validates
+      // the issued bearer. loginPage is where an unauthenticated authorize
+      // bounces; consentPage renders our grant screen (forced on every authorize
+      // by the prompt=consent before-hook above). requirePKCE enforces OAuth 2.1
+      // PKCE at the authorize step, not just at the public-client token exchange.
+      //
+      // Placed AFTER organization() and BEFORE nextCookies() — nextCookies must
+      // stay last to flush Set-Cookie from server-action auth flows.
+      mcp({
+        loginPage: "/sign-in",
+        oidcConfig: {
+          // loginPage is also required on the OIDCOptions type; the plugin
+          // overrides it with the top-level value, so keep them the same.
+          loginPage: "/sign-in",
+          consentPage: "/oauth/consent",
+          requirePKCE: true,
+          // The `mcp` capability scope — the proxy REQUIRES it on the access
+          // token before granting MCP access (lib/proxy.ts proxyMcpOAuth). Listed
+          // alongside the plugin defaults (openid/profile/email/offline_access)
+          // so a client may request it.
+          scopes: ["mcp"],
+        },
       }),
       // Stripe billing (@better-auth/stripe). Conditionally loaded: [] in
       // self-host and in keyless cloud dev, so neither requires Stripe env to
