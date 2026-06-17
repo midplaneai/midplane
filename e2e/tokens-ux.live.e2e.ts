@@ -118,13 +118,17 @@ test("create connection → mint second token → revoke default → list reflec
   // token (named "default" by createConnection) must appear in the list.
   await page.getByTestId("saved-it").click();
   await page.waitForURL(`**/connections/${connectionId}`, { timeout: 10_000 });
+  // The connection page defaults to the Database section; tokens live under the
+  // Agents section. Go there directly.
+  await page.goto(`/connections/${connectionId}?section=agents`);
   const list = page.getByTestId("token-list");
   await expect(list).toBeVisible();
   const defaultRow = list.locator('[data-testid="token-row"]', {
     hasText: "default",
   });
   await expect(defaultRow).toBeVisible();
-  await expect(defaultRow.locator("[data-status]")).toHaveAttribute(
+  // data-status is on the token-row <li> itself, not a descendant.
+  await expect(defaultRow).toHaveAttribute(
     "data-status",
     /active|expiring|stale/,
   );
@@ -162,11 +166,9 @@ test("create connection → mint second token → revoke default → list reflec
   // Action calls revalidatePath; Next refreshes the Server Component
   // tree. The row stays in the list (history is preserved) — only the
   // badge / actions change.
-  await expect(defaultRow.locator("[data-status]")).toHaveAttribute(
-    "data-status",
-    "revoked",
-    { timeout: 10_000 },
-  );
+  await expect(defaultRow).toHaveAttribute("data-status", "revoked", {
+    timeout: 10_000,
+  });
   // Revoked rows lose the per-row revoke button.
   await expect(defaultRow.getByTestId("revoke-token")).toHaveCount(0);
 });
