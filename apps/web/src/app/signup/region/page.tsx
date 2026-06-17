@@ -1,7 +1,7 @@
-import { getOrgContext } from "@/lib/org-context";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { getOrgContext } from "@/lib/org-context";
 import { getPostHog } from "@/lib/posthog";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
@@ -9,6 +9,13 @@ import { Button } from "@/components/ui/button";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
+import {
+  APEX_HOST,
+  REGION_COOKIE,
+  REGION_HOST,
+  regionCookieOptions,
+  signRegionCookieValue,
+} from "@/lib/region-routing";
 import type { Region } from "@midplane-cloud/kms";
 
 // Region picker — the signup-completion step. Two entry points:
@@ -111,17 +118,23 @@ async function pickRegionAuthed(formData: FormData) {
   }
   const appRegion = bootRegion();
   if (region !== appRegion) {
-    // Cross-region pick on the wrong regional app — redirect to the
-    // matching app's picker with the choice preserved. The Better Auth
-    // session cookie is .midplane.ai-scoped so it carries across subdomains.
-    const target =
-      region === "eu"
-        ? "https://eu.app.midplane.ai/signup/region"
-        : "https://us.app.midplane.ai/signup/region";
-    redirect(target);
+    // Cross-region pick on the wrong regional app — redirect to the matching
+    // app's picker with the choice preserved. The region cookie is
+    // .app.midplane.ai-scoped so it carries across subdomains.
+    redirect(`https://${REGION_HOST[region]}/signup/region`);
   }
   const { userId } = await getOrgContext();
   const customer = await upsertCustomerRegion(region);
+
+  // Set the signed region cookie alongside the DB write — this is the routing
+  // fast-path the middleware reads to send the user to their regional subdomain
+  // (and bounce cross-region requests) with no DB lookup.
+  const cookieStore = await cookies();
+  cookieStore.set(
+    REGION_COOKIE,
+    await signRegionCookieValue(region),
+    regionCookieOptions(),
+  );
 
   const posthog = getPostHog();
   if (posthog && userId) {
@@ -152,6 +165,14 @@ async function pickRegionUnauth(formData: FormData) {
   const region = formData.get("region");
   if (region !== "eu" && region !== "us") {
     throw new Error("invalid region");
+  }
+  // On the apex, route to the chosen region's subdomain so signup (and its
+  // region-resident auth data) lands on the right app; the authed pass then
+  // writes the customer row + region cookie. On a regional app / dev single
+  // host, stay relative.
+  const host = (await headers()).get("host");
+  if (host === APEX_HOST) {
+    redirect(`https://${REGION_HOST[region]}/sign-up?redirect=/signup/region`);
   }
   redirect("/sign-up?redirect=/signup/region");
 }
