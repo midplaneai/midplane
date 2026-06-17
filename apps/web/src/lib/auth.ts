@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { organization } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
@@ -9,6 +10,7 @@ import * as authSchema from "@midplane-cloud/db/auth-schema";
 
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
+import { isSelfHost } from "./self-host";
 
 // Better Auth instance for the CLOUD build.
 //
@@ -30,6 +32,30 @@ function createAuth() {
     }),
     emailAndPassword: { enabled: true },
     databaseHooks: {
+      user: {
+        create: {
+          // Self-host is single-owner: the FIRST email+password signup becomes
+          // the owner; every later signup is rejected. Without this, anyone who
+          // could reach the instance would register — and because
+          // currentCustomer() resolves ANY authed user to the one implicit
+          // customer, they'd read all of the single tenant's audit data.
+          // Enforced at the DB-hook layer so it blocks the sign-up API itself,
+          // not just the UI. No-op in the cloud (open multi-tenant signup).
+          before: async () => {
+            if (!isSelfHost()) return;
+            const existing = await getDb(bootRegion())
+              .select({ id: authSchema.user.id })
+              .from(authSchema.user)
+              .limit(1);
+            if (existing.length > 0) {
+              throw new APIError("FORBIDDEN", {
+                message:
+                  "This Midplane instance already has an owner. Self-host is single-owner; new sign-ups are disabled.",
+              });
+            }
+          },
+        },
+      },
       session: {
         create: {
           // Set the active org from the user's (single) membership when a

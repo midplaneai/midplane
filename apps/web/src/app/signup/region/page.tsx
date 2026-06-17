@@ -13,6 +13,7 @@ import { RegionBadge } from "@/components/ui/region-badge";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
+import { isSelfHost } from "@/lib/self-host";
 import { suggestWorkspaceName } from "@/lib/workspace-name";
 import {
   APEX_HOST,
@@ -32,6 +33,11 @@ import type { Region } from "@midplane-cloud/kms";
 //     + writes the customer row in this region, then redirects to /dashboard.
 
 export default async function RegionPicker() {
+  // Self-host has one region and one implicit customer — there is no region to
+  // pick and no org to create. currentCustomer() already resolves authed users,
+  // so the (app) layout never sends anyone here; this guards a direct visit.
+  if (isSelfHost()) redirect("/dashboard");
+
   const h = await headers();
   // Read the session once: drives the auth/unauth branch AND the workspace-name
   // suggestion (email domain → company, or the person's name for generic
