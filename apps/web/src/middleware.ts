@@ -6,6 +6,7 @@ import {
   REGION_HOST,
   verifyRegionCookie,
 } from "@/lib/region-routing";
+import { isSelfHost } from "@/lib/self-host";
 
 // Auth-protection + region routing middleware (Better Auth).
 //
@@ -69,6 +70,19 @@ export default async function middleware(
   const url = new URL(req.url);
   const host = url.host;
   const { pathname } = url;
+
+  // Self-host: one host, one DB, no region routing. Auth-protection only —
+  // existence-check the session cookie (real validation is the (app) layout's
+  // currentCustomer DB read) and skip ALL region logic: no apex/subdomain, no
+  // signed region cookie, no cross-region redirect.
+  if (isSelfHost()) {
+    if (isPublic(pathname)) return NextResponse.next();
+    const sessionCookie = getSessionCookie(req);
+    if (!sessionCookie) {
+      return NextResponse.redirect(new URL("/sign-in", req.url));
+    }
+    return NextResponse.next();
+  }
 
   // Apex host: route an authed user to their regional subdomain via the signed
   // region cookie (no DB). The landing is exempt — no region-specific content,

@@ -1,0 +1,47 @@
+# Single-tenant self-host stack for the midplane control plane.
+#
+#   docker compose -f docker-compose.self-host.yml up -d postgres
+#   docker compose -f docker-compose.self-host.yml run --rm migrate
+#   # then run the control plane (see SELF_HOST.md)
+#
+# Keyless, uncapped, single-owner, one Postgres, no region routing, no cloud
+# vendors. See SELF_HOST.md for the full run + the engine-spawning topology
+# (the control plane spawns one OSS engine container per connection via the
+# host Docker daemon, so it needs Docker access — documented there).
+#
+# Env: copy .env.self-host.example to .env.self-host and fill the secrets.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: midplane
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-midplane}
+      POSTGRES_DB: midplane
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - midplane_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U midplane -d midplane"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot: apply Drizzle migrations to the single DB, then exit.
+  migrate:
+    image: oven/bun:1.3-slim
+    working_dir: /app/packages/db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # In-compose the DB is reachable at host `postgres`; from the host it's
+      # localhost:${POSTGRES_PORT}. sslmode=disable — it's a local network.
+      DATABASE_URL: postgres://midplane:${POSTGRES_PASSWORD:-midplane}@postgres:5432/midplane?sslmode=disable
+    volumes:
+      - .:/app
+    command: ["bun", "run", "src/migrate.ts", "self-host"]
+
+volumes:
+  midplane_pg:

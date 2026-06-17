@@ -1,0 +1,17 @@
+-- Self-host single-owner claim. In self-host the FIRST signup atomically claims
+-- ownership of the implicit customer via customers.owner_email, gated in the
+-- Better Auth user.create.before hook (lib/auth.ts) by:
+--
+--   UPDATE customers SET owner_email = $email
+--    WHERE id = '<implicit>' AND (owner_email IS NULL OR owner_email = $email)
+--
+-- The single-row UPDATE + WHERE serializes concurrent first-signups on the row
+-- lock: the first sets owner_email and commits; a racing different-email signup
+-- blocks, re-reads the now-set value, updates zero rows, and is rejected. This
+-- closes the check-then-create race a SELECT-count gate left open (both signups
+-- could read zero users and both be created). The `= $email` arm lets the
+-- legitimate owner retry if their first attempt failed after the claim.
+--
+-- Nullable + unused in the cloud (no implicit customer row). Hand-written;
+-- registered in meta/_journal.json.
+ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "owner_email" text;

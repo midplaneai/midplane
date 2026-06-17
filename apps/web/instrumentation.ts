@@ -13,8 +13,9 @@
 // design rationale: no DB touch in the liveness path).
 
 import { assertBootEnv } from "./src/lib/assert-boot-env.ts";
+import { isSelfHost } from "./src/lib/self-host.ts";
 
-export function register() {
+export async function register() {
   const region = process.env.MIDPLANE_REGION ?? "<unset>";
   // Boot log is JSON to match the middleware's structured-warn format so
   // downstream log search can grep on "event": values.
@@ -22,9 +23,21 @@ export function register() {
     JSON.stringify({
       level: "info",
       event: "region.boot",
-      region,
+      region: isSelfHost() ? "self-host" : region,
       ts: new Date().toISOString(),
     }),
   );
   assertBootEnv();
+
+  // Self-host: seed the implicit org + customer the single-tenant build binds
+  // every customer_id-scoped transaction against, before the first request can
+  // reach a bind. The NEXT_RUNTIME guard is REQUIRED: register() runs in both
+  // the Node.js and Edge runtimes, and customer.ts pulls node:async_hooks /
+  // node:crypto (via getDb), which the Edge bundle can't load. Guarding on
+  // 'nodejs' keeps that import out of the Edge compilation entirely. The
+  // dynamic import also keeps the cloud boot path db-free.
+  if (process.env.NEXT_RUNTIME === "nodejs" && isSelfHost()) {
+    const { ensureImplicitCustomer } = await import("./src/lib/customer.ts");
+    await ensureImplicitCustomer();
+  }
 }

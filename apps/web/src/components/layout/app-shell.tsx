@@ -7,7 +7,9 @@ import { RegionBadge } from "@/components/ui/region-badge";
 import type { Region } from "@midplane-cloud/kms";
 
 interface AppShellProps {
-  region: Region;
+  /** null in self-host — there's one region and no routing, so the badge is
+   *  hidden rather than showing a meaningless "Europe (Frankfurt)". */
+  region: Region | null;
   children: React.ReactNode;
 }
 
@@ -37,12 +39,16 @@ export function AppShell({ region, children }: AppShellProps) {
           </div>
         </div>
         <SidebarNav />
-        <div className="mt-2 px-[18px] pb-1 pt-2 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
-          region
-        </div>
-        <div className="px-[18px] py-[7px]">
-          <RegionBadge region={region} />
-        </div>
+        {region && (
+          <>
+            <div className="mt-2 px-[18px] pb-1 pt-2 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
+              region
+            </div>
+            <div className="px-[18px] py-[7px]">
+              <RegionBadge region={region} />
+            </div>
+          </>
+        )}
         <div className="mt-auto flex items-center gap-2 border-t border-border px-[18px] py-[7px]">
           <div className="min-w-0 flex-1">
             <UserMenuButton />

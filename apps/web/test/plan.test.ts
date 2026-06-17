@@ -6,13 +6,14 @@
 // stage the override. CAPS, the pre-flight block, and the typed limit error are
 // pure and asserted directly.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Customer } from "@midplane-cloud/db";
 
 import {
   CAPS,
   PlanLimitError,
+  SELF_HOST_CAPS,
   connectionCreateBlock,
   hasEntitlement,
   resolvePlan,
@@ -35,6 +36,7 @@ function customerWith(planOverride: Customer["planOverride"]): Customer {
     email: "u@e.test",
     region: "eu",
     planOverride,
+    ownerEmail: null,
     createdAt: new Date(),
   };
 }
@@ -107,6 +109,35 @@ describe("resolvePlan", () => {
     const { plan, caps } = await resolvePlan();
     expect(plan).toBe("free");
     expect(caps).toEqual(CAPS.free);
+  });
+});
+
+describe("resolvePlan in self-host (MIDPLANE_SELF_HOST=1)", () => {
+  const prev = process.env.MIDPLANE_SELF_HOST;
+  beforeEach(() => {
+    process.env.MIDPLANE_SELF_HOST = "1";
+  });
+  afterEach(() => {
+    if (prev === undefined) delete process.env.MIDPLANE_SELF_HOST;
+    else process.env.MIDPLANE_SELF_HOST = prev;
+  });
+
+  it("returns uncapped caps and never reads a customer", async () => {
+    // Self-host resolves BEFORE the customer.ts import — if it didn't, this
+    // mock would throw and fail the test, proving the early return.
+    currentCustomerMock = async () => {
+      throw new Error("resolvePlan must not read a customer in self-host");
+    };
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("team");
+    expect(caps).toEqual(SELF_HOST_CAPS);
+    // Uncapped: count >= cap is never true; Infinity retention = no clamp.
+    expect(caps.connections).toBe(Infinity);
+    expect(caps.tokens).toBe(Infinity);
+    expect(caps.auditRetentionDays).toBe(Infinity);
+    expect(caps.seats).toBe(Infinity);
+    // sso stays gated (ee, license-deferred) even uncapped.
+    expect(caps.sso).toBe(false);
   });
 });
 

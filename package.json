@@ -24,7 +24,8 @@
     "db:studio": "bun --filter '@midplane-cloud/db' studio",
     "migrate:eu": "bun --filter '@midplane-cloud/db' migrate:eu",
     "migrate:us": "bun --filter '@midplane-cloud/db' migrate:us",
-    "migrate:all": "bun run migrate:eu && bun run migrate:us"
+    "migrate:all": "bun run migrate:eu && bun run migrate:us",
+    "migrate:self-host": "bun --filter '@midplane-cloud/db' migrate:self-host"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",

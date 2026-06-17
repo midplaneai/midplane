@@ -12,7 +12,7 @@ import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import type { Region } from "@midplane-cloud/kms";
 
-export function MobileNav({ region }: { region: Region }) {
+export function MobileNav({ region }: { region: Region | null }) {
   const pathname = usePathname() ?? "";
   const router = useRouter();
   return (
@@ -20,7 +20,7 @@ export function MobileNav({ region }: { region: Region }) {
       <div className="flex h-12 items-center gap-3 px-4">
         <WorkspaceLabel />
         <div className="ml-auto flex items-center gap-3">
-          <RegionBadge region={region} />
+          {region && <RegionBadge region={region} />}
           <button
             type="button"
             title="Sign out"

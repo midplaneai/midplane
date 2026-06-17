@@ -77,6 +77,10 @@ export const customers = pgTable(
     // billing is wired). A value forces that tier's caps — the manual upgrade
     // lever while the Stripe webhook becomes the future source of truth.
     planOverride: text("plan_override", { enum: ["free", "pro", "team"] }),
+    // Self-host single-owner claim. NULL until the first signup atomically
+    // claims it on the implicit customer row (see lib/auth.ts). Unused in the
+    // cloud (no implicit customer there) — stays NULL on every cloud row.
+    ownerEmail: text("owner_email"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
