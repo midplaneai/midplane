@@ -1,8 +1,9 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import { ulid } from "ulid";
 
 import { customers, getDb, type Customer } from "@midplane-cloud/db";
+import { member } from "@midplane-cloud/db/auth-schema";
 import type { Region } from "@midplane-cloud/kms";
 import { getAuth } from "./auth.ts";
 import { getActorEmail, getOrgContext } from "./org-context.ts";
@@ -53,12 +54,14 @@ export async function upsertCustomerRegion(
   const email = await getActorEmail();
   if (!email) throw new Error("no email on session user");
 
-  let { orgId } = await getOrgContext();
-  if (!orgId) {
-    // The org name comes from the signup form (a smart default the user can
-    // edit). Fall back to the derived suggestion if it's blank.
-    orgId = await createActiveOrg(orgName?.trim() || suggestWorkspaceName(email));
-  }
+  const { userId, orgId: sessionOrgId } = await getOrgContext();
+  if (!userId) throw new Error("not authenticated");
+
+  // The session's active org, or — for a fresh signup, or a returning user
+  // whose new session has no active org set — the user's existing org, created
+  // idempotently. Never mints a second org for the same user.
+  const orgId =
+    sessionOrgId ?? (await getOrCreateOrgForUser(userId, email, orgName));
 
   // Pick the DB for the region the user is signing up for, not the region this
   // process happens to run in. Picker submission must originate on the matching
@@ -103,29 +106,57 @@ export async function upsertCustomerRegion(
   return winner;
 }
 
-// Create a Better Auth organization for the current user and make it the
-// active org on the session. One org == one customer, so there's never
-// another to choose. The active-org write means getOrgContext().orgId resolves
-// it on the next request; even if the cookie refresh lags, getSession reads
-// activeOrganizationId from the session row in the DB.
+// Resolve the user's organization, creating it on first onboarding. Idempotent
+// per user: a Postgres advisory lock serializes concurrent fresh onboards (a
+// double-submitted region form, two tabs) so they can't each create a DIFFERENT
+// org — the first creates it; the rest see the membership and reuse it. One org
+// == one customer.
 //
-// Region is NOT written to org metadata — region routing uses the signed
-// region cookie + the customers.region column, not an org-metadata claim.
-async function createActiveOrg(orgName: string): Promise<string> {
-  const auth = getAuth();
-  const reqHeaders = await headers();
+// The lock must live inside a transaction: postgres-js pools connections, and
+// only `db.transaction` pins one connection for the callback, so the
+// xact-scoped advisory lock (auto-released on commit) is the pool-safe choice.
+async function getOrCreateOrgForUser(
+  userId: string,
+  email: string,
+  orgName?: string,
+): Promise<string> {
+  const orgId = await getDb(bootRegion()).transaction(async (tx) => {
+    // Concurrent onboards of the same user block here until the holder commits.
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
+    );
+    const existing = await tx
+      .select({ organizationId: member.organizationId })
+      .from(member)
+      .where(eq(member.userId, userId))
+      .limit(1);
+    if (existing[0]) return existing[0].organizationId;
+    return createOrg(orgName?.trim() || suggestWorkspaceName(email));
+  });
+
+  // Make sure the session's active org matches the resolved org — covers the
+  // reuse path, where the session may have had a null/stale active org.
+  await getAuth().api.setActiveOrganization({
+    body: { organizationId: orgId },
+    headers: await headers(),
+  });
+  return orgId;
+}
+
+// Create a Better Auth organization owned by the current user. The active-org
+// write is handled by the caller so the create + reuse paths converge.
+//
+// Region is NOT written to org metadata — region routing uses the signed region
+// cookie + the customers.region column, not an org-metadata claim.
+async function createOrg(orgName: string): Promise<string> {
   const slugBase = slugifyWorkspaceName(orgName);
-  const created = await auth.api.createOrganization({
+  const created = await getAuth().api.createOrganization({
     body: {
       name: orgName,
       slug: `${slugBase || "org"}-${ulid().slice(-10).toLowerCase()}`,
     },
-    headers: reqHeaders,
+    headers: await headers(),
   });
   if (!created) throw new Error("failed to create organization");
-  await auth.api.setActiveOrganization({
-    body: { organizationId: created.id },
-    headers: reqHeaders,
-  });
   return created.id;
 }

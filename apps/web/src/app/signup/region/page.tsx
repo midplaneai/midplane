@@ -9,6 +9,7 @@ import { BrandLockup } from "@/components/layout/brand-mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RegionBadge } from "@/components/ui/region-badge";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
@@ -22,13 +23,13 @@ import {
 } from "@/lib/region-routing";
 import type { Region } from "@midplane-cloud/kms";
 
-// Region picker — the signup-completion step. Two entry points:
-//   - Unauth: show picker; submit routes to /sign-up, then back here authed.
-//   - Authed (post-signup): show picker; submit creates the org (Better Auth
-//     doesn't auto-create one) + writes the customer row against the chosen
-//     region's DB, then redirects to /dashboard.
-// Regional-subdomain routing (apex → region host) returns with the signed
-// region cookie in a later step; here the chosen region is written directly.
+// Region picker / signup-completion step. Two entry points:
+//   - Unauth: pick which regional app to sign up on; submit routes to /sign-up.
+//   - Authed (post-signup): the region is ALREADY fixed to the regional app the
+//     user signed up on (auth + data are region-resident — there's no way to
+//     move an authenticated session to the other region). So this just collects
+//     the workspace name, creates the org (Better Auth doesn't auto-create one)
+//     + writes the customer row in this region, then redirects to /dashboard.
 
 export default async function RegionPicker() {
   const h = await headers();
@@ -49,6 +50,8 @@ export default async function RegionPicker() {
     h.get("x-country") ??
     null;
   const suggested = defaultRegionForCountry(country);
+  // An authed user's region is fixed to the regional app they signed up on.
+  const appRegion = bootRegion();
 
   const action = userId ? pickRegionAuthed : pickRegionUnauth;
 
@@ -74,23 +77,39 @@ export default async function RegionPicker() {
           className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2"
         >
           {userId ? (
-            <div className="space-y-2 text-left sm:col-span-2">
-              <Label htmlFor="workspaceName">Workspace name</Label>
-              <Input
-                id="workspaceName"
-                name="workspaceName"
-                defaultValue={suggestedWorkspace}
-                maxLength={100}
-                required
-                autoComplete="organization"
-              />
-              <p className="text-xs text-muted-foreground">
-                You can rename this later.
-              </p>
-            </div>
-          ) : null}
-          <RegionCard region="eu" suggested={suggested} />
-          <RegionCard region="us" suggested={suggested} />
+            <>
+              <div className="space-y-2 text-left sm:col-span-2">
+                <Label htmlFor="workspaceName">Workspace name</Label>
+                <Input
+                  id="workspaceName"
+                  name="workspaceName"
+                  defaultValue={suggestedWorkspace}
+                  maxLength={100}
+                  required
+                  autoComplete="organization"
+                />
+                <p className="text-xs text-muted-foreground">
+                  You can rename this later.
+                </p>
+              </div>
+              {/* Region is fixed to the app the user authenticated on — shown
+                  read-only, not a choice (region-resident auth). */}
+              <div className="space-y-2 text-left sm:col-span-2">
+                <Label>Data region</Label>
+                <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-4">
+                  <RegionBadge region={appRegion} />
+                  <span className="text-sm text-muted-foreground">
+                    {REGION_LABELS[appRegion]} — permanent.
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <RegionCard region="eu" suggested={suggested} />
+              <RegionCard region="us" suggested={suggested} />
+            </>
+          )}
           <Button type="submit" className="sm:col-span-2" size="lg">
             Continue
           </Button>
@@ -135,22 +154,13 @@ function RegionCard({
 }
 
 // Auth path: user just completed sign-up. Create the org (if needed) + write
-// the customer row against the chosen region's DB. If the picked region
-// doesn't match the regional app this request landed on, redirect to the
-// matching app's picker instead of writing wrong-region data.
+// the customer row in THIS region. The region is authoritative — it's the
+// regional app the user authenticated on; auth + data are region-resident, so
+// there's no cross-region move (the old redirect stranded the session, which
+// the destination app — reading its own regional auth DB — saw as unauthed).
 async function pickRegionAuthed(formData: FormData) {
   "use server";
-  const region = formData.get("region");
-  if (region !== "eu" && region !== "us") {
-    throw new Error("invalid region");
-  }
-  const appRegion = bootRegion();
-  if (region !== appRegion) {
-    // Cross-region pick on the wrong regional app — redirect to the matching
-    // app's picker with the choice preserved. The region cookie is
-    // .app.midplane.ai-scoped so it carries across subdomains.
-    redirect(`https://${REGION_HOST[region]}/signup/region`);
-  }
+  const region = bootRegion();
   // Workspace name from the form (prefilled with a smart default, editable).
   // Blank → upsertCustomerRegion derives one. Capped to a sane length.
   const workspaceName = formData.get("workspaceName");

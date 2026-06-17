@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 import { organization } from "better-auth/plugins";
+import { eq } from "drizzle-orm";
 
 import { getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
@@ -28,6 +29,29 @@ function createAuth() {
       schema: { ...authSchema },
     }),
     emailAndPassword: { enabled: true },
+    databaseHooks: {
+      session: {
+        create: {
+          // Set the active org from the user's (single) membership when a
+          // session is created. Better Auth does NOT carry activeOrganizationId
+          // across logins, so without this a returning user signs in org-less
+          // (activeOrganizationId = null), currentCustomer() bounces them to
+          // /signup/region, and re-onboarding can mint a SECOND org/customer.
+          // One org == one customer, so the first membership is the right one.
+          before: async (session) => {
+            const rows = await getDb(bootRegion())
+              .select({ organizationId: authSchema.member.organizationId })
+              .from(authSchema.member)
+              .where(eq(authSchema.member.userId, session.userId))
+              .limit(1);
+            const orgId = rows[0]?.organizationId;
+            return orgId
+              ? { data: { ...session, activeOrganizationId: orgId } }
+              : undefined;
+          },
+        },
+      },
+    },
     plugins: [
       organization({
         // Per-plan seat cap. membershipLimit accepts a per-org function, so we
