@@ -5,8 +5,15 @@ import { expect, test } from "@playwright/test";
 
 test("landing page renders the sign-in CTA", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Midplane" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  // The wordmark is a home link (aria-label "midplane"), not a heading.
+  await expect(
+    page.getByRole("link", { name: /midplane/i }).first(),
+  ).toBeVisible();
+  // Unauthenticated visitors get the Sign in + Start free CTAs (Next links).
+  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: /start free/i }).first(),
+  ).toBeVisible();
 });
 
 test("dashboard redirects unauthenticated visitors", async ({ page }) => {
