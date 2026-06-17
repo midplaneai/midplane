@@ -13,8 +13,9 @@
 // design rationale: no DB touch in the liveness path).
 
 import { assertBootEnv } from "./src/lib/assert-boot-env.ts";
+import { isSelfHost } from "./src/lib/self-host.ts";
 
-export function register() {
+export async function register() {
   const region = process.env.MIDPLANE_REGION ?? "<unset>";
   // Boot log is JSON to match the middleware's structured-warn format so
   // downstream log search can grep on "event": values.
@@ -22,9 +23,18 @@ export function register() {
     JSON.stringify({
       level: "info",
       event: "region.boot",
-      region,
+      region: isSelfHost() ? "self-host" : region,
       ts: new Date().toISOString(),
     }),
   );
   assertBootEnv();
+
+  // Self-host: seed the implicit org + customer the single-tenant build binds
+  // every customer_id-scoped transaction against, before the first request can
+  // reach a bind. Dynamic import so the cloud boot path never loads the db
+  // client — keeping this module (and the liveness path) db-free in the cloud.
+  if (isSelfHost()) {
+    const { ensureImplicitCustomer } = await import("./src/lib/customer.ts");
+    await ensureImplicitCustomer();
+  }
 }

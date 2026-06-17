@@ -3,11 +3,17 @@ import { headers } from "next/headers";
 import { ulid } from "ulid";
 
 import { customers, getDb, type Customer } from "@midplane-cloud/db";
-import { member } from "@midplane-cloud/db/auth-schema";
+import { member, organization } from "@midplane-cloud/db/auth-schema";
 import type { Region } from "@midplane-cloud/kms";
 import { getAuth } from "./auth.ts";
 import { getActorEmail, getOrgContext } from "./org-context.ts";
 import { bootRegion } from "./region-context.ts";
+import {
+  isSelfHost,
+  SELF_HOST_CUSTOMER_ID,
+  SELF_HOST_ORG_ID,
+  SELF_HOST_REGION,
+} from "./self-host.ts";
 import {
   slugifyWorkspaceName,
   suggestWorkspaceName,
@@ -21,6 +27,24 @@ import {
 // One Midplane customer == one organization. Org members are the actors who
 // can sign in and act on its behalf.
 export async function currentCustomer(): Promise<Customer | null> {
+  // Self-host: one tenant. Any authenticated user resolves to the single
+  // implicit customer (seeded at boot by ensureImplicitCustomer). We still
+  // require an authed session so an anonymous request returns null and the
+  // (app) layout's gate holds. orgId is deliberately NOT consulted — there's no
+  // org-creation dance in self-host, and SELF_HOST_CUSTOMER_ID is the id every
+  // RLS bind (audit/tokens/connections) and `region = …` filter keys on, so a
+  // returning user can never mint a second customer.
+  if (isSelfHost()) {
+    const { userId } = await getOrgContext();
+    if (!userId) return null;
+    const db = getDb(SELF_HOST_REGION);
+    const rows = await db
+      .select()
+      .from(customers)
+      .where(eq(customers.id, SELF_HOST_CUSTOMER_ID));
+    return rows[0] ?? null;
+  }
+
   const { orgId } = await getOrgContext();
   if (!orgId) return null;
   // Each regional app is single-region (MIDPLANE_REGION env var, enforced
@@ -32,6 +56,38 @@ export async function currentCustomer(): Promise<Customer | null> {
     .from(customers)
     .where(eq(customers.orgId, orgId));
   return rows[0] ?? null;
+}
+
+// Seed the implicit org + customer rows the self-host build is keyed on.
+//
+// This is the P0-critical bootstrap. Tenant isolation is Postgres RLS bound by
+// `SET LOCAL app.customer_id = '<customer.id>'` on every scoped transaction. In
+// single-tenant self-host that id is the FIXED SELF_HOST_CUSTOMER_ID — and if
+// the row doesn't exist (or the id drifts), current_setting returns '' and
+// every audit read returns ZERO rows: a blank audit log, silently. Running this
+// from instrumentation.register() BEFORE the first request makes that
+// unreachable — the row every bind keys on is guaranteed present.
+//
+// Idempotent (ON CONFLICT DO NOTHING) so it's safe on every boot. customers /
+// organization carry no RLS, so no SET LOCAL is needed to seed them. No-op
+// outside self-host (and it never touches the DB there — the cloud boot path
+// stays db-free; instrumentation only imports this module under isSelfHost()).
+export async function ensureImplicitCustomer(): Promise<void> {
+  if (!isSelfHost()) return;
+  const db = getDb(SELF_HOST_REGION);
+  await db
+    .insert(organization)
+    .values({ id: SELF_HOST_ORG_ID, name: "Self-host", slug: "self-host" })
+    .onConflictDoNothing();
+  await db
+    .insert(customers)
+    .values({
+      id: SELF_HOST_CUSTOMER_ID,
+      orgId: SELF_HOST_ORG_ID,
+      email: "owner@self-host.local",
+      region: SELF_HOST_REGION,
+    })
+    .onConflictDoNothing();
 }
 
 // Create the customer row for the current org, OR return the existing row if
