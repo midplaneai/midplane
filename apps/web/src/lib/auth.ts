@@ -3,10 +3,9 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { mcp, organization } from "better-auth/plugins";
-import { and, eq, isNull, or } from "drizzle-orm";
-import { ulid } from "ulid";
+import { eq } from "drizzle-orm";
 
-import { customers, getDb } from "@midplane-cloud/db";
+import { getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
 
 import { buildStripePlugins } from "./billing";
@@ -14,7 +13,11 @@ import { getEeAuthPlugins } from "./ee-plugins";
 import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
-import { isSelfHost, SELF_HOST_CUSTOMER_ID, SELF_HOST_ORG_ID } from "./self-host";
+import {
+  enforceSelfHostSignupGate,
+  linkSelfHostOwnerMember,
+} from "./self-host-gate";
+import { isSelfHost, SELF_HOST_ORG_ID } from "./self-host";
 
 // Better Auth instance for the CLOUD build.
 //
@@ -108,71 +111,22 @@ function createAuth() {
     databaseHooks: {
       user: {
         create: {
-          // Self-host is single-owner: the FIRST email+password signup becomes
-          // the owner; every later signup is rejected. Without this, anyone who
-          // could reach the instance would register — and because
+          // Self-host single-owner gate, with an invited-teammate exception.
           // currentCustomer() resolves ANY authed user to the one implicit
-          // customer, they'd read all of the single tenant's audit data.
-          //
-          // The gate is an ATOMIC claim on the implicit customer row, not a
-          // SELECT-then-throw: a count check is check-then-create raceable
-          // (two concurrent first-signups both read zero users, both pass, both
-          // get created — and both then map to the implicit tenant). The
-          // single-row UPDATE + WHERE serializes concurrent signups on the row
-          // lock — the first sets owner_email and commits; a racing
-          // different-email signup blocks, re-reads the now-set value, updates
-          // zero rows, and is rejected. The `= email` arm lets the legitimate
-          // owner retry if their first attempt failed after the claim (so a
-          // transient error can't brick the instance). No-op in the cloud.
+          // customer, so SIGNUP is the data-isolation boundary: the first
+          // signup claims owner; later signups are rejected UNLESS the email
+          // has a pending, owner-issued invitation. Security-critical and
+          // race-safe — see lib/self-host-gate.ts. No-op in the cloud.
           before: async (newUser) => {
-            if (!isSelfHost()) return;
-            const claimed = await getDb(bootRegion())
-              .update(customers)
-              .set({ ownerEmail: newUser.email })
-              .where(
-                and(
-                  eq(customers.id, SELF_HOST_CUSTOMER_ID),
-                  or(
-                    isNull(customers.ownerEmail),
-                    eq(customers.ownerEmail, newUser.email),
-                  ),
-                ),
-              )
-              .returning({ ownerEmail: customers.ownerEmail });
-            if (claimed.length === 0) {
-              throw new APIError("FORBIDDEN", {
-                message:
-                  "This Midplane instance already has an owner. Self-host is single-owner; new sign-ups are disabled.",
-              });
-            }
+            await enforceSelfHostSignupGate(newUser.email);
           },
-          // Link the owner as a member of the implicit org so Better Auth's org
-          // APIs (active organization, workspace rename/manage) work and the
-          // session.create hook below can set activeOrganizationId from this
-          // membership. ensureImplicitCustomer seeds the org but not this link.
-          // The before-hook claim guarantees exactly one account, so exactly
-          // one member is ever linked; the existence check keeps it idempotent.
+          // Link the OWNER as an `owner` member of the implicit org so Better
+          // Auth's org APIs (active organization, workspace rename/manage)
+          // work. Invited teammates are linked by acceptInvitation (with the
+          // invite's role), not here — see lib/self-host-gate.ts. No-op in the
+          // cloud.
           after: async (newUser) => {
-            if (!isSelfHost()) return;
-            const db = getDb(bootRegion());
-            const existing = await db
-              .select({ id: authSchema.member.id })
-              .from(authSchema.member)
-              .where(
-                and(
-                  eq(authSchema.member.userId, newUser.id),
-                  eq(authSchema.member.organizationId, SELF_HOST_ORG_ID),
-                ),
-              )
-              .limit(1);
-            if (existing.length === 0) {
-              await db.insert(authSchema.member).values({
-                id: ulid(),
-                userId: newUser.id,
-                organizationId: SELF_HOST_ORG_ID,
-                role: "owner",
-              });
-            }
+            await linkSelfHostOwnerMember(newUser);
           },
         },
       },
@@ -216,6 +170,14 @@ function createAuth() {
         // resolve the org's plan → seat cap (lib/seats.ts); Better Auth enforces
         // it on the invite/add path. Otherwise it's a single static number.
         membershipLimit: (_user, organization) => seatCapForOrg(organization.id),
+        // Teammate invites (self-host) are delivered as a LINK the owner copies
+        // and shares out-of-band, NOT an email — so we deliberately do NOT set
+        // sendInvitationEmail (the keyless self-host artifact ships no SMTP).
+        // createInvitation still mints the invitation row; we surface the
+        // accept link from /settings. invitationExpiresIn bounds the link's
+        // validity — 7 days, longer than the 48h default to tolerate an
+        // out-of-band hand-off, but still a hard expiry on a capability link.
+        invitationExpiresIn: 60 * 60 * 24 * 7,
       }),
       // MCP OAuth 2.1 provider (P6). Turns this app into the authorization
       // server MCP clients (Claude, Cursor) authenticate against: discovery

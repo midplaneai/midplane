@@ -2,7 +2,7 @@
 // Auth's organization.membershipLimit. We mock getDb to stage the customer's
 // plan_override + subscription-backed plan and assert the resolved seat cap.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Tier = "free" | "pro" | "team";
 
@@ -26,12 +26,29 @@ vi.mock("@midplane-cloud/db", async () => {
   };
 });
 
+const prevSelfHost = process.env.MIDPLANE_SELF_HOST;
+
 beforeEach(() => {
   process.env.MIDPLANE_REGION = "eu";
+  delete process.env.MIDPLANE_SELF_HOST;
   rows = [];
 });
 
+afterEach(() => {
+  if (prevSelfHost === undefined) delete process.env.MIDPLANE_SELF_HOST;
+  else process.env.MIDPLANE_SELF_HOST = prevSelfHost;
+});
+
 describe("seatCapForOrg", () => {
+  it("unlimited (Infinity) in self-host — before any DB read", async () => {
+    // The implicit customer row carries no plan, so without the self-host
+    // short-circuit this would resolve to `free` (cap 1) and block the second
+    // member (acceptInvitation). rows stays empty: no DB read should happen.
+    process.env.MIDPLANE_SELF_HOST = "1";
+    const { seatCapForOrg } = await import("../src/lib/seats.ts");
+    expect(await seatCapForOrg("self-host-org")).toBe(Infinity);
+  });
+
   it("free cap (1) for a customer with no override and no subscription", async () => {
     rows = [{ planOverride: null, plan: "free" }];
     const { seatCapForOrg } = await import("../src/lib/seats.ts");
