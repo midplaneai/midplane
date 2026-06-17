@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   slugifyWorkspaceName,
   suggestWorkspaceName,
+  validateWorkspaceName,
 } from "../src/lib/workspace-name.ts";
 
 describe("suggestWorkspaceName", () => {
@@ -42,6 +43,23 @@ describe("suggestWorkspaceName", () => {
   it("always returns a non-empty value", () => {
     expect(suggestWorkspaceName("x@gmail.com").length).toBeGreaterThan(0);
     expect(suggestWorkspaceName("weird").length).toBeGreaterThan(0);
+  });
+});
+
+describe("validateWorkspaceName", () => {
+  it("accepts a normal name", () => {
+    expect(validateWorkspaceName("Acme")).toBeNull();
+    expect(validateWorkspaceName("  Acme Corp  ")).toBeNull();
+  });
+
+  it("rejects empty / whitespace-only", () => {
+    expect(validateWorkspaceName("")).toMatch(/empty/i);
+    expect(validateWorkspaceName("   ")).toMatch(/empty/i);
+  });
+
+  it("rejects names over 100 chars; accepts exactly 100", () => {
+    expect(validateWorkspaceName("x".repeat(101))).toMatch(/100/);
+    expect(validateWorkspaceName("x".repeat(100))).toBeNull();
   });
 });
 

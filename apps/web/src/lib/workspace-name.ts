@@ -89,3 +89,17 @@ export function slugifyWorkspaceName(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+
+/** Max workspace-name length (shared by the input + validation). */
+export const MAX_WORKSPACE_NAME_LENGTH = 100;
+
+/** Validate a workspace name for the rename form. Returns an error message, or
+ *  null when valid. */
+export function validateWorkspaceName(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return "Workspace name can't be empty.";
+  if (trimmed.length > MAX_WORKSPACE_NAME_LENGTH) {
+    return `Workspace name must be ${MAX_WORKSPACE_NAME_LENGTH} characters or fewer.`;
+  }
+  return null;
+}
