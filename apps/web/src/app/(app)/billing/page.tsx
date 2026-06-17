@@ -115,8 +115,8 @@ export default async function BillingPage() {
                 </p>
               ) : (
                 <p>
-                  Self-serve plans and checkout are coming soon. To change your
-                  plan today,{" "}
+                  Self-serve checkout isn&apos;t enabled on this instance. To
+                  change your plan,{" "}
                   <a
                     href={`mailto:${SALES_EMAIL}`}
                     className="font-medium text-foreground underline underline-offset-2"
