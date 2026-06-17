@@ -7,8 +7,10 @@ import {
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
 } from "@midplane-cloud/db";
+import { mcpConnectionUrl } from "@midplane-cloud/router";
 
 import { ConnectionRail } from "@/components/connections/connection-rail";
+import { OAuthConnectGuide } from "@/components/connections/oauth-connect-guide";
 import {
   CONNECTION_SECTIONS,
   type ConnectionSection,
@@ -142,6 +144,10 @@ export default async function ConnectionWorkspace({
     Number.isFinite(caps.tokens) && usage.tokens >= caps.tokens
       ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
       : undefined;
+
+  // This connection's OAuth MCP endpoint — /mcp/<connectionId>. Non-secret
+  // (auth is the OAuth sign-in), so it's shown openly with a copy button.
+  const mcpUrl = mcpConnectionUrl(conn.region, conn.id, process.env);
 
   // ---- server actions ----------------------------------------------------
 
@@ -648,20 +654,37 @@ export default async function ConnectionWorkspace({
   );
 
   const agentsPane = (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Each agent gets its own credentialed URL — paste it into Cursor, Claude
-        Code, or any MCP client. Revoke the moment a laptop goes missing.
-      </p>
-      <TokenList
-        connectionId={conn.id}
-        connectionName={conn.name}
-        region={conn.region}
-        tokens={tokens}
-        createAction={createTokenAction}
-        revokeAction={revokeTokenAction}
-        tokenLimit={tokenLimit}
-      />
+    <div className="space-y-8">
+      {/* Interactive agents (Claude Code, Cursor, Claude Desktop) — OAuth. The
+          human signs in once; the endpoint URL isn't a secret. */}
+      <section className="space-y-3">
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+          Interactive agents
+        </span>
+        <OAuthConnectGuide connectionName={conn.name} mcpUrl={mcpUrl} />
+      </section>
+
+      {/* Headless agents (CI, scheduled jobs, unattended workflows) — a stored
+          API-token secret, since there's no browser to sign in. */}
+      <section className="space-y-3">
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+          Headless agents
+        </span>
+        <p className="text-xs text-muted-foreground">
+          For CI, scheduled jobs, or unattended workflows that can&apos;t do a
+          browser sign-in. Mint a token, store it as a secret, and revoke it the
+          moment a laptop or runner is compromised.
+        </p>
+        <TokenList
+          connectionId={conn.id}
+          connectionName={conn.name}
+          region={conn.region}
+          tokens={tokens}
+          createAction={createTokenAction}
+          revokeAction={revokeTokenAction}
+          tokenLimit={tokenLimit}
+        />
+      </section>
     </div>
   );
 
