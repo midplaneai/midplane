@@ -1,4 +1,3 @@
-import { PricingTable } from "@clerk/nextjs";
 import { redirect } from "next/navigation";
 
 import { PageContainer, Topbar } from "@/components/layout/app-shell";
@@ -8,14 +7,13 @@ import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
 import { hasEntitlement, resolvePlan } from "@/lib/plan";
 
-// Plans & billing surface. Clerk Billing owns the plan/price catalog and the
-// checkout flow — <PricingTable for="organization"> renders the org's plans
-// and drives subscribe/upgrade. We add the current-plan line, the SSO
-// entitlement row (gated on the Clerk `sso` feature), and the "talk to us"
-// path for custom asks PRICING.md keeps off the self-serve matrix.
+// Plans & billing surface. Self-serve checkout (Stripe) lands in a later
+// phase; until then every org is on Free and plan changes are handled
+// manually. We show the current plan, the SSO entitlement row, and the
+// "talk to us" path for custom asks PRICING.md keeps off the self-serve matrix.
 //
-// Server component: <PricingTable> is a Clerk client island; everything else
-// (plan resolution, feature gate) resolves server-side from the session.
+// Server component: plan resolution + feature gate resolve server-side via the
+// lib/plan.ts chokepoint.
 
 const SALES_EMAIL = "sales@midplane.ai";
 
@@ -49,7 +47,24 @@ export default async function BillingPage() {
             }
           />
 
-          <PricingTable for="organization" />
+          <Card>
+            <CardHeader>
+              <CardTitle>plans</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              <p>
+                Self-serve plans and checkout are coming soon. To change your
+                plan today,{" "}
+                <a
+                  href={`mailto:${SALES_EMAIL}`}
+                  className="font-medium text-foreground underline underline-offset-2"
+                >
+                  talk to us
+                </a>
+                .
+              </p>
+            </CardContent>
+          </Card>
 
           <Card className="mt-8">
             <CardHeader>

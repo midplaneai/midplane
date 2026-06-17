@@ -1,4 +1,3 @@
-import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
@@ -50,51 +49,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <ClerkProvider
-      // Global sign-out redirect. Core 3 (v7) removed the per-button
-      // afterSignOutUrl on <UserButton>; setting it here covers every
-      // sign-out surface.
-      afterSignOutUrl="/"
-      appearance={{
-        variables: {
-          // Clerk doesn't read CSS custom properties — these hex values must
-          // be kept in sync with the warm-dark tokens in globals.css. See
-          // DESIGN.md decision log (2026-05-22 re-skin).
-          //
-          // Use the current variable names (colorForeground / colorInput /
-          // colorInputForeground / colorMutedForeground). The older
-          // colorText / colorInputBackground / colorInputText /
-          // colorTextSecondary names are no longer wired through clerk-js, so
-          // they silently fall back to Clerk's light-theme defaults — the
-          // result is near-black headings/labels and white inputs on our dark
-          // card (illegible). Renaming is the whole fix; don't add the old
-          // keys back.
-          colorBackground: "#1c1916",
-          colorInput: "#221f1c",
-          colorInputForeground: "#f3efe7",
-          colorForeground: "#f3efe7",
-          colorMutedForeground: "#bdb4a6",
-          colorMuted: "#221f1c",
-          colorBorder: "#2a2622",
-          colorPrimary: "#f3efe7",
-          // Text on primary-filled controls (e.g. PricingTable's "Subscribe").
-          // colorPrimary is the cream paper, so the label must be the dark ink
-          // (--primary-foreground) or it renders cream-on-cream and vanishes.
-          colorPrimaryForeground: "#161412",
-          colorNeutral: "#f3efe7",
-          colorDanger: "#c87070",
-          colorSuccess: "#5a9c6e",
-          colorWarning: "#d4a04c",
-          borderRadius: "0",
-          fontFamily: "var(--font-geist), -apple-system, sans-serif",
-        },
-      }}
-    >
-      <html lang="en" className={`dark ${geist.variable} ${geistMono.variable}`}>
-        <body className="min-h-screen bg-background font-sans text-foreground antialiased">
-          {children}
-        </body>
-      </html>
-    </ClerkProvider>
+    <html lang="en" className={`dark ${geist.variable} ${geistMono.variable}`}>
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
+        {children}
+      </body>
+    </html>
   );
 }

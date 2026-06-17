@@ -24,9 +24,13 @@ const customer = {
 };
 
 let currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-let authMock = vi.fn(async () => ({ userId: "user_clerk_1" }) as {
-  userId: string | null;
-});
+let getOrgContextMock = vi.fn(
+  async () =>
+    ({ userId: "user_1", orgId: "org_1" }) as {
+      userId: string | null;
+      orgId: string | null;
+    },
+);
 let pingGuardedMock = vi.fn(async () => ({ ok: true }) as {
   ok: boolean;
   error?: string;
@@ -40,9 +44,11 @@ vi.mock("@/lib/customer", () => ({
   },
 }));
 
-vi.mock("@clerk/nextjs/server", () => ({
-  get auth() {
-    return authMock;
+// The routes read identity through the getOrgContext seam (Better Auth under
+// the hood); mock the seam, not the provider.
+vi.mock("@/lib/org-context", () => ({
+  get getOrgContext() {
+    return getOrgContextMock;
   },
 }));
 
@@ -87,7 +93,7 @@ vi.mock("@midplane-cloud/db", async () => {
 beforeEach(() => {
   resetRateLimits();
   currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
-  authMock = vi.fn(async () => ({ userId: "user_clerk_1" }));
+  getOrgContextMock = vi.fn(async () => ({ userId: "user_1", orgId: "org_1" }));
   pingGuardedMock = vi.fn(async () => ({ ok: true }));
   ownedRows = [{ id: "conn-1" }];
 });

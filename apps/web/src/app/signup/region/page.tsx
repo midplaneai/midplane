@@ -11,14 +11,13 @@ import { upsertCustomerRegion } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
 import type { Region } from "@midplane-cloud/kms";
 
-// Region picker. Three entry points:
-//   - Apex (app.midplane.ai) unauth: show picker; submit redirects to the
-//     regional /sign-up so Clerk signup happens on the correct app.
-//   - Apex auth: middleware already redirected to the regional subdomain,
-//     so this branch is unreachable via apex when authenticated.
-//   - Regional subdomain auth (post-Clerk-signup): show picker; submit
-//     writes the customer row + Clerk org metadata against this regional
-//     app's DB, then redirects to /dashboard.
+// Region picker — the signup-completion step. Two entry points:
+//   - Unauth: show picker; submit routes to /sign-up, then back here authed.
+//   - Authed (post-signup): show picker; submit creates the org (Better Auth
+//     doesn't auto-create one) + writes the customer row against the chosen
+//     region's DB, then redirects to /dashboard.
+// Regional-subdomain routing (apex → region host) returns with the signed
+// region cookie in a later step; here the chosen region is written directly.
 
 export default async function RegionPicker() {
   const { userId } = await getOrgContext();
@@ -100,12 +99,10 @@ function RegionCard({
   );
 }
 
-// Auth path: user just completed Clerk sign-up on a regional subdomain (or
-// is correcting a missing publicMetadata.region claim). Write the customer
-// row + Clerk org metadata against this regional app's DB. If the picked
-// region doesn't match the app this request landed on (e.g. user wanted
-// US but submitted on EU), redirect them to the matching regional app's
-// picker instead of writing wrong-region data.
+// Auth path: user just completed sign-up. Create the org (if needed) + write
+// the customer row against the chosen region's DB. If the picked region
+// doesn't match the regional app this request landed on, redirect to the
+// matching app's picker instead of writing wrong-region data.
 async function pickRegionAuthed(formData: FormData) {
   "use server";
   const region = formData.get("region");
@@ -115,9 +112,8 @@ async function pickRegionAuthed(formData: FormData) {
   const appRegion = bootRegion();
   if (region !== appRegion) {
     // Cross-region pick on the wrong regional app — redirect to the
-    // matching app's picker with the choice preserved. The destination
-    // app's middleware will gate auth (Clerk session is .midplane.ai-
-    // scoped so it carries across subdomains).
+    // matching app's picker with the choice preserved. The Better Auth
+    // session cookie is .midplane.ai-scoped so it carries across subdomains.
     const target =
       region === "eu"
         ? "https://eu.app.midplane.ai/signup/region"
@@ -147,19 +143,15 @@ async function pickRegionAuthed(formData: FormData) {
   redirect("/dashboard");
 }
 
-// Unauth path: visitor on apex picked a region before signing up. Redirect
-// to the regional subdomain's /sign-up so Clerk signup runs on the right
-// app — after sign-up, Clerk's afterSignUpUrl lands them back on
-// /signup/region and the auth path above completes the write.
+// Unauth path: visitor picked a region before signing up. Route to /sign-up,
+// then back here (authed) to complete the write. Regional-subdomain routing
+// for the pre-auth pick returns with the signed region cookie in a later step;
+// for now the region is chosen on the authed pass.
 async function pickRegionUnauth(formData: FormData) {
   "use server";
   const region = formData.get("region");
   if (region !== "eu" && region !== "us") {
     throw new Error("invalid region");
   }
-  const target =
-    region === "eu"
-      ? "https://eu.app.midplane.ai/sign-up?redirect_url=/signup/region"
-      : "https://us.app.midplane.ai/sign-up?redirect_url=/signup/region";
-  redirect(target);
+  redirect("/sign-up?redirect=/signup/region");
 }

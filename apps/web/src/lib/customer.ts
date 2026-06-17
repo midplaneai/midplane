@@ -1,22 +1,21 @@
 import { eq } from "drizzle-orm";
+import { headers } from "next/headers";
 import { ulid } from "ulid";
 
 import { customers, getDb, type Customer } from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
+import { getAuth } from "./auth.ts";
 import { getActorEmail, getOrgContext } from "./org-context.ts";
 import { bootRegion } from "./region-context.ts";
 
-// Look up the Midplane customer for the current Clerk session, if it exists.
-// Returns null when:
-//   - the Clerk user has signed in but their session has no active org yet
-//     (Clerk dashboard config force-creates one on signup, so this should
-//     be a transient state during the very first request after signup), OR
-//   - they have an active org but haven't picked a region yet (post-signup,
-//     pre-region-selection — the dashboard route uses this to redirect to
-//     /signup/region).
+// Look up the Midplane customer for the current session's active org, if it
+// exists. Returns null when the signed-in user has no active org yet (fresh
+// signup, before the region picker creates one) or has an org but no customer
+// row yet — the dashboard route uses null to redirect to /signup/region.
 //
-// One Midplane customer == one Clerk organization. Org members are the
-// actors who can sign in on its behalf.
+// One Midplane customer == one organization. Org members are the actors who
+// can sign in and act on its behalf. (The column is still named clerk_org_id;
+// it's renamed provider-neutral in a later step.)
 export async function currentCustomer(): Promise<Customer | null> {
   const { orgId } = await getOrgContext();
   if (!orgId) return null;
@@ -31,33 +30,34 @@ export async function currentCustomer(): Promise<Customer | null> {
   return rows[0] ?? null;
 }
 
-// Create the customer row for the current Clerk org, OR return the existing
-// row if one's already been created. Region is set on creation and immutable
-// for V1.
+// Create the customer row for the current org, OR return the existing row if
+// one's already been created. Region is set on creation and immutable for V1.
+//
+// Better Auth (unlike Clerk) does NOT auto-create an organization on signup,
+// so a fresh user reaches the region picker with no active org. We create it
+// here — the signup-completion step — keeping the one-org-one-customer
+// invariant, then write the customer row against the chosen region's DB.
 //
 // Race-safe: INSERT ... ON CONFLICT DO NOTHING means concurrent submits for
-// the same Clerk org can't both succeed — one wins, the other returns no
-// rows from .returning(), and we fall back to SELECT to fetch what the
-// winner inserted. Without this, a double-clicked region form throws on
-// the unique(clerk_org_id) constraint.
+// the same org can't both succeed — one wins, the other returns no rows from
+// .returning(), and we fall back to SELECT to fetch what the winner inserted.
 export async function upsertCustomerRegion(region: Region): Promise<Customer> {
-  const { orgId } = await getOrgContext();
-  if (!orgId) throw new Error("no active organization");
-
-  // Pick the DB for the region the user is signing up for, not the region
-  // this process happens to be running in. Picker submission must originate
-  // on the matching regional app (apex form-action redirects there before
-  // calling this), so `getDb(region)` will succeed; calling it from the
-  // wrong-region app throws "DATABASE_URL_<REGION> not set" — hard failure,
-  // not silent cross-region read.
-  const db = getDb(region);
-
-  // We seed customers.email from the human who first picked the region for
-  // the org — used for the workspace label in AppShell + receipts. The org
-  // itself doesn't carry a billing email yet (Clerk Billing wires that
-  // separately when we turn it on).
+  // We seed customers.email from the human who first picked the region — used
+  // for the workspace label in AppShell + receipts.
   const email = await getActorEmail();
-  if (!email) throw new Error("no email on Clerk user");
+  if (!email) throw new Error("no email on session user");
+
+  let { orgId } = await getOrgContext();
+  if (!orgId) {
+    orgId = await createActiveOrg(email);
+  }
+
+  // Pick the DB for the region the user is signing up for, not the region this
+  // process happens to run in. Picker submission must originate on the matching
+  // regional app (apex form-action redirects there), so getDb(region) succeeds;
+  // calling it from the wrong-region app throws "DATABASE_URL_<REGION> not set"
+  // — hard failure, not a silent cross-region read.
+  const db = getDb(region);
 
   const inserted = await db
     .insert(customers)
@@ -81,34 +81,47 @@ export async function upsertCustomerRegion(region: Region): Promise<Customer> {
     const row = existing[0];
     if (!row)
       throw new Error("customer row vanished after onConflictDoNothing");
-    // Defensive: if the existing row is for a different region (caller
-    // double-submitted a different pick), reject loudly — region is
-    // immutable per 0001_constraints.sql, but the wrong-region request
-    // shouldn't silently succeed by returning the existing row.
+    // Defensive: region is immutable per 0001_constraints.sql; a double-submit
+    // for a different region must reject loudly, not silently return the
+    // existing row.
     if (row.region !== region) {
       throw new Error(
         `org already has customer row in ${row.region}; cannot rewrite to ${region}`,
       );
     }
-    await writeClerkOrgRegionMetadata(orgId, region);
     return row;
   }
 
-  await writeClerkOrgRegionMetadata(orgId, region);
   return winner;
 }
 
-// Write region to Clerk organization publicMetadata so the JWT carries it
-// for the next request. Failure here leaves the DB customer row consistent
-// but the org metadata stale — the backfill script catches that case on
-// its next run, and middleware emits region.null_metadata for the gap.
-async function writeClerkOrgRegionMetadata(
-  orgId: string,
-  region: Region,
-): Promise<void> {
-  const { clerkClient } = await import("@clerk/nextjs/server");
-  const client = await clerkClient();
-  await client.organizations.updateOrganizationMetadata(orgId, {
-    publicMetadata: { region },
+// Create a Better Auth organization for the current user and make it the
+// active org on the session. One org == one customer, so there's never
+// another to choose. The active-org write means getOrgContext().orgId resolves
+// it on the next request; even if the cookie refresh lags, getSession reads
+// activeOrganizationId from the session row in the DB.
+//
+// Region is NOT written to org metadata — region routing uses the signed
+// region cookie + the customers.region column, not an org-metadata claim.
+async function createActiveOrg(email: string): Promise<string> {
+  const auth = getAuth();
+  const reqHeaders = await headers();
+  const local = email.split("@")[0] || "workspace";
+  const slugBase = local.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
+    /(^-|-$)/g,
+    "",
+  );
+  const created = await auth.api.createOrganization({
+    body: {
+      name: local,
+      slug: `${slugBase || "org"}-${ulid().slice(-10).toLowerCase()}`,
+    },
+    headers: reqHeaders,
   });
+  if (!created) throw new Error("failed to create organization");
+  await auth.api.setActiveOrganization({
+    body: { organizationId: created.id },
+    headers: reqHeaders,
+  });
+  return created.id;
 }
