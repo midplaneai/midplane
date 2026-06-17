@@ -10,6 +10,8 @@ interface AppShellProps {
   /** null in self-host — there's one region and no routing, so the badge is
    *  hidden rather than showing a meaningless "Europe (Frankfurt)". */
   region: Region | null;
+  /** Self-host build: drops the Billing nav item (uncapped, never bills). */
+  selfHost?: boolean;
   children: React.ReactNode;
 }
 
@@ -28,7 +30,7 @@ function WorkspaceMark() {
   );
 }
 
-export function AppShell({ region, children }: AppShellProps) {
+export function AppShell({ region, selfHost = false, children }: AppShellProps) {
   return (
     <div className="grid min-h-screen md:grid-cols-[220px_1fr]">
       <aside className="sticky top-0 hidden h-screen flex-col overflow-y-auto border-r border-border bg-card py-4 md:flex">
@@ -38,7 +40,7 @@ export function AppShell({ region, children }: AppShellProps) {
             <WorkspaceLabel />
           </div>
         </div>
-        <SidebarNav />
+        <SidebarNav selfHost={selfHost} />
         {region && (
           <>
             <div className="mt-2 px-[18px] pb-1 pt-2 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
@@ -59,7 +61,7 @@ export function AppShell({ region, children }: AppShellProps) {
         </div>
       </aside>
       <main className="min-w-0">
-        <MobileNav region={region} />
+        <MobileNav region={region} selfHost={selfHost} />
         {children}
       </main>
     </div>

@@ -5,14 +5,20 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 import { LegalMenu } from "@/components/layout/legal-menu";
-import { NAV_ITEMS } from "@/components/layout/nav-items";
+import { navItemsFor } from "@/components/layout/nav-items";
 import { WorkspaceLabel } from "@/components/layout/workspace-label";
 import { RegionBadge } from "@/components/ui/region-badge";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import type { Region } from "@midplane-cloud/kms";
 
-export function MobileNav({ region }: { region: Region | null }) {
+export function MobileNav({
+  region,
+  selfHost = false,
+}: {
+  region: Region | null;
+  selfHost?: boolean;
+}) {
   const pathname = usePathname() ?? "";
   const router = useRouter();
   return (
@@ -46,7 +52,7 @@ export function MobileNav({ region }: { region: Region | null }) {
         aria-label="Workspace"
         className="flex items-center gap-1 overflow-x-auto px-2 pb-1"
       >
-        {NAV_ITEMS.map((item) => {
+        {navItemsFor(selfHost).map((item) => {
           const active = item.match(pathname);
           const Icon = item.icon;
           return (

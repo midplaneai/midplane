@@ -13,7 +13,13 @@ export default async function AuthenticatedLayout({
   if (!customer) redirect("/signup/region");
 
   // Self-host has one region and no region routing, so the region chrome is
-  // noise — pass null to hide the sidebar/mobile badge.
-  const region = isSelfHost() ? null : customer.region;
-  return <AppShell region={region}>{children}</AppShell>;
+  // noise — pass null to hide the sidebar/mobile badge — and never bills, so
+  // selfHost drops the Billing nav item too.
+  const selfHost = isSelfHost();
+  const region = selfHost ? null : customer.region;
+  return (
+    <AppShell region={region} selfHost={selfHost}>
+      {children}
+    </AppShell>
+  );
 }

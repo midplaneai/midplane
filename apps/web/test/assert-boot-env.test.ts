@@ -118,6 +118,45 @@ describe("assertBootEnv", () => {
     expect(() => assertBootEnv(envMode("eu"))).not.toThrow();
   });
 
+  describe("Stripe billing (cloud, all-or-nothing)", () => {
+    const ALL_STRIPE = {
+      STRIPE_SECRET_KEY: "sk_test_x",
+      STRIPE_WEBHOOK_SECRET: "whsec_x",
+      STRIPE_PRO_PRICE_ID: "price_pro",
+      STRIPE_TEAM_PRICE_ID: "price_team",
+    };
+
+    it("passes with NO Stripe vars (billing off — keyless dev)", () => {
+      expect(() => assertBootEnv(envMode("eu"))).not.toThrow();
+    });
+
+    it("passes with ALL four Stripe vars set", () => {
+      expect(() =>
+        assertBootEnv({ ...envMode("eu"), ...ALL_STRIPE }),
+      ).not.toThrow();
+    });
+
+    it("flags the missing var(s) when the config is partial", () => {
+      const env = { ...envMode("eu"), STRIPE_SECRET_KEY: "sk_test_x" };
+      expect(() => assertBootEnv(env)).toThrow(/STRIPE_WEBHOOK_SECRET/);
+      expect(() => assertBootEnv(env)).toThrow(/STRIPE_PRO_PRICE_ID/);
+      expect(() => assertBootEnv(env)).toThrow(/STRIPE_TEAM_PRICE_ID/);
+    });
+
+    it("never requires Stripe vars in self-host", () => {
+      const env: Record<string, string | undefined> = {
+        MIDPLANE_SELF_HOST: "1",
+        DATABASE_URL: "postgres://localhost/x",
+        MIDPLANE_KMS_MODE: "env",
+        MIDPLANE_KMS_DEV_KEY_EU: KEY_HEX,
+        MIDPLANE_TOKEN_PEPPER_EU_V1: PEPPER_B64,
+        // A stray Stripe var must NOT pull in the all-or-nothing cloud check.
+        STRIPE_SECRET_KEY: "sk_test_x",
+      };
+      expect(() => assertBootEnv(env)).not.toThrow();
+    });
+  });
+
   describe("self-host (MIDPLANE_SELF_HOST=1)", () => {
     function selfHostEnv(): Record<string, string | undefined> {
       return {

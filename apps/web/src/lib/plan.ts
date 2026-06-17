@@ -1,11 +1,13 @@
 // Plan resolution + numeric caps. The single entitlement chokepoint.
 //
-// Stripe billing isn't wired yet, so resolvePlan() returns `free` unless the
-// customers.plan_override column is set (the founder/internal manual lever),
-// and hasEntitlement() returns false. The numeric caps below are OURS — boolean
-// entitlements can't answer "10 connections", so we map plan tier to caps here
-// and count rows in Postgres ourselves. When billing lands, only resolvePlan()/
-// hasEntitlement() change; callers thread `caps` down unchanged.
+// resolvePlan() resolves the active org's tier from (in order) the self-host
+// uncapped branch, the customers.plan_override manual lever, then the
+// subscription-backed customers.plan written by the Stripe webhook; absent all
+// three it's `free`. hasEntitlement() returns false (ee features aren't wired).
+// The numeric caps below are OURS — boolean entitlements can't answer "10
+// connections", so we map plan tier to caps here and count rows in Postgres
+// ourselves. Callers thread `caps` down to the auth-free enforcement functions
+// unchanged.
 //
 // Seats ARE in this map (the per-plan seat cap). They're enforced on the invite
 // path via Better Auth organization.membershipLimit (lib/seats.ts) — which is
@@ -146,10 +148,10 @@ export function planLimitBody(err: PlanLimitError): {
 
 /** Resolve the active organization's plan + caps.
  *
- *  Reads the founder/internal override from customers.plan_override; absent a
- *  value, resolves `free` (Stripe billing is the future source of truth). Kept
- *  async + called once per request so the later billing swap changes only this
- *  body — callers thread `caps` down to the auth-free, unit-tested lib
+ *  Read order: self-host (uncapped, before any DB read) → customers.plan_override
+ *  (the manual lever, BEATS the subscription) → customers.plan (subscription-
+ *  backed, written by the Stripe webhook) → `free`. Kept async + called once per
+ *  request so callers thread `caps` down to the auth-free, unit-tested lib
  *  enforcement functions unchanged. We never clawback already-created resources
  *  on a downgrade; only new creates are gated.
  *
@@ -165,11 +167,11 @@ export async function resolvePlan(): Promise<ResolvedPlan> {
     return { plan: "team", caps: SELF_HOST_CAPS };
   }
   const { currentCustomer } = await import("./customer.ts");
-  const override = (await currentCustomer())?.planOverride;
-  if (override) {
-    return { plan: override, caps: CAPS[override] };
-  }
-  return { plan: "free", caps: CAPS.free };
+  const customer = await currentCustomer();
+  // plan_override is the manual lever and wins over the subscription; absent it,
+  // the subscription-backed plan applies; absent a customer row, free.
+  const plan: Plan = customer?.planOverride ?? customer?.plan ?? "free";
+  return { plan, caps: CAPS[plan] };
 }
 
 /** App-level boolean entitlement features. Add a key here as each ee feature

@@ -35,3 +35,11 @@ export const NAV_ITEMS: NavItem[] = [
     match: (p) => p.startsWith("/billing"),
   },
 ];
+
+// Nav items for the current build. Self-host is uncapped and never bills, so
+// the Billing item is dropped there (the /billing route itself also degrades to
+// a self-host notice). Cloud shows the full list.
+export function navItemsFor(selfHost: boolean): NavItem[] {
+  if (!selfHost) return NAV_ITEMS;
+  return NAV_ITEMS.filter((item) => item.href !== "/billing");
+}

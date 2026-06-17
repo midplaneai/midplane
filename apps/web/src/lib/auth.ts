@@ -9,6 +9,7 @@ import { ulid } from "ulid";
 import { customers, getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
 
+import { buildStripePlugins } from "./billing";
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
 import { isSelfHost, SELF_HOST_CUSTOMER_ID, SELF_HOST_ORG_ID } from "./self-host";
@@ -144,6 +145,13 @@ function createAuth() {
         // it on the invite/add path. Otherwise it's a single static number.
         membershipLimit: (_user, organization) => seatCapForOrg(organization.id),
       }),
+      // Stripe billing (@better-auth/stripe). Conditionally loaded: [] in
+      // self-host and in keyless cloud dev, so neither requires Stripe env to
+      // boot; the configured plugin otherwise. Customer-per-org, referenceId =
+      // orgId, per-seat. MUST sit after organization() (it reads org membership)
+      // and before nextCookies(). It registers /api/auth/stripe/webhook —
+      // already public via the /api/auth middleware prefix.
+      ...buildStripePlugins(),
       // nextCookies MUST stay last: it flushes Set-Cookie from server-action
       // auth flows through Next's cookies() helper.
       nextCookies(),

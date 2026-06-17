@@ -1,10 +1,11 @@
 // Unit coverage for lib/plan.ts — the plan/caps resolution layer.
 //
-// resolvePlan() reads the founder/internal override from customers.plan_override
-// (via currentCustomer); absent a value it resolves `free` (Stripe billing is a
-// later phase) and hasEntitlement() returns false. We mock currentCustomer to
-// stage the override. CAPS, the pre-flight block, and the typed limit error are
-// pure and asserted directly.
+// resolvePlan() resolves (via currentCustomer) in order: plan_override (the
+// manual lever, which BEATS the subscription) → the subscription-backed
+// customers.plan written by the Stripe webhook → `free`. hasEntitlement()
+// returns false (ee not wired). We mock currentCustomer to stage both columns.
+// CAPS, the pre-flight block, and the typed limit error are pure and asserted
+// directly.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,7 +21,7 @@ import {
 } from "../src/lib/plan.ts";
 
 // currentCustomer is reassigned per-test through a getter so each test can
-// stage a different plan_override (or a null customer).
+// stage a different plan_override / subscription plan (or a null customer).
 let currentCustomerMock: () => Promise<Customer | null>;
 
 vi.mock("@/lib/customer", () => ({
@@ -29,13 +30,17 @@ vi.mock("@/lib/customer", () => ({
   },
 }));
 
-function customerWith(planOverride: Customer["planOverride"]): Customer {
+function customerWith(
+  planOverride: Customer["planOverride"],
+  plan: Customer["plan"] = "free",
+): Customer {
   return {
     id: "01HCUSTOMER0000000000000000",
     orgId: "org_1",
     email: "u@e.test",
     region: "eu",
     planOverride,
+    plan,
     ownerEmail: null,
     createdAt: new Date(),
   };
@@ -77,7 +82,7 @@ describe("CAPS", () => {
 });
 
 describe("resolvePlan", () => {
-  it("resolves free when plan_override is null", async () => {
+  it("resolves free when plan_override is null and plan is 'free'", async () => {
     currentCustomerMock = async () => customerWith(null);
     const { plan, caps } = await resolvePlan();
     expect(plan).toBe("free");
@@ -88,6 +93,35 @@ describe("resolvePlan", () => {
     currentCustomerMock = async () => null;
     const { plan } = await resolvePlan();
     expect(plan).toBe("free");
+  });
+
+  it("resolves the subscription-backed plan when no override (plan = 'pro')", async () => {
+    currentCustomerMock = async () => customerWith(null, "pro");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("pro");
+    expect(caps).toEqual(CAPS.pro);
+  });
+
+  it("resolves the subscription-backed plan when no override (plan = 'team')", async () => {
+    currentCustomerMock = async () => customerWith(null, "team");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("team");
+    expect(caps).toEqual(CAPS.team);
+  });
+
+  it("plan_override BEATS the subscription plan (override 'team' over plan 'free')", async () => {
+    currentCustomerMock = async () => customerWith("team", "free");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("team");
+    expect(caps).toEqual(CAPS.team);
+  });
+
+  it("plan_override can DOWNGRADE below the subscription (override 'free' over plan 'team')", async () => {
+    // Support lever: cap a paying org for abuse/refund without touching Stripe.
+    currentCustomerMock = async () => customerWith("free", "team");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("free");
+    expect(caps).toEqual(CAPS.free);
   });
 
   it("forces team caps when plan_override is 'team' (no subscription needed)", async () => {
