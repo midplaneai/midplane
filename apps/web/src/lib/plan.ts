@@ -3,7 +3,8 @@
 // resolvePlan() resolves the active org's tier from (in order) the self-host
 // uncapped branch, the customers.plan_override manual lever, then the
 // subscription-backed customers.plan written by the Stripe webhook; absent all
-// three it's `free`. hasEntitlement() returns false (ee features aren't wired).
+// three it's `free`. hasEntitlement(feature) gates ee features (e.g. "sso") on
+// the ee build switch AND the resolved plan caps.
 // The numeric caps below are OURS — boolean entitlements can't answer "10
 // connections", so we map plan tier to caps here and count rows in Postgres
 // ourselves. Callers thread `caps` down to the auth-free enforcement functions
@@ -71,7 +72,8 @@ export const CAPS: Record<Plan, PlanCaps> = {
  *  null, so reads apply no window clamp. `sso` stays FALSE: it's ee-gated and
  *  the signed-license verifier is deferred (D3), so community runs uncapped-core
  *  with NO license check (Neosync pattern) and the ee surface stays dark.
- *  hasEntitlement() likewise stays false until an ee license lands. */
+ *  hasEntitlement("sso") reads this `sso:false`, so SSO stays dark in self-host
+ *  even if MIDPLANE_EE were set. */
 export const SELF_HOST_CAPS: PlanCaps = {
   connections: Infinity,
   tokens: Infinity,
@@ -179,12 +181,32 @@ export async function resolvePlan(): Promise<ResolvedPlan> {
  *  hit the auth/billing SDK directly. */
 export type EntitlementFeature = "sso";
 
+/** Whether THIS build ships + activates the Enterprise Edition (ee/). The
+ *  core-readable mirror of ee/index.ts's eeEnabled() (canonical there): core may
+ *  not import ee/, so the MIDPLANE_EE read is duplicated here for the one place
+ *  core gates on the build switch — the entitlement chokepoint below, and the
+ *  pre-auth sign-in surface, which has no org context to resolve a plan from. */
+export function eeBuildEnabled(): boolean {
+  return process.env.MIDPLANE_EE === "1";
+}
+
 /** Whether the active org is entitled to a boolean feature. The single
- *  feature-gating seam. No billing/ee wired yet, so every feature is false;
- *  the billing swap changes only this body — callers use hasEntitlement(
- *  feature), never the auth SDK directly. */
+ *  feature-gating seam — callers go through this, never the auth/billing SDK.
+ *
+ *  An ee feature needs BOTH gates: the build SWITCH (MIDPLANE_EE — the ee bundle
+ *  is present + licensed) AND the per-org plan ENTITLEMENT (caps). Self-host
+ *  resolves to SELF_HOST_CAPS (sso:false), so ee stays dark there regardless of
+ *  the flag; keyless cloud fails the build switch; only a licensed cloud build on
+ *  the Team plan returns true. Fails closed on every other path. */
 export async function hasEntitlement(
-  _feature: EntitlementFeature,
+  feature: EntitlementFeature,
 ): Promise<boolean> {
-  return false;
+  if (!eeBuildEnabled()) return false;
+  const { caps } = await resolvePlan();
+  switch (feature) {
+    case "sso":
+      return caps.sso;
+    default:
+      return false;
+  }
 }

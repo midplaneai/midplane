@@ -40,4 +40,41 @@ export async function register() {
     const { ensureImplicitCustomer } = await import("./src/lib/customer.ts");
     await ensureImplicitCustomer();
   }
+
+  // Enterprise Edition bootstrap — the SOLE bridge from the always-present graph
+  // into ee/. This file lives OUTSIDE src/ (exempt from the open-core eslint
+  // boundary), so it is the sanctioned "cloud-only entrypoint": it registers the
+  // ee Better Auth plugins (SSO/SAML) into the neutral registry that createAuth()
+  // reads synchronously on the first request. Runs once at boot, before any
+  // request builds auth.
+  //
+  // Triple-guarded: nodejs only (ee pulls Node-only SAML deps; never enter the
+  // Edge bundle), MIDPLANE_EE=1 (so keyless cloud / self-host never load it), and
+  // try/caught (so a community build that physically deletes src/ee/ still boots
+  // — the import just fails and SSO stays dark). registerEe() self-gates on
+  // eeEnabled() too.
+  if (process.env.NEXT_RUNTIME === "nodejs" && process.env.MIDPLANE_EE === "1") {
+    try {
+      // Non-literal specifier ON PURPOSE: a `: string`-typed value keeps ee/ out
+      // of TypeScript's module graph (no "cannot find module" when src/ee/ is
+      // deleted for an MIT build) while the static "./src/ee/" prefix lets the
+      // bundler tolerate its absence too — so a deleted ee/ both type-checks and
+      // compiles; the import just rejects at runtime and we catch it. With ee/
+      // present this resolves register.ts normally.
+      const eeEntry: string = "register.ts";
+      const mod = (await import(`./src/ee/${eeEntry}`)) as {
+        registerEe: () => void;
+      };
+      mod.registerEe();
+    } catch (err) {
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "ee.bootstrap_skipped",
+          reason: err instanceof Error ? err.message : String(err),
+          ts: new Date().toISOString(),
+        }),
+      );
+    }
+  }
 }

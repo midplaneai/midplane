@@ -10,6 +10,7 @@ import { customers, getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
 
 import { buildStripePlugins } from "./billing";
+import { getEeAuthPlugins } from "./ee-plugins";
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
 import { isSelfHost, SELF_HOST_CUSTOMER_ID, SELF_HOST_ORG_ID } from "./self-host";
@@ -223,6 +224,13 @@ function createAuth() {
       // and before nextCookies(). It registers /api/auth/stripe/webhook —
       // already public via the /api/auth middleware prefix.
       ...buildStripePlugins(),
+      // Enterprise Edition plugins (SSO/SAML). Empty unless the ee build
+      // registered them at boot (lib/ee-plugins.ts ← src/ee/register.ts, wired
+      // by instrumentation under MIDPLANE_EE). Core never imports ee/ — it reads
+      // this neutral registry — so a keyless build or a deleted ee/ just yields
+      // []. Spread AFTER stripe and BEFORE nextCookies(): SSO org-provisioning
+      // relies on organization() (already above), and nextCookies must stay last.
+      ...getEeAuthPlugins(),
       // nextCookies MUST stay last: it flushes Set-Cookie from server-action
       // auth flows through Next's cookies() helper.
       nextCookies(),
