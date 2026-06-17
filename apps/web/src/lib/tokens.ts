@@ -74,6 +74,9 @@ export async function countUsableTokens(
     .where(
       and(
         inArray(mcpTokens.connectionId, ids),
+        // OAuth attribution rows (kind='oauth') are NOT plaintext URL tokens
+        // and must never consume a plan token slot — only 'url' tokens count.
+        eq(mcpTokens.kind, "url"),
         eq(mcpTokens.status, "active"),
         sql`(${mcpTokens.expiresAt} IS NULL OR ${mcpTokens.expiresAt} > NOW())`,
       ),
@@ -105,6 +108,9 @@ export async function countActiveTokensByConnection(
     .where(
       and(
         inArray(mcpTokens.connectionId, connectionIds),
+        // Dashboard "agents" stat counts plaintext URL tokens only; OAuth
+        // attribution rows are internal to the audit pipeline.
+        eq(mcpTokens.kind, "url"),
         eq(mcpTokens.status, "active"),
         sql`(${mcpTokens.expiresAt} IS NULL OR ${mcpTokens.expiresAt} > NOW())`,
       ),
@@ -403,7 +409,15 @@ export async function listTokens(
       revokedReason: mcpTokens.revokedReason,
     })
     .from(mcpTokens)
-    .where(eq(mcpTokens.connectionId, connectionId))
+    // Only plaintext URL tokens are shown in the dashboard list; OAuth
+    // attribution rows (kind='oauth') carry no prefix/last4 the user issued
+    // and are invisible here by design.
+    .where(
+      and(
+        eq(mcpTokens.connectionId, connectionId),
+        eq(mcpTokens.kind, "url"),
+      ),
+    )
     .orderBy(desc(mcpTokens.createdAt));
   return rows;
 }
@@ -531,6 +545,7 @@ export async function lookupByPlaintext(
       .where(
         and(
           eq(mcpTokens.tokenHash, hash),
+          eq(mcpTokens.kind, "url"),
           eq(mcpTokens.status, "active"),
           sql`(${mcpTokens.expiresAt} IS NULL OR ${mcpTokens.expiresAt} > NOW())`,
         ),
@@ -544,6 +559,67 @@ export async function lookupByPlaintext(
     }
   }
   return null;
+}
+
+/** Mint-or-get the attribution row that binds an OAuth client to a connection,
+ *  for the MCP-OAuth proxy path (lib/proxy.ts proxyMcpOAuth).
+ *
+ *  The OAuth bearer authenticates the user, but the engine still stamps a
+ *  per-agent `mcp_token_id` on every audit row (via X-Midplane-Token-Id). That
+ *  id must be a real mcp_tokens row so the audit FK holds. We mint exactly ONE
+ *  `kind='oauth'` row per (connection, OAuth client) — the registered MCP
+ *  client IS the agent identity — and return its id. The row carries no HMAC
+ *  secret (token_hash/pepper_kid NULL) and never resolves via the URL proxy; it
+ *  exists solely so per-agent attribution survives the URL→OAuth switch.
+ *
+ *  Idempotent under concurrent first-use: the (connection_id, client_id) partial
+ *  unique index (kind='oauth') serializes the mint; a racing insert is caught
+ *  and the winner's row re-read. */
+export async function ensureOAuthAttributionToken(
+  db: ReturnType<typeof getDb>,
+  args: { connectionId: string; clientId: string; userId: string },
+): Promise<string> {
+  const findExisting = () =>
+    db
+      .select({ id: mcpTokens.id })
+      .from(mcpTokens)
+      .where(
+        and(
+          eq(mcpTokens.connectionId, args.connectionId),
+          eq(mcpTokens.clientId, args.clientId),
+          eq(mcpTokens.kind, "oauth"),
+        ),
+      )
+      .limit(1);
+
+  const existing = await findExisting();
+  if (existing[0]) return existing[0].id;
+
+  const id = ulid();
+  try {
+    await db.insert(mcpTokens).values({
+      id,
+      connectionId: args.connectionId,
+      // Encodes the client id so the (connection_id, name) unique also guards
+      // one-row-per-client; the partial unique on (connection_id, client_id)
+      // is the primary guard.
+      name: `oauth:${args.clientId}`,
+      // Sentinels: OAuth rows have no plaintext, but prefix/last4 stay NOT NULL
+      // (the audit token-label join reads last4). mp_oauth marks the kind;
+      // last4 surfaces which client.
+      prefix: "mp_oauth",
+      last4: args.clientId.slice(-4),
+      kind: "oauth",
+      clientId: args.clientId,
+      createdByUserId: args.userId,
+      // token_hash / pepper_kid omitted → NULL (no HMAC secret for OAuth rows).
+    });
+    return id;
+  } catch (err) {
+    const raced = await findExisting();
+    if (raced[0]) return raced[0].id;
+    throw err;
+  }
 }
 
 // --- internals --------------------------------------------------------------
