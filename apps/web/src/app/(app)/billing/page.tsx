@@ -1,5 +1,4 @@
 import { PricingTable } from "@clerk/nextjs";
-import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 
 import { PageContainer, Topbar } from "@/components/layout/app-shell";
@@ -7,7 +6,7 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
-import { resolvePlan } from "@/lib/plan";
+import { hasEntitlement, resolvePlan } from "@/lib/plan";
 
 // Plans & billing surface. Clerk Billing owns the plan/price catalog and the
 // checkout flow — <PricingTable for="organization"> renders the org's plans
@@ -25,12 +24,10 @@ export default async function BillingPage() {
   if (!customer) redirect("/signup/region");
 
   const { plan } = await resolvePlan();
-  const { has } = await auth();
-  // Server-side entitlement check, ORG-SCOPED. `org:sso` binds to the active
-  // organization's subscription — an unscoped `sso` would also match a
-  // user-scoped feature with that slug (Clerk merges both scopes), wrongly
-  // showing the org as SSO-entitled. The dashboard feature slug stays `sso`.
-  const hasSso = has({ feature: "org:sso" });
+  // Single feature-gating seam: hasEntitlement maps "sso" -> the org-scoped
+  // Clerk feature in lib/plan.ts, so P2's auth swap touches that one module,
+  // not this page.
+  const hasSso = await hasEntitlement("sso");
 
   return (
     <>

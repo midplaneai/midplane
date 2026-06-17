@@ -10,14 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // has() is reassigned per-test; the mock reads through the getter so each
 // test can stage a different active-plan answer. Every has() param is
 // recorded so a test can assert the checks are ORG-SCOPED (org:pro etc.).
-let hasPredicate: (param: { plan: string }) => boolean;
+let hasPredicate: (param: { plan?: string; feature?: string }) => boolean;
 let hasCalls: Array<{ plan?: string; feature?: string }>;
 // auth() also yields sessionClaims, which carries the founder/internal
 // override (the `planOverride` claim sourced from Clerk public metadata).
 // Staged per-test; undefined = no override claim present.
 let authSessionClaims: Record<string, unknown> | undefined;
 
-const hasMock = (param: { plan: string }): boolean => {
+const hasMock = (param: { plan?: string; feature?: string }): boolean => {
   hasCalls.push(param);
   return hasPredicate(param);
 };
@@ -40,9 +40,16 @@ afterEach(() => {
 
 /** Build a has() predicate that returns true only for the given (already
  *  org-scoped) plan slugs, e.g. hasPlans("org:pro"). */
-function hasPlans(...slugs: string[]): (p: { plan: string }) => boolean {
+function hasPlans(...slugs: string[]): (p: { plan?: string }) => boolean {
   const set = new Set(slugs);
-  return ({ plan }) => set.has(plan);
+  return ({ plan }) => plan !== undefined && set.has(plan);
+}
+
+/** has() predicate true only for the given (org-scoped) FEATURE slugs, e.g.
+ *  hasFeatures("org:sso"). Mirrors hasPlans for boolean feature entitlements. */
+function hasFeatures(...slugs: string[]): (p: { feature?: string }) => boolean {
+  const set = new Set(slugs);
+  return ({ feature }) => feature !== undefined && set.has(feature);
 }
 
 describe("CAPS", () => {
@@ -174,6 +181,32 @@ describe("resolvePlan — founder/internal override (planOverride claim)", () =>
     const { resolvePlan } = await import("../src/lib/plan.ts");
     const { plan } = await resolvePlan();
     expect(plan).toBe("free");
+  });
+});
+
+describe("hasEntitlement", () => {
+  it("returns true when the org-scoped feature is active", async () => {
+    hasPredicate = hasFeatures("org:sso");
+    const { hasEntitlement } = await import("../src/lib/plan.ts");
+    expect(await hasEntitlement("sso")).toBe(true);
+  });
+
+  it("returns false when the feature is not entitled", async () => {
+    hasPredicate = hasFeatures(); // nothing active → no SSO
+    const { hasEntitlement } = await import("../src/lib/plan.ts");
+    expect(await hasEntitlement("sso")).toBe(false);
+  });
+
+  it("checks the ORG-SCOPED feature slug (org:sso), never the bare slug", async () => {
+    // Same org-scope discipline as resolvePlan: an unscoped `sso` would also
+    // match a user-scoped feature (Clerk merges scopes) and wrongly entitle
+    // the org. hasEntitlement must ask Clerk for `org:sso`.
+    hasPredicate = hasFeatures(); // answer irrelevant; we assert WHAT was asked
+    const { hasEntitlement } = await import("../src/lib/plan.ts");
+    await hasEntitlement("sso");
+    const featureChecks = hasCalls.map((c) => c.feature);
+    expect(featureChecks).toContain("org:sso");
+    expect(featureChecks).not.toContain("sso");
   });
 });
 
