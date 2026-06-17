@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { mcp, organization } from "better-auth/plugins";
 import { and, eq, isNull, or } from "drizzle-orm";
@@ -39,6 +39,25 @@ function createAuth() {
       schema: { ...authSchema },
     }),
     emailAndPassword: { enabled: true },
+    hooks: {
+      // Always show our branded consent screen on the MCP OAuth authorize.
+      // Better Auth only renders the consent page when the authorize request
+      // carries prompt=consent, and MCP clients don't reliably send it — which
+      // would skip our approval step and jump straight to the client's own
+      // callback. Forcing it guarantees the user explicitly approves each agent
+      // before it can reach their databases (the security-forward posture), and
+      // makes our consent screen the consistent branded moment in the flow.
+      //
+      // It rides through the login-resume path too: authorizeMCPOAuth stores
+      // this query in the oidc_login_prompt cookie before bouncing to /sign-in,
+      // so the post-login resume sees prompt=consent as well.
+      before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== "/mcp/authorize") return;
+        return {
+          context: { ...ctx, query: { ...ctx.query, prompt: "consent" } },
+        };
+      }),
+    },
     databaseHooks: {
       user: {
         create: {

@@ -5,28 +5,31 @@ import { oauthApplication } from "@midplane-cloud/db/auth-schema";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { ConsentForm } from "@/components/oauth/consent-form";
-import { Card, CardContent } from "@/components/ui/card";
+import { getActorEmail } from "@/lib/org-context";
 import { bootRegion } from "@/lib/region-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// OAuth consent screen for the MCP `mcp` plugin. The authorize endpoint
-// redirects here (with consent_code / client_id / scope) when an MCP client
-// requests `prompt=consent`. The user is already signed in — authorize requires
-// a session — so this is the explicit grant step, not a login. Lives OUTSIDE
-// the (app) group: it's an OAuth interstitial, not a dashboard page, so it
-// renders its own minimal chrome instead of the AppShell.
+// OAuth consent screen for the MCP `mcp` plugin — the explicit "approve this
+// agent" step. The authorize endpoint redirects here with consent_code /
+// client_id / scope; the auth-config before-hook forces prompt=consent so this
+// always renders (the consistent branded moment before the hand-off back to the
+// agent's own callback). The user is already signed in — authorize requires a
+// session — so this grants, it doesn't log in.
+//
+// Lives OUTSIDE the (app) group: an OAuth interstitial, not a dashboard page, so
+// it renders its own minimal chrome instead of the AppShell.
 
-// Human-readable copy for each scope we may grant. `mcp` is the coarse v1
-// capability (full MCP access to a connection the user owns); the rest are the
-// Better Auth OIDC defaults. Unknown scopes fall back to their raw name.
-const SCOPE_COPY: Record<string, string> = {
-  mcp: "Run queries through your Midplane database connections (each connection's policy and guardrails still apply).",
-  openid: "Confirm your Midplane identity.",
-  profile: "Read your name and profile image.",
-  email: "Read your email address.",
-  offline_access: "Stay connected without re-approving each time.",
+// Human copy per scope. `mcp` is the one that matters (database access); the
+// rest are the Better Auth OIDC identity defaults, shown muted. The DB scope is
+// surfaced first and prominently; unknown scopes fall back to their raw name.
+const DB_SCOPE = "mcp";
+const IDENTITY_COPY: Record<string, string> = {
+  openid: "confirm your identity",
+  profile: "your name and profile image",
+  email: "your email address",
+  offline_access: "staying connected without re-approving each time",
 };
 
 export default async function OAuthConsentPage({
@@ -40,8 +43,8 @@ export default async function OAuthConsentPage({
   const scopeParam = typeof sp.scope === "string" ? sp.scope : "";
   const scopes = scopeParam.split(" ").filter(Boolean);
 
-  // Resolve the registered client's display name (Dynamic Client Registration
-  // stores it). Falls back to the opaque client id if a name wasn't supplied.
+  // The registered client's display name (Dynamic Client Registration stores
+  // it). Client-asserted, so we frame it as such; falls back to the opaque id.
   let appName: string | null = null;
   if (clientId) {
     const rows = await getDb(bootRegion())
@@ -52,6 +55,10 @@ export default async function OAuthConsentPage({
     appName = rows[0]?.name ?? null;
   }
   const displayName = appName || clientId || "An MCP client";
+  const email = await getActorEmail();
+
+  const grantsDbAccess = scopes.length === 0 || scopes.includes(DB_SCOPE);
+  const identityScopes = scopes.filter((s) => s in IDENTITY_COPY);
 
   return (
     <main className="flex min-h-screen flex-col">
@@ -59,49 +66,80 @@ export default async function OAuthConsentPage({
         <BrandLockup />
       </header>
 
-      <section className="container mx-auto flex max-w-[520px] flex-1 flex-col items-center justify-center gap-8 px-4 py-16">
+      <section className="container mx-auto flex max-w-[460px] flex-1 flex-col items-center justify-center gap-7 px-4 py-16">
         {consentCode ? (
           <>
-            <div className="space-y-3 text-center">
-              <h1 className="text-2xl font-semibold tracking-[-0.025em] text-foreground">
-                Authorize {displayName}
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{displayName}</span>{" "}
-                is requesting access to your Midplane account as an agent.
-              </p>
+            <div className="flex flex-col items-center gap-4 text-center">
+              {/* Neutral monogram — we deliberately don't render the client's
+                  self-supplied logo URL (tracking + spoofing surface). */}
+              <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary font-mono text-lg font-medium text-foreground">
+                {displayName.charAt(0).toUpperCase()}
+              </div>
+              <div className="space-y-1.5">
+                <h1 className="text-xl font-semibold tracking-[-0.02em] text-foreground">
+                  Connect {displayName}?
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  An agent identifying itself as{" "}
+                  <span className="font-medium text-foreground">
+                    {displayName}
+                  </span>{" "}
+                  wants to connect to your Midplane account.
+                </p>
+              </div>
             </div>
 
-            <Card className="w-full">
-              <CardContent className="space-y-4 py-5">
-                <p className="text-xs font-medium uppercase tracking-wide text-subtle">
-                  This will allow it to
-                </p>
-                <ul className="space-y-3">
-                  {(scopes.length ? scopes : ["mcp"]).map((scope) => (
-                    <li key={scope} className="flex gap-2.5 text-sm">
-                      <span aria-hidden className="mt-0.5 font-mono text-allow">
-                        ✓
-                      </span>
-                      <span className="text-foreground">
-                        {SCOPE_COPY[scope] ?? scope}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
+            <div className="w-full space-y-4 border border-border bg-card p-5">
+              {grantsDbAccess && (
+                <div className="flex gap-3">
+                  <span aria-hidden className="mt-0.5 font-mono text-allow">
+                    ✓
+                  </span>
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium text-foreground">
+                      Run queries through your database connections
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Each connection&apos;s policy and guardrails still apply —
+                      the agent can only do what you&apos;ve allowed.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {identityScopes.length > 0 && (
+                <div className="flex gap-3">
+                  <span aria-hidden className="mt-0.5 font-mono text-subtle">
+                    ·
+                  </span>
+                  <p className="text-xs text-muted-foreground">
+                    Read{" "}
+                    {identityScopes
+                      .map((s) => IDENTITY_COPY[s])
+                      .join(", ")
+                      .replace(/, ([^,]*)$/, " and $1")}
+                    .
+                  </p>
+                </div>
+              )}
+            </div>
 
             <ConsentForm consentCode={consentCode} />
 
-            <p className="text-center text-xs text-muted-foreground">
-              You can revoke this access at any time by pausing or deleting the
-              connection.
-            </p>
+            <div className="space-y-1 text-center">
+              {email && (
+                <p className="text-xs text-subtle">
+                  Signed in as <span className="text-muted-foreground">{email}</span>
+                </p>
+              )}
+              <p className="text-xs text-subtle">
+                You can revoke access any time by pausing or deleting the
+                connection.
+              </p>
+            </div>
           </>
         ) : (
-          <div className="space-y-3 text-center">
-            <h1 className="text-2xl font-semibold tracking-[-0.025em] text-foreground">
+          <div className="space-y-2 text-center">
+            <h1 className="text-xl font-semibold tracking-[-0.02em] text-foreground">
               Nothing to authorize
             </h1>
             <p className="text-sm text-muted-foreground">
