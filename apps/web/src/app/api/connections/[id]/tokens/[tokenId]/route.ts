@@ -10,7 +10,7 @@
 // owned by a different customer (same leakage-avoidance shape as the
 // list/create route and the parent /api/connections/[id]).
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import { currentCustomer } from "@/lib/customer";
@@ -33,7 +33,7 @@ export async function DELETE(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   if (!userId) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }

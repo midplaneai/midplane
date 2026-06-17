@@ -14,7 +14,7 @@
 // 404 on foreign-row, mirroring the rest of the connections API. Auth
 // failures still return 401 — same shape as the sibling routes.
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 
@@ -44,7 +44,7 @@ export async function POST(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   const { id } = await params;
 
   // Shared budget with the raw-DSN surface — one key per customer

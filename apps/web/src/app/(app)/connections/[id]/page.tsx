@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
@@ -165,7 +165,7 @@ export default async function ConnectionWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await auth();
+    const { userId } = await getOrgContext();
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
       throw new Error("missing id");
@@ -198,7 +198,7 @@ export default async function ConnectionWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await auth();
+    const { userId } = await getOrgContext();
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
       throw new Error("missing id");
@@ -250,7 +250,7 @@ export default async function ConnectionWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await auth();
+    const { userId } = await getOrgContext();
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
       throw new Error("missing id");
@@ -302,7 +302,7 @@ export default async function ConnectionWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await auth();
+    const { userId } = await getOrgContext();
     if (!userId) redirect("/");
     if (!selectedName) notFound();
     const raw = formData.get("policy");
@@ -331,7 +331,7 @@ export default async function ConnectionWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await auth();
+    const { userId } = await getOrgContext();
     if (!userId) redirect("/");
     if (!selectedName) notFound();
     const raw = formData.get("guardrails");
@@ -360,7 +360,7 @@ export default async function ConnectionWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await auth();
+    const { userId } = await getOrgContext();
     if (!userId) redirect("/");
     if (!selectedName) notFound();
     const raw = formData.get("config");
@@ -389,7 +389,7 @@ export default async function ConnectionWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await auth();
+    const { userId } = await getOrgContext();
     if (!selectedName) notFound();
     const dsn = formData.get("dsn");
     if (!isValidDsn(dsn)) {

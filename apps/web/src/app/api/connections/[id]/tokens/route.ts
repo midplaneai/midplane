@@ -12,7 +12,7 @@
 //     It is never logged, persisted in a server-side session, or returned
 //     to GET. The caller is responsible for surfacing it.
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
@@ -86,7 +86,7 @@ export async function POST(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   if (!userId) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }

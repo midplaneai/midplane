@@ -20,7 +20,7 @@
 // DSN rotation. Response carries only { id } (the connection id).
 // Token lifecycle (list / create / revoke) lives on PR3's surface.
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import {
@@ -46,7 +46,7 @@ export async function PATCH(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   const { id } = await params;
 
   let raw: unknown;
@@ -94,7 +94,7 @@ export async function DELETE(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   const { id } = await params;
   const deleted = await deleteConnection(customer, id);
   if (!deleted) {

@@ -20,12 +20,12 @@
 // target org's members. Clerk has no atomic org-wide revoke; race window
 // for in-flight sessions is acceptable for this rare audited action.
 
-import { auth } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { customers, getDb } from "@midplane-cloud/db";
 
+import { getOrgContext } from "@/lib/org-context";
 import { bootRegion } from "@/lib/region-context";
 
 const Body = z.object({
@@ -63,7 +63,7 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   if (!userId) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }

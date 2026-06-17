@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -21,7 +21,7 @@ import type { Region } from "@midplane-cloud/kms";
 //     app's DB, then redirects to /dashboard.
 
 export default async function RegionPicker() {
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
 
   const h = await headers();
   // Vercel/Cloudflare-style country header, falls through to nothing in dev.
@@ -124,7 +124,7 @@ async function pickRegionAuthed(formData: FormData) {
         : "https://us.app.midplane.ai/signup/region";
     redirect(target);
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   const customer = await upsertCustomerRegion(region);
 
   const posthog = getPostHog();

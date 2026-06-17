@@ -9,7 +9,7 @@
 // tooling); both routes share validation rules and error translation
 // so the two paths stay consistent.
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { revalidatePath } from "next/cache";
 
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
@@ -49,7 +49,7 @@ export async function createTokenAction(
 ): Promise<CreateTokenResult> {
   const customer = await currentCustomer();
   if (!customer) return { ok: false, error: "internal" };
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   if (!userId) return { ok: false, error: "internal" };
 
   const trimmed = input.name.trim();
@@ -147,7 +147,7 @@ export async function revokeTokenAction(
 ): Promise<{ ok: true; id: string } | { ok: false; error: "not_found" | "internal" }> {
   const customer = await currentCustomer();
   if (!customer) return { ok: false, error: "internal" };
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   if (!userId) return { ok: false, error: "internal" };
 
   try {

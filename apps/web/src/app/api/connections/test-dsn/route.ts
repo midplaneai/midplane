@@ -8,7 +8,7 @@
 // Static route segment beats the [id] sibling, so "test-dsn" can never
 // be captured as a connection id.
 
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import { isValidDsn } from "@/lib/connections";
@@ -32,7 +32,7 @@ export async function POST(req: Request) {
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
 
   const limited = checkRateLimit(pingTestKey(customer.id), PING_TEST_RATE_LIMIT);
   if (!limited.ok) {

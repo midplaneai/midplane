@@ -1,9 +1,9 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import { customers, getDb, type Customer } from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
+import { getActorEmail, getOrgContext } from "./org-context.ts";
 import { bootRegion } from "./region-context.ts";
 
 // Look up the Midplane customer for the current Clerk session, if it exists.
@@ -18,7 +18,7 @@ import { bootRegion } from "./region-context.ts";
 // One Midplane customer == one Clerk organization. Org members are the
 // actors who can sign in on its behalf.
 export async function currentCustomer(): Promise<Customer | null> {
-  const { orgId } = await auth();
+  const { orgId } = await getOrgContext();
   if (!orgId) return null;
   // Each regional app is single-region (MIDPLANE_REGION env var, enforced
   // by env-var locality on DATABASE_URL_<REGION>). Read from this app's DB;
@@ -41,7 +41,7 @@ export async function currentCustomer(): Promise<Customer | null> {
 // winner inserted. Without this, a double-clicked region form throws on
 // the unique(clerk_org_id) constraint.
 export async function upsertCustomerRegion(region: Region): Promise<Customer> {
-  const { orgId } = await auth();
+  const { orgId } = await getOrgContext();
   if (!orgId) throw new Error("no active organization");
 
   // Pick the DB for the region the user is signing up for, not the region
@@ -56,10 +56,7 @@ export async function upsertCustomerRegion(region: Region): Promise<Customer> {
   // the org — used for the workspace label in AppShell + receipts. The org
   // itself doesn't carry a billing email yet (Clerk Billing wires that
   // separately when we turn it on).
-  const user = await currentUser();
-  const email =
-    user?.primaryEmailAddress?.emailAddress ??
-    user?.emailAddresses?.[0]?.emailAddress;
+  const email = await getActorEmail();
   if (!email) throw new Error("no email on Clerk user");
 
   const inserted = await db

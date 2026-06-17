@@ -4,13 +4,13 @@
 //
 // Nav + footer section anchors are absolute (`/#policy`) so they resolve from
 // any route, not just the landing itself.
-import { auth } from "@clerk/nextjs/server";
+import { getOrgContext } from "@/lib/org-context";
 import Link from "next/link";
 
 export async function EditorialTopbar() {
   // Signed-in visitors get a one-click Dashboard link in place of the
   // Sign in / Start free pair — same behavior the landing had inline.
-  const { userId } = await auth();
+  const { userId } = await getOrgContext();
   const isSignedIn = !!userId;
 
   return (
