@@ -61,13 +61,13 @@ test.beforeAll(async () => {
   await db.insert(customers).values([
     {
       id: custAId,
-      clerkOrgId: `org_e2e-audit-A-${custAId}`,
+      orgId: `org_e2e-audit-A-${custAId}`,
       email: `e2e-audit-A-${custAId}@example.test`,
       region: REGION,
     },
     {
       id: custBId,
-      clerkOrgId: `org_e2e-audit-B-${custBId}`,
+      orgId: `org_e2e-audit-B-${custBId}`,
       email: `e2e-audit-B-${custBId}@example.test`,
       region: REGION,
     },

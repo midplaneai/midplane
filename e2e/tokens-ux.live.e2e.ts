@@ -41,19 +41,19 @@ test.skip(
 
 let testEmail = "";
 let clerkUserId = "";
-let clerkOrgId = "";
+let orgId = "";
 let connectionId = "";
 
 test.afterAll(async () => {
   if (clerkUserId) {
     await cleanupClerkUser(clerkUserId);
   }
-  if (clerkOrgId) {
+  if (orgId) {
     const db = getDb("eu");
     const customerRows = await db
       .select()
       .from(customers)
-      .where(eq(customers.clerkOrgId, clerkOrgId));
+      .where(eq(customers.orgId, orgId));
     const customerId = customerRows[0]?.id;
     if (customerId) {
       const conns = await db
@@ -83,7 +83,7 @@ test("create connection → mint second token → revoke default → list reflec
   const result = await signUp(page, testEmail, (id) => {
     clerkUserId = id;
   });
-  clerkOrgId = result.clerkOrgId;
+  orgId = result.orgId;
 
   await page.goto("/signup/region");
   await page.getByRole("button", { name: /continue/i }).click();

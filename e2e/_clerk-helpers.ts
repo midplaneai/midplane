@@ -81,7 +81,7 @@ export async function createTestUser(
 export async function createTestOrganization(
   clerkUserId: string,
   name: string,
-): Promise<{ clerkOrgId: string }> {
+): Promise<{ orgId: string }> {
   const client = backend();
   const org = await client.organizations
     .createOrganization({ name, createdBy: clerkUserId })
@@ -98,7 +98,7 @@ export async function createTestOrganization(
         { cause: e },
       );
     });
-  return { clerkOrgId: org.id };
+  return { orgId: org.id };
 }
 
 // Create a real Clerk user + their org, then establish a browser session
@@ -118,11 +118,11 @@ export async function signUp(
   page: Page,
   email: string,
   onUserCreated?: (clerkUserId: string) => void,
-): Promise<{ clerkUserId: string; clerkOrgId: string }> {
+): Promise<{ clerkUserId: string; orgId: string }> {
   const { clerkUserId } = await createTestUser(email);
   onUserCreated?.(clerkUserId);
 
-  const { clerkOrgId } = await createTestOrganization(
+  const { orgId } = await createTestOrganization(
     clerkUserId,
     `Midplane E2E ${clerkUserId.slice(-6)}`,
   );
@@ -134,7 +134,7 @@ export async function signUp(
   await clerk.loaded({ page });
   await clerk.signIn({ page, emailAddress: email });
 
-  return { clerkUserId, clerkOrgId };
+  return { clerkUserId, orgId };
 }
 
 // Sign-in helper for tests that already have a user. Same session-establishment

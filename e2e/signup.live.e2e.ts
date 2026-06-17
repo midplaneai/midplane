@@ -49,7 +49,7 @@ const PG_DB = "midplane_e2e_signup";
 let pgPort = 0;
 let testEmail = "";
 let clerkUserId = "";
-let clerkOrgId = "";
+let orgId = "";
 let mcpToken = "";
 let connectionId = "";
 let proxiedContainerName = "";
@@ -92,12 +92,12 @@ test.afterAll(async () => {
 
   // Customer was created by the Server Action, addressable by clerk_org_id.
   // Delete dependent rows first to satisfy FKs.
-  if (clerkOrgId) {
+  if (orgId) {
     const db = getDb("eu");
     const customerRows = await db
       .select()
       .from(customers)
-      .where(eq(customers.clerkOrgId, clerkOrgId));
+      .where(eq(customers.orgId, orgId));
     const customerId = customerRows[0]?.id;
     if (customerId) {
       const conns = await db
@@ -136,7 +136,7 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
     clerkUserId = id;
   });
   expect(result.clerkUserId).toBe(clerkUserId);
-  clerkOrgId = result.clerkOrgId;
+  orgId = result.orgId;
 
   // 2. Region picker — real Server Action upserts the customer row.
   await page.goto("/signup/region");
@@ -199,7 +199,7 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   const customerRows = await db
     .select()
     .from(customers)
-    .where(eq(customers.clerkOrgId, clerkOrgId));
+    .where(eq(customers.orgId, orgId));
   const customerId = customerRows[0]?.id;
   expect(customerId, "Server Action should have created customer row").toBeTruthy();
 
