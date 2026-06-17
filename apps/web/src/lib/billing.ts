@@ -1,5 +1,5 @@
 import { stripe as stripePlugin } from "@better-auth/stripe";
-import { and, count, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import Stripe from "stripe";
 
 import { customers, getDb } from "@midplane-cloud/db";
@@ -103,17 +103,6 @@ export function billingPlans(): BillingPlan[] {
   ];
 }
 
-/** The org's current member count, the per-seat checkout quantity (min 1). The
- *  billing page passes it to the upgrade call so a team is billed for its size;
- *  the Customer Portal handles later adjustments and reconcileOrgPlan re-aligns. */
-export async function orgSeatCount(orgId: string): Promise<number> {
-  const rows = await getDb(bootRegion())
-    .select({ n: count() })
-    .from(member)
-    .where(eq(member.organizationId, orgId));
-  return Math.max(1, rows[0]?.n ?? 1);
-}
-
 // --- status → tier mapping (pure) -------------------------------------------
 
 // Only these Stripe subscription statuses grant the paid tier. Everything else
@@ -206,7 +195,16 @@ export async function reconcileOrgPlan(orgId: string): Promise<Plan> {
 /** The configured @better-auth/stripe plugin, or [] when billing is off. Spread
  *  into the plugins array in lib/auth.ts AFTER organization() and BEFORE
  *  nextCookies(). Customer-per-org (organization mode), referenceId = orgId,
- *  per-seat (the plan price is per seat; seat count is the checkout quantity).
+ *  per-seat with AUTO-MANAGED seats.
+ *
+ *  Each plan is registered as a "seat-only" plan — priceId === seatPriceId, the
+ *  per-seat recurring price. With organization mode + customerType
+ *  "organization" that turns on the plugin's seat auto-management: it sets the
+ *  Stripe quantity = member count at checkout AND re-syncs it (prorated) on
+ *  every member add / remove / invitation accept via the organization hooks the
+ *  plugin installs. So we do NOT pass `seats` from the client — a one-time
+ *  checkout quantity would go stale the moment the team grew (an org could add
+ *  members while still paying for the original count).
  *
  *  Self-host / keyless dev: returns [] so the plugin never loads and no Stripe
  *  env is required to boot. */
@@ -225,7 +223,13 @@ export function buildStripePlugins(): ReturnType<typeof stripePlugin>[] {
       organization: { enabled: true },
       subscription: {
         enabled: true,
-        plans: plans.map((p) => ({ name: p.tier, priceId: p.priceId })),
+        // seatPriceId === priceId ⇒ seat-only plan: quantity is the member count,
+        // auto-synced by the plugin on member changes (see the doc comment above).
+        plans: plans.map((p) => ({
+          name: p.tier,
+          priceId: p.priceId,
+          seatPriceId: p.priceId,
+        })),
         // Only the org's owner/admin may manage its billing. referenceId is the
         // orgId; verify the acting user actually holds that role in the org.
         authorizeReference: async ({ user, referenceId }) => {

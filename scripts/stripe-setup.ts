@@ -12,7 +12,9 @@
 // Refuses a live key unless STRIPE_SETUP_ALLOW_LIVE=1 — this is a TEST-mode
 // bootstrap. The unit_amounts below are placeholder test prices ($/seat/month);
 // adjust them in the Stripe dashboard (or here) to the real numbers. Billing is
-// per-seat: the price is per seat and the seat count is the checkout quantity.
+// per-seat: each price is a per-seat recurring price used as a seat-only plan
+// (priceId === seatPriceId), so the @better-auth/stripe plugin sets quantity =
+// member count and auto-syncs it as members change (see apps/web/src/lib/billing.ts).
 
 import Stripe from "stripe";
 

@@ -5,7 +5,7 @@ import { PageContainer, Topbar } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { billingPlans, isBillingConfigured, orgSeatCount } from "@/lib/billing";
+import { billingPlans, isBillingConfigured } from "@/lib/billing";
 import { currentCustomer } from "@/lib/customer";
 import { getOrgContext } from "@/lib/org-context";
 import { hasEntitlement, resolvePlan } from "@/lib/plan";
@@ -49,14 +49,12 @@ export default async function BillingPage() {
   if (billingOn && !selfHost && !managedManually) {
     const { orgId } = await getOrgContext();
     if (orgId) {
-      const seatCount = await orgSeatCount(orgId);
       const upgradePlans = hasActiveSub
         ? []
         : billingPlans().map((p) => ({ tier: p.tier, label: p.label }));
       actions = (
         <BillingActions
           orgId={orgId}
-          seatCount={seatCount}
           upgradePlans={upgradePlans}
           canManage={hasActiveSub}
         />

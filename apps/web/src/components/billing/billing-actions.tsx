@@ -13,7 +13,10 @@ import { authClient } from "@/lib/auth-client";
 // we never create a second subscription for an org that already has one.
 //
 // customerType "organization" + referenceId = orgId: we bill the org, not the
-// user. successUrl/cancelUrl/returnUrl point back at /billing.
+// user. successUrl/cancelUrl/returnUrl point back at /billing. We do NOT pass a
+// seat count — the plans are seat-only (priceId === seatPriceId), so the plugin
+// sets quantity = member count at checkout and keeps it synced on member changes
+// (see lib/billing.ts); a client-supplied count would just go stale.
 
 interface UpgradePlan {
   tier: "pro" | "team";
@@ -22,12 +25,10 @@ interface UpgradePlan {
 
 export function BillingActions({
   orgId,
-  seatCount,
   upgradePlans,
   canManage,
 }: {
   orgId: string;
-  seatCount: number;
   upgradePlans: UpgradePlan[];
   canManage: boolean;
 }) {
@@ -60,7 +61,6 @@ export function BillingActions({
         plan: tier,
         referenceId: orgId,
         customerType: "organization",
-        seats: seatCount,
         successUrl: "/billing",
         cancelUrl: "/billing",
       }),
