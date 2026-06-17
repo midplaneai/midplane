@@ -1,14 +1,18 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { getAuth } from "@/lib/auth";
 import { getOrgContext } from "@/lib/org-context";
 import { getPostHog } from "@/lib/posthog";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
+import { suggestWorkspaceName } from "@/lib/workspace-name";
 import {
   APEX_HOST,
   REGION_COOKIE,
@@ -27,9 +31,17 @@ import type { Region } from "@midplane-cloud/kms";
 // region cookie in a later step; here the chosen region is written directly.
 
 export default async function RegionPicker() {
-  const { userId } = await getOrgContext();
-
   const h = await headers();
+  // Read the session once: drives the auth/unauth branch AND the workspace-name
+  // suggestion (email domain → company, or the person's name for generic
+  // providers). Unauth visitors picked region before signup, so there's no
+  // session yet and no workspace field — the name is set on the authed pass.
+  const session = await getAuth().api.getSession({ headers: h });
+  const userId = session?.user.id ?? null;
+  const suggestedWorkspace = session
+    ? suggestWorkspaceName(session.user.email, session.user.name)
+    : "";
+
   // Vercel/Cloudflare-style country header, falls through to nothing in dev.
   const country =
     h.get("x-vercel-ip-country") ??
@@ -49,7 +61,7 @@ export default async function RegionPicker() {
       <section className="container mx-auto flex max-w-[760px] flex-1 flex-col items-center justify-center gap-8 px-4 py-16">
         <div className="space-y-3 text-center">
           <h1 className="text-3xl font-semibold tracking-[-0.025em] text-foreground">
-            Pick your data region
+            {userId ? "Set up your workspace" : "Pick your data region"}
           </h1>
           <p className="text-sm text-muted-foreground">
             Your audit log and encrypted credentials live in this region. This
@@ -61,6 +73,22 @@ export default async function RegionPicker() {
           action={action}
           className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2"
         >
+          {userId ? (
+            <div className="space-y-2 text-left sm:col-span-2">
+              <Label htmlFor="workspaceName">Workspace name</Label>
+              <Input
+                id="workspaceName"
+                name="workspaceName"
+                defaultValue={suggestedWorkspace}
+                maxLength={100}
+                required
+                autoComplete="organization"
+              />
+              <p className="text-xs text-muted-foreground">
+                You can rename this later.
+              </p>
+            </div>
+          ) : null}
           <RegionCard region="eu" suggested={suggested} />
           <RegionCard region="us" suggested={suggested} />
           <Button type="submit" className="sm:col-span-2" size="lg">
@@ -123,8 +151,16 @@ async function pickRegionAuthed(formData: FormData) {
     // .app.midplane.ai-scoped so it carries across subdomains.
     redirect(`https://${REGION_HOST[region]}/signup/region`);
   }
+  // Workspace name from the form (prefilled with a smart default, editable).
+  // Blank → upsertCustomerRegion derives one. Capped to a sane length.
+  const workspaceName = formData.get("workspaceName");
+  const orgName =
+    typeof workspaceName === "string"
+      ? workspaceName.trim().slice(0, 100)
+      : "";
+
   const { userId } = await getOrgContext();
-  const customer = await upsertCustomerRegion(region);
+  const customer = await upsertCustomerRegion(region, orgName || undefined);
 
   // Set the signed region cookie alongside the DB write — this is the routing
   // fast-path the middleware reads to send the user to their regional subdomain

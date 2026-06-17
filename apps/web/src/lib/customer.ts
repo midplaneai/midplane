@@ -7,6 +7,10 @@ import type { Region } from "@midplane-cloud/kms";
 import { getAuth } from "./auth.ts";
 import { getActorEmail, getOrgContext } from "./org-context.ts";
 import { bootRegion } from "./region-context.ts";
+import {
+  slugifyWorkspaceName,
+  suggestWorkspaceName,
+} from "./workspace-name.ts";
 
 // Look up the Midplane customer for the current session's active org, if it
 // exists. Returns null when the signed-in user has no active org yet (fresh
@@ -40,15 +44,20 @@ export async function currentCustomer(): Promise<Customer | null> {
 // Race-safe: INSERT ... ON CONFLICT DO NOTHING means concurrent submits for
 // the same org can't both succeed — one wins, the other returns no rows from
 // .returning(), and we fall back to SELECT to fetch what the winner inserted.
-export async function upsertCustomerRegion(region: Region): Promise<Customer> {
+export async function upsertCustomerRegion(
+  region: Region,
+  orgName?: string,
+): Promise<Customer> {
   // We seed customers.email from the human who first picked the region — used
-  // for the workspace label in AppShell + receipts.
+  // for receipts and the customers row.
   const email = await getActorEmail();
   if (!email) throw new Error("no email on session user");
 
   let { orgId } = await getOrgContext();
   if (!orgId) {
-    orgId = await createActiveOrg(email);
+    // The org name comes from the signup form (a smart default the user can
+    // edit). Fall back to the derived suggestion if it's blank.
+    orgId = await createActiveOrg(orgName?.trim() || suggestWorkspaceName(email));
   }
 
   // Pick the DB for the region the user is signing up for, not the region this
@@ -102,17 +111,13 @@ export async function upsertCustomerRegion(region: Region): Promise<Customer> {
 //
 // Region is NOT written to org metadata — region routing uses the signed
 // region cookie + the customers.region column, not an org-metadata claim.
-async function createActiveOrg(email: string): Promise<string> {
+async function createActiveOrg(orgName: string): Promise<string> {
   const auth = getAuth();
   const reqHeaders = await headers();
-  const local = email.split("@")[0] || "workspace";
-  const slugBase = local.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
-    /(^-|-$)/g,
-    "",
-  );
+  const slugBase = slugifyWorkspaceName(orgName);
   const created = await auth.api.createOrganization({
     body: {
-      name: local,
+      name: orgName,
       slug: `${slugBase || "org"}-${ulid().slice(-10).toLowerCase()}`,
     },
     headers: reqHeaders,
