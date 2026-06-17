@@ -107,7 +107,34 @@ export function assertBootEnv(env: EnvLike = process.env): void {
     });
   }
 
+  // Stripe billing (cloud-only). All-or-nothing: zero Stripe vars = billing is
+  // off and the app boots fine (keyless dev — /billing degrades to "talk to
+  // us"). But a PARTIAL config is a deploy footgun — Checkout/Portal/webhook
+  // would 500 on first use — so if ANY Stripe var is set, require ALL four.
+  // Deliberately NOT in the self-host branch: self-host never bills.
+  issues.push(...stripeIssues(env));
+
   throwIfIssues(issues);
+}
+
+// Cloud Stripe vars, validated all-or-nothing (see call site). Returns issues
+// only when the config is partial; zero set = billing off = no issues.
+function stripeIssues(env: EnvLike): Issue[] {
+  const vars = [
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_PRO_PRICE_ID",
+    "STRIPE_TEAM_PRICE_ID",
+  ] as const;
+  const setCount = vars.filter((v) => env[v]).length;
+  if (setCount === 0 || setCount === vars.length) return [];
+  return vars
+    .filter((v) => !env[v])
+    .map((v) => ({
+      var: v,
+      reason:
+        "required once any Stripe var is set (billing is all-or-nothing; see scripts/stripe-setup.ts)",
+    }));
 }
 
 // Self-host required vars. One DB, no region pin, env-mode crypto against the
