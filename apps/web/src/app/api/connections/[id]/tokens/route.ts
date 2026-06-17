@@ -135,7 +135,7 @@ export async function POST(
       {
         name: parsed.data.name,
         expiresAt,
-        actorClerkUserId: userId,
+        actorUserId: userId,
         env: tokenEnvFromConfig(process.env),
         planLimit: { tokenCap: caps.tokens, plan },
       },

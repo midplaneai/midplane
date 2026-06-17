@@ -14,8 +14,7 @@ import { bootRegion } from "./region-context.ts";
 // row yet — the dashboard route uses null to redirect to /signup/region.
 //
 // One Midplane customer == one organization. Org members are the actors who
-// can sign in and act on its behalf. (The column is still named clerk_org_id;
-// it's renamed provider-neutral in a later step.)
+// can sign in and act on its behalf.
 export async function currentCustomer(): Promise<Customer | null> {
   const { orgId } = await getOrgContext();
   if (!orgId) return null;
@@ -26,7 +25,7 @@ export async function currentCustomer(): Promise<Customer | null> {
   const rows = await db
     .select()
     .from(customers)
-    .where(eq(customers.clerkOrgId, orgId));
+    .where(eq(customers.orgId, orgId));
   return rows[0] ?? null;
 }
 
@@ -63,11 +62,11 @@ export async function upsertCustomerRegion(region: Region): Promise<Customer> {
     .insert(customers)
     .values({
       id: ulid(),
-      clerkOrgId: orgId,
+      orgId: orgId,
       email,
       region,
     })
-    .onConflictDoNothing({ target: customers.clerkOrgId })
+    .onConflictDoNothing({ target: customers.orgId })
     .returning();
 
   const winner = inserted[0];
@@ -77,7 +76,7 @@ export async function upsertCustomerRegion(region: Region): Promise<Customer> {
     const existing = await db
       .select()
       .from(customers)
-      .where(eq(customers.clerkOrgId, orgId));
+      .where(eq(customers.orgId, orgId));
     const row = existing[0];
     if (!row)
       throw new Error("customer row vanished after onConflictDoNothing");

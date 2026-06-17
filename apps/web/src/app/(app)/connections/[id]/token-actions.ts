@@ -90,7 +90,7 @@ export async function createTokenAction(
       {
         name: trimmed,
         expiresAt,
-        actorClerkUserId: userId,
+        actorUserId: userId,
         env: tokenEnvFromConfig(process.env),
         planLimit: { tokenCap: caps.tokens, plan },
       },
@@ -153,7 +153,7 @@ export async function revokeTokenAction(
   try {
     const result = await revokeToken(customer, connectionId, tokenId, {
       reason: "user_action",
-      actorClerkUserId: userId,
+      actorUserId: userId,
     });
     if (!result) return { ok: false, error: "not_found" };
     revalidatePath(`/connections/${connectionId}`);

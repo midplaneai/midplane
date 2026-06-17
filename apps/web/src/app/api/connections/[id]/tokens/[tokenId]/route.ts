@@ -69,7 +69,7 @@ export async function DELETE(
 
   const result = await revokeToken(customer, id, tokenId, {
     reason,
-    actorClerkUserId: userId,
+    actorUserId: userId,
   });
   if (!result) {
     return Response.json({ error: "not found" }, { status: 404 });

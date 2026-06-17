@@ -228,7 +228,7 @@ export async function createToken(
   args: {
     name: string;
     expiresAt: Date | null;
-    actorClerkUserId: string;
+    actorUserId: string;
     env: "live" | "test";
     /** Manual mints pass the resolved token cap so the per-customer plan
      *  limit is enforced. The auto-minted default token (createConnection)
@@ -322,7 +322,7 @@ export async function createToken(
         last4: generated.last4,
         tokenHash,
         pepperKid: pepper.kid,
-        createdByUserId: args.actorClerkUserId,
+        createdByUserId: args.actorUserId,
         expiresAt: args.expiresAt,
       });
 
@@ -354,7 +354,7 @@ export async function createToken(
         last4: generated.last4,
         expires_at: args.expiresAt?.toISOString() ?? null,
       },
-      actorClerkUserId: args.actorClerkUserId,
+      actorUserId: args.actorUserId,
     });
   } catch (err) {
     console.error("[createToken] TOKEN_CREATED audit write failed", err);
@@ -416,7 +416,7 @@ export async function revokeToken(
   customer: Customer,
   connectionId: string,
   tokenId: string,
-  args: { reason: string; actorClerkUserId: string },
+  args: { reason: string; actorUserId: string },
 ): Promise<{ id: string } | null> {
   const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
@@ -477,7 +477,7 @@ export async function revokeToken(
           token_id: tokenId,
           reason: args.reason,
         },
-        actorClerkUserId: args.actorClerkUserId,
+        actorUserId: args.actorUserId,
       });
     } catch (err) {
       console.error("[revokeToken] TOKEN_REVOKED audit write failed", err);
@@ -555,7 +555,7 @@ export async function emitTokenAuditRow(
     mcpTokenId: string;
     eventType: "TOKEN_CREATED" | "TOKEN_REVOKED";
     payload: Record<string, unknown>;
-    actorClerkUserId: string;
+    actorUserId: string;
   },
 ): Promise<void> {
   // Mirrors emitConfigAuditRow in connections.ts: validates customer.id
@@ -588,7 +588,7 @@ export async function emitTokenAuditRow(
       ts: new Date(),
       eventType: row.eventType,
       payload: row.payload,
-      actorClerkUserId: row.actorClerkUserId,
+      actorUserId: row.actorUserId,
       mcpTokenId: row.mcpTokenId,
       // Stamp the canonical connection scope (0020) so a connection-
       // filtered /audit keeps these credential events. tenant_id carries

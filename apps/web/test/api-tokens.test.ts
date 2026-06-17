@@ -14,7 +14,7 @@ const PEPPER_B64 = randomBytes(32).toString("base64");
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
-  clerkOrgId: "org_clerk-1",
+  orgId: "org_clerk-1",
   email: "u@e.test",
   region: "eu" as const,
   createdAt: new Date(),
@@ -319,7 +319,7 @@ describe("DELETE /api/connections/[id]/tokens/[tokenId]", () => {
     expect(await res.json()).toEqual({ id: "tok-1" });
     const args = revokeTokenMock.mock.calls[0]!;
     expect(args[3].reason).toBe("user_action");
-    expect(args[3].actorClerkUserId).toBe("user_1");
+    expect(args[3].actorUserId).toBe("user_1");
   });
 
   it("accepts an empty body without choking the JSON parser", async () => {

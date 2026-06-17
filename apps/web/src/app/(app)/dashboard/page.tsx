@@ -415,7 +415,7 @@ async function pauseAction(formData: FormData) {
         database: "main",
         eventType: "CONNECTION_PAUSED",
         payload: { connection_id: result.id, action: "paused" },
-        actorClerkUserId: userId,
+        actorUserId: userId,
       });
     } catch (err) {
       console.error("[dashboard.pauseAction] CONNECTION_PAUSED audit write failed", err);
@@ -453,7 +453,7 @@ async function resumeAction(formData: FormData) {
         database: "main",
         eventType: "CONNECTION_RESUMED",
         payload: { connection_id: result.id, action: "resumed" },
-        actorClerkUserId: userId,
+        actorUserId: userId,
       });
     } catch (err) {
       console.error("[dashboard.resumeAction] CONNECTION_RESUMED audit write failed", err);

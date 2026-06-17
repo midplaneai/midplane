@@ -140,10 +140,10 @@ export default async function AuditDetailPage({ params }: PageProps) {
                 <Dd>{event.eventType}</Dd>
                 <Dt>Tenant</Dt>
                 <Dd>{event.tenantId}</Dd>
-                {event.actorClerkUserId && (
+                {event.actorUserId && (
                   <>
                     <Dt>Actor</Dt>
-                    <Dd>{event.actorClerkUserId}</Dd>
+                    <Dd>{event.actorUserId}</Dd>
                   </>
                 )}
                 <Dt>Agent</Dt>

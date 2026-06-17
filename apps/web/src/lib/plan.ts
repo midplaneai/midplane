@@ -1,12 +1,11 @@
 // Plan resolution + numeric caps. The single entitlement chokepoint.
 //
-// Billing is not wired yet (Stripe lands in a later phase), so resolvePlan()
-// returns `free` for everyone and hasEntitlement() returns false. The numeric
-// caps below are OURS — boolean entitlements can't answer "10 connections", so
-// we map plan tier to caps here and count rows in Postgres ourselves. When
-// billing lands, only resolvePlan()/hasEntitlement() change; callers thread
-// `caps` down unchanged. The founder/internal plan override returns as a
-// customers column in a later step.
+// Stripe billing isn't wired yet, so resolvePlan() returns `free` unless the
+// customers.plan_override column is set (the founder/internal manual lever),
+// and hasEntitlement() returns false. The numeric caps below are OURS — boolean
+// entitlements can't answer "10 connections", so we map plan tier to caps here
+// and count rows in Postgres ourselves. When billing lands, only resolvePlan()/
+// hasEntitlement() change; callers thread `caps` down unchanged.
 //
 // Seats are NOT in this map — a per-plan seat cap is enforced separately on the
 // invite path (Better Auth organization.membershipLimit is static, not per-plan).
@@ -123,13 +122,22 @@ export function planLimitBody(err: PlanLimitError): {
 
 /** Resolve the active organization's plan + caps.
  *
- *  Billing is not wired yet, so this returns `free` for everyone. Kept async
- *  and called once per request so the later billing swap (Stripe-fed
- *  customers.plan + the founder override column) changes only this body —
- *  callers thread `caps` down to the auth-free, unit-tested lib enforcement
- *  functions unchanged. We never clawback already-created resources on a
- *  downgrade; only new creates are gated. */
+ *  Reads the founder/internal override from customers.plan_override; absent a
+ *  value, resolves `free` (Stripe billing is the future source of truth). Kept
+ *  async + called once per request so the later billing swap changes only this
+ *  body — callers thread `caps` down to the auth-free, unit-tested lib
+ *  enforcement functions unchanged. We never clawback already-created resources
+ *  on a downgrade; only new creates are gated.
+ *
+ *  Dynamic import keeps the top of this module dependency-free so the pure
+ *  exports (CAPS, PlanLimitError, types) stay importable by tokens.ts /
+ *  connections.ts + their unit tests without pulling auth/db into those paths. */
 export async function resolvePlan(): Promise<ResolvedPlan> {
+  const { currentCustomer } = await import("./customer.ts");
+  const override = (await currentCustomer())?.planOverride;
+  if (override) {
+    return { plan: override, caps: CAPS[override] };
+  }
   return { plan: "free", caps: CAPS.free };
 }
 

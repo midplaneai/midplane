@@ -1,12 +1,14 @@
 // Unit coverage for lib/plan.ts — the plan/caps resolution layer.
 //
-// Billing is not wired yet (Stripe lands in a later phase), so resolvePlan()
-// returns `free` for everyone and hasEntitlement() returns false — no session
-// read, nothing to mock. CAPS, the pre-flight block, and the typed limit error
-// are pure and asserted directly. Tier resolution + the founder override return
-// (with coverage) when billing + the override column land.
+// resolvePlan() reads the founder/internal override from customers.plan_override
+// (via currentCustomer); absent a value it resolves `free` (Stripe billing is a
+// later phase) and hasEntitlement() returns false. We mock currentCustomer to
+// stage the override. CAPS, the pre-flight block, and the typed limit error are
+// pure and asserted directly.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { Customer } from "@midplane-cloud/db";
 
 import {
   CAPS,
@@ -15,6 +17,31 @@ import {
   hasEntitlement,
   resolvePlan,
 } from "../src/lib/plan.ts";
+
+// currentCustomer is reassigned per-test through a getter so each test can
+// stage a different plan_override (or a null customer).
+let currentCustomerMock: () => Promise<Customer | null>;
+
+vi.mock("@/lib/customer", () => ({
+  get currentCustomer() {
+    return currentCustomerMock;
+  },
+}));
+
+function customerWith(planOverride: Customer["planOverride"]): Customer {
+  return {
+    id: "01HCUSTOMER0000000000000000",
+    orgId: "org_1",
+    email: "u@e.test",
+    region: "eu",
+    planOverride,
+    createdAt: new Date(),
+  };
+}
+
+beforeEach(() => {
+  currentCustomerMock = async () => customerWith(null);
+});
 
 describe("CAPS", () => {
   it("encodes the PRICING.md tiers exactly", () => {
@@ -45,7 +72,35 @@ describe("CAPS", () => {
 });
 
 describe("resolvePlan", () => {
-  it("returns free with the free caps (billing not wired yet)", async () => {
+  it("resolves free when plan_override is null", async () => {
+    currentCustomerMock = async () => customerWith(null);
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("free");
+    expect(caps).toEqual(CAPS.free);
+  });
+
+  it("resolves free when there is no customer", async () => {
+    currentCustomerMock = async () => null;
+    const { plan } = await resolvePlan();
+    expect(plan).toBe("free");
+  });
+
+  it("forces team caps when plan_override is 'team' (no subscription needed)", async () => {
+    currentCustomerMock = async () => customerWith("team");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("team");
+    expect(caps).toEqual(CAPS.team);
+  });
+
+  it("forces pro caps when plan_override is 'pro'", async () => {
+    currentCustomerMock = async () => customerWith("pro");
+    const { plan, caps } = await resolvePlan();
+    expect(plan).toBe("pro");
+    expect(caps).toEqual(CAPS.pro);
+  });
+
+  it("can force a LOWER tier ('free') to exercise the capped UI", async () => {
+    currentCustomerMock = async () => customerWith("free");
     const { plan, caps } = await resolvePlan();
     expect(plan).toBe("free");
     expect(caps).toEqual(CAPS.free);

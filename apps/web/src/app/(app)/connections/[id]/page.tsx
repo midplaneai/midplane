@@ -224,7 +224,7 @@ export default async function ConnectionWorkspace({
           database: "main",
           eventType: "CONNECTION_PAUSED",
           payload: { connection_id: result.id, action: "paused" },
-          actorClerkUserId: userId,
+          actorUserId: userId,
         });
       } catch (err) {
         console.error(
@@ -266,7 +266,7 @@ export default async function ConnectionWorkspace({
           database: "main",
           eventType: "CONNECTION_RESUMED",
           payload: { connection_id: result.id, action: "resumed" },
-          actorClerkUserId: userId,
+          actorUserId: userId,
         });
       } catch (err) {
         console.error(
