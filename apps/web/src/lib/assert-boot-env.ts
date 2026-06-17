@@ -15,6 +15,8 @@
 // or hex shape here. The downstream loaders own that and reporting it
 // twice would drift. The goal is: "did you remember to set the var?"
 
+import { SELF_HOST_REGION } from "./self-host.ts";
+
 interface Issue {
   var: string;
   reason: string;
@@ -23,6 +25,17 @@ interface Issue {
 type EnvLike = Record<string, string | undefined>;
 
 export function assertBootEnv(env: EnvLike = process.env): void {
+  // Self-host is a different process shape: one DATABASE_URL (no per-region
+  // DATABASE_URL_<R>), no MIDPLANE_REGION (bootRegion pins it), no region
+  // cookie, no Fly/indexer plumbing. Crypto reuses env-mode against the pinned
+  // region's keys. Validate that surface and skip the cloud checks entirely.
+  // Read the flag off the passed env (not isSelfHost()'s process.env) so the
+  // function validates one consistent snapshot — at boot the two are identical.
+  if (env.MIDPLANE_SELF_HOST === "1") {
+    throwIfIssues(selfHostIssues(env));
+    return;
+  }
+
   const issues: Issue[] = [];
 
   // Region pin
@@ -94,6 +107,51 @@ export function assertBootEnv(env: EnvLike = process.env): void {
     });
   }
 
+  throwIfIssues(issues);
+}
+
+// Self-host required vars. One DB, no region pin, env-mode crypto against the
+// region self-host pins to (SELF_HOST_REGION). The _<REGION> suffix on the
+// crypto vars is an internal artifact of that pin — documented in the SELFHOST
+// block of .env.example.
+function selfHostIssues(env: EnvLike): Issue[] {
+  const issues: Issue[] = [];
+
+  if (!env.DATABASE_URL) {
+    issues.push({
+      var: "DATABASE_URL",
+      reason: "required in self-host (single Postgres; getDb ignores region)",
+    });
+  }
+
+  const upper = SELF_HOST_REGION.toUpperCase();
+  const mode = env.MIDPLANE_KMS_MODE ?? "env";
+  if (mode === "env") {
+    const keyVar = `MIDPLANE_KMS_DEV_KEY_${upper}`;
+    if (!env[keyVar]) {
+      issues.push({
+        var: keyVar,
+        reason: `required for env-mode credential encryption (self-host pins region '${SELF_HOST_REGION}'; run: openssl rand -hex 32)`,
+      });
+    }
+    const pepperVar = `MIDPLANE_TOKEN_PEPPER_${upper}_V1`;
+    if (!env[pepperVar]) {
+      issues.push({
+        var: pepperVar,
+        reason: `required for env-mode token pepper (self-host; run: openssl rand -base64 32)`,
+      });
+    }
+  } else {
+    issues.push({
+      var: "MIDPLANE_KMS_MODE",
+      reason: `self-host supports only env-mode KMS; got ${JSON.stringify(mode)} (no AWS in self-host)`,
+    });
+  }
+
+  return issues;
+}
+
+function throwIfIssues(issues: Issue[]): void {
   if (issues.length === 0) return;
 
   const lines = issues.map((i) => `  - ${i.var}: ${i.reason}`);

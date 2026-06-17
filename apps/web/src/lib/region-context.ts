@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { Region } from "@midplane-cloud/kms";
 
+import { isSelfHost, SELF_HOST_REGION } from "./self-host.ts";
+
 // Request-scope region context. The Next.js middleware reads
 // auth().sessionClaims.org?.publicMetadata?.region and wraps the rest of
 // the request in `withRegion()`. Server actions, route handlers, and any
@@ -36,6 +38,11 @@ export function currentRegion(): Region {
 }
 
 export function bootRegion(): Region {
+  // Self-host has one DB and no region routing, so it pins to a fixed region
+  // token rather than requiring the operator to set MIDPLANE_REGION. getDb
+  // ignores the region in self-host; this value is what the implicit customer
+  // carries and what the audit pipeline stamps + filters on.
+  if (isSelfHost()) return SELF_HOST_REGION;
   const r = process.env.MIDPLANE_REGION;
   if (r !== "eu" && r !== "us") {
     throw new Error(

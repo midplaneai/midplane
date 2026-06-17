@@ -117,4 +117,48 @@ describe("assertBootEnv", () => {
   it("does not require INDEXER_TOKEN on a laptop (no FLY_API_TOKEN)", () => {
     expect(() => assertBootEnv(envMode("eu"))).not.toThrow();
   });
+
+  describe("self-host (MIDPLANE_SELF_HOST=1)", () => {
+    function selfHostEnv(): Record<string, string | undefined> {
+      return {
+        MIDPLANE_SELF_HOST: "1",
+        DATABASE_URL: "postgres://localhost/x",
+        MIDPLANE_KMS_MODE: "env",
+        MIDPLANE_KMS_DEV_KEY_EU: KEY_HEX,
+        MIDPLANE_TOKEN_PEPPER_EU_V1: PEPPER_B64,
+      };
+    }
+
+    it("passes on a complete self-host env", () => {
+      expect(() => assertBootEnv(selfHostEnv())).not.toThrow();
+    });
+
+    it("does NOT require the cloud per-region / region-pin vars", () => {
+      // No MIDPLANE_REGION, no DATABASE_URL_EU/US — self-host pins the region.
+      const env = selfHostEnv();
+      expect(env.MIDPLANE_REGION).toBeUndefined();
+      expect(env.DATABASE_URL_EU).toBeUndefined();
+      expect(() => assertBootEnv(env)).not.toThrow();
+    });
+
+    it("requires DATABASE_URL (the single Postgres)", () => {
+      const env = selfHostEnv();
+      delete env.DATABASE_URL;
+      expect(() => assertBootEnv(env)).toThrow(/DATABASE_URL\b/);
+    });
+
+    it("requires the env-mode key + pepper for the pinned region", () => {
+      const env = selfHostEnv();
+      delete env.MIDPLANE_KMS_DEV_KEY_EU;
+      delete env.MIDPLANE_TOKEN_PEPPER_EU_V1;
+      expect(() => assertBootEnv(env)).toThrow(/MIDPLANE_KMS_DEV_KEY_EU/);
+      expect(() => assertBootEnv(env)).toThrow(/MIDPLANE_TOKEN_PEPPER_EU_V1/);
+    });
+
+    it("rejects kms mode (no AWS in self-host)", () => {
+      const env = selfHostEnv();
+      env.MIDPLANE_KMS_MODE = "kms";
+      expect(() => assertBootEnv(env)).toThrow(/MIDPLANE_KMS_MODE/);
+    });
+  });
 });
