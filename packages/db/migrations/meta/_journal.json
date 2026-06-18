@@ -197,6 +197,13 @@
       "when": 1777644000021,
       "tag": "0027_sso_provider",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1777644000022,
+      "tag": "0028_mcp_scope_grants",
+      "breakpoints": true
     }
   ]
 }

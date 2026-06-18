@@ -6,11 +6,13 @@ import { describe, expect, it } from "vitest";
 
 import { ssoProvider } from "../src/auth-schema.ts";
 import {
+  MCP_SCOPE_ACCESS_LEVELS,
   REGIONS,
   auditEventsIndex,
   connectionDatabases,
   connections,
   customers,
+  mcpScopeGrants,
 } from "../src/schema.ts";
 
 describe("schema parity with OSS audit_events", () => {
@@ -113,6 +115,28 @@ describe("customers", () => {
     for (const col of ["id", "orgId", "email", "region"]) {
       expect(cols).toContain(col);
     }
+  });
+});
+
+describe("mcpScopeGrants (0028, per-agent DB scope)", () => {
+  it("holds a polymorphic subject (OAuth client+user OR PAT token) + access, keyed by connection_database_id", () => {
+    const cols = Object.keys(mcpScopeGrants);
+    for (const col of [
+      "id",
+      "connectionDatabaseId",
+      "clientId",
+      "userId",
+      "mcpTokenId",
+      "access",
+      "createdAt",
+      "updatedAt",
+    ]) {
+      expect(cols).toContain(col);
+    }
+  });
+
+  it("scopes access to read | write (the consent/PAT picker levels)", () => {
+    expect(MCP_SCOPE_ACCESS_LEVELS).toEqual(["read", "write"]);
   });
 });
 

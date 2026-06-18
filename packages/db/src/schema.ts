@@ -527,6 +527,71 @@ export const mcpTokens = pgTable(
   }),
 );
 
+// --- mcp_scope_grants -------------------------------------------------------
+//
+// Per-agent least-privilege DB scope (P6.1). The access boundary ON TOP of
+// ownership: which connection_databases an agent may reach and at what access.
+// The proxy resolves the grant set for a credential, intersects it with the
+// connection's DBs, and injects the X-Midplane-Scope session header the engine
+// enforces (subset gate + clamp read_write→read where the grant is read).
+// Absence of a row = that DB is NOT in the agent's scope.
+//
+// ONE table, polymorphic subject, so OAuth and headless PAT credentials share
+// one enforcement path. Exactly one subject is set per row (DB CHECK in 0028):
+//   - OAuth: (client_id, user_id), written at consent;
+//   - PAT:   mcp_token_id, written at token creation.
+// Keyed by connection_database_id (stable spawn/DSN/audit id; survives rename).
+// No RLS (mirrors mcp_tokens) — ownership is enforced in app code. The two
+// partial UNIQUE indexes (one OAuth, one PAT) live in the 0028 migration since
+// Drizzle can't express the WHERE predicate; the declarations below are the
+// unindexed read-side mirror so type inference + schema-shape tests see them.
+
+export const MCP_SCOPE_ACCESS_LEVELS = ["read", "write"] as const;
+export type McpScopeAccess = (typeof MCP_SCOPE_ACCESS_LEVELS)[number];
+
+export const mcpScopeGrants = pgTable(
+  "mcp_scope_grants",
+  {
+    id: text("id").primaryKey(), // ULID
+    connectionDatabaseId: text("connection_database_id").notNull(),
+    // OAuth subject (client_id = oauth_application.client_id, user_id =
+    // user.id). NULL for PAT grants. FKs to the auth tables live in the
+    // migration (cross-module, same as mcp_tokens.client_id).
+    clientId: text("client_id"),
+    userId: text("user_id"),
+    // Headless PAT subject. NULL for OAuth grants.
+    mcpTokenId: text("mcp_token_id"),
+    access: text("access", { enum: MCP_SCOPE_ACCESS_LEVELS }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    connectionDatabaseFk: foreignKey({
+      name: "mcp_scope_grants_connection_database_fk",
+      columns: [t.connectionDatabaseId],
+      foreignColumns: [connectionDatabases.id],
+    }).onDelete("cascade"),
+    // Read-side mirrors of the UNIQUE PARTIAL indexes the 0028 migration owns
+    // (WHERE mcp_token_id IS NULL / IS NOT NULL — not expressible in Drizzle).
+    // The (client_id, user_id) / (mcp_token_id) prefixes also serve the proxy's
+    // per-request grant lookup.
+    oauthIdx: index("mcp_scope_grants_oauth_uq").on(
+      t.clientId,
+      t.userId,
+      t.connectionDatabaseId,
+    ),
+    patIdx: index("mcp_scope_grants_pat_uq").on(
+      t.mcpTokenId,
+      t.connectionDatabaseId,
+    ),
+    cdbIdx: index("mcp_scope_grants_cdb_idx").on(t.connectionDatabaseId),
+  }),
+);
+
 // --- types ------------------------------------------------------------------
 
 export type Customer = typeof customers.$inferSelect;
@@ -541,5 +606,7 @@ export type IndexerCursor = typeof indexerCursors.$inferSelect;
 export type NewIndexerCursor = typeof indexerCursors.$inferInsert;
 export type McpToken = typeof mcpTokens.$inferSelect;
 export type NewMcpToken = typeof mcpTokens.$inferInsert;
+export type McpScopeGrant = typeof mcpScopeGrants.$inferSelect;
+export type NewMcpScopeGrant = typeof mcpScopeGrants.$inferInsert;
 
 export { sql };
