@@ -1,0 +1,41 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install
+      - run: bun test
+
+  smoketest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install
+      - name: Build and run smoketest
+        working-directory: examples/smoketest
+        run: ./run.sh
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      - name: Build image and run MCP trial battery against sidecar Postgres
+        run: ./scripts/test-image.sh

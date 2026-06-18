@@ -1,0 +1,16 @@
+{
+  "name": "midplane-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "bun run server.ts",
+    "client": "bun run client.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "libpg-query": "^16.2.0",
+    "zod": "^4.3.6"
+  },
+  "trustedDependencies": ["better-sqlite3"]
+}
