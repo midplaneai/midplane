@@ -111,10 +111,21 @@ async function ownedDbIds(
   return new Set(rows.map((r) => r.id));
 }
 
-/** Replace the OAuth grant set for (client_id, user_id) with `selections`.
- *  Ownership-validated; non-owned / duplicate selections are dropped. Runs in
- *  one txn so a re-consent is atomic (the agent never sees a half-applied set).
- *  Returns the number of grant rows written. */
+/** Replace the OAuth grant set for (client_id, user_id) — SCOPED TO THIS
+ *  CUSTOMER's databases — with `selections`. Ownership-validated; non-owned /
+ *  duplicate selections are dropped. Runs in one txn so a re-consent is atomic
+ *  (the agent never sees a half-applied set). Returns the number of grant rows
+ *  written.
+ *
+ *  Why the delete is customer-scoped: a user can belong to more than one org
+ *  (customer) in the same region, and the consent picker only offers the CURRENT
+ *  customer's databases. The grant key is (client_id, user_id) — which spans
+ *  customers — so a blanket delete on that key would wipe the SAME user+client's
+ *  grants for ANOTHER customer's connections, 403-ing those agents. We restrict
+ *  the replace to grants whose connection_database belongs to THIS customer; the
+ *  selection then IS the complete grant set for this customer. (No customer_id
+ *  column needed — the row's connection_database_id already ties it to a
+ *  customer via connection_databases → connections.) */
 export async function setOAuthGrants(
   customer: Customer,
   args: { clientId: string; userId: string; selections: ScopeSelection[] },
@@ -134,12 +145,24 @@ export async function setOAuthGrants(
   }));
 
   await db.transaction(async (tx) => {
+    // Scope the replace to THIS customer's connection_databases (subquery), so
+    // re-consenting in one workspace can't clear another workspace's grants for
+    // the same user+client. A different-customer grant for the same key survives.
+    const customerDbIds = tx
+      .select({ id: connectionDatabases.id })
+      .from(connectionDatabases)
+      .innerJoin(
+        connections,
+        eq(connections.id, connectionDatabases.connectionId),
+      )
+      .where(eq(connections.customerId, customer.id));
     await tx
       .delete(mcpScopeGrants)
       .where(
         and(
           eq(mcpScopeGrants.clientId, args.clientId),
           eq(mcpScopeGrants.userId, args.userId),
+          inArray(mcpScopeGrants.connectionDatabaseId, customerDbIds),
         ),
       );
     if (rows.length > 0) await tx.insert(mcpScopeGrants).values(rows);
