@@ -27,6 +27,10 @@ which side of the line it's on (the rule of thumb: does it make a *single*
 developer/agent safer → core; does it exist because an org has compliance/
 identity/governance requirements → `ee/`). When in doubt, open an issue first.
 
+External pull requests to `apps/web/src/ee/` aren't accepted — that directory is
+commercial and maintainer-owned (enforced via `CODEOWNERS`). If you want to
+propose an `ee/` change, open an issue and we'll take it from there.
+
 ## Development
 
 ```bash
@@ -51,6 +55,21 @@ bun run test:engine                            # engine bun:test suite (cd engin
   `packages/db/migrations/meta/_journal.json` — see the existing files for the
   pattern, and mirror new auth tables in `packages/db/src/auth-schema.ts`.
 - Keep PRs focused; explain the "why" in the description.
+
+## Commit & PR conventions
+
+Commit messages and PR titles follow [Conventional Commits](https://www.conventionalcommits.org):
+`type(scope): description` (e.g. `feat(audit): connection-scoped audit log`).
+Common types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`,
+`chore`, `revert`, `security`.
+
+## Sign your commits (DCO)
+
+Sign every commit with `git commit -s`. By signing you certify the
+[Developer Certificate of Origin](https://developercertificate.org/) — you wrote
+the change, or have the right to submit it under the project's license. We don't
+require a separate CLA. (The engine subtree has required this all along; it now
+applies repo-wide.)
 
 ## Support scope
 
