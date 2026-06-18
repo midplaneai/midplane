@@ -259,7 +259,11 @@ async function runMcpQuery(
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "query", arguments: { sql: "SELECT n FROM t" } },
+      params: {
+        name: "query",
+        // `intent` is a required field on the query tool (engine 0.4.0+).
+        arguments: { sql: "SELECT n FROM t", intent: "e2e indexer drain" },
+      },
     },
   });
   expect(callRes.status(), await callRes.text()).toBe(200);

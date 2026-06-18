@@ -28,7 +28,9 @@ const SITES = [
   "scripts/dev-image.sh",
   "scripts/bootstrap.sh",
   ".env.example",
-  ".env.self-host.example",
+  // .env.self-host.example no longer pins the image: self-host process-spawns
+  // the in-image compiled binary (ProcessSpawner), so there is no image tag to
+  // drift there.
   "fly-eu.toml",
   "fly-us.toml",
   "fly-web-eu.toml",

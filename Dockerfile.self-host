@@ -1,0 +1,87 @@
+# Self-host control-plane image (single-tenant, MIDPLANE_SELF_HOST=1).
+#
+# Unlike the cloud web image (apps/web/Dockerfile), this one BUNDLES the engine:
+# in self-host the control plane spawns `midplane server` as a local subprocess
+# per connection (ProcessSpawner) instead of pulling a Docker image or creating
+# a Fly machine. So the engine binary must live in the same image as apps/web —
+# no Docker socket, no host networking, no image pull. One container is the whole
+# deploy (point it at one Postgres via DATABASE_URL).
+#
+# Built from the repo ROOT (one root bun.lock for the whole monorepo):
+#
+#   docker build -f Dockerfile.self-host -t midplane/self-host:dev .
+#
+# All stages use the glibc bun base (slim, NOT alpine) so the compiled engine
+# binary's libc matches the runner it executes on.
+
+# ---- deps: install with frozen lockfile ----------------------------------
+FROM oven/bun:1.3-slim AS deps
+WORKDIR /app
+
+# Root manifests + lockfile + bunfig (linker=hoisted), then EVERY workspace
+# member's package.json so `bun install --frozen-lockfile` resolves the merged
+# graph (it errors if any member named in the lockfile is missing).
+COPY package.json bun.lock bunfig.toml ./
+COPY apps/web/package.json apps/web/package.json
+COPY packages/db/package.json packages/db/package.json
+COPY packages/kms/package.json packages/kms/package.json
+COPY packages/router/package.json packages/router/package.json
+COPY infra/telemetry-proxy/package.json infra/telemetry-proxy/package.json
+COPY engine/packages/engine/package.json engine/packages/engine/package.json
+COPY engine/packages/mcp-server/package.json engine/packages/mcp-server/package.json
+COPY engine/examples/smoketest/package.json engine/examples/smoketest/package.json
+
+RUN bun install --frozen-lockfile
+
+# ---- web-builder: Next.js standalone bundle ------------------------------
+FROM oven/bun:1.3-slim AS web-builder
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+RUN bun --filter '@midplane-cloud/web' build
+
+# ---- engine-builder: compile the self-contained `midplane` binary --------
+# Mirrors engine/docker/Dockerfile's build stage exactly (WORKDIR /app so the
+# workspace symlinks + the baked libpg-query.wasm __dirname resolve at
+# /app/node_modules/libpg-query/wasm). The runner copies that one .wasm to the
+# same absolute path so the binary finds it at runtime.
+FROM oven/bun:1.3-slim AS engine-builder
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json bun.lock bunfig.toml ./
+COPY engine/packages ./engine/packages
+
+RUN bun build --compile ./engine/packages/mcp-server/src/cli.ts --outfile /app/midplane
+
+# ---- runner: web standalone + the engine binary --------------------------
+FROM oven/bun:1.3-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+# Select the single-tenant build + the process-spawn engine backend.
+ENV MIDPLANE_SELF_HOST=1
+ENV MIDPLANE_ENGINE_BIN=/usr/local/bin/midplane
+
+# `output: 'standalone'` + `outputFileTracingRoot: <repo root>` writes
+# apps/web/.next/standalone/{apps/web,packages/*,node_modules,...}; copy the
+# whole tree to /app and start at apps/web/server.js.
+COPY --from=web-builder /app/apps/web/.next/standalone ./
+COPY --from=web-builder /app/apps/web/.next/static ./apps/web/.next/static
+
+# The compiled engine binary on PATH, plus the ONE WASM asset bun --compile
+# can't embed (libpg-query loads it via fs.readFileSync(__dirname + ...); the
+# baked __dirname is /app/node_modules/libpg-query/wasm — added AFTER the web
+# standalone copy, so it just augments that tree; libpg-query isn't in the
+# web's pruned node_modules, so there's no clobber).
+COPY --from=engine-builder /app/midplane /usr/local/bin/midplane
+COPY --from=engine-builder /app/node_modules/libpg-query/wasm/libpg-query.wasm /app/node_modules/libpg-query/wasm/libpg-query.wasm
+
+EXPOSE 3000
+
+CMD ["bun", "run", "apps/web/server.js"]

@@ -136,7 +136,11 @@ test("policy hot-reload preserves the agent's MCP session", async ({
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "query", arguments: { sql: "SELECT n FROM t" } },
+      params: {
+        name: "query",
+        // `intent` is a required field on the query tool (engine 0.4.0+).
+        arguments: { sql: "SELECT n FROM t", intent: "e2e hot-policy allowed" },
+      },
     },
   });
   expect(allowedRes.status(), await allowedRes.text()).toBe(200);
@@ -190,7 +194,11 @@ test("policy hot-reload preserves the agent's MCP session", async ({
       jsonrpc: "2.0",
       id: 3,
       method: "tools/call",
-      params: { name: "query", arguments: { sql: "SELECT n FROM t" } },
+      params: {
+        name: "query",
+        // `intent` is a required field on the query tool (engine 0.4.0+).
+        arguments: { sql: "SELECT n FROM t", intent: "e2e hot-policy denied" },
+      },
     },
   });
   expect(deniedRes.status(), await deniedRes.text()).toBe(200);

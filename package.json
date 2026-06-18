@@ -16,6 +16,7 @@
     "dev": "bun --filter '@midplane-cloud/web' dev",
     "dev:image": "bash scripts/dev-image.sh",
     "build": "bun --filter '@midplane-cloud/*' build",
+    "build:engine-binary": "bash scripts/build-engine-binary.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:engine": "cd engine && bun test",

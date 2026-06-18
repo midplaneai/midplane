@@ -23,8 +23,13 @@ and are dark in the community build.
 
 ## Prerequisites
 
-- Docker (for the bundled Postgres and the OSS engine the control plane spawns).
-- Bun ≥ 1.3 (to run migrations and the control plane).
+- Bun ≥ 1.3 (to run migrations, the control plane, and to compile the engine
+  binary).
+- Docker — **optional**. Only the bundled Postgres
+  (`docker-compose.self-host.yml`) uses it; point `DATABASE_URL` at your own
+  Postgres and you don't need Docker at all. The engine is **not** a container
+  in self-host (see the topology section) — there is no Docker-socket
+  requirement.
 
 ## 1. Configure
 
@@ -45,7 +50,25 @@ docker compose -f docker-compose.self-host.yml up -d postgres
 bun run migrate:self-host          # applies Drizzle migrations to DATABASE_URL
 ```
 
-## 3. Run the control plane
+## 3. Build the engine binary
+
+The control plane exec's the compiled engine binary per connection (see the
+topology section). Compile it once:
+
+```bash
+bun run build:engine-binary        # → engine/dist/midplane
+```
+
+Then point the control plane at it (or put it on `PATH` as `midplane`):
+
+```bash
+export MIDPLANE_ENGINE_BIN="$PWD/engine/dist/midplane"
+```
+
+(The containerized image below bakes this in — this step is only for the
+run-on-host path.)
+
+## 4. Run the control plane
 
 ```bash
 bun --env-file=.env.self-host run dev          # http://localhost:3000
@@ -59,40 +82,75 @@ up once (you're the owner), and add a connection.
 
 ## The engine topology (read this before deploying)
 
-The control plane does **not** embed the engine. Per connection, it spawns one
-OSS engine container (`MIDPLANE_OSS_IMAGE`) via the **local Docker daemon**
-(`DockerSpawner`, the path used whenever `FLY_API_TOKEN` is unset) and proxies
-`/mcp/<token>` to it. So wherever the control plane runs, it needs:
+Per connection, the control plane **exec's the compiled `midplane server`
+binary as a subprocess** (`ProcessSpawner`, selected automatically by
+`MIDPLANE_SELF_HOST=1`), binds it to a loopback-only ephemeral port with that
+connection's decrypted DSN, and proxies `/mcp/<token>` to `127.0.0.1:<port>`.
+The engine idle-stops after 30 minutes and is torn down on connection delete.
 
-1. access to the Docker daemon (to `docker run` the engine), and
-2. network reachability to the engine's published port (the spawner binds the
-   engine to a random **host** port and connects at `127.0.0.1:<port>`).
+This means self-host needs **no Docker daemon, no Docker socket, no `docker`
+CLI in the image, and no host networking**. The only requirement is that the
+`midplane` binary is present where the control plane runs (`MIDPLANE_ENGINE_BIN`
+or on `PATH`).
 
-Running the control plane **on the host** (step 3 above) satisfies both
-naturally — this is the supported single-box setup and is how local development
-already works.
+> Why one process per connection: the engine binds exactly one set of databases
+> for its lifetime (it reads the policy file + DSN env vars once at boot), so a
+> connection gets its own engine. This is the same spawn-per-connection model
+> the cloud (Fly machines) and local-dev (Docker) backends use — only the
+> spawn *mechanism* differs.
 
-A fully-containerized control plane (control plane itself in a container) also
-needs the Docker socket mounted, the `docker` CLI in the image, and — so that
-`127.0.0.1:<port>` resolves to the host's published engine ports — host
-networking. That works on Linux (`network_mode: host` + `/var/run/docker.sock`);
-it does **not** work cleanly on Docker Desktop for macOS, where the daemon runs
-in a VM. Containerizing the control plane for a Linux host is the documented
-next step; it is intentionally not the default `compose up` because it can't be
-validated cross-platform here.
+Two ways to run it:
+
+- **On the host** (steps 3–4 above): build the binary, set
+  `MIDPLANE_ENGINE_BIN`, run the control plane. The supported single-box setup;
+  also how local development works.
+- **Fully containerized** (one image, the whole deploy): `Dockerfile.self-host`
+  bundles both the control plane and the engine binary, so there is nothing to
+  mount or pull:
+
+  ```bash
+  docker build -f Dockerfile.self-host -t midplane/self-host:local .
+  # `localhost` inside the container is the container itself, not your host —
+  # point DATABASE_URL at a host the container can reach (host.docker.internal
+  # on Docker Desktop):
+  docker run --env-file .env.self-host \
+    -e DATABASE_URL='postgres://midplane:midplane@host.docker.internal:5432/midplane?sslmode=disable' \
+    -p 3000:3000 midplane/self-host:local
+  ```
+
+  The binary is baked at `/usr/local/bin/midplane` (with `MIDPLANE_ENGINE_BIN`
+  preset), and `MIDPLANE_SELF_HOST=1` is set in the image. This works the same
+  on Linux and macOS — there is no host-networking or VM-socket caveat. The
+  engine runs in-container too, so the connection DSNs you add in the dashboard
+  follow the same rule: a `localhost` Postgres on your host is
+  `host.docker.internal` from inside (or put the DB on the same Docker network).
+
+The audit pipeline's internal bearer (`INDEXER_TOKEN`) is auto-provisioned at
+boot when unset: the engine is loopback-only, so the token never leaves the
+box, and audit reaches the dashboard out of the box without extra config.
 
 ## Verified
 
 Run against a local Postgres on this branch:
 
 - Migrations apply via `migrate:self-host`.
+- The compiled engine binary (`bun run build:engine-binary`) boots `server`
+  self-contained from a `node_modules`-free dir, becomes healthy on its loopback
+  port, creates + migrates its `audit.db`, and exits cleanly on `SIGTERM` (no
+  orphan).
 - `e2e/audit-isolation.e2e.ts` passes in **both** modes — self-host
   (`MIDPLANE_SELF_HOST=1` + `DATABASE_URL`) and cloud (`DATABASE_URL_EU`) — the
   cross-tenant RLS/scope regression gate.
+- `e2e/self-host-spawn.live.e2e.ts` (gated on `E2E_LIVE=1`) proves the full
+  process-spawn path: spawn the real binary → run a query → the indexer drains
+  audit into Postgres bound to the implicit customer → an RLS-scoped read
+  returns real rows (guards the silent zero-rows trap).
 - The implicit customer is seeded and a `SET LOCAL app.customer_id =
   <implicit id>` bind round-trips an audit row (no silent blank-log).
-- Full unit suite green; cloud behavior unchanged when `MIDPLANE_SELF_HOST` is
-  unset.
+- Full unit suite green (incl. `ProcessSpawner`); cloud behavior unchanged when
+  `MIDPLANE_SELF_HOST` is unset.
 
-Not yet validated here: the fully-containerized control-plane deploy shape
-(needs a Linux host — see above).
+Not built in this session: the `Dockerfile.self-host` image (a full Next
+standalone + engine compile). The binary-compile, boot, and process-spawn paths
+it bundles are all verified above; the multi-stage image build itself is
+unbuilt here.

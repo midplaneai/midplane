@@ -149,7 +149,11 @@ test("proxy handshake + SELECT 1 + audit row lands in container SQLite", async (
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "query", arguments: { sql: "SELECT n FROM t" } },
+      params: {
+        name: "query",
+        // `intent` is a required field on the query tool (engine 0.4.0+).
+        arguments: { sql: "SELECT n FROM t", intent: "e2e mcp-proxy query" },
+      },
     },
   });
   expect(callRes.status(), await callRes.text()).toBe(200);

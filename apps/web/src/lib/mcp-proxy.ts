@@ -6,8 +6,11 @@
 // in dev and rely on the steady-state module identity in prod.
 //
 // Backend selection:
-//   FLY_API_TOKEN set → FlyMachineSpawner (production shape).
-//   else            → DockerSpawner (laptop / Playwright).
+//   MIDPLANE_SELF_HOST=1 → ProcessSpawner (exec the in-image compiled
+//                          `midplane server` binary per connection on a
+//                          loopback port — no Docker daemon, no Fly).
+//   FLY_API_TOKEN set    → FlyMachineSpawner (production shape).
+//   else                 → DockerSpawner (laptop / Playwright).
 //
 // The audit Indexer is also a singleton: started lazily on first proxy
 // request, runs forever, drains every active container's SQLite into the
@@ -20,6 +23,8 @@
 // The ExpirySweeper runs alongside the Indexer in the regional process
 // and flips expired-but-still-active rows on mcp_tokens.
 
+import { randomUUID } from "node:crypto";
+
 import {
   ContainerRegistry,
   DecryptCache,
@@ -30,16 +35,19 @@ import {
   FlyMachineSpawner,
   Indexer,
   loadRegions,
+  ProcessSpawner,
   pushPolicy as pushPolicyHelper,
   type DryRunOutcome,
   type DryRunRequest,
   type PushPolicyResult,
+  type Spawner,
   type SpawnOptions,
 } from "@midplane-cloud/router";
 import { getDb, type DatabaseEntry } from "@midplane-cloud/db";
 import { makeKmsContext } from "@midplane-cloud/kms";
 
 import { bootRegion } from "./region-context.ts";
+import { isSelfHost } from "./self-host.ts";
 
 interface McpProxyContext {
   cache: DecryptCache;
@@ -87,26 +95,41 @@ export function getMcpProxyContext(): McpProxyContext {
 
   const cache = new DecryptCache();
   const regions = loadRegions(process.env);
-  const indexerToken = process.env.INDEXER_TOKEN;
   const flyApiToken = process.env.FLY_API_TOKEN;
+  const selfHost = isSelfHost();
 
-  // Hosted (FLY_API_TOKEN set) requires the indexer — silent disablement
-  // there means audit data never reaches the dashboard with zero log
-  // signal until a customer notices. Dev (Docker backend) treats it as
-  // optional so the laptop loop doesn't require token plumbing.
+  // Audit pipeline bearer.
+  //   Hosted (FLY_API_TOKEN set): REQUIRED — silent disablement there means
+  //     audit data never reaches the dashboard with zero log signal until a
+  //     customer notices.
+  //   Self-host: AUTO-PROVISION a loopback-only token when unset. The engine
+  //     is a local subprocess reachable only at 127.0.0.1, so the token never
+  //     leaves the box; generating it means self-host audit works out of the
+  //     box without the operator wiring yet another secret (and avoids the
+  //     silent zero-audit-rows trap).
+  //   Laptop Docker dev: optional, so the loop doesn't require token plumbing.
+  let indexerToken = process.env.INDEXER_TOKEN;
+  if (selfHost && !indexerToken) {
+    indexerToken = randomUUID();
+    console.log(
+      "[mcp-proxy] self-host: auto-provisioned a loopback INDEXER_TOKEN for the audit pipeline (set INDEXER_TOKEN to override)",
+    );
+  }
   if (flyApiToken && !indexerToken) {
     throw new Error(
       "INDEXER_TOKEN is required when FLY_API_TOKEN is set (hosted audit pipeline cannot start without it)",
     );
   }
 
-  const spawner = flyApiToken
-    ? new FlyMachineSpawner({
-        apiToken: flyApiToken,
-        regions,
-        indexerToken,
-      })
-    : new DockerSpawner({ indexerToken });
+  const spawner: Spawner = selfHost
+    ? new ProcessSpawner({ indexerToken })
+    : flyApiToken
+      ? new FlyMachineSpawner({
+          apiToken: flyApiToken,
+          regions,
+          indexerToken,
+        })
+      : new DockerSpawner({ indexerToken });
 
   const registry = new ContainerRegistry(spawner);
   // Module-init: this runs once on first import (memoized on globalThis),

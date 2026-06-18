@@ -12,13 +12,16 @@ This repository is the open-core monorepo — **one codebase, two deployables**:
   audit views, agent-token issuance, and the hosted MCP proxy. Open core — MIT
   except `apps/web/src/ee/` (the commercial Enterprise Edition).
 - **engine** ([`engine/`](./engine)): the MIT query-path engine (SQL parsing,
-  policy enforcement, guardrails), shipped as the minimal Docker image
-  `midplane/midplane`. The control plane spawns this image per connection and
-  never reimplements it, so hosted/self-host parity is mechanically enforced by
-  running the same engine everywhere.
+  policy enforcement, guardrails), built once via `bun build --compile` into a
+  self-contained binary. The control plane spawns it per connection and never
+  reimplements it, so hosted/self-host parity is mechanically enforced by
+  running the same engine everywhere — only the packaging differs: hosted and
+  local-dev run it as the minimal `midplane/midplane` Docker image (Fly machine
+  / `docker run`); self-host exec's the same binary, bundled in the
+  control-plane image, as a subprocess (no Docker daemon).
 
 "One codebase" is not "one process": the engine stays a tiny, minimal-attack-
-surface image in the query path; the control plane is one web app.
+surface artifact in the query path; the control plane is one web app.
 
 ## Open core
 
