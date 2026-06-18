@@ -6,6 +6,18 @@ import { getActorEmail } from "@/lib/org-context";
 import { selfHostNonMemberRedirect } from "@/lib/self-host-gate";
 import { isSelfHost } from "@/lib/self-host";
 
+// Force every authenticated route to render per-request — never at `next build`.
+// This layout (and every page under it) reads the session + the regional DB:
+// currentCustomer() → getOrgContext() → getAuth(), and getAuth() constructs the
+// Better Auth instance with `drizzleAdapter(getDb(bootRegion()))`. At build time
+// MIDPLANE_REGION is unset, so a static prerender throws "MIDPLANE_REGION must
+// be eu or us" before the request-time dynamic bailout (headers()) is reached.
+// These pages are per-user + per-region and were already dynamic at runtime;
+// force-dynamic on the layout propagates to all children, so none are
+// prerendered. Without it the production image build fails on whichever authed
+// page Next prerenders first (billing, settings/sso, …).
+export const dynamic = "force-dynamic";
+
 export default async function AuthenticatedLayout({
   children,
 }: {

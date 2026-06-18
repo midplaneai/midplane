@@ -5,6 +5,12 @@ import {
   EditorialTopbar,
 } from "@/components/layout/editorial-chrome";
 
+// EditorialTopbar is session-aware (renders Dashboard vs Sign in), so it reads
+// the session — getOrgContext() → getAuth() → getDb(bootRegion()) — which throws
+// at `next build` (no MIDPLANE_REGION). These pages must render per-request, not
+// be statically prerendered; force-dynamic propagates to all (legal) routes.
+export const dynamic = "force-dynamic";
+
 export default function LegalLayout({
   children,
 }: {

@@ -32,6 +32,12 @@ import {
 import { CyclingAgent } from "./_landing/cycling-agent";
 import { DemoChat } from "./demo/demo-chat";
 
+// The landing renders the session-aware EditorialTopbar (Dashboard vs Sign in),
+// which reads the session — getOrgContext() → getAuth() → getDb(bootRegion()) —
+// and throws at `next build` (no MIDPLANE_REGION). It's per-user, so it must
+// render per-request rather than be statically prerendered.
+export const dynamic = "force-dynamic";
+
 export default async function Landing() {
   // Signed-in users still see the landing — they may be sharing it with
   // teammates, revisiting the pricing page, or comparing tier limits. The
