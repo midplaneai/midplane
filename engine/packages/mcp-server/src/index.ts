@@ -67,14 +67,14 @@ export async function runServer(): Promise<void> {
 
   if (cfg.transport === "stdio") {
     logger.info({ transport: "stdio", databases: handle.registry.names() }, "starting mcp-server");
-    // stdio has no HTTP headers — no X-Midplane-Token-Id channel. Pass
-    // an empty sessionContext so the field is well-defined null on
-    // audit rows from stdio sessions (matches the spec: only MCP
-    // sessions opened over HTTP through the cloud proxy carry a token id).
+    // stdio has no HTTP headers — no X-Midplane-Token-Id or X-Midplane-Scope
+    // channel. Pass an empty sessionContext so token id is null (matches the
+    // spec: only HTTP sessions through the cloud proxy carry a token id) and
+    // scope is null (no scope = full access — stdio is the local owner).
     const server = buildServer({
       handle,
       telemetry,
-      sessionContext: { mcp_token_id: null },
+      sessionContext: { mcp_token_id: null, scope: null },
     });
     await startStdio(server);
     close = async () => {

@@ -38,6 +38,15 @@ export type EngineContext = {
   // non-MCP callers, and on POLICY_RELOADED audit rows.
   mcp_token_id: string | null;
   role?: string;
+  // Per-session read-only ceiling from the cloud per-agent grant. Sourced from
+  // the `X-Midplane-Scope` HTTP header at MCP `initialize`, surfaced per-DB by
+  // the mcp-server's ctxFor, and read by the table_access rule:
+  //   - undefined / "read_write" → no clamp (the table_access policy decides);
+  //   - "read"                   → cap this session at read — writes the policy
+  //                                would otherwise permit are denied.
+  // It only ever NARROWS; it can't widen a table the policy denies. Null/absent
+  // for URL-token sessions, self-host owner-all, non-MCP callers, and dry-run.
+  scope_max_access?: "read" | "read_write";
   // Optional opt-in tenant-scope context. Legacy `mappings` is a flat
   // `table → column` dict (pre-0.5.0). The 0.5.0 shape adds a universal
   // `defaultColumn` (strict mode: every queried table needs the predicate),

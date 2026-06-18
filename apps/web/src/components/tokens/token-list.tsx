@@ -39,6 +39,7 @@ export async function TokenList({
   connectionId,
   connectionName,
   region,
+  databases = [],
   tokens,
   createAction,
   revokeAction,
@@ -48,6 +49,8 @@ export async function TokenList({
   connectionId: string;
   connectionName?: string | null;
   region?: string | null;
+  /** This connection's databases, for the token scope picker (P6.1). */
+  databases?: Array<{ connectionDatabaseId: string; name: string }>;
   tokens: TokenSummary[];
   createAction: CreateTokenAction;
   revokeAction: RevokeTokenAction;
@@ -98,6 +101,7 @@ export async function TokenList({
           connectionId={connectionId}
           connectionName={connectionName}
           region={region}
+          databases={databases}
           action={createAction}
           triggerLabel="Connect an agent"
           limitReached={tokenLimit}
@@ -128,6 +132,7 @@ export async function TokenList({
           connectionId={connectionId}
           connectionName={connectionName}
           region={region}
+          databases={databases}
           action={createAction}
           limitReached={tokenLimit}
         />

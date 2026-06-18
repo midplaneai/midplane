@@ -20,6 +20,8 @@ export type {
   ResolveResult,
   ConnectionResolveResult,
 } from "./resolve.ts";
+export { resolveScope, scopeHeaderValue } from "./scope.ts";
+export type { ScopeMap, ScopeSubject } from "./scope.ts";
 export { ContainerRegistry } from "./spawner.ts";
 export type {
   ActiveContainer,

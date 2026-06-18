@@ -52,7 +52,21 @@ interface TableRef {
 type DenialCause =
   | { kind: "write_blocked"; table: string; resolved: TableAccessLevel }
   | { kind: "read_blocked"; table: string; resolved: TableAccessLevel }
+  // The table_access POLICY permits the write, but this session's credential
+  // is scoped read-only by the cloud per-agent grant (ctx.scope_max_access ===
+  // "read"). Distinct from write_blocked so the message doesn't tell the
+  // operator to mark a table read_write when it already is.
+  | { kind: "scope_read_only"; table: string }
   | { kind: "no_target"; statement: string };
+
+// Per-session access ceiling carried on the EngineContext. The cloud proxy sets
+// it from the credential's per-agent grant (X-Midplane-Scope header, frozen at
+// MCP initialize and surfaced per-DB by the mcp-server's ctxFor):
+//   - "read_write" / undefined → no clamp (the policy decides).
+//   - "read"                   → cap this session at read; writes the policy
+//                                would otherwise permit are denied.
+// The clamp only ever NARROWS — it can't widen a table the policy denies.
+type ScopeCeiling = "read" | "read_write" | undefined;
 
 // Accepts either a static TableAccessConfig (snapshot at construction) or a
 // getter that returns the current config on each evaluation. The getter form
@@ -74,6 +88,11 @@ export function tableAccess(source?: TableAccessConfigSource): Rule {
     evaluateIR(program: NormalizedProgram, rctx: RuleEvalContext): RuleVerdict {
       if (!rctx.parse.ok) return { decision: "ALLOW" }; // parse_error owns this case
       const cfg = resolveConfig() ?? LEGACY_NO_YAML_CONFIG;
+      // Per-session read-only ceiling from the cloud per-agent grant. "read"
+      // caps writes the policy would otherwise allow; "read_write"/undefined =
+      // no clamp. Read AFTER cfg so a clamp only narrows the resolved policy.
+      const ceiling = (rctx.ctx as { scope_max_access?: ScopeCeiling })
+        .scope_max_access;
       for (const c of program.accessChecks) {
         let cause: DenialCause | null = null;
         if (c.kind === "no_target") {
@@ -82,6 +101,9 @@ export function tableAccess(source?: TableAccessConfigSource): Rule {
           const resolved = resolvePermission(c.ref, cfg);
           if (resolved !== "read_write") {
             cause = { kind: "write_blocked", table: displayName(c.ref), resolved };
+          } else if (ceiling === "read") {
+            // Policy permits the write, but the credential is scoped read-only.
+            cause = { kind: "scope_read_only", table: displayName(c.ref) };
           }
         } else {
           const resolved = resolvePermission(c.ref, cfg);
@@ -117,6 +139,13 @@ function messageFor(cause: DenialCause): string {
         `are not allowed by the table-access policy ` +
         `(\`${cause.table}\` resolves to \`${cause.resolved}\`; mark it ` +
         `\`read\` or \`read_write\` to grant access).`
+      );
+    case "scope_read_only":
+      return (
+        `Midplane denied this write to \`${cause.table}\` because this agent's ` +
+        `credential is scoped to read-only access for this database. Grant ` +
+        `write access to this database in the consent screen (interactive ` +
+        `agents) or the token's scope (API tokens) to allow writes.`
       );
     case "no_target":
       return (

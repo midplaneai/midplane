@@ -10,6 +10,10 @@ export interface EngineContextLike {
   agent_name: string | null;
   agent_version: string | null;
   role?: string;
+  // Per-session read-only ceiling from the cloud per-agent grant (see
+  // EngineContext in engine.ts). "read" caps this session at read in the
+  // table_access rule; "read_write"/undefined = no clamp.
+  scope_max_access?: "read" | "read_write";
   // tenant_scope is opt-in per-call context. Two shapes accepted:
   //   • legacy flat `mappings` (pre-0.5.0 fixtures, still works)
   //   • rich shape with `defaultColumn` / `overrides` / `exempt` (0.5.0+)

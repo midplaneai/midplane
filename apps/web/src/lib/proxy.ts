@@ -33,6 +33,8 @@ import {
   bumpLastUsed,
   resolveByToken,
   resolveConnectionForCustomer,
+  resolveScope,
+  scopeHeaderValue,
 } from "@midplane-cloud/router";
 import {
   customers,
@@ -84,6 +86,39 @@ export function filterUpstreamResponseHeaders(src: Headers): Headers {
     out.set(k, v);
   }
   return out;
+}
+
+// Build the headers forwarded to the engine from the client request: copy
+// every non-hop-by-hop request header, then stamp the two Midplane control
+// headers — for which the PROXY is the sole authority — OVER whatever the
+// client sent. Exported so the trust-critical override has a regression test
+// without standing up the full proxy.
+//
+//   X-Midplane-Token-Id: always set to our resolved attribution id. OSS 0.6.0
+//     reads it at MCP initialize, session-freezes it, and stamps it on every
+//     audit row (re-sends post-initialize are ignored). For the OAuth path it's
+//     the (connection, client) attribution row id, so audit attribution is
+//     identical across auth methods. NEVER the plaintext token.
+//
+//   X-Midplane-Scope: the per-agent DB scope (P6.1). We delete any client value
+//     first, then set ours ONLY when the credential carries a grant (scopeHeader
+//     non-null). The engine narrows the session to the granted DBs + clamps
+//     writes where read-only; absent (null) → unscoped (full access), preserving
+//     every pre-scope session. Stripping the client value matters even though
+//     scope only ever NARROWS — an unscoped credential must not be able to
+//     smuggle a scope value to the engine. db-name keys are non-secret aliases.
+export function buildForwardHeaders(
+  src: Headers,
+  opts: { tokenId: string; scopeHeader: string | null },
+): Headers {
+  const headers = new Headers();
+  for (const [k, v] of src) {
+    if (!HOP_BY_HOP.has(k.toLowerCase())) headers.set(k, v);
+  }
+  headers.set("X-Midplane-Token-Id", opts.tokenId);
+  headers.delete("X-Midplane-Scope");
+  if (opts.scopeHeader) headers.set("X-Midplane-Scope", opts.scopeHeader);
+  return headers;
 }
 
 // Pepper map is loaded once per process and reused across requests. The
@@ -168,10 +203,21 @@ export async function proxyMcp(
     console.error("[proxyMcp] bumpLastUsed failed", err);
   });
 
+  // Per-agent DB scope for a headless PAT (mcp_scope_grants keyed by token id).
+  // No grant rows → empty → null header → full access: existing tokens are
+  // grandfathered, and a token opts into a scope at creation. Grants present →
+  // the engine narrows the session to them (+ read clamp).
+  const scope = await resolveScope(
+    db,
+    { kind: "token", mcpTokenId: resolved.tokenId },
+    resolved.databases,
+  );
+
   return forwardResolved(req, {
     connection: resolved.connection,
     databases: resolved.databases,
     tokenId: resolved.tokenId,
+    scopeHeader: scopeHeaderValue(scope),
   });
 }
 
@@ -271,10 +317,39 @@ export async function proxyMcpOAuth(
     console.error("[proxyMcpOAuth] bumpLastUsed failed", err);
   });
 
+  // Per-agent DB scope for the OAuth credential (mcp_scope_grants keyed by
+  // client + user, written by the consent DB picker). Scope-on-the-credential
+  // is the access boundary on top of ownership.
+  const scope = await resolveScope(
+    db,
+    { kind: "oauth", clientId, userId },
+    resolved.databases,
+  );
+
+  // No grant for any of this connection's DBs → the user owns it but this agent
+  // was approved for nothing here. Consent is FORCED on every authorize, and the
+  // picker writes a grant per chosen DB, so an empty grant means "approved no
+  // databases" → 403 (fail closed), not a connection-probing 404. Self-host is
+  // the exception: single-tenant, so an unscoped owner gets all their DBs (empty
+  // → full access) rather than being locked out of their own data.
+  if (scope.size === 0 && !isSelfHost()) {
+    return Response.json(
+      { ok: false, error: "no_database_grant" },
+      {
+        status: 403,
+        headers: {
+          "WWW-Authenticate":
+            'Bearer error="insufficient_scope", error_description="no database access granted for this connection; re-connect to choose databases"',
+        },
+      },
+    );
+  }
+
   return forwardResolved(req, {
     connection: resolved.connection,
     databases: resolved.databases,
     tokenId,
+    scopeHeader: scopeHeaderValue(scope),
   });
 }
 
@@ -309,9 +384,13 @@ async function forwardResolved(
     connection: Connection;
     databases: ConnectionDatabase[];
     tokenId: string;
+    // Pre-serialized X-Midplane-Scope value (db name → access), or null when
+    // the credential is unscoped (full access). Resolved per-path by the
+    // callers (PAT vs OAuth) so this shared core stays auth-method-agnostic.
+    scopeHeader: string | null;
   },
 ): Promise<Response> {
-  const { connection, databases, tokenId } = resolved;
+  const { connection, databases, tokenId, scopeHeader } = resolved;
   if (databases.length === 0) {
     // Connection without children is a torn migration / data corruption —
     // can't spawn a container with no DSN. Treat as not_found to avoid
@@ -402,17 +481,7 @@ async function forwardResolved(
   }
 
   const upstreamUrl = `http://${upstream.host}:${upstream.port}/mcp`;
-  const headers = new Headers();
-  for (const [k, v] of req.headers) {
-    if (!HOP_BY_HOP.has(k.toLowerCase())) headers.set(k, v);
-  }
-  // Per-token attribution header. OSS 0.6.0 reads this on MCP initialize,
-  // session-freezes the value, and stamps it on every audit row from
-  // the session. Safe to send on every request: post-initialize the
-  // engine ignores re-sends. NEVER log the plaintext token; only tokenId
-  // appears here. For the OAuth path this is the (connection, client)
-  // attribution row id, so per-agent audit attribution is identical.
-  headers.set("X-Midplane-Token-Id", tokenId);
+  const headers = buildForwardHeaders(req.headers, { tokenId, scopeHeader });
 
   const init: RequestInit = {
     method: req.method,

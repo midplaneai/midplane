@@ -23,6 +23,8 @@ import {
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { SqliteAuditWriter } from "@midplane/engine";
 import { logger } from "../logger.ts";
+import type { SessionScope } from "../scope.ts";
+import { parseMcpScopeHeader } from "./scope-header.ts";
 import { parseMcpTokenIdHeader } from "./token-header.ts";
 
 const DEFAULT_AUDIT_LIMIT = 500;
@@ -42,6 +44,10 @@ export interface HttpHandle {
 // matching the per-token attribution spec.
 export interface SessionContext {
   mcp_token_id: string | null;
+  // Per-agent DB scope (X-Midplane-Scope), captured at MCP `initialize` and
+  // frozen for the session. `null` = header absent = no scope (full access);
+  // a map = scope active (only these DBs, at the given access). See scope.ts.
+  scope: SessionScope | null;
 }
 
 // The MCP SDK's McpServer holds a single Protocol → single transport. Each
@@ -213,6 +219,9 @@ async function handle(
     // mcp_token_id IS NULL for the session's lifetime.
     const sessionContext: SessionContext = {
       mcp_token_id: parseMcpTokenIdHeader(req.headers),
+      // Frozen with the session, same as the token id: the per-agent DB scope
+      // can't change mid-session by re-sending the header on a later request.
+      scope: parseMcpScopeHeader(req.headers),
     };
     const server = serverFactory(sessionContext);
     const transport = new StreamableHTTPServerTransport({
@@ -225,6 +234,9 @@ async function handle(
             // Boolean only — never log the token id itself. The id is
             // cloud-side opaque and stays in audit rows where it belongs.
             mcp_token_id_present: sessionContext.mcp_token_id !== null,
+            // DB-name keys are non-secret aliases; the count is enough for ops.
+            // null (no scope) → -1 so it's distinguishable from an empty scope.
+            scope_db_count: sessionContext.scope?.size ?? -1,
           },
           "session initialized",
         );

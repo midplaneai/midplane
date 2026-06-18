@@ -2,6 +2,12 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-06-18
+
+### Added
+
+- **Per-session DB scope (`X-Midplane-Scope`).** A new request header, read once at the MCP `initialize` handshake and frozen for the session — exactly like `X-Midplane-Token-Id`. It carries a JSON map of database name → `read`|`write` and narrows that session to a least-privilege view: the tool surface (`query`/`list_tables`/`describe_table`/`list_databases` and the multi-DB `database` enum) exposes only the granted databases, and the `table_access` rule clamps each to read where the grant says read (a write the policy would otherwise permit is denied with a distinct "credential is scoped to read-only" message). The clamp only ever NARROWS — it can't widen a table the policy denies, and reads are unaffected. Absent header → no scope → full access (unchanged for every existing session; stdio and non-proxied callers are never scoped). The header is set by a trusted control plane over the private network; a malformed-but-present value fails closed (zero databases in scope) rather than widening to full access. This is the engine half of Midplane's per-agent least-privilege model — the cloud consent picker (interactive agents) and per-token scope (API tokens) resolve a credential's grant and send it here.
+
 ## [0.10.0] — 2026-06-12
 
 ### Added

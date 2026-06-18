@@ -184,7 +184,14 @@ export class ProcessSpawner implements Spawner {
     // Curated env — NOT the control plane's full environment. Start with
     // run/binary-lookup essentials plus the allowlisted engine config the
     // operator set; then layer the spawn-managed vars on top so THEY win.
-    const env: NodeJS.ProcessEnv = {
+    //
+    // Typed as a plain mutable record, NOT NodeJS.ProcessEnv: when this module
+    // is compiled under the web app's tsconfig, Next's ProcessEnv augmentation
+    // makes NODE_ENV a required + readonly property, which both rejects this
+    // partial literal and forbids the `env.NODE_ENV =` assignment below. A plain
+    // record carries no such constraint; we cast back to ProcessEnv at the
+    // spawnFn boundary. Behavior is unchanged.
+    const env: Record<string, string | undefined> = {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
     };
@@ -204,7 +211,9 @@ export class ProcessSpawner implements Spawner {
     }
     if (this.indexerToken) env.INDEXER_TOKEN = this.indexerToken;
 
-    const child = this.spawnFn(this.binaryPath, ["server"], { env });
+    const child = this.spawnFn(this.binaryPath, ["server"], {
+      env: env as NodeJS.ProcessEnv,
+    });
 
     // Drain BOTH streams (prevents a pipe-buffer deadlock) and keep the tail so
     // a crash surfaces the real reason instead of a generic timeout. Config

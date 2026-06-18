@@ -11,6 +11,14 @@
 //     plaintext token. parseToken() matches its shape → proxyMcp HMAC-validates
 //     it (resolveByToken) exactly as before. The pre-OAuth path, kept green.
 //
+//   - Bearer PAT (the headless half of the credential model): the same
+//     `mp_(live|test)_…` token presented in `Authorization: Bearer` instead of
+//     the URL path — so the secret stays out of the URL (logs / referer) and
+//     both credential types are bearers. The token (not the path segment)
+//     selects the connection, exactly like the URL-token path; it then carries
+//     the same per-token DB scope. Checked BEFORE the OAuth branch so a bearer
+//     that's a Midplane token never reaches withMcpAuth.
+//
 //   - OAuth 2.1 (the credible launch path): `<segment>` is a connection id
 //     (a ULID — parseToken() returns null). withMcpAuth validates the OAuth
 //     bearer against the Better Auth `mcp` plugin; a missing/invalid bearer
@@ -45,6 +53,14 @@ async function handle(
   // token still routes here and resolveByToken returns the leakage-safe 404.
   if (parseToken(segment)) return proxyMcp(req, segment);
 
+  // Bearer PAT: `Authorization: Bearer mp_(live|test)_…` → HMAC path. The token
+  // selects the connection (the path segment is ignored, same as the URL form),
+  // so a headless caller sets one env var and keeps the secret out of the URL.
+  // Only a well-formed Midplane token is intercepted; any other bearer falls
+  // through to the OAuth branch below.
+  const bearer = bearerToken(req);
+  if (bearer && parseToken(bearer)) return proxyMcp(req, bearer);
+
   // Otherwise treat the segment as a connection id and require an OAuth bearer.
   // withMcpAuth returns 401 + WWW-Authenticate when the bearer is absent or
   // invalid (the discovery handshake); on success it hands us the access-token
@@ -53,6 +69,19 @@ async function handle(
     proxyMcpOAuth(r, segment, session),
   );
   return guarded(req);
+}
+
+// Extract the credential from `Authorization: Bearer <token>`. Returns null
+// when the header is absent or not a Bearer scheme — those route to OAuth (a
+// missing bearer becomes the withMcpAuth 401 discovery challenge). Case-
+// insensitive scheme; the value is matched against the Midplane token format by
+// the caller, so a non-Midplane bearer (an OAuth access token) returns its raw
+// value here and simply fails parseToken, falling through to withMcpAuth.
+function bearerToken(req: Request): string | null {
+  const auth = req.headers.get("authorization");
+  if (!auth) return null;
+  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  return m ? m[1]!.trim() : null;
 }
 
 export { handle as GET, handle as POST, handle as DELETE };

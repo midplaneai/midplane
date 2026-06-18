@@ -35,6 +35,7 @@ import {
   handleQuery,
   type QueryArgs,
   type QueryMultiArgs,
+  type ToolResult,
 } from "./tools/query.ts";
 import {
   ListTablesInputSchema,
@@ -52,17 +53,23 @@ import {
   type DescribeTableMultiArgs,
 } from "./tools/describe-table.ts";
 import { handleListDatabases } from "./tools/list-databases.ts";
+import { ceilingFor, scopedRegistry, type SessionScope } from "./scope.ts";
 
 export interface BuildServerOptions {
   handle: EngineHandle;
   telemetry?: TelemetryHandle;
   // Per-session context captured by the transport at MCP `initialize`.
-  // Today this carries the cloud-issued `mcp_token_id` (X-Midplane-Token-Id
-  // HTTP header). The HTTP transport's per-session serverFactory hands
-  // this in; stdio and tests can leave it undefined — null mcp_token_id
-  // is the well-defined "no cloud token attribution" state.
+  // Carries the cloud-issued `mcp_token_id` (X-Midplane-Token-Id header) and
+  // the per-agent DB `scope` (X-Midplane-Scope header). The HTTP transport's
+  // per-session serverFactory hands this in; stdio and tests can leave it
+  // undefined — null mcp_token_id / null scope are the well-defined
+  // "no cloud token attribution" / "no scope (full access)" states.
   sessionContext?: {
     mcp_token_id: string | null;
+    // null = no scope header = full access (URL-token / self-host owner-all /
+    // stdio). A map = scope active: only these DBs are visible, at the given
+    // access (an empty map = scope active with zero DBs → deny-all, fail-closed).
+    scope?: SessionScope | null;
   };
 }
 
@@ -80,7 +87,14 @@ export function buildServer(opts: BuildServerOptions): McpServer {
   });
 
   const telemetry = opts.telemetry ?? NOOP_TELEMETRY;
-  const registry = opts.handle.registry;
+  // Per-agent DB scope, frozen at MCP `initialize`. null = no scope header =
+  // full access; a map = scope active (subset gate + read clamp). When active
+  // we view the registry through `scopedRegistry` so the tool surface (the
+  // `database` enum, `list_databases`, every lookup) only ever sees granted
+  // DBs — a non-granted DB is invisible and unreachable. The underlying shared
+  // engine is unchanged; the read clamp rides on the per-call ctx below.
+  const scope = opts.sessionContext?.scope ?? null;
+  const registry = scope ? scopedRegistry(opts.handle.registry, scope) : opts.handle.registry;
   // Frozen for the session's lifetime. Captured by the HTTP transport at
   // MCP `initialize` from the X-Midplane-Token-Id header and stamped on
   // every audit row this session emits. Null when the header was absent
@@ -112,8 +126,23 @@ export function buildServer(opts: BuildServerOptions): McpServer {
       agent_name: name,
       agent_version: version,
       mcp_token_id: mcpTokenId,
+      // Per-session read-only ceiling from the grant. The table_access rule
+      // denies writes when this is "read". Absent scope → undefined (no clamp).
+      // dbName is always in scope here: every caller resolves it through the
+      // (scoped) registry, which only exposes granted DBs.
+      scope_max_access: scope ? ceilingFor(scope.get(dbName)!) : undefined,
     };
   };
+
+  // Scope active but zero DBs granted (a malformed/empty X-Midplane-Scope —
+  // fail-closed; the proxy 403s before forwarding in the normal no-grant case).
+  // Neither the single- nor multi-DB surface below is valid with no DBs (the
+  // multi-DB `database` enum needs >=1 name), so register a degenerate surface
+  // that denies cleanly instead of throwing at construction.
+  if (scope && registry.count() === 0) {
+    registerEmptyScopeSurface(server);
+    return server;
+  }
 
   // Tool handlers wrap their engine call in try/finally so the per-tool
   // counter is recorded on every exit path — including the case where the
@@ -320,7 +349,8 @@ export function buildServer(opts: BuildServerOptions): McpServer {
 
   // list_databases: trivial registry-introspection. Only registered when
   // there's more than one DB — single-DB users don't need a tool that
-  // would return one entry.
+  // would return one entry. Reads the SCOPED registry, so it lists only the
+  // agent's granted databases (with the read clamp reflected in the default).
   server.registerTool(
     "list_databases",
     {
@@ -342,4 +372,70 @@ export function buildServer(opts: BuildServerOptions): McpServer {
   );
 
   return server;
+}
+
+// Tool surface for an active-but-empty scope (a malformed/empty X-Midplane-Scope
+// — fail-closed). Every data tool denies with a clear message and list_databases
+// returns an empty set, so the agent gets a coherent "nothing in scope" answer
+// instead of the server failing to construct. Defensive: in normal flow the
+// proxy 403s a credential that has no grant for the connection, so this surface
+// is never reached.
+function registerEmptyScopeSurface(server: McpServer): void {
+  const deniedResult = (): ToolResult => ({
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          allowed: false,
+          policy_rule: "scope",
+          reason:
+            "No databases are in scope for this credential. Its grant authorizes no databases on this connection — adjust the scope in the consent screen (interactive agents) or the token's settings (API tokens).",
+        }),
+      },
+    ],
+  });
+
+  server.registerTool(
+    "query",
+    {
+      title: "Run a SQL query (no databases are in scope for this credential)",
+      description:
+        "This credential's scope grants no database access on this connection; every call is denied. Adjust the scope to enable queries.",
+      inputSchema: QueryInputSchema,
+    },
+    async () => deniedResult(),
+  );
+  server.registerTool(
+    "list_tables",
+    {
+      title: "List tables (no databases are in scope for this credential)",
+      description:
+        "This credential's scope grants no database access on this connection; every call is denied.",
+      inputSchema: ListTablesInputSchema,
+    },
+    async () => deniedResult(),
+  );
+  server.registerTool(
+    "describe_table",
+    {
+      title: "Describe a table (no databases are in scope for this credential)",
+      description:
+        "This credential's scope grants no database access on this connection; every call is denied.",
+      inputSchema: DescribeTableInputSchema,
+    },
+    async () => deniedResult(),
+  );
+  server.registerTool(
+    "list_databases",
+    {
+      title: "List the databases this credential may reach",
+      description:
+        "Returns the databases in this credential's scope. Empty when the credential's grant authorizes no databases on this connection.",
+      inputSchema: {},
+    },
+    async () => ({
+      content: [{ type: "text", text: JSON.stringify({ databases: [] }) }],
+    }),
+  );
 }
