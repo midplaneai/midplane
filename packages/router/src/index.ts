@@ -32,6 +32,12 @@ export { DockerSpawner, parseHostPort } from "./spawner-docker.ts";
 export type { DockerSpawnerOptions } from "./spawner-docker.ts";
 export { FlyMachineSpawner } from "./spawner-fly.ts";
 export type { FlyMachineSpawnerOptions } from "./spawner-fly.ts";
+export { ProcessSpawner, allocateFreePort } from "./spawner-process.ts";
+export type {
+  ChildHandle,
+  ProcessSpawnerOptions,
+  SpawnFn,
+} from "./spawner-process.ts";
 export { Indexer } from "./indexer.ts";
 export type { ContainerAuditRow, IndexerOptions } from "./indexer.ts";
 export { ExpirySweeper } from "./expiry-sweeper.ts";

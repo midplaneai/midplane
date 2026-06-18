@@ -92,19 +92,24 @@ check. Bumping the engine:
   `packages/router/test/spawner-{docker,fly}.test.ts`. (The fly suite's
   `0.8.0` literals are deliberately-stale comparison fixtures, not pin sites.)
 - Literal sites the drift check enforces: `scripts/dev-image.sh`,
-  `scripts/bootstrap.sh`, `.env.example`, `.env.self-host.example`,
+  `scripts/bootstrap.sh`, `.env.example`,
   `fly-eu.toml`, `fly-us.toml`, `fly-web-eu.toml`, `fly-web-us.toml`,
   `README.md`, `.github/workflows/deploy-fly.yml` (the bare `default: "X.Y.Z"`),
   `e2e/hot-policy-reload.live.e2e.ts`, `e2e/mcp-proxy.live.e2e.ts`.
+  (`.env.self-host.example` is not a pin site: self-host process-spawns the
+  in-image compiled binary, so it carries no image tag.)
 
 The engine itself is at `engine/` and ships its own image via the `engine-v*`
 publish workflow; the merge centralizes the pin but does not remove it (the
 control plane still references the engine by tag). The sanity grep still works:
 `rg 'midplane/midplane:[0-9]' --hidden -g '!node_modules' -g '!bun.lock'`.
 
-Follow-ups (P7 Stage 2 / decisions pending): pin prod by immutable digest
-(`@sha256:...`) and drop `.env.self-host.example`'s `MIDPLANE_OSS_IMAGE` once
-self-host process-spawns the in-image binary.
+Self-host carries no image pin: it process-spawns the in-image compiled binary
+(`ProcessSpawner`, selected by `MIDPLANE_SELF_HOST=1` in `mcp-proxy.ts`; the
+binary is bundled by `Dockerfile.self-host` and built standalone via
+`scripts/build-engine-binary.sh`). The pin governs only the cloud (Fly-machine)
+and local-dev (Docker) spawn paths; prod pins the immutable digest
+(`@sha256:...`) in the Fly TOMLs.
 
 ## Skill routing
 

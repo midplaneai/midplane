@@ -334,7 +334,14 @@ async function runSelectMarker(host: string, port: number): Promise<string> {
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "query", arguments: { sql: "SELECT site FROM marker" } },
+      params: {
+        name: "query",
+        // `intent` is a required field on the query tool (engine 0.4.0+).
+        arguments: {
+          sql: "SELECT site FROM marker",
+          intent: "e2e rotate-connection",
+        },
+      },
     }),
   });
   if (!callRes.ok) throw new Error(`mcp tools/call failed: ${callRes.status}`);
