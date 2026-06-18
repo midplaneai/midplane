@@ -16,6 +16,7 @@ import {
   serializeMultiDbPolicyToYaml,
 } from "@midplane-cloud/db";
 import type { Region } from "@midplane-cloud/kms";
+import { OSS_ENGINE_IMAGE } from "./oss-image.ts";
 import type { RegionConfig } from "./region.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 
@@ -71,7 +72,7 @@ export class FlyMachineSpawner implements Spawner {
     this.token = opts.apiToken;
     this.indexerToken = opts.indexerToken;
     this.apiBase = opts.apiBase ?? "https://api.machines.dev";
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.9.0";
+    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? OSS_ENGINE_IMAGE;
     this.regions = opts.regions;
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 60_000;
     this.fetchFn = opts.fetch ?? fetch;

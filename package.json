@@ -8,18 +8,22 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "infra/*"
+    "infra/*",
+    "engine/packages/*",
+    "engine/examples/*"
   ],
   "scripts": {
     "dev": "bun --filter '@midplane-cloud/web' dev",
     "dev:image": "bash scripts/dev-image.sh",
-    "build": "bun --filter '*' build",
+    "build": "bun --filter '@midplane-cloud/*' build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:engine": "cd engine && bun test",
     "test:e2e": "playwright test",
     "test:e2e:live": "E2E_LIVE=1 playwright test",
-    "lint": "bun --filter '*' lint",
-    "typecheck": "bun --filter '*' typecheck",
+    "lint": "bun --filter '@midplane-cloud/*' lint",
+    "typecheck": "bun --filter '@midplane-cloud/*' typecheck",
+    "check:pins": "bun scripts/check-image-pin.ts",
     "db:generate": "bun --filter '@midplane-cloud/db' generate",
     "db:studio": "bun --filter '@midplane-cloud/db' studio",
     "migrate:eu": "bun --filter '@midplane-cloud/db' migrate:eu",

@@ -21,7 +21,10 @@ export default defineConfig({
       "apps/**/test/**/*.test.ts",
       "infra/**/test/**/*.test.ts",
     ],
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.next/**"],
+    // engine/** runs under `bun test` (bun:test API), NOT vitest. The include
+    // globs above already scope to packages|apps|infra, but exclude engine/**
+    // explicitly so a future glob change can't sweep engine bun:test files in.
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.next/**", "engine/**"],
     environment: "node",
     reporters: ["default"],
     coverage: {

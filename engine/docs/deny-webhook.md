@@ -1,0 +1,91 @@
+# Deny webhook
+
+`MIDPLANE_DENY_WEBHOOK` fires a JSON `POST` on every policy denial. Generic — works with Slack incoming webhooks, Discord webhooks, the PagerDuty Events API, or any HTTP endpoint.
+
+Useful when you want a denial to trigger an active signal (a Slack ping, an on-call page) rather than waiting for someone to query the audit log.
+
+## Configuration
+
+```bash
+MIDPLANE_DENY_WEBHOOK=https://hooks.slack.com/services/T000/B000/xxx
+# Optional: only fire for specific rules (comma-separated).
+# Unset = fire on every denial.
+MIDPLANE_DENY_WEBHOOK_RULES=writes_require_approval,multi_statement
+```
+
+URL must be `http://` or `https://`; anything else fails fast at boot.
+
+## Payload
+
+`POST {url}` with `content-type: application/json` and:
+
+```json
+{
+  "event": "denial",
+  "schema_version": 3,
+  "ts": 1730000000000,
+  "query_id": "01HXXX...",
+  "audit_id": "01HXXX...",
+  "tenant_id": "__self_host__",
+  "agent_name": "claude-code",
+  "agent_version": "0.42.1",
+  "agent_intent": "investigating slow user lookup",
+  "mcp_token_id": "01HZX3KQ7B9YV2RTNGH7MJSPVB",
+  "policy_rule": "writes_require_approval",
+  "reason": "Midplane denied this query because writes require approval.",
+  "statement_type": "DELETE",
+  "tables_touched": ["public.users"],
+  "sql_preview": "DELETE FROM users WHERE id = 42",
+  "sql_truncated": false
+}
+```
+
+`agent_name` and `agent_version` come from the MCP `clientInfo` sent on
+`initialize`; both are `null` for non-MCP callers. `agent_intent` is the
+free-text task description supplied as the required `intent` field on
+the `query` tool's input (≤ 500 chars). For `query` calls it is always
+populated (the MCP SDK rejects calls missing it before the engine
+runs); for non-`query` events (e.g. denials surfaced through other
+paths) it can be `null`.
+
+`mcp_token_id` (added in 0.6.0) is the cloud-issued ULID for the MCP
+token that opened the session, read from the `X-Midplane-Token-Id`
+header at MCP `initialize`. It is `null` for self-host deploys (no
+cloud proxy injecting the header), for sessions whose `initialize`
+request carried a malformed header (a malformed header is ignored, not
+rejected), and on any non-MCP caller. Receivers wanting per-token
+attribution key on this field; receivers that don't care can ignore it.
+
+Receivers that pinned to `schema_version: 2` should widen their handler:
+the `intent_source` key is gone (per-call intent now has one source —
+the `intent` tool arg — so the column was always-redundant). Receivers
+on `schema_version: 1` should also drop `agent_identity` and adopt the
+split `agent_name`/`agent_version` keys. The 0.6.0 `mcp_token_id`
+addition is additive-nullable and does **not** bump `schema_version` —
+v3 receivers that don't know the field just ignore it.
+
+`sql_preview` is truncated at 1024 characters; `sql_truncated` flags when truncation occurred. Both are empty/false when the engine could not match an `ATTEMPTED` row to the denial (rare — only happens under buffer pressure).
+
+## Reliability
+
+- Fire-and-forget. The webhook POST has a 5 second timeout.
+- Webhook failure (network error, HTTP 5xx, slow endpoint) **never** blocks or fails the underlying audit write. The `DECIDED` row in the audit log is the source of truth; the webhook is a notification.
+- No retries. If the receiver is down, the denial is still recorded; the webhook just doesn't fire for that event.
+- The receiver must accept any 2xx response; status codes are ignored.
+
+## Slack quickstart
+
+1. Create an Incoming Webhook in Slack and copy the `https://hooks.slack.com/services/...` URL.
+2. Set `MIDPLANE_DENY_WEBHOOK=...` in `.env`.
+3. Slack will render the JSON as a code block. For prettier formatting, point the webhook at a small relay (Cloudflare Worker, Lambda) that translates the payload into Slack Block Kit. The default JSON is intentionally generic.
+
+## Filtering
+
+`MIDPLANE_DENY_WEBHOOK_RULES` accepts a comma-separated list of [policy rule names](./policy-rules.md). Recognized values:
+
+- `writes_require_approval`
+- `multi_statement`
+- `tenant_scope_missing`
+- `parse_error`
+
+A query that matched a rule not in the allowlist still produces an audit row, but does not fire the webhook.

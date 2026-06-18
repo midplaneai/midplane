@@ -19,6 +19,7 @@ import {
   serializeMultiDbPolicyToYaml,
 } from "@midplane-cloud/db";
 
+import { OSS_ENGINE_IMAGE } from "./oss-image.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 
 // Path inside the container where the OSS engine reads the policy file
@@ -52,7 +53,7 @@ export class DockerSpawner implements Spawner {
   private readonly fetchFn: typeof fetch;
 
   constructor(opts: DockerSpawnerOptions = {}) {
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? "midplane/midplane:0.9.0";
+    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? OSS_ENGINE_IMAGE;
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 30_000;
     this.indexerToken = opts.indexerToken;
     this.exec = opts.exec ?? execProcess;

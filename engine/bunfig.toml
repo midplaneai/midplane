@@ -1,0 +1,9 @@
+[test]
+# Preload the verdict-baseline recorder so its `afterAll` registers at root
+# scope and runs once after the whole suite (a top-level afterAll in an
+# imported module is otherwise scoped to the first importing file). The
+# recorder is the byte-identical policy-verdict oracle for the multi-DB
+# normalized-IR refactor; see packages/engine/test/_verdict-recorder.ts.
+# It only captures verdicts from engine tests (via MemoryAuditWriter) and
+# no-ops for any run that produces none.
+preload = ["./packages/engine/test/_verdict-recorder.ts"]

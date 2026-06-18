@@ -1,0 +1,71 @@
+name: engine-publish
+
+# Publishes the OSS engine image midplane/midplane:<X.Y.Z> + :latest.
+#
+# Monorepo note: engine releases are namespaced `engine-v*` so they don't
+# collide with any control-plane release tag in the shared tag space. Push
+# `engine-v0.11.0` to cut midplane/midplane:0.11.0. This is SEPARATE from the
+# control-plane deploy (deploy-fly.yml, manual workflow_dispatch) — code-only
+# merge keeps the two pipelines distinct.
+
+on:
+  push:
+    tags:
+      - "engine-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Engine version X.Y.Z to (re)publish, e.g. 0.10.0 (no engine-v prefix)."
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        # On a tag push, strip the `engine-v` prefix → bare X.Y.Z. On a manual
+        # workflow_dispatch GITHUB_REF is a BRANCH ref (refs/heads/...), so the
+        # strip would yield an invalid Docker tag — use the required input instead.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.version }}"
+          else
+            tag="${GITHUB_REF#refs/tags/engine-v}"
+          fi
+          case "$tag" in
+            *refs/*|"") echo "::error::could not resolve a valid version (got '$tag')"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          # Build context is the repo root (the merged monorepo has one root
+          # bun.lock; the engine Dockerfile compiles a self-contained binary).
+          context: .
+          file: engine/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          # No attestation manifests in the index: buildx provenance/SBOM add
+          # `unknown/unknown` manifests Fly's resolver can't parse, making it
+          # report "found arm64". Keep the index to just the platform images.
+          provenance: false
+          sbom: false
+          push: true
+          tags: |
+            midplane/midplane:${{ steps.version.outputs.tag }}
+            midplane/midplane:latest

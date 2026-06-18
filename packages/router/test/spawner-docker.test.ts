@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { OSS_ENGINE_IMAGE } from "../src/oss-image.ts";
 import { DockerSpawner, parseHostPort } from "../src/spawner-docker.ts";
 
 describe("parseHostPort", () => {
@@ -31,7 +32,7 @@ describe("DockerSpawner", () => {
     ) as unknown as typeof fetch;
 
     const spawner = new DockerSpawner({
-      image: "midplane/midplane:0.9.0",
+      image: OSS_ENGINE_IMAGE,
       exec,
       fetch: fetchFn,
       bootTimeoutMs: 1000,
@@ -57,7 +58,7 @@ describe("DockerSpawner", () => {
     expect(exec).toHaveBeenCalled();
 
     const runArgs = exec.mock.calls[0]?.[1] ?? [];
-    expect(runArgs).toContain("midplane/midplane:0.9.0");
+    expect(runArgs).toContain(OSS_ENGINE_IMAGE);
     // Multi-DB: DSN is injected as a per-DB env var (MIDPLANE_DSN_<id>),
     // never as a top-level DATABASE_URL — the YAML's `url:` references
     // the env via ${...} interpolation.

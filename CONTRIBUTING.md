@@ -1,10 +1,14 @@
 # Contributing to Midplane
 
-Thanks for your interest. This repository is the Midplane **control plane** —
-the dashboard, connection/policy management, audit views, and the hosted MCP
-proxy. The query-path engine (SQL parsing, policy enforcement, guardrails)
-lives in the separate, MIT-licensed [`midplaneai/midplane`](https://github.com/midplaneai/midplane)
-repo; engine changes go there.
+Thanks for your interest. This repository is the Midplane monorepo: the
+**control plane** (dashboard, connection/policy management, audit views, the
+hosted MCP proxy) at the root, and the query-path **engine** (SQL parsing,
+policy enforcement, guardrails) under [`engine/`](./engine) — an MIT subtree
+with its own [`engine/CONTRIBUTING.md`](./engine/CONTRIBUTING.md) (the highest-
+value contributions there are SQL-bypass attempts and the policy fixes that
+defeat them) and [`engine/THREAT_MODEL.md`](./engine/THREAT_MODEL.md). One
+codebase, two deployables: the engine ships as its own minimal Docker image,
+the control plane as one web app.
 
 ## Open-core boundary
 
@@ -35,7 +39,8 @@ bun dev                      # localhost:3000
 Before opening a PR, from the repo root:
 
 ```bash
-./node_modules/.bin/vitest run                 # unit suite
+./node_modules/.bin/vitest run                 # control-plane unit suite
+bun run test:engine                            # engine bun:test suite (cd engine && bun test)
 (cd apps/web && bun run typecheck && bun run lint)
 ```
 
