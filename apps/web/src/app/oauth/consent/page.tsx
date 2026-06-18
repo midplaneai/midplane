@@ -5,26 +5,31 @@ import { oauthApplication } from "@midplane-cloud/db/auth-schema";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { ConsentForm } from "@/components/oauth/consent-form";
-import { getActorEmail } from "@/lib/org-context";
+import { currentCustomer } from "@/lib/customer";
+import { getActorEmail, getOrgContext } from "@/lib/org-context";
 import { bootRegion } from "@/lib/region-context";
+import { getOAuthGrantMap, listGrantableDatabases } from "@/lib/scope-grants";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // OAuth consent screen for the MCP `mcp` plugin — the explicit "approve this
-// agent" step. The authorize endpoint redirects here with consent_code /
-// client_id / scope; the auth-config before-hook forces prompt=consent so this
-// always renders (the consistent branded moment before the hand-off back to the
-// agent's own callback). The user is already signed in — authorize requires a
-// session — so this grants, it doesn't log in.
+// agent + choose its databases" step. The authorize endpoint redirects here with
+// consent_code / client_id / scope; the auth-config before-hook forces
+// prompt=consent so this always renders (the consistent branded moment before
+// the hand-off back to the agent's own callback). The user is already signed in
+// (authorize requires a session), so this grants — it doesn't log in.
+//
+// P6.1: the screen is a per-DATABASE least-privilege picker. The user chooses
+// which of their databases the agent may reach, and at what access. The picker
+// writes mcp_scope_grants (keyed by this OAuth client + the user) which the
+// proxy enforces on every request (X-Midplane-Scope). See ConsentForm.
 //
 // Lives OUTSIDE the (app) group: an OAuth interstitial, not a dashboard page, so
 // it renders its own minimal chrome instead of the AppShell.
 
-// Human copy per scope. `mcp` is the one that matters (database access); the
-// rest are the Better Auth OIDC identity defaults, shown muted. The DB scope is
-// surfaced first and prominently; unknown scopes fall back to their raw name.
-const DB_SCOPE = "mcp";
+// Identity scopes are the Better Auth OIDC defaults — shown muted; the `mcp`
+// database scope is now expressed by the picker itself, not a bullet.
 const IDENTITY_COPY: Record<string, string> = {
   openid: "confirm your identity",
   profile: "your name and profile image",
@@ -57,8 +62,19 @@ export default async function OAuthConsentPage({
   const displayName = appName || clientId || "An MCP client";
   const email = await getActorEmail();
 
-  const grantsDbAccess = scopes.length === 0 || scopes.includes(DB_SCOPE);
   const identityScopes = scopes.filter((s) => s in IDENTITY_COPY);
+
+  // Load the databases the user can grant + any prior grant for this client, so
+  // the picker pre-selects a re-consent. Only needed when there's a request to
+  // act on (consent_code + client_id present).
+  const ready = Boolean(consentCode && clientId);
+  const customer = ready ? await currentCustomer() : null;
+  const { userId } = ready ? await getOrgContext() : { userId: null };
+  const connections = customer ? await listGrantableDatabases(customer) : [];
+  const existing =
+    customer && clientId && userId
+      ? Object.fromEntries(await getOAuthGrantMap(customer, clientId, userId))
+      : {};
 
   return (
     <main className="flex min-h-screen flex-col">
@@ -67,7 +83,7 @@ export default async function OAuthConsentPage({
       </header>
 
       <section className="container mx-auto flex max-w-[460px] flex-1 flex-col items-center justify-center gap-7 px-4 py-16">
-        {consentCode ? (
+        {ready && clientId ? (
           <>
             <div className="flex flex-col items-center gap-4 text-center">
               {/* Neutral monogram — we deliberately don't render the client's
@@ -89,41 +105,28 @@ export default async function OAuthConsentPage({
               </div>
             </div>
 
-            <div className="w-full space-y-4 border border-border bg-card p-5">
-              {grantsDbAccess && (
-                <div className="flex gap-3">
-                  <span aria-hidden className="mt-0.5 font-mono text-allow">
-                    ✓
-                  </span>
-                  <div className="space-y-0.5">
-                    <p className="text-sm font-medium text-foreground">
-                      Run queries through your database connections
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Each connection&apos;s policy and guardrails still apply —
-                      the agent can only do what you&apos;ve allowed.
-                    </p>
-                  </div>
-                </div>
-              )}
-              {identityScopes.length > 0 && (
-                <div className="flex gap-3">
-                  <span aria-hidden className="mt-0.5 font-mono text-subtle">
-                    ·
-                  </span>
-                  <p className="text-xs text-muted-foreground">
-                    Read{" "}
-                    {identityScopes
-                      .map((s) => IDENTITY_COPY[s])
-                      .join(", ")
-                      .replace(/, ([^,]*)$/, " and $1")}
-                    .
-                  </p>
-                </div>
-              )}
-            </div>
+            {identityScopes.length > 0 && (
+              <div className="flex w-full gap-3">
+                <span aria-hidden className="mt-0.5 font-mono text-subtle">
+                  ·
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  It will also read{" "}
+                  {identityScopes
+                    .map((s) => IDENTITY_COPY[s])
+                    .join(", ")
+                    .replace(/, ([^,]*)$/, " and $1")}
+                  .
+                </p>
+              </div>
+            )}
 
-            <ConsentForm consentCode={consentCode} />
+            <ConsentForm
+              consentCode={consentCode!}
+              clientId={clientId}
+              connections={connections}
+              existing={existing}
+            />
 
             <div className="space-y-1 text-center">
               {email && (
@@ -133,7 +136,7 @@ export default async function OAuthConsentPage({
               )}
               <p className="text-xs text-subtle">
                 You can revoke access any time by pausing or deleting the
-                connection.
+                connection, or re-running this flow.
               </p>
             </div>
           </>
