@@ -56,7 +56,7 @@ on:
         required: true
         # Default mirrors OSS_ENGINE_IMAGE (packages/router/src/oss-image.ts);
         # scripts/check-image-pin.ts enforces it matches the rest of the repo.
-        default: "0.10.0"
+        default: "0.11.0"
       region:
         description: "Region(s) to roll out. With 'both', eu rolls fully before us (staged blast radius)."
         type: choice
