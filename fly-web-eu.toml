@@ -22,10 +22,15 @@
 #   fly secrets set --app midplane-web ...   # see comment below
 #   fly deploy --config fly-web-eu.toml
 #
-# Three TLS certs are needed on this app (Fly matches by SNI; the cert
-# for eu.app.midplane.ai does NOT cover app.midplane.ai):
+# Three host certs are needed on this app (Fly matches by SNI; each cert
+# covers exactly one host). eu.app.midplane.ai is the dashboard + OAuth issuer
+# (BETTER_AUTH_URL); app.midplane.ai is the apex picker; eu.midplane.ai is the
+# MCP endpoint host (MIDPLANE_PUBLIC_HOST_EU) — agents connect there and the
+# OAuth bearer is validated by THIS same app, so the cert is mandatory:
 #   fly certs add eu.app.midplane.ai  --app midplane-web
 #   fly certs add app.midplane.ai     --app midplane-web
+#   fly certs add eu.midplane.ai      --app midplane-web   # MCP endpoint host
+# See docs/runbooks/mcp-oauth-prod-hosts.md for the issuer-vs-endpoint topology.
 
 app = "midplane-web"
 primary_region = "fra"
@@ -52,6 +57,7 @@ primary_region = "fra"
 #   MIDPLANE_REGION="eu"                  # region pin — required
 #   DATABASE_URL_EU                       # Neon prod project in eu-central-1
 #   MIDDLEWARE_ENFORCE="false"            # "true" after 24h shadow window
+#   BETTER_AUTH_URL="https://eu.app.midplane.ai"  # MCP OAuth issuer — this app's OWN origin (boot-asserted; serves /api/auth + /.well-known/*). See docs/runbooks/mcp-oauth-prod-hosts.md
 #   BETTER_AUTH_SECRET                    # 32+ bytes (signs sessions); `openssl rand -base64 32`
 #   MIDPLANE_REGION_COOKIE_SECRET         # 32+ bytes; MUST match across apex + both web apps (signed region cookie)
 #   MIDPLANE_KMS_MODE                     # "env" or "kms"
