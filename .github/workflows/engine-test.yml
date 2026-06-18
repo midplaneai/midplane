@@ -1,10 +1,16 @@
-name: test
+name: engine-test
+
+# CI for the engine subtree (engine/). Runs only when engine files change, so a
+# control-plane-only PR doesn't pay for it. The control-plane suite runs under
+# vitest (see CONTRIBUTING.md); the engine runs under bun:test.
 
 on:
   push:
     branches: [main]
+    paths: ["engine/**"]
   pull_request:
     branches: [main]
+    paths: ["engine/**"]
 
 jobs:
   test:
@@ -15,7 +21,10 @@ jobs:
         with:
           bun-version: 1.3
       - run: bun install
-      - run: bun test
+      # Scope bun:test to engine/ — from the repo root `bun test` would discover
+      # the control-plane vitest files (which import `vitest`, not `bun:test`).
+      - name: engine bun:test
+        run: cd engine && bun test
 
   smoketest:
     runs-on: ubuntu-latest
@@ -26,7 +35,7 @@ jobs:
           bun-version: 1.3
       - run: bun install
       - name: Build and run smoketest
-        working-directory: examples/smoketest
+        working-directory: engine/examples/smoketest
         run: ./run.sh
 
   docker-build:
@@ -38,4 +47,5 @@ jobs:
           bun-version: 1.3
       - run: bun install --frozen-lockfile
       - name: Build image and run MCP trial battery against sidecar Postgres
-        run: ./scripts/test-image.sh
+        # test-image.sh cd's into engine/ itself and builds from the repo root.
+        run: bash engine/scripts/test-image.sh
