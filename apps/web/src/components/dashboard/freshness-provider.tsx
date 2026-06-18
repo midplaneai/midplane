@@ -27,21 +27,21 @@ interface DatabaseFreshness {
   lastQueryAt: Date | null;
 }
 
-export interface ConnectionFreshness {
+export interface ProjectFreshness {
   /** Non-null = paused. Overrides the cursor-derived dot (see
-   *  resolveFreshness) so a paused connection reads "paused" on the
+   *  resolveFreshness) so a paused project reads "paused" on the
    *  dashboard, refreshed on every poll. */
   pausedAt: Date | null;
   cursor: { lastIndexedAt: Date | null; lastErrorAt: Date | null };
   databases: Map<string, DatabaseFreshness>;
 }
 
-type Snapshot = Map<string, ConnectionFreshness>;
+type Snapshot = Map<string, ProjectFreshness>;
 
 const FreshnessContext = createContext<Snapshot | null>(null);
 
 interface SerializedSnapshot {
-  connections: Array<{
+  projects: Array<{
     id: string;
     pausedAt: string | null;
     cursor: {
@@ -56,7 +56,7 @@ interface SerializedSnapshot {
 }
 
 export interface FreshnessInitial {
-  connections: Array<{
+  projects: Array<{
     id: string;
     pausedAt: Date | null;
     cursor: {
@@ -72,7 +72,7 @@ export interface FreshnessInitial {
 
 function deserialize(payload: SerializedSnapshot): Snapshot {
   const map: Snapshot = new Map();
-  for (const c of payload.connections) {
+  for (const c of payload.projects) {
     const dbs = new Map<string, DatabaseFreshness>();
     for (const d of c.databases) {
       dbs.set(d.name, {
@@ -98,7 +98,7 @@ function deserialize(payload: SerializedSnapshot): Snapshot {
 
 function fromInitial(initial: FreshnessInitial): Snapshot {
   const map: Snapshot = new Map();
-  for (const c of initial.connections) {
+  for (const c of initial.projects) {
     const dbs = new Map<string, DatabaseFreshness>();
     for (const d of c.databases) {
       dbs.set(d.name, { name: d.name, lastQueryAt: d.lastQueryAt });
@@ -126,7 +126,7 @@ export function DashboardFreshnessProvider({
   // streams a fresh `initial` that we'd otherwise ignore until the next
   // 60s poll. Consumers prefer the live snapshot over their initial* props
   // (so cross-surface polling wins), which means the snapshot must track
-  // revalidations or a just-paused connection keeps reading "live" until a
+  // revalidations or a just-paused project keeps reading "live" until a
   // manual refresh. `initial` only gets a new reference on a server
   // re-render — client-side poll updates re-render via setSnapshot without
   // touching the prop, so this doesn't clobber freshly polled data.
@@ -190,32 +190,32 @@ export function DashboardFreshnessProvider({
   );
 }
 
-/** Read the live freshness for one connection, or `null` when the
+/** Read the live freshness for one project, or `null` when the
  *  provider isn't mounted (caller falls back to its server-rendered
  *  initial values). */
-export function useConnectionFreshness(
-  connectionId: string,
-): ConnectionFreshness | null {
+export function useProjectFreshness(
+  projectId: string,
+): ProjectFreshness | null {
   const snapshot = useContext(FreshnessContext);
-  return snapshot?.get(connectionId) ?? null;
+  return snapshot?.get(projectId) ?? null;
 }
 
-/** Read the live last-query-at for one DB on a connection. */
+/** Read the live last-query-at for one DB on a project. */
 export function useDatabaseLastQuery(
-  connectionId: string,
+  projectId: string,
   dbName: string,
 ): Date | null {
-  const conn = useConnectionFreshness(connectionId);
+  const conn = useProjectFreshness(projectId);
   return conn?.databases.get(dbName)?.lastQueryAt ?? null;
 }
 
 /** Memoize a derivation off the live snapshot. Skips re-running when
- *  the connectionId / dbName tuple doesn't change AND the underlying
+ *  the projectId / dbName tuple doesn't change AND the underlying
  *  values haven't moved. */
 export function useFreshnessMemo<T>(
-  connectionId: string,
-  derive: (conn: ConnectionFreshness | null) => T,
+  projectId: string,
+  derive: (conn: ProjectFreshness | null) => T,
 ): T {
-  const conn = useConnectionFreshness(connectionId);
+  const conn = useProjectFreshness(projectId);
   return useMemo(() => derive(conn), [conn, derive]);
 }

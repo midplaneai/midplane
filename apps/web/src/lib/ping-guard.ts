@@ -32,7 +32,7 @@ import { isIP } from "node:net";
 import { pingDsn, type PingDsnResult } from "@/lib/ping-dsn";
 
 export const GENERIC_PING_ERROR =
-  "Could not connect. Check the host, port, and that the database accepts connections from the internet.";
+  "Could not connect. Check the host, port, and that the database accepts projects from the internet.";
 
 export function pingGuardEnabled(
   env: Record<string, string | undefined> = process.env,

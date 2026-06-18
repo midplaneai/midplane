@@ -1,6 +1,6 @@
 // Unit coverage for the tokens lib (apps/web/src/lib/tokens.ts).
 //
-// Same pattern as connections.test.ts: a hand-rolled fake DB that records
+// Same pattern as projects.test.ts: a hand-rolled fake DB that records
 // every operation and lets each test stage the next select/insert/update
 // result. The real @midplane-cloud/kms/pepper module is used (pure crypto,
 // no IO) so the createToken happy-path test can re-hash the returned
@@ -210,7 +210,7 @@ describe("createToken", () => {
     );
     expect(insert).toBeDefined();
     const row = insert!.set as Record<string, unknown>;
-    expect(row.connectionId).toBe("conn-1");
+    expect(row.projectId).toBe("conn-1");
     expect(row.name).toBe("laptop");
     expect(row.prefix).toBe("mp_test");
     expect((row.last4 as string).length).toBe(4);
@@ -257,7 +257,7 @@ describe("createToken", () => {
 
   it("throws PlanLimitError('tokens') when planLimit is set and usable tokens are at the cap", async () => {
     handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
-    handle.queueSelect([{ id: "conn-1" }]); // countUsableTokens: connection ids
+    handle.queueSelect([{ id: "conn-1" }]); // countUsableTokens: project ids
     handle.queueSelect([{ count: 1 }]); // usable token count → 1 >= cap 1
     const { createToken } = await import("../src/lib/tokens.ts");
     const { PlanLimitError } = await import("../src/lib/plan.ts");
@@ -278,13 +278,13 @@ describe("createToken", () => {
     expect(err.limit).toBe(1);
   });
 
-  it("locks the customers row BEFORE the connection when enforcing the token cap", async () => {
+  it("locks the customers row BEFORE the project when enforcing the token cap", async () => {
     handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
-    handle.queueSelect([{ id: "conn-1" }]); // countUsableTokens: connection ids
+    handle.queueSelect([{ id: "conn-1" }]); // countUsableTokens: project ids
     handle.queueSelect([{ count: 0 }]); // usable token count → 0 < cap 5 ✓
-    handle.queueSelect([{ id: "conn-1" }]); // parent connection FOR UPDATE
+    handle.queueSelect([{ id: "conn-1" }]); // parent project FOR UPDATE
     handle.queueSelect([]); // name collision pre-check (none)
-    const { customers, connections } = await import("@midplane-cloud/db");
+    const { customers, projects } = await import("@midplane-cloud/db");
     const { createToken } = await import("../src/lib/tokens.ts");
     const result = await createToken(
       customer,
@@ -301,10 +301,10 @@ describe("createToken", () => {
     expect(result).not.toBeNull();
     const selects = handle.calls.filter((c) => c.op === "select");
     // First lock is the customers row (cap serialization), and it precedes
-    // the connection lock — consistent lock order with createConnection.
+    // the project lock — consistent lock order with createProject.
     expect(selects[0]?.table).toBe(customers);
     expect(selects[0]?.forUpdate).toBe(true);
-    expect(selects.some((s) => s.table === connections && s.forUpdate)).toBe(
+    expect(selects.some((s) => s.table === projects && s.forUpdate)).toBe(
       true,
     );
   });
@@ -336,7 +336,7 @@ describe("createToken", () => {
     handle.failNextInsert(
       Object.assign(new Error("dup"), {
         code: "23505",
-        constraint_name: "mcp_tokens_name_per_connection_uq",
+        constraint_name: "mcp_tokens_name_per_project_uq",
       }),
     );
     const { createToken, DuplicateTokenName } = await import(
@@ -376,7 +376,7 @@ describe("createToken", () => {
     ).rejects.toBeInstanceOf(ExpiryInThePast);
   });
 
-  it("returns null on foreign connection (parent ownership read returns 0 rows)", async () => {
+  it("returns null on foreign project (parent ownership read returns 0 rows)", async () => {
     handle.queueSelect([]); // parent not found / not owned
     const { createToken } = await import("../src/lib/tokens.ts");
     const result = await createToken(
@@ -395,7 +395,7 @@ describe("createToken", () => {
 });
 
 describe("listTokens", () => {
-  it("happy path: returns rows for an owned connection", async () => {
+  it("happy path: returns rows for an owned project", async () => {
     handle.queueSelect([{ id: "conn-1" }]); // parent ownership
     handle.queueSelect([
       {
@@ -422,7 +422,7 @@ describe("listTokens", () => {
     expect(rows![0]!.status).toBe("active");
   });
 
-  it("returns null on foreign connection", async () => {
+  it("returns null on foreign project", async () => {
     handle.queueSelect([]); // parent not owned
     const { listTokens } = await import("../src/lib/tokens.ts");
     const rows = await listTokens(customer, "foreign");
@@ -484,7 +484,7 @@ describe("revokeToken", () => {
     ).toBe(false);
   });
 
-  it("returns null on foreign connection", async () => {
+  it("returns null on foreign project", async () => {
     handle.queueSelect([]); // parent not owned
     const { revokeToken } = await import("../src/lib/tokens.ts");
     const result = await revokeToken(customer, "foreign", "tok-x", {
@@ -494,7 +494,7 @@ describe("revokeToken", () => {
     expect(result).toBeNull();
   });
 
-  it("returns null when the token id doesn't exist on the connection", async () => {
+  it("returns null when the token id doesn't exist on the project", async () => {
     handle.queueSelect([{ id: "conn-1" }]); // parent ok
     handle.queueSelect([]); // token not found
     const { revokeToken } = await import("../src/lib/tokens.ts");
@@ -536,17 +536,17 @@ describe("lookupByPlaintext", () => {
     expect(handle.calls).toHaveLength(0);
   });
 
-  it("happy path: resolves a known hash to (tokenId, connectionId)", async () => {
+  it("happy path: resolves a known hash to (tokenId, projectId)", async () => {
     const { generateToken } = await import("@midplane-cloud/db");
     const { plaintext } = generateToken("test");
-    handle.queueSelect([{ id: "tok-1", connectionId: "conn-1" }]);
+    handle.queueSelect([{ id: "tok-1", projectId: "conn-1" }]);
     const { lookupByPlaintext } = await import("../src/lib/tokens.ts");
     const result = await lookupByPlaintext(
       plaintext,
       "eu",
       new Map([[pepper.kid, pepper.pepper]]),
     );
-    expect(result).toEqual({ tokenId: "tok-1", connectionId: "conn-1" });
+    expect(result).toEqual({ tokenId: "tok-1", projectId: "conn-1" });
   });
 
   it("returns null when the hash does not match any row (unknown / revoked / expired)", async () => {
@@ -582,20 +582,20 @@ describe("lookupByPlaintext", () => {
 });
 
 describe("countUsableTokens", () => {
-  it("returns 0 without a count query when the customer has no connections", async () => {
-    handle.queueSelect([]); // connection ids → none
+  it("returns 0 without a count query when the customer has no projects", async () => {
+    handle.queueSelect([]); // project ids → none
     const { countUsableTokens } = await import("../src/lib/tokens.ts");
     const n = await countUsableTokens(
       handle.db as unknown as Parameters<typeof countUsableTokens>[0],
       customer.id,
     );
     expect(n).toBe(0);
-    // Only the connection-ids select ran; no token count for an empty set.
+    // Only the project-ids select ran; no token count for an empty set.
     expect(handle.calls.filter((c) => c.op === "select")).toHaveLength(1);
   });
 
-  it("sums the usable-token count across the customer's connections", async () => {
-    handle.queueSelect([{ id: "c1" }, { id: "c2" }]); // connection ids
+  it("sums the usable-token count across the customer's projects", async () => {
+    handle.queueSelect([{ id: "c1" }, { id: "c2" }]); // project ids
     handle.queueSelect([{ count: 3 }]); // usable count
     const { countUsableTokens } = await import("../src/lib/tokens.ts");
     const n = await countUsableTokens(
@@ -608,7 +608,7 @@ describe("countUsableTokens", () => {
 
 describe("ensureOAuthAttributionToken", () => {
   const args = {
-    connectionId: "conn-oauth",
+    projectId: "conn-oauth",
     clientId: "CLIENTABCDEFGH1234",
     userId: "user_oauth_1",
   };
@@ -643,7 +643,7 @@ describe("ensureOAuthAttributionToken", () => {
     expect(row.id).toBe(id);
     expect(row.kind).toBe("oauth");
     expect(row.clientId).toBe(args.clientId);
-    expect(row.connectionId).toBe(args.connectionId);
+    expect(row.projectId).toBe(args.projectId);
     expect(row.createdByUserId).toBe(args.userId);
     expect(row.name).toBe(`oauth:${args.clientId}`);
     expect(row.prefix).toBe("mp_oauth");

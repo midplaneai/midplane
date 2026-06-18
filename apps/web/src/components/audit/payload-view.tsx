@@ -164,7 +164,7 @@ function TokenCreatedView({ payload }: { payload: Record<string, unknown> }) {
   const prefix = stringField(payload, "prefix");
   const last4 = stringField(payload, "last4");
   const expiresAt = stringField(payload, "expires_at");
-  const connectionId = stringField(payload, "connection_id");
+  const projectId = stringField(payload, "project_id");
   return (
     <Fields>
       {name && <Field label="Token name">{name}</Field>}
@@ -182,9 +182,9 @@ function TokenCreatedView({ payload }: { payload: Record<string, unknown> }) {
           <span className="text-subtle">never</span>
         )}
       </Field>
-      {connectionId && (
-        <Field label="Connection">
-          <span className="font-mono text-xs">{connectionId}</span>
+      {projectId && (
+        <Field label="Project">
+          <span className="font-mono text-xs">{projectId}</span>
         </Field>
       )}
     </Fields>
@@ -193,14 +193,14 @@ function TokenCreatedView({ payload }: { payload: Record<string, unknown> }) {
 
 function TokenRevokedView({ payload }: { payload: Record<string, unknown> }) {
   const reason = stringField(payload, "reason");
-  const connectionId = stringField(payload, "connection_id");
+  const projectId = stringField(payload, "project_id");
   return (
     <div className="space-y-3">
       {reason && <Callout tone="deny">{reason}</Callout>}
-      {connectionId && (
+      {projectId && (
         <Fields>
-          <Field label="Connection">
-            <span className="font-mono text-xs">{connectionId}</span>
+          <Field label="Project">
+            <span className="font-mono text-xs">{projectId}</span>
           </Field>
         </Fields>
       )}

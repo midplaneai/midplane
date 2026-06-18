@@ -194,8 +194,8 @@ export async function upsertCustomerRegion(
 // org — the first creates it; the rest see the membership and reuse it. One org
 // == one customer.
 //
-// The lock must live inside a transaction: postgres-js pools connections, and
-// only `db.transaction` pins one connection for the callback, so the
+// The lock must live inside a transaction: postgres-js pools projects, and
+// only `db.transaction` pins one project for the callback, so the
 // xact-scoped advisory lock (auto-released on commit) is the pool-safe choice.
 async function getOrCreateOrgForUser(
   userId: string,

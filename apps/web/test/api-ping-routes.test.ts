@@ -1,7 +1,7 @@
 // Route-layer coverage for the two pasted-DSN ping surfaces:
 //
-//   POST /api/connections/test-dsn            (new — pre-create, no parent id)
-//   POST /api/connections/[id]/databases/test (REGRESSION: gained the 429
+//   POST /api/projects/test-dsn            (new — pre-create, no parent id)
+//   POST /api/projects/[id]/databases/test (REGRESSION: gained the 429
 //                                              branch and the pingDsn →
 //                                              pingDsnGuarded swap)
 //
@@ -62,9 +62,9 @@ vi.mock("@/lib/posthog", () => ({
   getPostHog: () => null,
 }));
 
-// isValidDsn is the only @/lib/connections symbol the test-dsn route
+// isValidDsn is the only @/lib/projects symbol the test-dsn route
 // needs; keep the real implementation, skip the heavy module graph.
-vi.mock("@/lib/connections", () => ({
+vi.mock("@/lib/projects", () => ({
   isValidDsn: (s: unknown) =>
     typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8,
 }));
@@ -113,16 +113,16 @@ function jsonRequest(body?: unknown): Request {
 const GOOD_DSN = "postgres://u:p@db.example.com:5432/app";
 
 async function loadTestDsnRoute() {
-  return await import("../src/app/api/connections/test-dsn/route.ts");
+  return await import("../src/app/api/projects/test-dsn/route.ts");
 }
 
 async function loadPerConnRoute() {
   return await import(
-    "../src/app/api/connections/[id]/databases/test/route.ts"
+    "../src/app/api/projects/[id]/databases/test/route.ts"
   );
 }
 
-describe("POST /api/connections/test-dsn", () => {
+describe("POST /api/projects/test-dsn", () => {
   it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { POST } = await loadTestDsnRoute();
@@ -141,7 +141,7 @@ describe("POST /api/connections/test-dsn", () => {
   it("passes the guarded ping result through verbatim", async () => {
     pingGuardedMock = vi.fn(async () => ({
       ok: false,
-      error: "Could not connect. Check the host, port, and that the database accepts connections from the internet.",
+      error: "Could not connect. Check the host, port, and that the database accepts projects from the internet.",
     }));
     const { POST } = await loadTestDsnRoute();
     const res = await POST(jsonRequest({ dsn: GOOD_DSN }));
@@ -163,7 +163,7 @@ describe("POST /api/connections/test-dsn", () => {
   });
 });
 
-describe("POST /api/connections/[id]/databases/test (regression: guard + 429)", () => {
+describe("POST /api/projects/[id]/databases/test (regression: guard + 429)", () => {
   const params = { params: Promise.resolve({ id: "conn-1" }) };
 
   it("401 / 404 gates still hold", async () => {
@@ -174,7 +174,7 @@ describe("POST /api/connections/[id]/databases/test (regression: guard + 429)", 
     );
 
     currentCustomerMock = vi.fn(async () => customer);
-    ownedRows = []; // foreign / unknown connection
+    ownedRows = []; // foreign / unknown project
     expect((await POST(jsonRequest({ dsn: GOOD_DSN }), params)).status).toBe(
       404,
     );

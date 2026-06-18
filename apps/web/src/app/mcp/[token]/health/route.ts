@@ -7,7 +7,7 @@ import { bootRegion } from "@/lib/region-context";
 // GET /mcp/<token>/health — bootstrap health probe, served by the web app
 // (the same ingress as /mcp/<token> itself). It resolves the token against
 // the regional cloud DB and returns: token resolves → 200 {ok, region};
-// connection paused → 403 (distinct from unknown so the probe reflects the
+// project paused → 403 (distinct from unknown so the probe reflects the
 // kill switch the same way the proxy does); token unknown → 404. Unlike the
 // proxy path it does NOT spawn a container — a cheap "is this token live?"
 // check.
@@ -41,11 +41,11 @@ export async function GET(
   if (!resolved.ok) {
     if (resolved.reason === "paused") {
       return Response.json(
-        { ok: false, error: "connection_paused" },
+        { ok: false, error: "project_paused" },
         { status: 403 },
       );
     }
     return Response.json({ ok: false }, { status: 404 });
   }
-  return Response.json({ ok: true, region: resolved.connection.region });
+  return Response.json({ ok: true, region: resolved.project.region });
 }

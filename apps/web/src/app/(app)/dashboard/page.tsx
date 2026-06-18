@@ -5,30 +5,30 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { ConnectionRowMenu } from "@/components/dashboard/connection-row-menu";
-import { ConnectionServiceControl } from "@/components/dashboard/connection-service-control";
+import { ProjectRowMenu } from "@/components/dashboard/project-row-menu";
+import { ProjectServiceControl } from "@/components/dashboard/project-service-control";
 import { DatabaseRow } from "@/components/dashboard/database-row";
 import {
   DashboardFreshnessProvider,
   type FreshnessInitial,
 } from "@/components/dashboard/freshness-provider";
-import { LiveConnectionFreshness } from "@/components/dashboard/live-connection-freshness";
+import { LiveProjectFreshness } from "@/components/dashboard/live-project-freshness";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { RegionBadge } from "@/components/ui/region-badge";
 import {
-  type DashboardConnectionRow,
+  type DashboardProjectRow,
   type DashboardDatabase,
-  deleteConnection,
+  deleteProject,
   emitConfigAuditRow,
-  listDashboardConnections,
-  pauseConnection,
-  resumeConnection,
-} from "@/lib/connections";
+  listDashboardProjects,
+  pauseProject,
+  resumeProject,
+} from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
-import { connectionLabel, formatRelative } from "@/lib/format";
+import { projectLabel, formatRelative } from "@/lib/format";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
@@ -49,37 +49,37 @@ export default async function Dashboard({
   if (!customer) redirect("/signup/region");
 
   // PR1's create flow redirected to /dashboard?setup=<id> to auto-open
-  // the agent setup sheet. PR2 routes new connections through the
-  // dedicated /connections/<id>/created success page instead. Strip
+  // the agent setup sheet. PR2 routes new projects through the
+  // dedicated /projects/<id>/created success page instead. Strip
   // the stale param if a bookmarked URL still carries it.
   void searchParams;
 
   const { caps } = await resolvePlan();
-  const rows = await listDashboardConnections(
+  const rows = await listDashboardProjects(
     customer,
     caps.auditRetentionDays,
   );
 
-  // Surface the connection cap in the header so the limit is visible before
+  // Surface the project cap in the header so the limit is visible before
   // the user tries to add one (and the create form already guards the same
-  // cap on /connections/new). Unlimited (Team) shows no counter. atLimit
+  // cap on /projects/new). Unlimited (Team) shows no counter. atLimit
   // only fires when rows is non-empty, so it never collides with the
   // empty-state branch below.
-  const connectionLimit = caps.connections;
-  const atConnectionLimit =
-    Number.isFinite(connectionLimit) && rows.length >= connectionLimit;
+  const projectLimit = caps.projects;
+  const atProjectLimit =
+    Number.isFinite(projectLimit) && rows.length >= projectLimit;
 
   return (
     <>
       <Topbar>
-        <Breadcrumb items={[{ label: "Connections" }]} />
+        <Breadcrumb items={[{ label: "Projects" }]} />
       </Topbar>
       <PageContainer>
         <PageHeader
-          title="Connections"
+          title="Projects"
           subtitle={
             <>
-              Each connection is a{" "}
+              Each project is a{" "}
               <strong className="font-medium text-foreground">
                 hosted MCP endpoint
               </strong>{" "}
@@ -89,22 +89,22 @@ export default async function Dashboard({
           }
           actions={
             <div className="flex items-center gap-3">
-              {Number.isFinite(connectionLimit) ? (
+              {Number.isFinite(projectLimit) ? (
                 <span className="font-mono text-[11px] uppercase tracking-[0.04em] text-subtle">
-                  {rows.length} / {connectionLimit}
+                  {rows.length} / {projectLimit}
                 </span>
               ) : null}
-              {atConnectionLimit ? (
+              {atProjectLimit ? (
                 <Link href={UPGRADE_URL}>
                   <Button size="sm" variant="outline">
                     Upgrade to add more
                   </Button>
                 </Link>
               ) : (
-                <Link href="/connections/new">
+                <Link href="/projects/new">
                   <Button size="sm">
                     <Plus className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-                    New connection
+                    New project
                   </Button>
                 </Link>
               )}
@@ -114,10 +114,10 @@ export default async function Dashboard({
 
         {rows.length === 0 ? (
           <EmptyState
-            title="No connections yet"
+            title="No projects yet"
             description={
               <>
-                Add a Postgres connection to get a{" "}
+                Add a Postgres project to get a{" "}
                 <strong className="font-medium text-foreground">
                   hosted MCP endpoint
                 </strong>
@@ -125,7 +125,7 @@ export default async function Dashboard({
               </>
             }
             action={
-              <Link href="/connections/new">
+              <Link href="/projects/new">
                 <Button size="sm">Connect Postgres</Button>
               </Link>
             }
@@ -134,8 +134,8 @@ export default async function Dashboard({
           <DashboardFreshnessProvider initial={initialFreshness(rows)}>
             <ul className="space-y-3">
               {rows.map((row) => (
-                <ConnectionCard
-                  key={row.connection.id}
+                <ProjectCard
+                  key={row.project.id}
                   row={row}
                   deleteAction={deleteAction}
                   pauseAction={pauseAction}
@@ -152,15 +152,15 @@ export default async function Dashboard({
 
 function initialFreshness(
   rows: Array<{
-    connection: { id: string; pausedAt: Date | null };
+    project: { id: string; pausedAt: Date | null };
     databases: DashboardDatabase[];
     cursor: { lastIndexedAt: Date | null; lastErrorAt: Date | null };
   }>,
 ): FreshnessInitial {
   return {
-    connections: rows.map((row) => ({
-      id: row.connection.id,
-      pausedAt: row.connection.pausedAt,
+    projects: rows.map((row) => ({
+      id: row.project.id,
+      pausedAt: row.project.pausedAt,
       cursor: row.cursor,
       databases: row.databases.map((d) => ({
         name: d.name,
@@ -170,7 +170,7 @@ function initialFreshness(
   };
 }
 
-// One connection, rendered as a card. The whole card opens the connection
+// One project, rendered as a card. The whole card opens the project
 // workspace (the name link's stretched ::after covers it); the inner deep
 // links — the database / agents stats and each DB row — sit above it (z-10)
 // so they route to their own pane. Rename / add-db / per-DB management all
@@ -178,21 +178,21 @@ function initialFreshness(
 // manages. The "agents" stat doubles as the empty-state nudge — zero usable
 // tokens means the endpoint is dark, so it reads "connect an agent →" in the
 // warn tone instead of a dead "0".
-function ConnectionCard({
+function ProjectCard({
   row,
   deleteAction,
   pauseAction,
   resumeAction,
 }: {
-  row: DashboardConnectionRow;
+  row: DashboardProjectRow;
   deleteAction: (formData: FormData) => Promise<void>;
   pauseAction: (formData: FormData) => Promise<void>;
   resumeAction: (formData: FormData) => Promise<void>;
 }) {
-  const { connection: c, databases, cursor, activeTokens } = row;
-  const label = connectionLabel(c);
+  const { project: c, databases, cursor, activeTokens } = row;
+  const label = projectLabel(c);
 
-  // Connection-level "last query" = the most recent across its databases.
+  // Project-level "last query" = the most recent across its databases.
   // Server-rendered (the per-DB rows below carry the live values).
   const lastQueryAt = databases.reduce<Date | null>((max, d) => {
     if (!d.lastQueryAt) return max;
@@ -215,14 +215,14 @@ function ConnectionCard({
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <Link
-              href={`/connections/${c.id}`}
+              href={`/projects/${c.id}`}
               className="text-sm font-medium tracking-tight text-foreground after:absolute after:inset-0 focus-visible:underline focus-visible:outline-none"
             >
               {label}
             </Link>
             <div className="mt-1.5 flex items-center gap-3">
-              <LiveConnectionFreshness
-                connectionId={c.id}
+              <LiveProjectFreshness
+                projectId={c.id}
                 initialPausedAt={c.pausedAt}
                 initialLastIndexedAt={cursor.lastIndexedAt}
                 initialLastErrorAt={cursor.lastErrorAt}
@@ -230,8 +230,8 @@ function ConnectionCard({
               {/* z-10 lifts the control above the card's stretched open-link
                   (::after inset-0) so clicking Pause/Resume doesn't navigate. */}
               <span className="relative z-10">
-                <ConnectionServiceControl
-                  connectionId={c.id}
+                <ProjectServiceControl
+                  projectId={c.id}
                   initialPausedAt={c.pausedAt}
                   pauseAction={pauseAction}
                   resumeAction={resumeAction}
@@ -241,7 +241,7 @@ function ConnectionCard({
           </div>
           <RegionBadge region={c.region} />
           <div className="relative z-10">
-            <ConnectionRowMenu
+            <ProjectRowMenu
               id={c.id}
               name={c.name}
               deleteAction={deleteAction}
@@ -254,7 +254,7 @@ function ConnectionCard({
             card's open-link. */}
         <div className="mt-4 flex flex-wrap items-start gap-x-10 gap-y-3">
           <Link
-            href={`/connections/${c.id}?section=database`}
+            href={`/projects/${c.id}?section=database`}
             className={statTile}
           >
             <div className="font-mono text-lg tabular-nums text-foreground">
@@ -268,7 +268,7 @@ function ConnectionCard({
           </Link>
 
           <Link
-            href={`/connections/${c.id}?section=agents`}
+            href={`/projects/${c.id}?section=agents`}
             className={statTile}
           >
             <div
@@ -295,17 +295,17 @@ function ConnectionCard({
             </div>
           </Link>
 
-          {/* "queries" stat — always a deep-link to this connection's audit
-              log, even with zero queries (it just lands on the connection-
+          {/* "queries" stat — always a deep-link to this project's audit
+              log, even with zero queries (it just lands on the project-
               scoped audit view, empty or not — a valid "no activity yet"
               destination, not a dead stat). window=90d (the widest key) so it
-              spans the connection's full retained history; the audit page
+              spans the project's full retained history; the audit page
               clamps it to the plan's retention. Without it /audit defaults to
               24h and a "last query" older than a day (this stat honors the
               plan's 7d/30d/90d retention) would land on an empty table. statTile's
               relative z-10 keeps the click off the card's stretched open-link. */}
           <Link
-            href={`/audit?connection=${c.id}&window=90d`}
+            href={`/audit?project=${c.id}&window=90d`}
             aria-label={`View ${label}'s queries in the audit log`}
             title={`View ${label}'s queries in the audit log`}
             className={statTile}
@@ -339,8 +339,8 @@ function ConnectionCard({
           {databases.map((db) => (
             <DatabaseRow
               key={db.id}
-              connectionId={c.id}
-              // `db` is the safe projection from listDashboardConnections —
+              projectId={c.id}
+              // `db` is the safe projection from listDashboardProjects —
               // no encryptedDsn / kmsKeyId, so it crosses the RSC boundary
               // cleanly.
               database={db}
@@ -353,7 +353,7 @@ function ConnectionCard({
         </ul>
       ) : (
         <p className="relative z-10 border-t border-border px-4 py-3 text-xs text-muted-foreground">
-          No databases on this connection yet.
+          No databases on this project yet.
         </p>
       )}
     </li>
@@ -370,7 +370,7 @@ async function deleteAction(formData: FormData) {
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
   }
-  const deleted = await deleteConnection(customer, id);
+  const deleted = await deleteProject(customer, id);
   if (deleted) {
     const ctx = getMcpProxyContext();
     await ctx.registry.invalidate(deleted.id).catch((err) => {
@@ -379,9 +379,9 @@ async function deleteAction(formData: FormData) {
     if (userId) {
       getPostHog()?.capture({
         distinctId: userId,
-        event: "connection_deleted",
+        event: "project_deleted",
         properties: {
-          connection_id: deleted.id,
+          project_id: deleted.id,
           region: customer.region,
           source: "dashboard",
         },
@@ -400,7 +400,7 @@ async function pauseAction(formData: FormData) {
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
   }
-  const result = await pauseConnection(customer, id);
+  const result = await pauseProject(customer, id);
   if (!result) notFound();
   // Drop the running session — same teardown delete uses. Best-effort: the
   // pause is durable and the resolver rejects every request regardless.
@@ -413,18 +413,18 @@ async function pauseAction(formData: FormData) {
       await emitConfigAuditRow(customer, {
         tenantId: result.id,
         database: "main",
-        eventType: "CONNECTION_PAUSED",
-        payload: { connection_id: result.id, action: "paused" },
+        eventType: "PROJECT_PAUSED",
+        payload: { project_id: result.id, action: "paused" },
         actorUserId: userId,
       });
     } catch (err) {
-      console.error("[dashboard.pauseAction] CONNECTION_PAUSED audit write failed", err);
+      console.error("[dashboard.pauseAction] PROJECT_PAUSED audit write failed", err);
     }
     getPostHog()?.capture({
       distinctId: userId,
-      event: "connection_paused",
+      event: "project_paused",
       properties: {
-        connection_id: result.id,
+        project_id: result.id,
         region: customer.region,
         source: "dashboard",
       },
@@ -442,7 +442,7 @@ async function resumeAction(formData: FormData) {
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
   }
-  const result = await resumeConnection(customer, id);
+  const result = await resumeProject(customer, id);
   if (!result) notFound();
   // No teardown — the next agent request spawns a fresh engine with the
   // current policy.
@@ -451,18 +451,18 @@ async function resumeAction(formData: FormData) {
       await emitConfigAuditRow(customer, {
         tenantId: result.id,
         database: "main",
-        eventType: "CONNECTION_RESUMED",
-        payload: { connection_id: result.id, action: "resumed" },
+        eventType: "PROJECT_RESUMED",
+        payload: { project_id: result.id, action: "resumed" },
         actorUserId: userId,
       });
     } catch (err) {
-      console.error("[dashboard.resumeAction] CONNECTION_RESUMED audit write failed", err);
+      console.error("[dashboard.resumeAction] PROJECT_RESUMED audit write failed", err);
     }
     getPostHog()?.capture({
       distinctId: userId,
-      event: "connection_resumed",
+      event: "project_resumed",
       properties: {
-        connection_id: result.id,
+        project_id: result.id,
         region: customer.region,
         source: "dashboard",
       },

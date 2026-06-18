@@ -20,7 +20,7 @@
 //     the actual context key used in packages/kms.
 //   • §03 vs roles → §04 Teams: per-query engineer attribution is NOT
 //     shipped (MCP tokens are per-customer, not per-engineer). The page
-//     no longer claims it. If multi-token-per-connection ships, swap §04
+//     no longer claims it. If multi-token-per-project ships, swap §04
 //     back to a member-with-tokens table.
 import Link from "next/link";
 
@@ -75,7 +75,7 @@ export default async function Landing() {
                   Start free →
                 </Link>
                 <span className="cmd">
-                  no credit card · <b>free for 1 connection · 1 seat</b>
+                  no credit card · <b>free for 1 project · 1 seat</b>
                 </span>
               </div>
               <p className="hero-talk">
@@ -645,7 +645,7 @@ export default async function Landing() {
               </h2>
               <p className="sec-sub">
                 Policy enforcement, audit log, and tenant isolation are on
-                every tier. Tiers gate structural growth — more connections,
+                every tier. Tiers gate structural growth — more projects,
                 more seats, longer retention, enterprise SSO. Query volume is
                 never metered. Hosted in EU or US, or self-host the
                 MIT-licensed engine — same engine and audit format either way.
@@ -663,7 +663,7 @@ export default async function Landing() {
               </div>
               <ul className="tier-rows">
                 <li>
-                  <span>Connections</span>
+                  <span>Projects</span>
                   <b>1</b>
                 </li>
                 <li>
@@ -703,7 +703,7 @@ export default async function Landing() {
               </div>
               <ul className="tier-rows">
                 <li>
-                  <span>Connections</span>
+                  <span>Projects</span>
                   <b>10</b>
                 </li>
                 <li>
@@ -743,7 +743,7 @@ export default async function Landing() {
               </div>
               <ul className="tier-rows">
                 <li>
-                  <span>Connections</span>
+                  <span>Projects</span>
                   <b>Unlimited</b>
                 </li>
                 <li>

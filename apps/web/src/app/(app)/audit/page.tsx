@@ -34,7 +34,7 @@ import {
   type AuditWindowKey,
   type QueryStatus,
 } from "@/lib/audit";
-import { listConnectionOptions } from "@/lib/connections";
+import { listProjectOptions } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
 import { resolvePlan } from "@/lib/plan";
 
@@ -71,7 +71,7 @@ interface PageProps {
     database?: string;
     agent?: string;
     token?: string;
-    connection?: string;
+    project?: string;
     q?: string;
     window?: string;
     t?: string;
@@ -94,7 +94,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
   const selectedDatabase = params.database?.trim() || null;
   const selectedAgent = params.agent?.trim() || null;
   const selectedToken = params.token?.trim() || null;
-  const selectedConnection = params.connection?.trim() || null;
+  const selectedProject = params.project?.trim() || null;
   const search = params.q?.trim() ?? "";
   const cursor = params.cursor?.trim() || undefined;
   const timeFormat: TimeFormat = params.t === "abs" ? "abs" : "rel";
@@ -114,7 +114,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
     databases,
     agents,
     tokens,
-    connections,
+    projects,
     counts,
     volume,
     staleness,
@@ -126,7 +126,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
       database: selectedDatabase ?? undefined,
       agentName: selectedAgent ?? undefined,
       tokenId: selectedToken ?? undefined,
-      connectionId: selectedConnection ?? undefined,
+      projectId: selectedProject ?? undefined,
       search,
       cursor,
       pageSize: PAGE_SIZE,
@@ -137,21 +137,21 @@ export default async function AuditListPage({ searchParams }: PageProps) {
     listDatabases(customer.id, customer.region, retentionDays, windowSince),
     listAgents(customer.id, customer.region, retentionDays, windowSince),
     listTokenOptions(customer.id, customer.region, retentionDays, windowSince),
-    listConnectionOptions(customer),
+    listProjectOptions(customer),
     countByStatus(
       customer.id,
       customer.region,
       () => now,
       retentionDays,
       windowSince,
-      selectedConnection ?? undefined,
+      selectedProject ?? undefined,
     ),
     eventVolumeByHour(customer.id, customer.region, {
       tenantId: selectedTenant ?? undefined,
       database: selectedDatabase ?? undefined,
       agentName: selectedAgent ?? undefined,
       tokenId: selectedToken ?? undefined,
-      connectionId: selectedConnection ?? undefined,
+      projectId: selectedProject ?? undefined,
       search,
       retentionDays,
       bucket: window.bucket,
@@ -169,7 +169,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
     selectedDatabase !== null ||
     selectedAgent !== null ||
     selectedToken !== null ||
-    selectedConnection !== null ||
+    selectedProject !== null ||
     search.length > 0;
 
   const buildUrl = makeUrlBuilder({
@@ -178,7 +178,7 @@ export default async function AuditListPage({ searchParams }: PageProps) {
     selectedDatabase,
     selectedAgent,
     selectedToken,
-    selectedConnection,
+    selectedProject,
     search,
     windowKey,
     timeFormat,
@@ -233,12 +233,12 @@ export default async function AuditListPage({ searchParams }: PageProps) {
           selectedDatabase={selectedDatabase}
           selectedAgent={selectedAgent}
           selectedToken={selectedToken}
-          selectedConnection={selectedConnection}
+          selectedProject={selectedProject}
           tenants={tenants}
           databases={databases}
           agents={agents}
           tokens={tokens}
-          connections={connections}
+          projects={projects}
           counts={counts}
           search={search}
           buildUrl={buildUrl}
@@ -536,7 +536,7 @@ function makeUrlBuilder(state: {
   selectedDatabase: string | null;
   selectedAgent: string | null;
   selectedToken: string | null;
-  selectedConnection: string | null;
+  selectedProject: string | null;
   search: string;
   windowKey: AuditWindowKey;
   timeFormat: TimeFormat;
@@ -548,7 +548,7 @@ function makeUrlBuilder(state: {
     database?: string | null;
     agentName?: string | null;
     tokenId?: string | null;
-    connectionId?: string | null;
+    projectId?: string | null;
     search?: string | null;
     window?: AuditWindowKey;
     timeFormat?: TimeFormat;
@@ -561,7 +561,7 @@ function makeUrlBuilder(state: {
     const database = pick(overrides.database, state.selectedDatabase);
     const agent = pick(overrides.agentName, state.selectedAgent);
     const token = pick(overrides.tokenId, state.selectedToken);
-    const connection = pick(overrides.connectionId, state.selectedConnection);
+    const project = pick(overrides.projectId, state.selectedProject);
     const searchVal = pick(overrides.search, state.search);
     const windowKey = pick(overrides.window, state.windowKey);
     const timeFormat = pick(overrides.timeFormat, state.timeFormat);
@@ -572,7 +572,7 @@ function makeUrlBuilder(state: {
     if (database) usp.set("database", database);
     if (agent) usp.set("agent", agent);
     if (token) usp.set("token", token);
-    if (connection) usp.set("connection", connection);
+    if (project) usp.set("project", project);
     if (searchVal) usp.set("q", searchVal);
     // Window is a normal param; omit the 24h default to keep URLs clean.
     if (windowKey !== "24h") usp.set("window", windowKey);

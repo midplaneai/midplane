@@ -13,35 +13,35 @@ describe("dedupeSelections", () => {
   it("keeps only owned databases (drops foreign / tampered ids)", () => {
     const out = dedupeSelections(
       [
-        { connectionDatabaseId: "cdb-1", access: "read" },
-        { connectionDatabaseId: "cdb-foreign", access: "write" },
+        { projectDatabaseId: "cdb-1", access: "read" },
+        { projectDatabaseId: "cdb-foreign", access: "write" },
       ],
       owned,
     );
-    expect(out).toEqual([{ connectionDatabaseId: "cdb-1", access: "read" }]);
+    expect(out).toEqual([{ projectDatabaseId: "cdb-1", access: "read" }]);
   });
 
   it("last selection wins for a duplicated DB", () => {
     const out = dedupeSelections(
       [
-        { connectionDatabaseId: "cdb-1", access: "read" },
-        { connectionDatabaseId: "cdb-1", access: "write" },
+        { projectDatabaseId: "cdb-1", access: "read" },
+        { projectDatabaseId: "cdb-1", access: "write" },
       ],
       owned,
     );
-    expect(out).toEqual([{ connectionDatabaseId: "cdb-1", access: "write" }]);
+    expect(out).toEqual([{ projectDatabaseId: "cdb-1", access: "write" }]);
   });
 
   it("drops entries with an invalid access value", () => {
     const out = dedupeSelections(
       [
-        { connectionDatabaseId: "cdb-1", access: "read" },
+        { projectDatabaseId: "cdb-1", access: "read" },
         // @ts-expect-error — exercising a tampered submit
-        { connectionDatabaseId: "cdb-2", access: "admin" },
+        { projectDatabaseId: "cdb-2", access: "admin" },
       ],
       owned,
     );
-    expect(out).toEqual([{ connectionDatabaseId: "cdb-1", access: "read" }]);
+    expect(out).toEqual([{ projectDatabaseId: "cdb-1", access: "read" }]);
   });
 
   it("empty in → empty out (a deny-all consent)", () => {

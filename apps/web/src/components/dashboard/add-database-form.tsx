@@ -4,19 +4,19 @@ import { useEffect, useState, useTransition } from "react";
 import { Plus, X } from "lucide-react";
 
 import { AccessRadio } from "@/components/access-radio";
-import { TestDsnButton } from "@/components/connections/test-dsn-button";
+import { TestDsnButton } from "@/components/projects/test-dsn-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-// Inline expansion form rendered under each connection's DB list. Two
+// Inline expansion form rendered under each project's DB list. Two
 // surfaces in one component: the toggle button (when collapsed) and
 // the form (when expanded). The collapsed shape replaces the disabled
 // "soon" chip from PR-B.
 //
 // State model: form fields are uncontrolled inputs — we read values
 // out via FormData in the submit handler. The pre-submit
-// [Test connection] button is the one place we have to peek into the
+// [Test project] button is the one place we have to peek into the
 // inputs early, so we keep refs into the form for that probe.
 //
 // Submit flow: client-side validates the name regex (matches OSS
@@ -28,12 +28,12 @@ import { Label } from "@/components/ui/label";
 const DB_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 export function AddDatabaseForm({
-  connectionId,
+  projectId,
   action,
   embedded = false,
   onClose,
 }: {
-  connectionId: string;
+  projectId: string;
   // Server action: receives FormData with `name`, `dsn`,
   // `default_access`. Throws on validation / collision so we can
   // catch + render inline.
@@ -79,7 +79,7 @@ export function AddDatabaseForm({
           className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
-          Add database to this connection
+          Add database to this project
         </button>
       </div>
     );
@@ -115,7 +115,7 @@ export function AddDatabaseForm({
       return;
     }
 
-    fd.set("connectionId", connectionId);
+    fd.set("projectId", projectId);
 
     startTransition(async () => {
       try {
@@ -228,7 +228,7 @@ export function AddDatabaseForm({
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <TestDsnButton
             key={testVersion}
-            endpoint={`/api/connections/${connectionId}/databases/test`}
+            endpoint={`/api/projects/${projectId}/databases/test`}
             disabled={pending}
           />
           <Button type="submit" size="sm" disabled={pending}>

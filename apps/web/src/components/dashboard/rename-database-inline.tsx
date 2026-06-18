@@ -5,25 +5,25 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
 
 // Inline-editable DB alias rendered inside the dashboard's DB row.
-// Mirrors RenameConnectionInline's UX (click to edit, Enter saves, Esc
+// Mirrors RenameProjectInline's UX (click to edit, Enter saves, Esc
 // cancels) but enforces the OSS DB_NAME_RE on the client and surfaces
 // the per-DB restart trade-off in copy: renaming forces a container
 // restart since the OSS engine treats `database` as an agent-facing
 // identifier on every tool call.
 //
-// Submit posts a FormData with `connectionId`, `name` (oldName), and
+// Submit posts a FormData with `projectId`, `name` (oldName), and
 // `newName`. The server action wraps the renameDatabase lib helper;
 // DatabaseNameTaken from the helper surfaces here as the error string.
 
 const DB_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 export function RenameDatabaseInline({
-  connectionId,
+  projectId,
   initialName,
   action,
   onDone,
 }: {
-  connectionId: string;
+  projectId: string;
   initialName: string;
   action: (formData: FormData) => Promise<void>;
   // Called when the rename completes so the parent can flip out of edit
@@ -54,7 +54,7 @@ export function RenameDatabaseInline({
       return;
     }
     const fd = new FormData();
-    fd.set("connectionId", connectionId);
+    fd.set("projectId", projectId);
     fd.set("name", initialName);
     fd.set("newName", next);
     setError(null);

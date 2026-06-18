@@ -70,7 +70,7 @@ export default async function OAuthConsentPage({
   const ready = Boolean(consentCode && clientId);
   const customer = ready ? await currentCustomer() : null;
   const { userId } = ready ? await getOrgContext() : { userId: null };
-  const connections = customer ? await listGrantableDatabases(customer) : [];
+  const projects = customer ? await listGrantableDatabases(customer) : [];
   const existing =
     customer && clientId && userId
       ? Object.fromEntries(await getOAuthGrantMap(customer, clientId, userId))
@@ -124,7 +124,7 @@ export default async function OAuthConsentPage({
             <ConsentForm
               consentCode={consentCode!}
               clientId={clientId}
-              connections={connections}
+              projects={projects}
               existing={existing}
             />
 
@@ -136,7 +136,7 @@ export default async function OAuthConsentPage({
               )}
               <p className="text-xs text-subtle">
                 You can revoke access any time by pausing or deleting the
-                connection, or re-running this flow.
+                project, or re-running this flow.
               </p>
             </div>
           </>

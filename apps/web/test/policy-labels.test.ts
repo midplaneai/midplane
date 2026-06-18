@@ -1,4 +1,4 @@
-// accessLabel — shared by the dashboard rows and the connection home.
+// accessLabel — shared by the dashboard rows and the project home.
 // The interpunct form ("read · write") matches the audit log's badge
 // copy; pin all four branches.
 

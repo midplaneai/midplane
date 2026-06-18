@@ -4,7 +4,7 @@
 // grid and the tenant-scope editor so operators get the same
 // autocomplete experience for every "pick a table" surface.
 //
-// Behavior: debounced fetch against GET /api/connections/:id/tables?q=…
+// Behavior: debounced fetch against GET /api/projects/:id/tables?q=…
 // (the server runs an information_schema lookup against the customer's
 // own DB, KMS-decrypted server-side). 150ms debounce, AbortController
 // per request so a fast typer can't race two responses. Errors surface
@@ -38,8 +38,8 @@ type RowState =
 export interface TableNameInputProps {
   value: string;
   onChange: (v: string) => void;
-  connectionId: string;
-  /** Database name on the connection — the tables route is per-db.
+  projectId: string;
+  /** Database name on the project — the tables route is per-db.
    *  Omitted falls back to the route's default ("main"). */
   dbName?: string;
   excludeNames: Set<string>;
@@ -50,7 +50,7 @@ export interface TableNameInputProps {
 export function TableNameInput({
   value,
   onChange,
-  connectionId,
+  projectId,
   dbName,
   excludeNames,
   placeholder = "public.users",
@@ -85,7 +85,7 @@ export function TableNameInput({
     const handle = window.setTimeout(async () => {
       setState((prev) => (prev.kind === "error" ? prev : { kind: "loading" }));
       try {
-        const url = `/api/connections/${connectionId}/tables?q=${encodeURIComponent(trimmed)}${
+        const url = `/api/projects/${projectId}/tables?q=${encodeURIComponent(trimmed)}${
           dbName ? `&db=${encodeURIComponent(dbName)}` : ""
         }`;
         const res = await fetch(url, {
@@ -115,7 +115,7 @@ export function TableNameInput({
       window.clearTimeout(handle);
       ctl.abort();
     };
-  }, [value, open, connectionId, dbName]);
+  }, [value, open, projectId, dbName]);
 
   const filtered =
     state.kind === "loaded"
@@ -251,7 +251,7 @@ function PanelContents({
     return (
       <li role="presentation" className="px-3 py-2 text-xs text-muted-foreground">
         {state.tables.length === 0 && typedQuery.length === 0
-          ? "No tables visible to this connection."
+          ? "No tables visible to this project."
           : "No match — paste the full name to add it anyway."}
       </li>
     );
@@ -283,7 +283,7 @@ function PanelContents({
 function errorHint(reason: ErrorReason): string {
   switch (reason) {
     case "credential_unavailable":
-      return "Couldn't decrypt connection — type names manually.";
+      return "Couldn't decrypt project — type names manually.";
     case "introspection_failed":
       return "Couldn't reach DB — type names manually.";
     default:

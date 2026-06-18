@@ -1,5 +1,5 @@
 // One-shot connectivity probe used by the add-database inline form's
-// [Test connection] button. Opens a single Postgres connection with
+// [Test project] button. Opens a single Postgres project with
 // strict timeouts, runs SELECT 1, and returns ok/err. Never persists
 // anything — this is purely "does the DSN you pasted reach a live
 // Postgres?" before the user commits to encrypting + storing it.
@@ -52,7 +52,7 @@ export async function pingDsn(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "connection failed",
+      error: err instanceof Error ? err.message : "project failed",
     };
   } finally {
     await sql.end({ timeout: 1 }).catch(() => undefined);

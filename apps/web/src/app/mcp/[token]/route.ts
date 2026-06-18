@@ -1,7 +1,7 @@
 // /mcp/<segment> — the agent-facing Streamable HTTP endpoint.
 //
 // Cursor / Claude Code / Claude Desktop all point at this URL. We forward each
-// request to a per-connection OSS container (spawned on demand by the router)
+// request to a per-project OSS container (spawned on demand by the router)
 // running with the customer's decrypted DATABASE_URL.
 //
 // TWO auth methods share this boundary, format-discriminated on the path
@@ -15,16 +15,16 @@
 //     `mp_(live|test)_…` token presented in `Authorization: Bearer` instead of
 //     the URL path — so the secret stays out of the URL (logs / referer) and
 //     both credential types are bearers. The token (not the path segment)
-//     selects the connection, exactly like the URL-token path; it then carries
+//     selects the project, exactly like the URL-token path; it then carries
 //     the same per-token DB scope. Checked BEFORE the OAuth branch so a bearer
 //     that's a Midplane token never reaches withMcpAuth.
 //
-//   - OAuth 2.1 (the credible launch path): `<segment>` is a connection id
+//   - OAuth 2.1 (the credible launch path): `<segment>` is a project id
 //     (a ULID — parseToken() returns null). withMcpAuth validates the OAuth
 //     bearer against the Better Auth `mcp` plugin; a missing/invalid bearer
 //     returns 401 + WWW-Authenticate, which kicks off MCP client discovery →
 //     authorize → token. With a valid bearer, proxyMcpOAuth maps the user to
-//     their customer, checks they own the connection, and forwards — stamping
+//     their customer, checks they own the project, and forwards — stamping
 //     the per-agent mcp_token_id the audit log keys on.
 //
 // Streamable HTTP uses POST, GET, and DELETE — POST for JSON-RPC messages, GET
@@ -54,14 +54,14 @@ async function handle(
   if (parseToken(segment)) return proxyMcp(req, segment);
 
   // Bearer PAT: `Authorization: Bearer mp_(live|test)_…` → HMAC path. The token
-  // selects the connection (the path segment is ignored, same as the URL form),
+  // selects the project (the path segment is ignored, same as the URL form),
   // so a headless caller sets one env var and keeps the secret out of the URL.
   // Only a well-formed Midplane token is intercepted; any other bearer falls
   // through to the OAuth branch below.
   const bearer = bearerToken(req);
   if (bearer && parseToken(bearer)) return proxyMcp(req, bearer);
 
-  // Otherwise treat the segment as a connection id and require an OAuth bearer.
+  // Otherwise treat the segment as a project id and require an OAuth bearer.
   // withMcpAuth returns 401 + WWW-Authenticate when the bearer is absent or
   // invalid (the discovery handshake); on success it hands us the access-token
   // record (userId / clientId / scopes).

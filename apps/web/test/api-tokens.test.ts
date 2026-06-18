@@ -1,4 +1,4 @@
-// Unit coverage for the /api/connections/[id]/tokens REST surface
+// Unit coverage for the /api/projects/[id]/tokens REST surface
 // (PR3 of mcp_url_auth_security).
 //
 // The route handlers are thin: validation + auth gate + call into
@@ -81,13 +81,13 @@ afterEach(() => {
 
 async function loadCollectionRoute() {
   return await import(
-    "../src/app/api/connections/[id]/tokens/route.ts"
+    "../src/app/api/projects/[id]/tokens/route.ts"
   );
 }
 
 async function loadItemRoute() {
   return await import(
-    "../src/app/api/connections/[id]/tokens/[tokenId]/route.ts"
+    "../src/app/api/projects/[id]/tokens/[tokenId]/route.ts"
   );
 }
 
@@ -112,7 +112,7 @@ function formRequest(method: string, fields: Record<string, string>): Request {
   });
 }
 
-describe("GET /api/connections/[id]/tokens", () => {
+describe("GET /api/projects/[id]/tokens", () => {
   it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { GET } = await loadCollectionRoute();
@@ -168,7 +168,7 @@ describe("GET /api/connections/[id]/tokens", () => {
   });
 });
 
-describe("POST /api/connections/[id]/tokens", () => {
+describe("POST /api/projects/[id]/tokens", () => {
   it("400 on missing name", async () => {
     const { POST } = await loadCollectionRoute();
     const res = await POST(
@@ -204,7 +204,7 @@ describe("POST /api/connections/[id]/tokens", () => {
     });
   });
 
-  it("404 when createToken returns null (unknown OR foreign connection)", async () => {
+  it("404 when createToken returns null (unknown OR foreign project)", async () => {
     createTokenMock = vi.fn(async () => null);
     const { POST } = await loadCollectionRoute();
     const res = await POST(
@@ -290,7 +290,7 @@ describe("POST /api/connections/[id]/tokens", () => {
   });
 });
 
-describe("DELETE /api/connections/[id]/tokens/[tokenId]", () => {
+describe("DELETE /api/projects/[id]/tokens/[tokenId]", () => {
   it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { DELETE } = await loadItemRoute();

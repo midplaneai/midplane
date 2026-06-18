@@ -6,7 +6,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 // Lightweight wrapper around Radix DropdownMenu. Used by the dashboard's
-// per-connection [⋯] menu (settings / delete). Keep the surface area small —
+// per-project [⋯] menu (settings / delete). Keep the surface area small —
 // add submenus / radio groups as we need them.
 
 const DropdownMenu = DropdownMenuPrimitive.Root;

@@ -1,5 +1,5 @@
 // Selects the prefix family ("live" vs "test") for newly-minted tokens.
-// Centralized so the connection-create flow, the token-create API/Server
+// Centralized so the project-create flow, the token-create API/Server
 // Action, and the success page all derive the same environment from one
 // rule:
 //

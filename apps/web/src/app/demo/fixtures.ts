@@ -1,4 +1,4 @@
-// Demo-only seeded fixtures. Pure data; no DB connection. Used by the
+// Demo-only seeded fixtures. Pure data; no DB project. Used by the
 // landing-page `/demo` route to give visitors a hands-on policy
 // experience without standing up a real engine + DSN.
 //

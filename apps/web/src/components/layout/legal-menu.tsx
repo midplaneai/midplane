@@ -12,7 +12,7 @@ import {
 
 // Compact legal/company menu behind a [⋯] trigger so the Imprint, Privacy, and
 // Terms stay reachable inside the app without spending a full footer row.
-// Mirrors the dashboard's per-connection [⋯] menu. Used in the desktop sidebar
+// Mirrors the dashboard's per-project [⋯] menu. Used in the desktop sidebar
 // (bottom, next to the account) and the mobile top bar.
 export function LegalMenu() {
   return (

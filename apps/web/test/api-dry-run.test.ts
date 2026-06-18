@@ -1,8 +1,8 @@
-// Route-layer coverage for POST /api/connections/[id]/dry-run — the
+// Route-layer coverage for POST /api/projects/[id]/dry-run — the
 // cloud half of the policy test surface (the router half, ordering and
 // engine error mapping, is pinned in packages/router/test/dry-run.test.ts).
 //
-// Pins: auth/ownership gates, the per-connection 429, request
+// Pins: auth/ownership gates, the per-project 429, request
 // validation (exactly one of probes|sql), the proxy-identical spawn
 // construction (decrypted DSNs, synthetic tenant), and the
 // outcome → HTTP status map (ok→200, engine_rejected→400 verbatim,
@@ -39,7 +39,7 @@ const CONN = {
 function makeDb(name: string, tableAccess?: unknown) {
   return {
     id: `cdb-${name}`,
-    connectionId: CONN.id,
+    projectId: CONN.id,
     name,
     tableAccess: tableAccess ?? { default: "read", tables: {} },
     tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -52,9 +52,9 @@ let currentCustomerMock = vi.fn(
   async () => customer as typeof customer | null,
 );
 let getConnMock = vi.fn(async () => ({
-  connection: CONN,
+  project: CONN,
   databases: [makeDb("main")],
-}) as { connection: typeof CONN; databases: ReturnType<typeof makeDb>[] } | null);
+}) as { project: typeof CONN; databases: ReturnType<typeof makeDb>[] } | null);
 let resolveMock = vi.fn(async () => ({
   ok: true,
   plaintext: "postgres://decrypted",
@@ -70,8 +70,8 @@ vi.mock("@/lib/customer", () => ({
   },
 }));
 
-vi.mock("@/lib/connections", () => ({
-  get getConnectionWithDatabasesAndCredentials() {
+vi.mock("@/lib/projects", () => ({
+  get getProjectWithDatabasesAndCredentials() {
     return getConnMock;
   },
 }));
@@ -93,7 +93,7 @@ beforeEach(() => {
   resetRateLimits();
   currentCustomerMock = vi.fn(async () => customer);
   getConnMock = vi.fn(async () => ({
-    connection: CONN,
+    project: CONN,
     databases: [makeDb("main")],
   }));
   resolveMock = vi.fn(async () => ({ ok: true, plaintext: "postgres://decrypted" }));
@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 async function loadRoute() {
-  return await import("../src/app/api/connections/[id]/dry-run/route.ts");
+  return await import("../src/app/api/projects/[id]/dry-run/route.ts");
 }
 
 const params = { params: Promise.resolve({ id: CONN.id }) };
@@ -126,7 +126,7 @@ const PROBES_BODY = {
   probes: [{ table: "orders", action: "select" }],
 };
 
-describe("POST /api/connections/[id]/dry-run", () => {
+describe("POST /api/projects/[id]/dry-run", () => {
   it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { POST } = await loadRoute();
@@ -153,13 +153,13 @@ describe("POST /api/connections/[id]/dry-run", () => {
     expect(dryRunMock).not.toHaveBeenCalled();
   });
 
-  it("404 for foreign connection and for a database not on the connection", async () => {
+  it("404 for foreign project and for a database not on the project", async () => {
     const { POST } = await loadRoute();
     getConnMock = vi.fn(async () => null);
     expect((await POST(jsonRequest(PROBES_BODY), params)).status).toBe(404);
 
     getConnMock = vi.fn(async () => ({
-      connection: CONN,
+      project: CONN,
       databases: [makeDb("main")],
     }));
     const unknownDb = await POST(
@@ -169,7 +169,7 @@ describe("POST /api/connections/[id]/dry-run", () => {
     expect(unknownDb.status).toBe(404);
   });
 
-  it("429 per (customer, connection) once the probe budget is spent", async () => {
+  it("429 per (customer, project) once the probe budget is spent", async () => {
     for (let i = 0; i < 6; i++) {
       checkRateLimit(dryRunKey(customer.id, CONN.id), DRY_RUN_RATE_LIMIT);
     }
@@ -180,7 +180,7 @@ describe("POST /api/connections/[id]/dry-run", () => {
     expect(dryRunMock).not.toHaveBeenCalled();
   });
 
-  it("a foreign tenant probing this connection id burns their OWN budget, not the owner's", async () => {
+  it("a foreign tenant probing this project id burns their OWN budget, not the owner's", async () => {
     // Review finding: keying on the bare path param let any signed-in
     // tenant starve the owner. Burn 6 slots as a DIFFERENT customer —
     // the route must still serve the owner.
@@ -204,7 +204,7 @@ describe("POST /api/connections/[id]/dry-run", () => {
 
     resolveMock = vi.fn(async () => ({ ok: true, plaintext: "postgres://x" }));
     getConnMock = vi.fn(async () => ({
-      connection: CONN,
+      project: CONN,
       databases: [makeDb("main", { default: "everything", tables: 7 })],
     }));
     const badPolicy = await POST(jsonRequest(PROBES_BODY), params);
@@ -214,7 +214,7 @@ describe("POST /api/connections/[id]/dry-run", () => {
 
   it("builds the proxy-identical spawn (decrypted DSNs, all dbs) and the synthetic tenant", async () => {
     getConnMock = vi.fn(async () => ({
-      connection: CONN,
+      project: CONN,
       databases: [makeDb("analytics"), makeDb("main")],
     }));
     const { POST } = await loadRoute();
@@ -224,13 +224,13 @@ describe("POST /api/connections/[id]/dry-run", () => {
 
     const [spawn, requests] = dryRunMock.mock.calls[0] as unknown as [
       {
-        connectionId: string;
+        projectId: string;
         region: string;
         databases: Array<{ name: string; dsn: string; guardrails?: unknown }>;
       },
       Array<{ database: string; tenant_context?: { value: string } }>,
     ];
-    expect(spawn.connectionId).toBe(CONN.id);
+    expect(spawn.projectId).toBe(CONN.id);
     expect(spawn.databases.map((d) => d.name)).toEqual(["analytics", "main"]);
     expect(spawn.databases.every((d) => d.dsn === "postgres://decrypted")).toBe(
       true,

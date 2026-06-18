@@ -1,8 +1,8 @@
 "use client";
 
-// Permission grid for the table_access policy on a connection.
+// Permission grid for the table_access policy on a project.
 //
-// Edits the JSONB policy stored on connections.table_access. On Save,
+// Edits the JSONB policy stored on projects.table_access. On Save,
 // posts the whole policy as a single JSON-encoded form field; the server
 // action validates it again (defense-in-depth — the engine also
 // re-validates) and calls setTableAccess(), which writes Postgres and
@@ -16,7 +16,7 @@
 // server; the client message is just a UX nicety.
 //
 // Autocomplete: each row owns its own debounced fetch against
-// GET /api/connections/:id/tables?q=<substring>. The endpoint runs an
+// GET /api/projects/:id/tables?q=<substring>. The endpoint runs an
 // information_schema lookup against the customer's own DB (KMS-decrypted
 // server-side). 150ms debounce avoids flooding the catalog on every
 // keystroke; an AbortController per request keeps a fast typer from
@@ -60,14 +60,14 @@ const TABLE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*)?$/;
 export function PermissionGrid({
   initialPolicy,
   action,
-  connectionId,
+  projectId,
   dbName,
 }: {
   initialPolicy: TableAccessPolicy;
   // Server action signature: (FormData) => Promise<void>. The form
   // contains a single `policy` field with JSON-encoded TableAccessPolicy.
   action: (formData: FormData) => Promise<void>;
-  connectionId: string;
+  projectId: string;
   /** Database the grid edits — scopes the autocomplete's introspection
    *  to the right DB (the tables route is per-db). */
   dbName?: string;
@@ -149,7 +149,7 @@ export function PermissionGrid({
     };
 
     const fd = new FormData();
-    fd.set("id", connectionId);
+    fd.set("id", projectId);
     fd.set("policy", JSON.stringify(policy));
 
     startTransition(async () => {
@@ -240,7 +240,7 @@ export function PermissionGrid({
                   <TableNameInput
                     value={r.name}
                     onChange={(v) => updateRow(r.key, { name: v })}
-                    connectionId={connectionId}
+                    projectId={projectId}
                     dbName={dbName}
                     excludeNames={
                       new Set([...usedNames].filter((n) => n !== r.name))

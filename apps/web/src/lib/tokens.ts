@@ -1,14 +1,14 @@
-// CRUD library for mcp_tokens — the multi-token-per-connection model that
+// CRUD library for mcp_tokens — the multi-token-per-project model that
 // replaces the single plaintext mcp_token bearer URL. PR1 of N (schema +
 // helpers); PR2 wires the proxy resolveByToken / spawner / indexer onto
 // this surface, and PR3 builds the dashboard UX. See the design doc at
 // dustinlange-lange-labs-mcp-url-auth-security-design-20260520-104330.md
 // for the full ratification context.
 //
-// Conventions mirror apps/web/src/lib/connections.ts:
+// Conventions mirror apps/web/src/lib/projects.ts:
 //   - All mutations run inside db.transaction(...) with FOR UPDATE on the
-//     parent connections row, so concurrent mints/revokes on the same
-//     connection serialize through here. This is what prevents the "two
+//     parent projects row, so concurrent mints/revokes on the same
+//     project serialize through here. This is what prevents the "two
 //     parallel creates with the same name" race from escaping as a raw
 //     unique-constraint violation.
 //   - All lookups by id check customer_id ownership on the parent and
@@ -23,7 +23,7 @@ import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
-  connections,
+  projects,
   customers,
   generateToken,
   getDb,
@@ -47,7 +47,7 @@ type TxLike = {
   };
 };
 
-/** Count the customer's USABLE MCP tokens across every connection they own.
+/** Count the customer's USABLE MCP tokens across every project they own.
  *  "Usable" matches the runtime resolver (lookupByPlaintext): status='active'
  *  AND (expires_at IS NULL OR expires_at > NOW()). status='active' alone
  *  over-counts — the expiry sweeper lags (it exists for dashboard
@@ -63,9 +63,9 @@ export async function countUsableTokens(
   customerId: string,
 ): Promise<number> {
   const connRows = (await tx
-    .select({ id: connections.id })
-    .from(connections)
-    .where(eq(connections.customerId, customerId))) as Array<{ id: string }>;
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.customerId, customerId))) as Array<{ id: string }>;
   const ids = connRows.map((r) => r.id);
   if (ids.length === 0) return 0;
   const rows = (await tx
@@ -73,7 +73,7 @@ export async function countUsableTokens(
     .from(mcpTokens)
     .where(
       and(
-        inArray(mcpTokens.connectionId, ids),
+        inArray(mcpTokens.projectId, ids),
         // OAuth attribution rows (kind='oauth') are NOT plaintext URL tokens
         // and must never consume a plan token slot — only 'url' tokens count.
         eq(mcpTokens.kind, "url"),
@@ -84,30 +84,30 @@ export async function countUsableTokens(
   return Number(rows[0]?.count ?? 0);
 }
 
-/** Active token count per connection, for the dashboard list's "agents"
+/** Active token count per project, for the dashboard list's "agents"
  *  stat. "Active" matches countUsableTokens / the runtime resolver:
  *  status='active' AND (expires_at IS NULL OR expires_at > NOW()) — so an
  *  expired-but-unswept row (still 'active' in the table) is NOT counted,
  *  keeping the dashboard number aligned with what an agent could actually
- *  use. Connections with zero active tokens are absent from the map; the
- *  caller defaults to 0. The connectionIds are assumed already
- *  ownership-scoped by the caller (listDashboardConnections derives them
- *  from the customer's own connections). */
-export async function countActiveTokensByConnection(
+ *  use. Projects with zero active tokens are absent from the map; the
+ *  caller defaults to 0. The projectIds are assumed already
+ *  ownership-scoped by the caller (listDashboardProjects derives them
+ *  from the customer's own projects). */
+export async function countActiveTokensByProject(
   customer: Customer,
-  connectionIds: string[],
+  projectIds: string[],
 ): Promise<Map<string, number>> {
-  if (connectionIds.length === 0) return new Map();
+  if (projectIds.length === 0) return new Map();
   const db = getDb(customer.region);
   const rows = (await db
     .select({
-      connectionId: mcpTokens.connectionId,
+      projectId: mcpTokens.projectId,
       count: sql<number>`count(*)::int`,
     })
     .from(mcpTokens)
     .where(
       and(
-        inArray(mcpTokens.connectionId, connectionIds),
+        inArray(mcpTokens.projectId, projectIds),
         // Dashboard "agents" stat counts plaintext URL tokens only; OAuth
         // attribution rows are internal to the audit pipeline.
         eq(mcpTokens.kind, "url"),
@@ -115,12 +115,12 @@ export async function countActiveTokensByConnection(
         sql`(${mcpTokens.expiresAt} IS NULL OR ${mcpTokens.expiresAt} > NOW())`,
       ),
     )
-    .groupBy(mcpTokens.connectionId)) as Array<{
-    connectionId: string;
+    .groupBy(mcpTokens.projectId)) as Array<{
+    projectId: string;
     count: number;
   }>;
   const map = new Map<string, number>();
-  for (const r of rows) map.set(r.connectionId, Number(r.count));
+  for (const r of rows) map.set(r.projectId, Number(r.count));
   return map;
 }
 
@@ -128,8 +128,8 @@ export async function countActiveTokensByConnection(
  *  the txn and any locking, and is responsible for the TOKEN_CREATED audit
  *  after commit (best-effort — see emitTokenAuditRow).
  *
- *  This exists so createConnection can mint a connection's default token
- *  ATOMICALLY with the connection insert AND the plan-cap check — all under
+ *  This exists so createProject can mint a project's default token
+ *  ATOMICALLY with the project insert AND the plan-cap check — all under
  *  the same customers-row lock. Minting the default in a separate post-commit
  *  transaction (as createToken does) let a concurrent manual mint slip in
  *  between the cap check and the default insert, pushing the org one token
@@ -138,7 +138,7 @@ export async function insertTokenRow(
   tx: TxLike,
   row: {
     id: string;
-    connectionId: string;
+    projectId: string;
     name: string;
     createdByUserId: string;
     expiresAt: Date | null;
@@ -150,7 +150,7 @@ export async function insertTokenRow(
   const tokenHash = hashToken(pepper.pepper, generated.plaintext);
   await tx.insert(mcpTokens).values({
     id: row.id,
-    connectionId: row.connectionId,
+    projectId: row.projectId,
     name: row.name,
     prefix: generated.prefix,
     last4: generated.last4,
@@ -166,13 +166,13 @@ const CUSTOMER_ID_ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 // Postgres error code for unique_violation, plus the constraint names
 // declared in 0017_mcp_tokens.sql. Used as the belt-and-suspenders catch
-// around createToken — the FOR UPDATE lock on the parent connection
+// around createToken — the FOR UPDATE lock on the parent project
 // makes the pre-check sufficient in practice, but if any future caller
 // bypasses the helper or the lock posture changes, the raw driver error
 // translates into the typed DuplicateTokenName the API knows how to
 // render.
 const PG_UNIQUE_VIOLATION = "23505";
-const NAME_UQ_CONSTRAINT = "mcp_tokens_name_per_connection_uq";
+const NAME_UQ_CONSTRAINT = "mcp_tokens_name_per_project_uq";
 
 function isDuplicateNameViolation(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
@@ -185,7 +185,7 @@ function isDuplicateNameViolation(err: unknown): boolean {
 /** Returned when a sibling token already owns the requested name. */
 export class DuplicateTokenName extends Error {
   constructor(public readonly takenName: string) {
-    super(`token "${takenName}" already exists on this connection`);
+    super(`token "${takenName}" already exists on this project`);
     this.name = "DuplicateTokenName";
   }
 }
@@ -217,7 +217,7 @@ export interface TokenSummary {
   revokedReason: string | null;
 }
 
-/** Mint a new token on a connection. Returns the new id + the plaintext
+/** Mint a new token on a project. Returns the new id + the plaintext
  *  URL component the caller renders ONCE in the show-once dashboard
  *  modal. The plaintext is never persisted — only its HMAC-SHA256(pepper)
  *  digest lands in the row.
@@ -226,21 +226,21 @@ export interface TokenSummary {
  *  in by the caller (a server action / API route) based on the deploy
  *  tier. The plaintext format is `mp_(live|test)_<32 hex>_<6 base32>`
  *  per packages/db/src/token-format.ts. Returns null when the
- *  connection is unknown or foreign (same leakage-avoidance shape as
- *  rotateConnection / setTableAccess / addDatabase). */
+ *  project is unknown or foreign (same leakage-avoidance shape as
+ *  rotateProject / setTableAccess / addDatabase). */
 export async function createToken(
   customer: Customer,
-  connectionId: string,
+  projectId: string,
   args: {
     name: string;
     expiresAt: Date | null;
     actorUserId: string;
     env: "live" | "test";
     /** Manual mints pass the resolved token cap so the per-customer plan
-     *  limit is enforced. The auto-minted default token (createConnection)
-     *  passes nothing — its room was already reserved at connection-create
+     *  limit is enforced. The auto-minted default token (createProject)
+     *  passes nothing — its room was already reserved at project-create
      *  time (decision D8), and re-checking here would block the default on
-     *  a connection that was just allowed. Infinity cap (Team) is a no-op. */
+     *  a project that was just allowed. Infinity cap (Team) is a no-op. */
     planLimit?: { tokenCap: number; plan: Plan };
   },
   pepper: { kid: string; pepper: Buffer },
@@ -264,8 +264,8 @@ export async function createToken(
       // Plan cap (manual mints only — `planLimit` is absent on the
       // auto-minted default). Lock the customers row FIRST so concurrent
       // mints for this org serialize and the usable-token count can't drift
-      // between read and insert (decision D4). customers-before-connection
-      // lock order is consistent with createConnection (which locks only
+      // between read and insert (decision D4). customers-before-project
+      // lock order is consistent with createProject (which locks only
       // customers), so no deadlock cycle. Infinity cap (Team) short-circuits
       // — never scan a large token set for an unlimited customer.
       if (args.planLimit && Number.isFinite(args.planLimit.tokenCap)) {
@@ -286,17 +286,17 @@ export async function createToken(
       }
 
       // Ownership-gated parent read + lock — same posture as
-      // addDatabase/removeDatabase in connections.ts. Without the lock,
+      // addDatabase/removeDatabase in projects.ts. Without the lock,
       // two parallel creates with the same name could each pass the
       // pre-check and the loser would hit the unique constraint as a
       // raw Postgres error instead of DuplicateTokenName.
       const parent = await tx
-        .select({ id: connections.id })
-        .from(connections)
+        .select({ id: projects.id })
+        .from(projects)
         .where(
           and(
-            eq(connections.id, connectionId),
-            eq(connections.customerId, customer.id),
+            eq(projects.id, projectId),
+            eq(projects.customerId, customer.id),
           ),
         )
         .for("update")
@@ -311,7 +311,7 @@ export async function createToken(
         .from(mcpTokens)
         .where(
           and(
-            eq(mcpTokens.connectionId, connectionId),
+            eq(mcpTokens.projectId, projectId),
             eq(mcpTokens.name, trimmedName),
           ),
         )
@@ -322,7 +322,7 @@ export async function createToken(
 
       await tx.insert(mcpTokens).values({
         id,
-        connectionId,
+        projectId,
         name: trimmedName,
         prefix: generated.prefix,
         last4: generated.last4,
@@ -346,14 +346,14 @@ export async function createToken(
 
   // Best-effort audit emission. Failure to write audit shouldn't undo the
   // durable mint (already committed). Same fail-soft posture as
-  // setTableAccess / setTenantScope in connections.ts.
+  // setTableAccess / setTenantScope in projects.ts.
   try {
     await emitTokenAuditRow(customer, {
-      connectionId,
+      projectId,
       mcpTokenId: id,
       eventType: "TOKEN_CREATED",
       payload: {
-        connection_id: connectionId,
+        project_id: projectId,
         token_id: id,
         token_name: trimmedName,
         prefix: generated.prefix,
@@ -369,24 +369,24 @@ export async function createToken(
   return { id, plaintext: generated.plaintext };
 }
 
-/** List every token on a connection — dashboard-safe shape (no hash, no
+/** List every token on a project — dashboard-safe shape (no hash, no
  *  plaintext, no pepper). Ordered newest-first so the show-once mint UX
  *  surfaces the just-created token at the top. Returns null when the
- *  connection is unknown or foreign. */
+ *  project is unknown or foreign. */
 export async function listTokens(
   customer: Customer,
-  connectionId: string,
+  projectId: string,
 ): Promise<TokenSummary[] | null> {
   const db = getDb(customer.region);
   // Ownership check on the parent without a lock — read-only path,
   // serialization isn't required.
   const parent = await db
-    .select({ id: connections.id })
-    .from(connections)
+    .select({ id: projects.id })
+    .from(projects)
     .where(
       and(
-        eq(connections.id, connectionId),
-        eq(connections.customerId, customer.id),
+        eq(projects.id, projectId),
+        eq(projects.customerId, customer.id),
       ),
     )
     .limit(1);
@@ -414,7 +414,7 @@ export async function listTokens(
     // and are invisible here by design.
     .where(
       and(
-        eq(mcpTokens.connectionId, connectionId),
+        eq(mcpTokens.projectId, projectId),
         eq(mcpTokens.kind, "url"),
       ),
     )
@@ -425,22 +425,22 @@ export async function listTokens(
 /** Revoke a token. Idempotent — revoking an already-revoked (or expired)
  *  token returns the row without rewriting revoked_at / revoked_reason,
  *  so retried API calls don't trample the original timestamps. Returns
- *  null when the connection or token is unknown or foreign. */
+ *  null when the project or token is unknown or foreign. */
 export async function revokeToken(
   customer: Customer,
-  connectionId: string,
+  projectId: string,
   tokenId: string,
   args: { reason: string; actorUserId: string },
 ): Promise<{ id: string } | null> {
   const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
     const parent = await tx
-      .select({ id: connections.id })
-      .from(connections)
+      .select({ id: projects.id })
+      .from(projects)
       .where(
         and(
-          eq(connections.id, connectionId),
-          eq(connections.customerId, customer.id),
+          eq(projects.id, projectId),
+          eq(projects.customerId, customer.id),
         ),
       )
       .for("update")
@@ -456,7 +456,7 @@ export async function revokeToken(
       .from(mcpTokens)
       .where(
         and(
-          eq(mcpTokens.connectionId, connectionId),
+          eq(mcpTokens.projectId, projectId),
           eq(mcpTokens.id, tokenId),
         ),
       )
@@ -483,11 +483,11 @@ export async function revokeToken(
   if (result.transitioned) {
     try {
       await emitTokenAuditRow(customer, {
-        connectionId,
+        projectId,
         mcpTokenId: tokenId,
         eventType: "TOKEN_REVOKED",
         payload: {
-          connection_id: connectionId,
+          project_id: projectId,
           token_id: tokenId,
           reason: args.reason,
         },
@@ -501,7 +501,7 @@ export async function revokeToken(
   return { id: result.id };
 }
 
-/** Resolve a plaintext token to (token_id, connection_id) for the
+/** Resolve a plaintext token to (token_id, project_id) for the
  *  regional Postgres. Validates format + checksum before any DB hit so
  *  malformed inputs cost nothing. Returns null for any non-matching
  *  shape: malformed, bad CRC, unknown hash, revoked / expired row, or
@@ -523,7 +523,7 @@ export async function lookupByPlaintext(
   plaintext: string,
   region: Region,
   peppers: Map<string, Buffer>,
-): Promise<{ tokenId: string; connectionId: string } | null> {
+): Promise<{ tokenId: string; projectId: string } | null> {
   const parsed = parseToken(plaintext);
   if (!parsed) return null;
   if (!validateChecksum(parsed)) return null;
@@ -539,7 +539,7 @@ export async function lookupByPlaintext(
     const rows = await db
       .select({
         id: mcpTokens.id,
-        connectionId: mcpTokens.connectionId,
+        projectId: mcpTokens.projectId,
       })
       .from(mcpTokens)
       .where(
@@ -554,30 +554,30 @@ export async function lookupByPlaintext(
     if (rows.length > 0) {
       return {
         tokenId: rows[0]!.id,
-        connectionId: rows[0]!.connectionId,
+        projectId: rows[0]!.projectId,
       };
     }
   }
   return null;
 }
 
-/** Mint-or-get the attribution row that binds an OAuth client to a connection,
+/** Mint-or-get the attribution row that binds an OAuth client to a project,
  *  for the MCP-OAuth proxy path (lib/proxy.ts proxyMcpOAuth).
  *
  *  The OAuth bearer authenticates the user, but the engine still stamps a
  *  per-agent `mcp_token_id` on every audit row (via X-Midplane-Token-Id). That
  *  id must be a real mcp_tokens row so the audit FK holds. We mint exactly ONE
- *  `kind='oauth'` row per (connection, OAuth client) — the registered MCP
+ *  `kind='oauth'` row per (project, OAuth client) — the registered MCP
  *  client IS the agent identity — and return its id. The row carries no HMAC
  *  secret (token_hash/pepper_kid NULL) and never resolves via the URL proxy; it
  *  exists solely so per-agent attribution survives the URL→OAuth switch.
  *
- *  Idempotent under concurrent first-use: the (connection_id, client_id) partial
+ *  Idempotent under concurrent first-use: the (project_id, client_id) partial
  *  unique index (kind='oauth') serializes the mint; a racing insert is caught
  *  and the winner's row re-read. */
 export async function ensureOAuthAttributionToken(
   db: ReturnType<typeof getDb>,
-  args: { connectionId: string; clientId: string; userId: string },
+  args: { projectId: string; clientId: string; userId: string },
 ): Promise<string> {
   const findExisting = () =>
     db
@@ -585,7 +585,7 @@ export async function ensureOAuthAttributionToken(
       .from(mcpTokens)
       .where(
         and(
-          eq(mcpTokens.connectionId, args.connectionId),
+          eq(mcpTokens.projectId, args.projectId),
           eq(mcpTokens.clientId, args.clientId),
           eq(mcpTokens.kind, "oauth"),
         ),
@@ -599,9 +599,9 @@ export async function ensureOAuthAttributionToken(
   try {
     await db.insert(mcpTokens).values({
       id,
-      connectionId: args.connectionId,
-      // Encodes the client id so the (connection_id, name) unique also guards
-      // one-row-per-client; the partial unique on (connection_id, client_id)
+      projectId: args.projectId,
+      // Encodes the client id so the (project_id, name) unique also guards
+      // one-row-per-client; the partial unique on (project_id, client_id)
       // is the primary guard.
       name: `oauth:${args.clientId}`,
       // Sentinels: OAuth rows have no plaintext, but prefix/last4 stay NOT NULL
@@ -627,14 +627,14 @@ export async function ensureOAuthAttributionToken(
 export async function emitTokenAuditRow(
   customer: Customer,
   row: {
-    connectionId: string;
+    projectId: string;
     mcpTokenId: string;
     eventType: "TOKEN_CREATED" | "TOKEN_REVOKED";
     payload: Record<string, unknown>;
     actorUserId: string;
   },
 ): Promise<void> {
-  // Mirrors emitConfigAuditRow in connections.ts: validates customer.id
+  // Mirrors emitConfigAuditRow in projects.ts: validates customer.id
   // matches the ULID alphabet before inlining via sql.raw (SET LOCAL
   // rejects parameterized values), runs the bind + insert in one
   // transaction so RLS sees the bound customer_id, and lives in its own
@@ -643,7 +643,7 @@ export async function emitTokenAuditRow(
   //
   // The `database` column on audit_events_index is NOT NULL DEFAULT
   // 'main'; token events aren't tied to a specific DB so we pass 'main'
-  // as a placeholder. PR3's UI work owns the connection-level event
+  // as a placeholder. PR3's UI work owns the project-level event
   // surface where this distinction matters; for now the column carries
   // the schema default's semantics.
   if (!CUSTOMER_ID_ULID_RE.test(customer.id)) {
@@ -657,7 +657,7 @@ export async function emitTokenAuditRow(
     await tx.insert(auditEventsIndex).values({
       id: ulid(),
       customerId: customer.id,
-      tenantId: row.connectionId,
+      tenantId: row.projectId,
       region: customer.region,
       queryId: ulid(),
       database: "main",
@@ -666,11 +666,11 @@ export async function emitTokenAuditRow(
       payload: row.payload,
       actorUserId: row.actorUserId,
       mcpTokenId: row.mcpTokenId,
-      // Stamp the canonical connection scope (0020) so a connection-
+      // Stamp the canonical project scope (0020) so a project-
       // filtered /audit keeps these credential events. tenant_id carries
-      // the same id for back-compat; connection_id is the column the filter
+      // the same id for back-compat; project_id is the column the filter
       // and the FK ON DELETE SET NULL key on.
-      connectionId: row.connectionId,
+      projectId: row.projectId,
     });
   });
 }
