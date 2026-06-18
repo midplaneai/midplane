@@ -7,7 +7,7 @@
 // scope) and region (multi-region partition key — every dashboard query
 // passes region so the planner partition-prunes).
 //
-// Region immutability + connection.region == customer.region are enforced
+// Region immutability + project.region == customer.region are enforced
 // by SQL constructs declared in 0001_constraints.sql, since Drizzle's TS
 // schema language doesn't cleanly express triggers or RLS.
 
@@ -100,28 +100,28 @@ export const customers = pgTable(
       .notNull(),
   },
   (t) => ({
-    // Composite unique so connections can FK on (customer_id, region) and
+    // Composite unique so projects can FK on (customer_id, region) and
     // mechanically guarantee the regions match.
     idRegion: unique("customers_id_region_uq").on(t.id, t.region),
   }),
 );
 
-// --- connections ------------------------------------------------------------
+// --- projects ------------------------------------------------------------
 //
-// Parent row for an MCP connection: identity, ownership, region, and the
+// Parent row for an MCP project: identity, ownership, region, and the
 // agent-facing token. Per-DB credential and policy state lives in the
-// child table `connection_databases` (one row per Postgres a single
-// connection can reach). Schema split landed in migration 0008.
+// child table `project_databases` (one row per Postgres a single
+// project can reach). Schema split landed in migration 0008.
 
-export const connections = pgTable(
-  "connections",
+export const projects = pgTable(
+  "projects",
   {
     id: text("id").primaryKey(), // ULID
     customerId: text("customer_id").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
-    // User-supplied label so a customer with multiple connections can tell
+    // User-supplied label so a customer with multiple projects can tell
     // them apart in the dashboard. Nullable for rows created before this
-    // column existed; the UI falls back to the connection id when null.
+    // column existed; the UI falls back to the project id when null.
     name: text("name"),
     // Reversible kill switch. Non-null = paused: the resolver rejects agent
     // requests with a distinct 403 (next to the mcp_tokens.status='active'
@@ -134,31 +134,31 @@ export const connections = pgTable(
   },
   (t) => ({
     customerRegionFk: foreignKey({
-      name: "connections_customer_region_fk",
+      name: "projects_customer_region_fk",
       columns: [t.customerId, t.region],
       foreignColumns: [customers.id, customers.region],
     }),
-    customerIdx: index("connections_customer_id_idx").on(t.customerId),
+    customerIdx: index("projects_customer_id_idx").on(t.customerId),
   }),
 );
 
-// --- connection_databases ---------------------------------------------------
+// --- project_databases ---------------------------------------------------
 //
-// One row per Postgres a connection can reach. The OSS 0.2.0 engine reads
+// One row per Postgres a project can reach. The OSS 0.2.0 engine reads
 // these from a YAML `databases:` block (one entry per row), each with an
 // independent `table_access` policy and `tenant_scope.mappings`. The DSN
 // stays encrypted at rest; KMS grace-window state (`rotated_at`,
-// `last_kms_success_at`) is per-credential, not per-connection — so DSN
+// `last_kms_success_at`) is per-credential, not per-project — so DSN
 // rotation on one DB cannot perturb the cache fence for siblings.
 //
 // `name` is the agent-facing alias (`main`, `analytics`, …) — what shows
-// up as `database:` on the OSS tool calls. Unique within a connection.
+// up as `database:` on the OSS tool calls. Unique within a project.
 
-export const connectionDatabases = pgTable(
-  "connection_databases",
+export const projectDatabases = pgTable(
+  "project_databases",
   {
     id: text("id").primaryKey(), // ULID for new rows; hex for rows backfilled by 0008
-    connectionId: text("connection_id").notNull(),
+    projectId: text("project_id").notNull(),
     // Agent-facing alias. ^[a-z][a-z0-9_-]{0,31}$ — matches OSS DB_NAME_RE
     // exactly so a name validated here also passes OSS-side parsing.
     name: text("name").notNull(),
@@ -205,17 +205,17 @@ export const connectionDatabases = pgTable(
       .notNull(),
   },
   (t) => ({
-    connectionFk: foreignKey({
-      name: "connection_databases_connection_fk",
-      columns: [t.connectionId],
-      foreignColumns: [connections.id],
+    projectFk: foreignKey({
+      name: "project_databases_project_fk",
+      columns: [t.projectId],
+      foreignColumns: [projects.id],
     }).onDelete("cascade"),
-    nameUq: unique("connection_databases_connection_name_uq").on(
-      t.connectionId,
+    nameUq: unique("project_databases_project_name_uq").on(
+      t.projectId,
       t.name,
     ),
-    connectionIdx: index("connection_databases_connection_id_idx").on(
-      t.connectionId,
+    projectIdx: index("project_databases_project_id_idx").on(
+      t.projectId,
     ),
   }),
 );
@@ -278,17 +278,17 @@ export const auditEventsIndex = pgTable(
     // TOKEN_REVOKED rows stamp it directly. NULL for rows where no token
     // identity applies (engine pre-lockstep, REGION_CHANGED, etc.).
     mcpTokenId: text("mcp_token_id"),
-    // Cloud-only connection attribution. The indexer drains each engine
-    // container per-connection, so the parent connection id is in scope at
+    // Cloud-only project attribution. The indexer drains each engine
+    // container per-project, so the parent project id is in scope at
     // insert time (the engine itself never emits it). Lets the audit log
-    // filter to one connection and disambiguates same-named DBs across
-    // connections (the dashboard's per-card "last query"). FK ON DELETE
-    // SET NULL (mirrors indexer_cursors.connection_id, 0018): audit history
-    // MUST survive connection deletion for compliance, so the row outlives
-    // the connection with connection_id flipped to NULL — never CASCADE.
-    // NULL on config events (no connection drain), pre-0.6.0 rows, and any
+    // filter to one project and disambiguates same-named DBs across
+    // projects (the dashboard's per-card "last query"). FK ON DELETE
+    // SET NULL (mirrors indexer_cursors.project_id, 0018): audit history
+    // MUST survive project deletion for compliance, so the row outlives
+    // the project with project_id flipped to NULL — never CASCADE.
+    // NULL on config events (no project drain), pre-0.6.0 rows, and any
     // existing row not reached by the 0020 backfill.
-    connectionId: text("connection_id"),
+    projectId: text("project_id"),
   },
   (t) => ({
     customerTsIdx: index("audit_customer_region_ts_idx").on(
@@ -329,26 +329,26 @@ export const auditEventsIndex = pgTable(
       t.ts.desc(),
     ),
     queryIdIdx: index("audit_query_id_idx").on(t.queryId),
-    // Connection scoping (0020). FK ON DELETE SET NULL so audit history
-    // outlives connection deletion (compliance) — the row's connection_id
+    // Project scoping (0020). FK ON DELETE SET NULL so audit history
+    // outlives project deletion (compliance) — the row's project_id
     // flips to NULL rather than the row CASCADE-deleting. Mirrors the
-    // indexer_cursors → connections FK from 0018. The migration creates
+    // indexer_cursors → projects FK from 0018. The migration creates
     // the constraint inline (auto-named) the same way 0018 did; this
     // declaration is the read-side mirror.
-    connectionFk: foreignKey({
-      name: "audit_events_index_connection_fk",
-      columns: [t.connectionId],
-      foreignColumns: [connections.id],
+    projectFk: foreignKey({
+      name: "audit_events_index_project_fk",
+      columns: [t.projectId],
+      foreignColumns: [projects.id],
     }).onDelete("set null"),
-    // Partial index (WHERE connection_id IS NOT NULL) — the /audit
-    // connection filter always supplies a concrete id and never scans the
+    // Partial index (WHERE project_id IS NOT NULL) — the /audit
+    // project filter always supplies a concrete id and never scans the
     // NULL bucket (config events + pre-backfill rows), so the predicate
     // keeps the index small. Mirrors the agent_name / mcp_token_id partial
     // indexes; Drizzle can't express the WHERE, so the migration owns it
     // and this declaration is the read-side mirror.
-    customerConnectionTsIdx: index(
-      "audit_customer_region_connection_ts_idx",
-    ).on(t.customerId, t.region, t.connectionId, t.ts.desc()),
+    customerProjectTsIdx: index(
+      "audit_customer_region_project_ts_idx",
+    ).on(t.customerId, t.region, t.projectId, t.ts.desc()),
     // Functional index on payload->>'sql_fingerprint' for ATTEMPTED rows
     // (matches OSS perf-review compound index). Created in
     // 0001_constraints.sql since Drizzle doesn't model partial expression
@@ -358,23 +358,23 @@ export const auditEventsIndex = pgTable(
 
 // --- indexer_cursors --------------------------------------------------------
 //
-// One row per connection the indexer has ever drained. Holds the
+// One row per project the indexer has ever drained. Holds the
 // bookmark (last_id) the next poll resumes from, plus customer_id
 // stamped on the first successful index — once stamped, the indexer
 // can keep draining even after the user deletes the underlying
-// connection row, which is exactly the design requirement (audit-grade
+// project row, which is exactly the design requirement (audit-grade
 // write-through: rows must reach Postgres regardless of what the user
-// does to the connection mid-flight).
+// does to the project mid-flight).
 //
 // Schema shape (PR2 of mcp_url_auth_security):
 //   - id            synthetic ULID PK (was: plaintext mcp_token)
-//   - connection_id nullable FK to connections(id) ON DELETE SET NULL.
-//                   When the connection is hard-deleted, this flips to
+//   - project_id nullable FK to projects(id) ON DELETE SET NULL.
+//                   When the project is hard-deleted, this flips to
 //                   NULL; the row lingers until the indexer drains the
 //                   remaining backlog and a future sweeper cleans
 //                   orphan rows. Migration 0018 owns the partial unique
-//                   index `indexer_cursors_connection_id_uq` keyed on
-//                   `(connection_id) WHERE connection_id IS NOT NULL`
+//                   index `indexer_cursors_project_id_uq` keyed on
+//                   `(project_id) WHERE project_id IS NOT NULL`
 //                   — Drizzle's index DSL can't express the predicate,
 //                   so the schema declaration here mirrors the column
 //                   only; the migration owns the index detail.
@@ -383,7 +383,7 @@ export const indexerCursors = pgTable(
   "indexer_cursors",
   {
     id: text("id").primaryKey(), // ULID
-    connectionId: text("connection_id"),
+    projectId: text("project_id"),
     customerId: text("customer_id").notNull(),
     region: text("region", { enum: REGIONS }).notNull(),
     lastId: text("last_id").notNull().default(""), // ULIDs sort lex; "" precedes all real ids
@@ -395,24 +395,24 @@ export const indexerCursors = pgTable(
       .notNull(),
   },
   (t) => ({
-    connectionFk: foreignKey({
-      name: "indexer_cursors_connection_fk",
-      columns: [t.connectionId],
-      foreignColumns: [connections.id],
+    projectFk: foreignKey({
+      name: "indexer_cursors_project_fk",
+      columns: [t.projectId],
+      foreignColumns: [projects.id],
     }).onDelete("set null"),
     regionIdx: index("indexer_cursors_region_idx").on(t.region),
     customerIdx: index("indexer_cursors_customer_id_idx").on(t.customerId),
     // See header comment — the partial unique predicate lives in the
     // migration. This non-unique declaration is the read-side mirror so
     // typecheck + schema-shape tests see the index column.
-    connectionIdx: index("indexer_cursors_connection_id_idx").on(t.connectionId),
+    projectIdx: index("indexer_cursors_project_id_idx").on(t.projectId),
   }),
 );
 
 // --- mcp_tokens -------------------------------------------------------------
 //
-// One row per agent-facing MCP token. Multi-token per connection
-// (`connection_id` is the FK, NOT unique), prefix+CRC format
+// One row per agent-facing MCP token. Multi-token per project
+// (`project_id` is the FK, NOT unique), prefix+CRC format
 // (`mp_(live|test)_<32 hex>_<6 base32>` — see packages/db/src/token-format),
 // HMAC-SHA256(pepper) hashing at rest (see packages/kms/src/pepper). Stores
 // creator identity, optional expiry, last-used surface, and revocation
@@ -432,7 +432,7 @@ export type McpTokenStatus = (typeof MCP_TOKEN_STATUSES)[number];
 
 // How a token authenticates the agent. 'url' is the HMAC plaintext-URL token
 // (the show-once `mp_(live|test)_…` bearer). 'oauth' is an attribution-only row
-// minted per (connection, OAuth client) by the MCP-OAuth path (0026): it carries
+// minted per (project, OAuth client) by the MCP-OAuth path (0026): it carries
 // no HMAC secret (token_hash/pepper_kid are NULL) and never resolves via the URL
 // proxy, but its id is what the engine stamps as mcp_token_id so per-agent audit
 // attribution survives the URL→OAuth switch. See lib/proxy.ts proxyMcpOAuth.
@@ -443,9 +443,9 @@ export const mcpTokens = pgTable(
   "mcp_tokens",
   {
     id: text("id").primaryKey(), // ULID
-    connectionId: text("connection_id").notNull(),
-    // User-supplied label, unique within the connection. Mirrors how
-    // connection_databases.name is scoped. OAuth rows use `oauth:<clientId>`.
+    projectId: text("project_id").notNull(),
+    // User-supplied label, unique within the project. Mirrors how
+    // project_databases.name is scoped. OAuth rows use `oauth:<clientId>`.
     name: text("name").notNull(),
     // "mp_live" or "mp_test" — the env prefix from the plaintext token,
     // copied here for dashboard rendering and scanner identification.
@@ -471,7 +471,7 @@ export const mcpTokens = pgTable(
     // dashboard token list, and the URL resolver.
     kind: text("kind", { enum: MCP_TOKEN_KINDS }).notNull().default("url"),
     // OAuth client (oauth_application.client_id) this attribution row belongs
-    // to. NULL for kind='url'. The (connection_id, client_id) partial-unique
+    // to. NULL for kind='url'. The (project_id, client_id) partial-unique
     // index (migration 0026) is what makes the mint-or-get idempotent.
     clientId: text("client_id"),
     // User id of the actor who minted the token. Distinct from customer scope
@@ -499,29 +499,29 @@ export const mcpTokens = pgTable(
     revokedReason: text("revoked_reason"),
   },
   (t) => ({
-    connectionFk: foreignKey({
-      name: "mcp_tokens_connection_fk",
-      columns: [t.connectionId],
-      foreignColumns: [connections.id],
+    projectFk: foreignKey({
+      name: "mcp_tokens_project_fk",
+      columns: [t.projectId],
+      foreignColumns: [projects.id],
     }).onDelete("cascade"),
-    connectionStatusIdx: index("mcp_tokens_connection_status_idx").on(
-      t.connectionId,
+    projectStatusIdx: index("mcp_tokens_project_status_idx").on(
+      t.projectId,
       t.status,
     ),
     // See header comment — the partial predicate lives in the migration.
     expiresAtIdx: index("mcp_tokens_expires_at_idx").on(t.expiresAt),
     // Read-side mirror of the UNIQUE PARTIAL index (WHERE kind='oauth') the
     // 0026 migration owns — Drizzle can't express the predicate. It's what
-    // makes "mint-or-get one attribution row per (connection, OAuth client)"
+    // makes "mint-or-get one attribution row per (project, OAuth client)"
     // race-safe; the uniqueness is enforced by the migration's index, not this
     // declaration.
     oauthClientIdx: index("mcp_tokens_oauth_client_idx").on(
-      t.connectionId,
+      t.projectId,
       t.clientId,
     ),
     tokenHashUq: unique("mcp_tokens_token_hash_uq").on(t.tokenHash),
-    nameUq: unique("mcp_tokens_name_per_connection_uq").on(
-      t.connectionId,
+    nameUq: unique("mcp_tokens_name_per_project_uq").on(
+      t.projectId,
       t.name,
     ),
   }),
@@ -530,9 +530,9 @@ export const mcpTokens = pgTable(
 // --- mcp_scope_grants -------------------------------------------------------
 //
 // Per-agent least-privilege DB scope (P6.1). The access boundary ON TOP of
-// ownership: which connection_databases an agent may reach and at what access.
+// ownership: which project_databases an agent may reach and at what access.
 // The proxy resolves the grant set for a credential, intersects it with the
-// connection's DBs, and injects the X-Midplane-Scope session header the engine
+// project's DBs, and injects the X-Midplane-Scope session header the engine
 // enforces (subset gate + clamp read_write→read where the grant is read).
 // Absence of a row = that DB is NOT in the agent's scope.
 //
@@ -540,7 +540,7 @@ export const mcpTokens = pgTable(
 // one enforcement path. Exactly one subject is set per row (DB CHECK in 0028):
 //   - OAuth: (client_id, user_id), written at consent;
 //   - PAT:   mcp_token_id, written at token creation.
-// Keyed by connection_database_id (stable spawn/DSN/audit id; survives rename).
+// Keyed by project_database_id (stable spawn/DSN/audit id; survives rename).
 // No RLS (mirrors mcp_tokens) — ownership is enforced in app code. The two
 // partial UNIQUE indexes (one OAuth, one PAT) live in the 0028 migration since
 // Drizzle can't express the WHERE predicate; the declarations below are the
@@ -553,7 +553,7 @@ export const mcpScopeGrants = pgTable(
   "mcp_scope_grants",
   {
     id: text("id").primaryKey(), // ULID
-    connectionDatabaseId: text("connection_database_id").notNull(),
+    projectDatabaseId: text("project_database_id").notNull(),
     // OAuth subject (client_id = oauth_application.client_id, user_id =
     // user.id). NULL for PAT grants. FKs to the auth tables live in the
     // migration (cross-module, same as mcp_tokens.client_id).
@@ -570,10 +570,10 @@ export const mcpScopeGrants = pgTable(
       .notNull(),
   },
   (t) => ({
-    connectionDatabaseFk: foreignKey({
-      name: "mcp_scope_grants_connection_database_fk",
-      columns: [t.connectionDatabaseId],
-      foreignColumns: [connectionDatabases.id],
+    projectDatabaseFk: foreignKey({
+      name: "mcp_scope_grants_project_database_fk",
+      columns: [t.projectDatabaseId],
+      foreignColumns: [projectDatabases.id],
     }).onDelete("cascade"),
     // Read-side mirrors of the UNIQUE PARTIAL indexes the 0028 migration owns
     // (WHERE mcp_token_id IS NULL / IS NOT NULL — not expressible in Drizzle).
@@ -582,13 +582,13 @@ export const mcpScopeGrants = pgTable(
     oauthIdx: index("mcp_scope_grants_oauth_uq").on(
       t.clientId,
       t.userId,
-      t.connectionDatabaseId,
+      t.projectDatabaseId,
     ),
     patIdx: index("mcp_scope_grants_pat_uq").on(
       t.mcpTokenId,
-      t.connectionDatabaseId,
+      t.projectDatabaseId,
     ),
-    cdbIdx: index("mcp_scope_grants_cdb_idx").on(t.connectionDatabaseId),
+    cdbIdx: index("mcp_scope_grants_cdb_idx").on(t.projectDatabaseId),
   }),
 );
 
@@ -596,10 +596,10 @@ export const mcpScopeGrants = pgTable(
 
 export type Customer = typeof customers.$inferSelect;
 export type NewCustomer = typeof customers.$inferInsert;
-export type Connection = typeof connections.$inferSelect;
-export type NewConnection = typeof connections.$inferInsert;
-export type ConnectionDatabase = typeof connectionDatabases.$inferSelect;
-export type NewConnectionDatabase = typeof connectionDatabases.$inferInsert;
+export type Project = typeof projects.$inferSelect;
+export type NewProject = typeof projects.$inferInsert;
+export type ProjectDatabase = typeof projectDatabases.$inferSelect;
+export type NewProjectDatabase = typeof projectDatabases.$inferInsert;
 export type AuditEvent = typeof auditEventsIndex.$inferSelect;
 export type NewAuditEvent = typeof auditEventsIndex.$inferInsert;
 export type IndexerCursor = typeof indexerCursors.$inferSelect;
