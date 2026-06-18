@@ -60,32 +60,33 @@ catches and renders inline.
 
 ## OSS image version pin sites
 
-The OSS engine image version (`midplane/midplane:X.Y.Z`) is pinned in
-thirteen places. Bumping requires updating all of them or the dev loop
-and prod deploys diverge from what the cloud was tested against:
+The OSS engine image version (`midplane/midplane:X.Y.Z`) has a single source
+of truth: **`OSS_ENGINE_IMAGE` in `packages/router/src/oss-image.ts`**. The TS
+sites import it; the non-TS sites carry a literal and are policed by a CI drift
+check. Bumping the engine:
 
-- `scripts/dev-image.sh` — local build tag
-- `scripts/bootstrap.sh` — one-shot setup script
-- `.env.example` — documented default
-- `packages/router/src/spawner-docker.ts` — fallback when env unset
-- `packages/router/src/spawner-fly.ts` — fallback when env unset
-- `fly-eu.toml` / `fly-us.toml` — production runtime apps
-- `fly-web-eu.toml` / `fly-web-us.toml` — `MIDPLANE_OSS_IMAGE` example
-  comments in the secrets blocks
-- `.github/workflows/deploy-fly.yml` — workflow input default; a bare
-  version number (`"0.9.0"`), so the grep below does NOT catch it
-- `README.md` — docs
-- `e2e/hot-policy-reload.live.e2e.ts` / `e2e/mcp-proxy.live.e2e.ts` —
-  prerequisite comments
+1. Edit `OSS_ENGINE_IMAGE` in `packages/router/src/oss-image.ts`.
+2. Run `bun scripts/check-image-pin.ts` — it fails and lists every config/doc
+   site that still disagrees. Update those, re-run until green.
 
-Plus the test fixtures in `packages/router/test/spawner-docker.test.ts`
-and `packages/router/test/spawner-fly.test.ts` assert on the tag (the
-fly suite's stale-image/`sameImageRef` cases use the current pin as the
-"fresh" side), so they get re-pinned to match.
+- TS (import the constant — do NOT hand-edit): `spawner-docker.ts`,
+  `spawner-fly.ts`, and the current-pin references in
+  `packages/router/test/spawner-{docker,fly}.test.ts`. (The fly suite's
+  `0.8.0` literals are deliberately-stale comparison fixtures, not pin sites.)
+- Literal sites the drift check enforces: `scripts/dev-image.sh`,
+  `scripts/bootstrap.sh`, `.env.example`, `.env.self-host.example`,
+  `fly-eu.toml`, `fly-us.toml`, `fly-web-eu.toml`, `fly-web-us.toml`,
+  `README.md`, `.github/workflows/deploy-fly.yml` (the bare `default: "X.Y.Z"`),
+  `e2e/hot-policy-reload.live.e2e.ts`, `e2e/mcp-proxy.live.e2e.ts`.
 
-Sanity-check grep before declaring a bump done — then check
-`deploy-fly.yml` by hand, since its default is a bare version number:
-`rg 'midplane/midplane:[0-9]' --hidden -g '!node_modules' -g '!bun.lock'`
+The engine itself is at `engine/` and ships its own image via the `engine-v*`
+publish workflow; the merge centralizes the pin but does not remove it (the
+control plane still references the engine by tag). The sanity grep still works:
+`rg 'midplane/midplane:[0-9]' --hidden -g '!node_modules' -g '!bun.lock'`.
+
+Follow-ups (P7 Stage 2 / decisions pending): pin prod by immutable digest
+(`@sha256:...`) and drop `.env.self-host.example`'s `MIDPLANE_OSS_IMAGE` once
+self-host process-spawns the in-image binary.
 
 ## Skill routing
 

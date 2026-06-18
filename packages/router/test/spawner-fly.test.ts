@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { OSS_ENGINE_IMAGE } from "../src/oss-image.ts";
 import { FlyMachineSpawner, imageIsStale, sameImageRef } from "../src/spawner-fly.ts";
 
 const regions = {
@@ -265,7 +266,7 @@ describe("FlyMachineSpawner", () => {
               state: "suspended",
               private_ip: "fdaa:0:7::7",
               // Same image as the pin — adoption must NOT recreate.
-              config: { image: "midplane/midplane:0.9.0" },
+              config: { image: OSS_ENGINE_IMAGE },
             },
           ]),
           { status: 200 },
