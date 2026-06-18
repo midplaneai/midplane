@@ -12,19 +12,19 @@
 // next grace window starts fresh.
 //
 // Persistence: every successful KMS decrypt updates
-// connection_databases.last_kms_success_at in Postgres. The cache and the
+// project_databases.last_kms_success_at in Postgres. The cache and the
 // row stay in sync; the row is the durable witness across process restarts.
 //
-// 0008 schema split: this resolver now operates on connection_databases
-// rows (per-credential) rather than connections (parent). Region is held
+// 0008 schema split: this resolver now operates on project_databases
+// rows (per-credential) rather than projects (parent). Region is held
 // on the parent row but threaded through here so the cache fence and KMS
 // region routing match the OSS-side per-region key.
 
 import { eq } from "drizzle-orm";
 
 import {
-  connectionDatabases,
-  type ConnectionDatabase,
+  projectDatabases,
+  type ProjectDatabase,
 } from "@midplane-cloud/db";
 import {
   decryptDsn,
@@ -49,7 +49,7 @@ export interface ResolveDsnDeps {
   /** Optional logger; defaults to no-op so library stays quiet. */
   onRefreshError?: (
     err: unknown,
-    ctx: { connectionDatabaseId: string; region: Region; customerId: string },
+    ctx: { projectDatabaseId: string; region: Region; customerId: string },
   ) => void;
 }
 
@@ -58,11 +58,11 @@ interface ResolverState {
 }
 
 export interface ResolveInput {
-  connectionDatabase: ConnectionDatabase;
-  /** Region of the parent connection — KMS keys are per-region, so the
+  projectDatabase: ProjectDatabase;
+  /** Region of the parent project — KMS keys are per-region, so the
    *  resolver needs it explicitly. */
   region: Region;
-  /** Customer who owns the parent connection — used as KMS context. */
+  /** Customer who owns the parent project — used as KMS context. */
   customerId: string;
 }
 
@@ -73,7 +73,7 @@ export class DsnResolver {
 
   async resolve(input: ResolveInput): Promise<ResolveDsnResult> {
     const cache = this.deps.cache;
-    const { connectionDatabase: cdb, region, customerId } = input;
+    const { projectDatabase: cdb, region, customerId } = input;
     const cached = cache.get(cdb.id, region);
 
     if (cached.kind === "fresh") {
@@ -111,7 +111,7 @@ export class DsnResolver {
   }
 
   private scheduleRefresh(input: ResolveInput): void {
-    const { connectionDatabase: cdb, region, customerId } = input;
+    const { projectDatabase: cdb, region, customerId } = input;
     if (this.state.inflight.has(cdb.id)) return;
     const decryptStartedAt = this.deps.now ? this.deps.now() : Date.now();
     const promise = (async () => {
@@ -121,7 +121,7 @@ export class DsnResolver {
         await this.persistSuccess(cdb.id);
       } catch (err) {
         this.deps.onRefreshError?.(err, {
-          connectionDatabaseId: cdb.id,
+          projectDatabaseId: cdb.id,
           region,
           customerId,
         });
@@ -133,7 +133,7 @@ export class DsnResolver {
   }
 
   private async callKms(
-    cdb: ConnectionDatabase,
+    cdb: ProjectDatabase,
     region: Region,
     customerId: string,
   ): Promise<string> {
@@ -147,11 +147,11 @@ export class DsnResolver {
     );
   }
 
-  private async persistSuccess(connectionDatabaseId: string): Promise<void> {
+  private async persistSuccess(projectDatabaseId: string): Promise<void> {
     const now = new Date(this.deps.now ? this.deps.now() : Date.now());
     await this.deps.db
-      .update(connectionDatabases)
+      .update(projectDatabases)
       .set({ lastKmsSuccessAt: now })
-      .where(eq(connectionDatabases.id, connectionDatabaseId));
+      .where(eq(projectDatabases.id, projectDatabaseId));
   }
 }

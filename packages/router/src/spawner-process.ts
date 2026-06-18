@@ -12,8 +12,8 @@
 // exactly one set of databases for its lifetime — the policy file + the
 // MIDPLANE_DSN_* env vars are read once at boot. Collapsing to a single
 // standing engine would require an engine change (dynamic per-request DSN
-// selection); the spawn-per-connection model is identical to the Docker/Fly
-// backends and reuses the same ContainerRegistry (keyed on connection_id,
+// selection); the spawn-per-project model is identical to the Docker/Fly
+// backends and reuses the same ContainerRegistry (keyed on project_id,
 // 30-minute idle stop).
 //
 // Trust posture: the engine subprocess gets a CURATED env, not the control
@@ -22,7 +22,7 @@
 // plus PATH/HOME so the binary can be found and run. The control plane's own
 // secrets (BETTER_AUTH_SECRET, KMS key material, the control-plane
 // DATABASE_URL) are NOT inherited — mirroring the isolation a container's
-// fresh env gives the Docker/Fly backends. The per-connection DSN is injected
+// fresh env gives the Docker/Fly backends. The per-project DSN is injected
 // the same way (MIDPLANE_DSN_<id> env var, referenced from the YAML via
 // ${...}); it never touches disk.
 
@@ -165,7 +165,7 @@ export class ProcessSpawner implements Spawner {
       serializeMultiDbPolicyToYaml(
         opts.databases.map((db) => ({
           name: db.name,
-          connectionDatabaseId: db.connectionDatabaseId,
+          projectDatabaseId: db.projectDatabaseId,
           tableAccess: db.tableAccess,
           tenantScope: db.tenantScope,
           guardrails: db.guardrails,
@@ -207,7 +207,7 @@ export class ProcessSpawner implements Spawner {
     env.MIDPLANE_POLICY_FILE = policyPath;
     env.DB_PATH = dbPath;
     for (const db of opts.databases) {
-      env[dsnEnvVarFor(db.connectionDatabaseId)] = db.dsn;
+      env[dsnEnvVarFor(db.projectDatabaseId)] = db.dsn;
     }
     if (this.indexerToken) env.INDEXER_TOKEN = this.indexerToken;
 
@@ -320,7 +320,7 @@ export class ProcessSpawner implements Spawner {
   // Graceful stop: SIGTERM, wait up to the grace for a clean exit, then
   // SIGKILL. Idempotent and safe to call on an already-exited child (kill on
   // a reaped pid is a no-op / throws ENVALID which we swallow). Guarantees no
-  // orphaned engine survives a connection teardown or idle expiry.
+  // orphaned engine survives a project teardown or idle expiry.
   private async terminate(
     child: ChildHandle,
     exited: Promise<void>,

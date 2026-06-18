@@ -39,12 +39,12 @@ describe("DockerSpawner", () => {
     });
 
     const c = await spawner.spawn({
-      connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
       region: "eu",
       databases: [
         {
           name: "main",
-          connectionDatabaseId: "01HXYZMAIN0000000000000000",
+          projectDatabaseId: "01HXYZMAIN0000000000000000",
           dsn: "postgres://example",
           tableAccess: { default: "read", tables: { users: "deny" } },
           tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -117,12 +117,12 @@ describe("DockerSpawner", () => {
 
     await expect(
       spawner.spawn({
-        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
         region: "eu",
         databases: [
           {
             name: "main",
-            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            projectDatabaseId: "01HXYZMAIN0000000000000000",
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -140,7 +140,7 @@ describe("DockerSpawner", () => {
     const spawner = new DockerSpawner({});
     await expect(
       spawner.spawn({
-        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
         region: "eu",
         databases: [],
       }),

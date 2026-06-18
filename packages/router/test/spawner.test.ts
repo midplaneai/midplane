@@ -27,13 +27,13 @@ class StubSpawner implements Spawner {
   }
 }
 
-const opts = (connectionId = "01HXYZCONN000000000000000A"): SpawnOptions => ({
-  connectionId,
+const opts = (projectId = "01HXYZCONN000000000000000A"): SpawnOptions => ({
+  projectId,
   region: "eu",
   databases: [
     {
       name: "main",
-      connectionDatabaseId: "01HXYZMAIN0000000000000000",
+      projectDatabaseId: "01HXYZMAIN0000000000000000",
       dsn: "postgres://x",
       tableAccess: { default: "deny", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -43,7 +43,7 @@ const opts = (connectionId = "01HXYZCONN000000000000000A"): SpawnOptions => ({
 });
 
 describe("ContainerRegistry", () => {
-  it("spawns once per connection, reuses on second acquire", async () => {
+  it("spawns once per project, reuses on second acquire", async () => {
     const stub = new StubSpawner();
     const reg = new ContainerRegistry(stub);
     const a = await reg.acquire(opts());
@@ -66,7 +66,7 @@ describe("ContainerRegistry", () => {
     expect(b.port).toBe(c.port);
   });
 
-  it("scopes registry per connection", async () => {
+  it("scopes registry per project", async () => {
     const stub = new StubSpawner();
     const reg = new ContainerRegistry(stub);
     await reg.acquire(opts("01HXYZCONN000000000000000A"));
@@ -116,7 +116,7 @@ describe("ContainerRegistry", () => {
     expect(reg.size()).toBe(0);
   });
 
-  it("getActive returns ActiveContainer for live connections, null otherwise", async () => {
+  it("getActive returns ActiveContainer for live projects, null otherwise", async () => {
     const stub = new StubSpawner();
     const reg = new ContainerRegistry(stub);
     expect(reg.getActive("01HXYZCONN000000000000000A")).toBeNull();
@@ -127,7 +127,7 @@ describe("ContainerRegistry", () => {
     expect(active?.host).toBe(c.host);
     expect(active?.port).toBe(c.port);
     expect(active?.region).toBe("eu");
-    expect(active?.connectionId).toBe("01HXYZCONN000000000000000A");
+    expect(active?.projectId).toBe("01HXYZCONN000000000000000A");
 
     expect(reg.getActive("01HXYZCONN000000000000000B")).toBeNull();
   });

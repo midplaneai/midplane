@@ -17,7 +17,7 @@ describe("FlyMachineSpawner", () => {
         const body = JSON.parse(init.body as string) as Record<string, unknown>;
         const config = body.config as Record<string, unknown>;
         const env = config.env as Record<string, string>;
-        // Multi-DB: DSN is injected as MIDPLANE_DSN_<connectionDatabaseId>,
+        // Multi-DB: DSN is injected as MIDPLANE_DSN_<projectDatabaseId>,
         // not DATABASE_URL. The YAML's `url:` references the env var via
         // ${...} interpolation per OSS 0.2.0 ENV_INTERP_RE.
         expect(env.MIDPLANE_DSN_01HXYZMAIN0000000000000000).toBe(
@@ -109,12 +109,12 @@ describe("FlyMachineSpawner", () => {
     });
 
     const c = await spawner.spawn({
-      connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
       region: "eu",
       databases: [
         {
           name: "main",
-          connectionDatabaseId: "01HXYZMAIN0000000000000000",
+          projectDatabaseId: "01HXYZMAIN0000000000000000",
           dsn: "postgres://example",
           tableAccess: { default: "read", tables: { orders: "read_write" } },
           tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -158,12 +158,12 @@ describe("FlyMachineSpawner", () => {
 
     await expect(
       spawner.spawn({
-        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
         region: "eu",
         databases: [
           {
             name: "main",
-            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            projectDatabaseId: "01HXYZMAIN0000000000000000",
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -204,7 +204,7 @@ describe("FlyMachineSpawner", () => {
         );
       }
       if (url.endsWith(":8080/health")) {
-        // ...but the engine never accepts connections.
+        // ...but the engine never accepts projects.
         throw new Error("connect ECONNREFUSED");
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -219,12 +219,12 @@ describe("FlyMachineSpawner", () => {
 
     await expect(
       spawner.spawn({
-        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
         region: "eu",
         databases: [
           {
             name: "main",
-            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            projectDatabaseId: "01HXYZMAIN0000000000000000",
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -300,12 +300,12 @@ describe("FlyMachineSpawner", () => {
     });
 
     const c = await spawner.spawn({
-      connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
       region: "eu",
       databases: [
         {
           name: "main",
-          connectionDatabaseId: "01HXYZMAIN0000000000000000",
+          projectDatabaseId: "01HXYZMAIN0000000000000000",
           dsn: "postgres://x",
           tableAccess: { default: "read", tables: {} },
           tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -391,12 +391,12 @@ describe("FlyMachineSpawner", () => {
 
     return spawner
       .spawn({
-        connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
         region: "eu",
         databases: [
           {
             name: "main",
-            connectionDatabaseId: "01HXYZMAIN0000000000000000",
+            projectDatabaseId: "01HXYZMAIN0000000000000000",
             dsn: "postgres://x",
             tableAccess: { default: "read", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -405,7 +405,7 @@ describe("FlyMachineSpawner", () => {
         ],
       })
       .then((c) => {
-        // The stale machine was destroyed and the connection now runs
+        // The stale machine was destroyed and the project now runs
         // the pinned image.
         expect(
           calls.some((s) => s.startsWith("DELETE ") && s.includes("mach-stale")),

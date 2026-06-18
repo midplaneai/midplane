@@ -6,12 +6,12 @@
 // is mostly fetch + cursor advance — the SQL surface is small and the
 // fake keeps tests fast.
 //
-// PR2 of mcp_url_auth_security: the indexer keys on connection_id (the
+// PR2 of mcp_url_auth_security: the indexer keys on project_id (the
 // parent ULID), not the plaintext token. Audit rows propagate the OSS
 // engine's `mcp_token_id` field (lockstep OSS 0.6.0) into the cloud's
 // audit_events_index.mcp_token_id column. The fake tracks:
-//   - cursors by both synthetic id AND connection_id, so the
-//     drain-after-delete path (FK ON DELETE SET NULL flips connection_id
+//   - cursors by both synthetic id AND project_id, so the
+//     drain-after-delete path (FK ON DELETE SET NULL flips project_id
 //     to NULL, but the cursorId stays stable) can be exercised.
 //   - mcpTokens existence, so the audit-insert FK guard can be probed
 //     (CASCADE-deleted token rows should make INSERTs NULL out the
@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   auditEventsIndex,
-  connections,
+  projects,
   indexerCursors,
   mcpTokens,
 } from "@midplane-cloud/db";
@@ -40,7 +40,7 @@ const TEST_CONN_A = "01HXYZCNN000000000000000AA";
 
 interface CursorRow {
   id: string;
-  connectionId: string | null;
+  projectId: string | null;
   lastId: string;
   customerId: string;
   region: "eu" | "us";
@@ -52,12 +52,12 @@ interface CursorRow {
 }
 
 interface FakeDbState {
-  customerByConnectionId: Map<
+  customerByProjectId: Map<
     string,
     { customerId: string; region: "eu" | "us" }
   >;
   /** Cursor rows indexed by their synthetic id PK. Lookups happen by id
-   *  (cache hit path), by connection_id (cache miss / first sighting),
+   *  (cache hit path), by project_id (cache miss / first sighting),
    *  and updates can target either depending on the indexer's state. */
   cursorsById: Map<string, CursorRow>;
   auditRows: Array<{
@@ -90,7 +90,7 @@ const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 function makeFakeDb(): { db: Db; state: FakeDbState } {
   const state: FakeDbState = {
-    customerByConnectionId: new Map(),
+    customerByProjectId: new Map(),
     cursorsById: new Map(),
     auditRows: [],
     extantTokenIds: new Set(),
@@ -101,11 +101,11 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
     boundCustomerIds: [],
   };
 
-  // Find a cursor by its current connection_id (NULL is never returned —
-  // the partial unique index in 0018 only covers non-null connection_id).
-  function cursorByConnectionId(connectionId: string): CursorRow | undefined {
+  // Find a cursor by its current project_id (NULL is never returned —
+  // the partial unique index in 0018 only covers non-null project_id).
+  function cursorByProjectId(projectId: string): CursorRow | undefined {
     for (const row of state.cursorsById.values()) {
-      if (row.connectionId === connectionId) return row;
+      if (row.projectId === projectId) return row;
     }
     return undefined;
   }
@@ -136,25 +136,25 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
     };
 
     function resolveSelect(): unknown[] {
-      if (table === connections) {
-        // resolveCustomer: WHERE id = $1 (connection id, single param).
+      if (table === projects) {
+        // resolveCustomer: WHERE id = $1 (project id, single param).
         const meta = whereCond.firstUlid
-          ? state.customerByConnectionId.get(whereCond.firstUlid)
+          ? state.customerByProjectId.get(whereCond.firstUlid)
           : undefined;
         return meta ? [meta] : [];
       }
       if (table === indexerCursors) {
         // Two read shapes from the indexer:
         //   loadCursorRow cache hit  → WHERE id = $1
-        //   loadCursorRow cache miss → WHERE connection_id = $1
-        //   writeBatch post-upsert   → WHERE connection_id = $1
+        //   loadCursorRow cache miss → WHERE project_id = $1
+        //   writeBatch post-upsert   → WHERE project_id = $1
         // Disambiguate by which column name appeared in the where tree.
         let row: CursorRow | undefined;
         if (whereCond.firstUlid) {
           if (whereCond.colsSeen.has("id")) {
             row = state.cursorsById.get(whereCond.firstUlid);
-          } else if (whereCond.colsSeen.has("connection_id")) {
-            row = cursorByConnectionId(whereCond.firstUlid);
+          } else if (whereCond.colsSeen.has("project_id")) {
+            row = cursorByProjectId(whereCond.firstUlid);
           }
         }
         return row
@@ -224,7 +224,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
         state.inserts.push({ table: "cursor", rows: stagedRows, mode });
         for (const r of stagedRows as Array<{
           id: string;
-          connectionId: string;
+          projectId: string;
           customerId: string;
           region: "eu" | "us";
           lastId?: string;
@@ -235,11 +235,11 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
           // onConflictDoUpdate semantics: customerId is immutable, so an
           // existing row's customerId stays — only lastId/lastIndexedAt
           // (and the error stamps) get bumped. Look up the existing
-          // cursor by connection_id (the partial unique index's target
+          // cursor by project_id (the partial unique index's target
           // predicate); if found, treat this as an UPDATE-in-place and
           // keep the existing id. recordError's insert carries no lastId
           // (schema default "") — don't clobber an existing one.
-          const existing = cursorByConnectionId(r.connectionId);
+          const existing = cursorByProjectId(r.projectId);
           if (existing) {
             if (r.lastId !== undefined) existing.lastId = r.lastId;
             if (r.lastIndexedAt) existing.lastIndexedAt = r.lastIndexedAt;
@@ -251,7 +251,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
           }
           state.cursorsById.set(r.id, {
             id: r.id,
-            connectionId: r.connectionId,
+            projectId: r.projectId,
             lastId: r.lastId ?? "",
             customerId: r.customerId,
             region: r.region,
@@ -294,11 +294,11 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
       if (table === indexerCursors) {
         // Cache-hit path: UPDATE indexer_cursors SET ... WHERE id = $1
         // (the cached cursorId). The where tree references the `id`
-        // column only — no connection_id, so we route via colsSeen.
+        // column only — no project_id, so we route via colsSeen.
         if (
           whereCond.firstUlid &&
           whereCond.colsSeen.has("id") &&
-          !whereCond.colsSeen.has("connection_id")
+          !whereCond.colsSeen.has("project_id")
         ) {
           const row = state.cursorsById.get(whereCond.firstUlid);
           if (!row) return;
@@ -369,7 +369,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
 
 interface WhereExtract {
   /** First ULID-shaped string found in walk order. Convenience for the
-   *  single-param reads (cursor + connections); resolveSelect picks
+   *  single-param reads (cursor + projects); resolveSelect picks
    *  between this and allUlids based on table identity. */
   firstUlid?: string;
   /** All ULID-shaped strings collected from the where tree, in walk
@@ -379,7 +379,7 @@ interface WhereExtract {
   allUlids: string[];
   /** Set of column names seen in the where tree. Used to route reads
    *  on indexer_cursors between the cache-hit path (WHERE id = $1) and
-   *  the cache-miss path (WHERE connection_id = $1) — both pass the
+   *  the cache-miss path (WHERE project_id = $1) — both pass the
    *  same ULID-shaped param, but reference different columns. */
   colsSeen: Set<string>;
 }
@@ -475,7 +475,7 @@ async function buildHarness(
 }> {
   const { db, state } = makeFakeDb();
   if (opts.failNextTxn) state.failNextTxn = true;
-  state.customerByConnectionId.set(TEST_CONN_A, {
+  state.customerByProjectId.set(TEST_CONN_A, {
     customerId: TEST_CUST_A,
     region: "eu",
   });
@@ -483,12 +483,12 @@ async function buildHarness(
   const spawner = new StubSpawner();
   const registry = new ContainerRegistry(spawner, { idleMs: 60_000 });
   await registry.acquire({
-    connectionId: TEST_CONN_A,
+    projectId: TEST_CONN_A,
     region: "eu",
     databases: [
       {
         name: "main",
-        connectionDatabaseId: "01HXYZMAIN0000000000000000",
+        projectDatabaseId: "01HXYZMAIN0000000000000000",
         dsn: "postgres://x",
         tableAccess: { default: "deny", tables: {} },
         tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -566,16 +566,16 @@ describe("Indexer", () => {
     expect(state.auditRows).toHaveLength(2);
     expect(state.auditRows[0]!.customerId).toBe(TEST_CUST_A);
     const cursor = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursor?.lastId).toBe("01HX0000000000000000000002");
   });
 
-  it("stamps connection_id (cloud-only) on every indexed audit row", async () => {
-    // 0020: the indexer drains per-connection, so writeBatch stamps the
-    // parent connection id on each row — the engine never emits it. This is
-    // what lets /audit filter by connection and disambiguates same-named
-    // DBs across connections on the dashboard.
+  it("stamps project_id (cloud-only) on every indexed audit row", async () => {
+    // 0020: the indexer drains per-project, so writeBatch stamps the
+    // parent project id on each row — the engine never emits it. This is
+    // what lets /audit filter by project and disambiguates same-named
+    // DBs across projects on the dashboard.
     const { db, state, registry } = await buildHarness();
     const fetchFn = vi.fn(async () =>
       jsonResponse({
@@ -591,7 +591,7 @@ describe("Indexer", () => {
 
     expect(state.auditRows).toHaveLength(2);
     for (const r of state.auditRows) {
-      expect((r as unknown as { connectionId: string }).connectionId).toBe(
+      expect((r as unknown as { projectId: string }).projectId).toBe(
         TEST_CONN_A,
       );
     }
@@ -602,7 +602,7 @@ describe("Indexer", () => {
     // row from a session carries the X-Midplane-Token-Id the cloud
     // injected at MCP initialize. The indexer copies it through after
     // confirming the mcp_tokens row still exists (FK guard for the
-    // post-connection-delete CASCADE case — covered in a separate
+    // post-project-delete CASCADE case — covered in a separate
     // test below).
     const { db, state, registry } = await buildHarness();
     state.extantTokenIds.add("01HXTKN00000000000000000AA");
@@ -634,8 +634,8 @@ describe("Indexer", () => {
   });
 
   it("NULLs out mcp_token_id when the referenced token has been CASCADE-deleted (FK guard)", async () => {
-    // Connection deleted → mcp_tokens row CASCADE-removed via FK ON
-    // DELETE CASCADE on mcp_tokens.connection_id. The OSS container's
+    // Project deleted → mcp_tokens row CASCADE-removed via FK ON
+    // DELETE CASCADE on mcp_tokens.project_id. The OSS container's
     // SQLite still has backlog rows referencing the (now-gone) token
     // id. Without the guard, the audit INSERT trips
     // audit_events_index_mcp_token_id_fk and rolls back the batch,
@@ -704,17 +704,17 @@ describe("Indexer", () => {
 
   it("survives ON DELETE SET NULL: cursor reads + writes route through cached cursor id", async () => {
     // Drain-after-delete: PR2's design promises that a cursor's
-    // connection_id can flip to NULL via FK ON DELETE SET NULL while
+    // project_id can flip to NULL via FK ON DELETE SET NULL while
     // the indexer keeps draining the OSS container's backlog. The
-    // implementation maintains an in-memory cursorIdByConnectionId
+    // implementation maintains an in-memory cursorIdByProjectId
     // cache: after the first tick stamps it, subsequent reads use
     // WHERE id = $cursorId (stable) and writes use UPDATE ... WHERE
     // id = $cursorId (no FK conflict from re-inserting the now-
-    // dangling connection_id).
+    // dangling project_id).
     const { db, state, registry } = await buildHarness();
 
-    // Tick 1: first sighting populates the cache via the connection_id
-    // read + upsert. Cursor row is created with connection_id set.
+    // Tick 1: first sighting populates the cache via the project_id
+    // read + upsert. Cursor row is created with project_id set.
     const responses = [
       jsonResponse({
         rows: [row("01HX0000000000000000000001")],
@@ -730,24 +730,24 @@ describe("Indexer", () => {
     await ix.tick();
 
     const cursorBeforeDelete = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursorBeforeDelete, "first tick must stamp the cursor row").toBeDefined();
     expect(cursorBeforeDelete!.customerId).toBe(TEST_CUST_A);
     expect(cursorBeforeDelete!.lastId).toBe("01HX0000000000000000000001");
 
-    // Simulate the connection delete: FK ON DELETE SET NULL flips the
-    // cursor's connection_id to NULL. The customers-table is also gone
+    // Simulate the project delete: FK ON DELETE SET NULL flips the
+    // cursor's project_id to NULL. The customers-table is also gone
     // (the indexer's resolveCustomer fallback would now miss too).
-    cursorBeforeDelete!.connectionId = null;
-    state.customerByConnectionId.clear();
+    cursorBeforeDelete!.projectId = null;
+    state.customerByProjectId.clear();
 
     // Tick 2: indexer should pull the cursor row via its cached id,
-    // get customer_id from there (NOT from the connections fallback,
+    // get customer_id from there (NOT from the projects fallback,
     // which is gone), and write the new batch via UPDATE-by-id.
     await ix.tick();
 
-    // Audit row landed despite the connection-row being gone.
+    // Audit row landed despite the project-row being gone.
     expect(state.auditRows.map((r) => r.id)).toEqual([
       "01HX0000000000000000000001",
       "01HX0000000000000000000002",
@@ -756,9 +756,9 @@ describe("Indexer", () => {
     // The cursor row's last_id advanced — proves UPDATE-by-id worked.
     const cursorAfter = state.cursorsById.get(cursorBeforeDelete!.id);
     expect(cursorAfter?.lastId).toBe("01HX0000000000000000000002");
-    // And the row's connection_id stays NULL — we did NOT re-INSERT
+    // And the row's project_id stays NULL — we did NOT re-INSERT
     // (which would have tripped the dangling FK reference).
-    expect(cursorAfter?.connectionId).toBeNull();
+    expect(cursorAfter?.projectId).toBeNull();
 
     // Verify the second tick's write went through update(), not
     // insert(). Pre-delete tick: one cursor insert. Post-delete tick:
@@ -770,7 +770,7 @@ describe("Indexer", () => {
     const updateWhere = cursorUpdates[0]!.where as WhereExtract;
     expect(updateWhere.firstUlid).toBe(cursorBeforeDelete!.id);
     expect(updateWhere.colsSeen.has("id")).toBe(true);
-    expect(updateWhere.colsSeen.has("connection_id")).toBe(false);
+    expect(updateWhere.colsSeen.has("project_id")).toBe(false);
   });
 
   it("drains multi-page within a single tick", async () => {
@@ -795,7 +795,7 @@ describe("Indexer", () => {
     expect(secondCall[0]).toMatch(/since\/01HX0000000000000000000002\?/);
     expect(state.auditRows).toHaveLength(3);
     const cursor = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursor?.lastId).toBe("01HX0000000000000000000003");
   });
@@ -825,7 +825,7 @@ describe("Indexer", () => {
     // progress.
     expect(state.auditRows).toHaveLength(0);
     const cursor = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursor?.lastId ?? "").toBe("");
     expect(cursor?.lastIndexedAt).toBeUndefined();
@@ -850,7 +850,7 @@ describe("Indexer", () => {
     // Cursor must not ADVANCE on 5xx; the error-stamped row recordError
     // creates carries no drain progress (lastId stays "").
     const cursor = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursor?.lastId ?? "").toBe("");
     expect(cursor?.lastIndexedAt).toBeUndefined();
@@ -898,7 +898,7 @@ describe("Indexer", () => {
   it("accepts POLICY_RELOADED rows (cloud-driven hot reload event)", async () => {
     // Engine emits POLICY_RELOADED on a successful POST /admin/policy
     // hot-swap. Cloud must index it like any other audit event so
-    // operators see the change in the connection-detail audit log.
+    // operators see the change in the project-detail audit log.
     const { db, state, registry } = await buildHarness();
     const fetchFn = vi.fn(async () =>
       jsonResponse({
@@ -957,7 +957,7 @@ describe("Indexer", () => {
       "01HX0000000000000000000003",
     ]);
     const cursor = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursor?.lastId).toBe("01HX0000000000000000000003");
     expect(errors).toHaveLength(1);
@@ -972,7 +972,7 @@ describe("Indexer", () => {
             ...row("01HX0000000000000000000001"),
             agent_name: "claude-code",
             agent_version: "0.42.1",
-            agent_intent: "count active connections",
+            agent_intent: "count active projects",
             intent_source: "mcp_meta",
           },
         ],
@@ -985,7 +985,7 @@ describe("Indexer", () => {
     const persisted = state.auditRows[0]!;
     expect(persisted.agentName).toBe("claude-code");
     expect(persisted.agentVersion).toBe("0.42.1");
-    expect(persisted.agentIntent).toBe("count active connections");
+    expect(persisted.agentIntent).toBe("count active projects");
     expect(persisted.intentSource).toBe("mcp_meta");
   });
 
@@ -1097,9 +1097,9 @@ describe("Indexer", () => {
     expect(deleteCalls).toHaveLength(0);
   });
 
-  it("ignores connections that have no connections row AND no cursor row", async () => {
+  it("ignores projects that have no projects row AND no cursor row", async () => {
     const { db, state, registry } = await buildHarness();
-    state.customerByConnectionId.clear(); // TEST_CONN_A is now orphaned
+    state.customerByProjectId.clear(); // TEST_CONN_A is now orphaned
     const fetchFn = vi.fn() as unknown as typeof fetch;
     const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
     await ix.tick();
@@ -1126,7 +1126,7 @@ describe("Indexer error recording", () => {
     const { db, state, registry } = await buildHarness();
     state.cursorsById.set(CURSOR_ID, {
       id: CURSOR_ID,
-      connectionId: TEST_CONN_A,
+      projectId: TEST_CONN_A,
       lastId: "01HX0000000000000000000001",
       customerId: TEST_CUST_A,
       region: "eu",
@@ -1176,7 +1176,7 @@ describe("Indexer error recording", () => {
     await ix.tick();
 
     const cursor = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursor).toBeDefined();
     expect(cursor!.lastErrorAt).toBeInstanceOf(Date);
@@ -1204,13 +1204,13 @@ describe("Indexer error recording", () => {
     await ix.tick();
 
     const cursor = [...state.cursorsById.values()].find(
-      (c) => c.connectionId === TEST_CONN_A,
+      (c) => c.projectId === TEST_CONN_A,
     );
     expect(cursor).toBeDefined();
     expect(cursor!.lastError).toMatch(/simulated postgres outage/);
     expect(cursor!.lastErrorAt).toBeInstanceOf(Date);
     expect(onError).toHaveBeenCalledWith(expect.anything(), {
-      connectionId: TEST_CONN_A,
+      projectId: TEST_CONN_A,
       phase: "write",
     });
   });
@@ -1219,7 +1219,7 @@ describe("Indexer error recording", () => {
     const { db, state, registry } = await buildHarness();
     state.cursorsById.set(CURSOR_ID, {
       id: CURSOR_ID,
-      connectionId: TEST_CONN_A,
+      projectId: TEST_CONN_A,
       lastId: "01HX0000000000000000000001",
       customerId: TEST_CUST_A,
       region: "eu",
@@ -1263,7 +1263,7 @@ describe("Indexer error recording", () => {
     const { db, state, registry } = await buildHarness();
     state.cursorsById.set(CURSOR_ID, {
       id: CURSOR_ID,
-      connectionId: TEST_CONN_A,
+      projectId: TEST_CONN_A,
       lastId: "01HX0000000000000000000001",
       customerId: TEST_CUST_A,
       region: "eu",

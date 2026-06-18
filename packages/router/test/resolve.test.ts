@@ -1,11 +1,11 @@
 // resolveByToken — the single token-auth chokepoint the MCP proxy and the
 // /mcp/<token>/health probe both go through. These tests cover the pause
-// gate (pausable connections): a valid, active token whose parent connection
+// gate (pausable projects): a valid, active token whose parent project
 // is paused must resolve to { ok: false, reason: "paused" } so the caller can
 // return a distinct 403, NOT a token-not-found 404.
 //
 // Like indexer.test.ts, we hand-roll a tiny fake Drizzle Db — resolveByToken
-// issues exactly three selects (mcp_tokens lookup → connections → child
+// issues exactly three selects (mcp_tokens lookup → projects → child
 // databases), so a FIFO result queue is enough. The token format helpers and
 // HMAC are real (pure crypto, no IO); the fake ignores the WHERE and just
 // hands back the staged rows in order, which is all the gate decision needs.
@@ -22,7 +22,7 @@ const REGION = "eu" as const;
 const PEPPERS = new Map<string, Buffer>([["v1-test", randomBytes(32)]]);
 
 // FIFO fake: queue holds the result rows for each successive select(), in
-// call order — [tokenRows, connectionRows, databaseRows]. Both .limit() and
+// call order — [tokenRows, projectRows, databaseRows]. Both .limit() and
 // .orderBy() are terminal in resolveByToken, so both resolve the next batch.
 function fakeDb(queue: unknown[][]): Db {
   const start = () => {
@@ -45,8 +45,8 @@ function fakeDb(queue: unknown[][]): Db {
   return { select: () => start() } as unknown as Db;
 }
 
-const TOKEN_ROW = { id: "tok-1", connectionId: "conn-1" };
-function connectionRow(pausedAt: Date | null) {
+const TOKEN_ROW = { id: "tok-1", projectId: "conn-1" };
+function projectRow(pausedAt: Date | null) {
   return {
     id: "conn-1",
     customerId: "cust-1",
@@ -56,25 +56,25 @@ function connectionRow(pausedAt: Date | null) {
     createdAt: new Date(0),
   };
 }
-const DB_ROW = { id: "cdb-1", connectionId: "conn-1", name: "main" };
+const DB_ROW = { id: "cdb-1", projectId: "conn-1", name: "main" };
 
 describe("resolveByToken — pause gate", () => {
-  it("resolves ok for a valid token on a non-paused connection", async () => {
+  it("resolves ok for a valid token on a non-paused project", async () => {
     const { plaintext } = generateToken("test");
-    const db = fakeDb([[TOKEN_ROW], [connectionRow(null)], [DB_ROW]]);
+    const db = fakeDb([[TOKEN_ROW], [projectRow(null)], [DB_ROW]]);
     const result = await resolveByToken(db, plaintext, REGION, PEPPERS);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.tokenId).toBe("tok-1");
-      expect(result.connection.id).toBe("conn-1");
+      expect(result.project.id).toBe("conn-1");
       expect(result.databases).toHaveLength(1);
     }
   });
 
-  it("rejects with reason 'paused' when the parent connection is paused", async () => {
+  it("rejects with reason 'paused' when the parent project is paused", async () => {
     const { plaintext } = generateToken("test");
-    // Active token resolves, but the connection carries a non-null paused_at.
-    const db = fakeDb([[TOKEN_ROW], [connectionRow(new Date())], [DB_ROW]]);
+    // Active token resolves, but the project carries a non-null paused_at.
+    const db = fakeDb([[TOKEN_ROW], [projectRow(new Date())], [DB_ROW]]);
     const result = await resolveByToken(db, plaintext, REGION, PEPPERS);
     expect(result).toEqual({ ok: false, reason: "paused" });
   });

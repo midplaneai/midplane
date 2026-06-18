@@ -85,10 +85,10 @@ export class FlyMachineSpawner implements Spawner {
     const regionCfg = this.regions[opts.region];
     if (!regionCfg) throw new Error(`unknown region: ${opts.region}`);
     const app = regionCfg.flyApp;
-    const name = this.machineName(opts.connectionId);
+    const name = this.machineName(opts.projectId);
 
     // Create the machine, or ADOPT an existing one of the same name. The
-    // machine name is the connection's stable identity in Fly, but the
+    // machine name is the project's stable identity in Fly, but the
     // ContainerRegistry that decides spawn-vs-reuse is in-memory — a web-app
     // redeploy (bluegreen wipes the process) or a second web instance loses
     // that entry, so we'd blind-create and Fly would 409 "already_exists".
@@ -227,11 +227,11 @@ export class FlyMachineSpawner implements Spawner {
     };
   }
 
-  // Stable per-connection machine name. Fly enforces uniqueness on it, which
+  // Stable per-project machine name. Fly enforces uniqueness on it, which
   // is exactly what lets a second web instance / a post-redeploy request find
-  // the connection's existing engine instead of double-spawning.
-  private machineName(connectionId: string): string {
-    return `mcp-${connectionId.slice(0, 16).toLowerCase()}`;
+  // the project's existing engine instead of double-spawning.
+  private machineName(projectId: string): string {
+    return `mcp-${projectId.slice(0, 16).toLowerCase()}`;
   }
 
   private async getMachineByName(
@@ -283,12 +283,12 @@ export class FlyMachineSpawner implements Spawner {
     // here only — never in the YAML file content.
     const dsnEnv: Record<string, string> = {};
     for (const db of opts.databases) {
-      dsnEnv[dsnEnvVarFor(db.connectionDatabaseId)] = db.dsn;
+      dsnEnv[dsnEnvVarFor(db.projectDatabaseId)] = db.dsn;
     }
     const policyYaml = serializeMultiDbPolicyToYaml(
       opts.databases.map((db) => ({
         name: db.name,
-        connectionDatabaseId: db.connectionDatabaseId,
+        projectDatabaseId: db.projectDatabaseId,
         tableAccess: db.tableAccess,
         tenantScope: db.tenantScope,
         guardrails: db.guardrails,
@@ -301,12 +301,12 @@ export class FlyMachineSpawner implements Spawner {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        // Machine name derived from the connection ULID, lowercased to
-        // match Fly's naming rules. Stable for the connection's lifetime;
-        // sibling tokens on the same connection share one machine, and a
+        // Machine name derived from the project ULID, lowercased to
+        // match Fly's naming rules. Stable for the project's lifetime;
+        // sibling tokens on the same project share one machine, and a
         // post-redeploy request adopts it by this name. The plaintext token
         // never reaches the Fly API surface.
-        name: this.machineName(opts.connectionId),
+        name: this.machineName(opts.projectId),
         region: flyRegion,
         config: {
           image: this.image,
@@ -374,7 +374,7 @@ export class FlyMachineSpawner implements Spawner {
     });
     if (!res.ok) {
       const text = await res.text();
-      // Name collision: a machine for this connection already exists (our
+      // Name collision: a machine for this project already exists (our
       // in-memory registry was lost to a redeploy, or another web instance
       // owns it). Signal the caller to adopt it rather than failing the spawn.
       if (res.status === 409 || text.includes("already_exists")) return null;
@@ -445,7 +445,7 @@ export class FlyMachineSpawner implements Spawner {
     const body = serializeMultiDbPolicyToYaml(
       opts.databases.map((db) => ({
         name: db.name,
-        connectionDatabaseId: db.connectionDatabaseId,
+        projectDatabaseId: db.projectDatabaseId,
         tableAccess: db.tableAccess,
         tenantScope: db.tenantScope,
         guardrails: db.guardrails,

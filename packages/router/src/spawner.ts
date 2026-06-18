@@ -6,13 +6,13 @@
 //   DockerSpawner       local `docker run` (dev / Playwright / no-Fly).
 //   FlyMachineSpawner   Fly Machines API (production; needs FLY_API_TOKEN).
 //
-// The registry is the same in both cases: a per-connection map of running
-// containers, with a per-connection mutex so concurrent first-requests
+// The registry is the same in both cases: a per-project map of running
+// containers, with a per-project mutex so concurrent first-requests
 // don't double-spawn, and a 30-minute idle timer that triggers stop().
 //
 // Keying note (PR2 of mcp_url_auth_security): the registry keys on the
 // CONNECTION id, not the plaintext token. The hybrid multi-token model
-// shares one container across every sibling token on a connection — the
+// shares one container across every sibling token on a project — the
 // container's session-frozen X-Midplane-Token-Id (set by the proxy from
 // the matched mcp_tokens row) is what discriminates audit attribution.
 // Pre-PR2, the registry keyed on the plaintext token, which was a leak
@@ -36,7 +36,7 @@ export interface SpawnedContainer {
 }
 
 /** One DB the OSS container will be configured to reach. The spawner
- *  injects each DSN as an env var (MIDPLANE_DSN_<connectionDatabaseId>)
+ *  injects each DSN as an env var (MIDPLANE_DSN_<projectDatabaseId>)
  *  and writes a YAML `databases:` block referencing those env vars via
  *  ${...} interpolation — DSNs never touch disk. */
 export interface SpawnDatabase {
@@ -44,7 +44,7 @@ export interface SpawnDatabase {
   name: string;
   /** Stable id used to derive the DSN env var name. ULID-shaped so it
    *  matches OSS env-interpolation regex `[A-Z_][A-Z0-9_]*`. */
-  connectionDatabaseId: string;
+  projectDatabaseId: string;
   dsn: string;
   tableAccess: TableAccessPolicy;
   /** Strict-mode tenant_scope envelope (OSS 0.5.0). Inert configs
@@ -57,11 +57,11 @@ export interface SpawnDatabase {
 }
 
 export interface SpawnOptions {
-  /** Stable parent-connection ULID. Used as the registry key, the
+  /** Stable parent-project ULID. Used as the registry key, the
    *  container name suffix (lowercased), and (in production) the Fly
    *  machine name suffix. Token plaintext is NEVER passed to the
    *  spawner. */
-  connectionId: string;
+  projectId: string;
   region: Region;
   /** One container per CONNECTION, N>=1 DBs per container. The cloud
    *  always emits the multi-DB YAML shape, even for N=1; OSS 0.2.0
@@ -82,7 +82,7 @@ interface RegistryEntry {
 }
 
 export interface ActiveContainer {
-  connectionId: string;
+  projectId: string;
   region: Region;
   host: string;
   port: number;
@@ -109,7 +109,7 @@ export class ContainerRegistry {
   }
 
   async acquire(opts: SpawnOptions): Promise<SpawnedContainer> {
-    const key = opts.connectionId;
+    const key = opts.projectId;
     const existing = this.entries.get(key);
     if (existing) {
       this.touch(key, existing);
@@ -137,18 +137,18 @@ export class ContainerRegistry {
     return promise;
   }
 
-  /** Returns the live container for `connectionId` if one is up, else
+  /** Returns the live container for `projectId` if one is up, else
    *  `null`. Does NOT spawn and does NOT block on an in-flight spawn —
    *  used by cloud admin paths (policy hot-reload) that want to mutate
    *  a running engine without keeping it warm. A concurrent spawn that
    *  lands after this call is fine: the saver writes Postgres before
    *  calling here, so the new container's spawn-time read of
    *  `tableAccess` already picks up the change. */
-  getActive(connectionId: string): ActiveContainer | null {
-    const entry = this.entries.get(connectionId);
+  getActive(projectId: string): ActiveContainer | null {
+    const entry = this.entries.get(projectId);
     if (!entry) return null;
     return {
-      connectionId,
+      projectId,
       region: entry.region,
       host: entry.container.host,
       port: entry.container.port,
@@ -156,13 +156,13 @@ export class ContainerRegistry {
   }
 
   /** Snapshot of active containers — used by the audit indexer to know
-   *  which connections to poll. Returned as a plain array so callers
+   *  which projects to poll. Returned as a plain array so callers
    *  can iterate without holding a reference into the live map. */
   list(): ActiveContainer[] {
     const out: ActiveContainer[] = [];
-    for (const [connectionId, entry] of this.entries) {
+    for (const [projectId, entry] of this.entries) {
       out.push({
-        connectionId,
+        projectId,
         region: entry.region,
         host: entry.container.host,
         port: entry.container.port,
@@ -171,21 +171,21 @@ export class ContainerRegistry {
     return out;
   }
 
-  async invalidate(connectionId: string): Promise<void> {
+  async invalidate(projectId: string): Promise<void> {
     // A concurrent acquire() may have a spawn in flight when we're called
-    // (typical during connection rotation: a request started just before
+    // (typical during project rotation: a request started just before
     // the customer paste-rotated). If we returned now without awaiting it,
     // the spawn would land in `entries` AFTER our invalidate and run with
     // the pre-rotation DSN until the next idle expiry. Wait for it to
     // settle (success or failure), then evict whatever ended up there.
-    const pending = this.inflight.get(connectionId);
+    const pending = this.inflight.get(projectId);
     if (pending) {
       await pending.catch(() => undefined);
     }
-    const entry = this.entries.get(connectionId);
+    const entry = this.entries.get(projectId);
     if (!entry) return;
     clearTimeout(entry.idleTimer);
-    this.entries.delete(connectionId);
+    this.entries.delete(projectId);
     await entry.container.stop().catch(() => undefined);
   }
 
