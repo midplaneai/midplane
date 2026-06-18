@@ -218,6 +218,10 @@ export async function createProject(
   const expiresAt = new Date(Date.now() + NINETY_DAYS_MS);
 
   const db = getDb(customer.region);
+  // The project the first DB + default token attach to: a reused empty project
+  // (the auto-seeded "Default") or, failing that, a newly inserted one.
+  // Assigned inside the txn below.
+  let resolvedProjectId = id;
   const defaultTokenPlaintext = await db.transaction(async (tx) => {
     // Plan caps (decisions D4/D8). Lock the customers row first so concurrent
     // creates for this org serialize and the counts can't drift before the
@@ -231,7 +235,38 @@ export async function createProject(
         .for("update")
         .limit(1);
     }
-    if (Number.isFinite(caps.projects)) {
+    // Reuse the customer's empty (database-less) project if one exists — the
+    // auto-seeded "Default" (ensureDefaultProject), or any project with no
+    // databases yet. Attaching the first DB + default token to an existing
+    // project does NOT consume a new project slot, so the project cap is
+    // enforced ONLY when we insert a new project below. This is what lets a
+    // Free customer (cap = 1, auto-seeded at signup) add their first database
+    // instead of tripping the cap with a second project.
+    const emptyProject = await tx
+      .select({ id: projects.id, name: projects.name })
+      .from(projects)
+      .where(
+        and(
+          eq(projects.customerId, customer.id),
+          sql`NOT EXISTS (SELECT 1 FROM project_databases pd WHERE pd.project_id = ${projects.id})`,
+        ),
+      )
+      .limit(1);
+    if (emptyProject[0]) {
+      resolvedProjectId = emptyProject[0].id;
+      // Let the first DSN name the project if the user supplied a name and the
+      // reused project is still unnamed or the auto-seed placeholder "Default".
+      const supplied = normalizeName(name);
+      if (
+        supplied &&
+        (emptyProject[0].name === null || emptyProject[0].name === "Default")
+      ) {
+        await tx
+          .update(projects)
+          .set({ name: supplied })
+          .where(eq(projects.id, resolvedProjectId));
+      }
+    } else if (Number.isFinite(caps.projects)) {
       const existing = await tx
         .select({ id: projects.id })
         .from(projects)
@@ -249,29 +284,31 @@ export async function createProject(
         throw new PlanLimitError("tokens", caps.tokens, plan);
       }
     }
-    await tx.insert(projects).values({
-      id,
-      customerId: customer.id,
-      region: customer.region,
-      name: normalizeName(name),
-    });
+    if (!emptyProject[0]) {
+      await tx.insert(projects).values({
+        id,
+        customerId: customer.id,
+        region: customer.region,
+        name: normalizeName(name),
+      });
+    }
     await tx.insert(projectDatabases).values({
       id: childId,
-      projectId: id,
+      projectId: resolvedProjectId,
       name: DEFAULT_DATABASE_NAME,
       encryptedDsn: ciphertext,
       kmsKeyId,
       tableAccess,
     });
-    // Default token, ATOMIC with the cap check + project insert (closes
-    // the over-cap race). The project is brand-new so the "default" name
-    // can't collide; ownership is guaranteed (we just inserted it), so no
-    // pre-check is needed.
+    // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
+    // race). This is the project's FIRST token — an empty (reused or new)
+    // project has none, so the "default" name can't collide; ownership is
+    // guaranteed (the project belongs to this customer), so no pre-check needed.
     const minted = await insertTokenRow(
       tx,
       {
         id: defaultTokenId,
-        projectId: id,
+        projectId: resolvedProjectId,
         name: "default",
         createdByUserId: actorUserId,
         expiresAt,
@@ -286,11 +323,11 @@ export async function createProject(
   // fail-soft posture — an audit hiccup must not undo the durable mint).
   try {
     await emitTokenAuditRow(customer, {
-      projectId: id,
+      projectId: resolvedProjectId,
       mcpTokenId: defaultTokenId,
       eventType: "TOKEN_CREATED",
       payload: {
-        project_id: id,
+        project_id: resolvedProjectId,
         token_id: defaultTokenId,
         token_name: "default",
         expires_at: expiresAt.toISOString(),
@@ -301,7 +338,43 @@ export async function createProject(
     console.error("[createProject] default TOKEN_CREATED audit failed", err);
   }
 
-  return { id, defaultTokenPlaintext };
+  return { id: resolvedProjectId, defaultTokenPlaintext };
+}
+
+// Idempotently seed an empty "Default" project for a customer at onboarding so a
+// new customer lands on a ready project ("add a database / connect your agent")
+// instead of having to create a container first (decision D6/D7-A). An EMPTY
+// project carries no token and triggers no engine spawn, so it never reaches the
+// proxy/spawner zero-database invariants — the first database + default token are
+// minted later by createProject(), which reuses this project.
+//
+// Race-safe: an xact-scoped advisory lock keyed on the customer serializes
+// concurrent onboards (a double-submitted region form, two tabs) so they can't
+// each seed a different default — mirrors getOrCreateOrgForUser. No-op when the
+// customer already has any project. Used by both the cloud signup path
+// (upsertCustomerRegion) and self-host boot (ensureImplicitCustomer); self-host
+// is uncapped, so the seed never trips a plan limit.
+export async function ensureDefaultProject(
+  customerId: string,
+  region: Region,
+): Promise<void> {
+  await getDb(region).transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${customerId}, 0))`,
+    );
+    const existing = await tx
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.customerId, customerId))
+      .limit(1);
+    if (existing[0]) return;
+    await tx.insert(projects).values({
+      id: ulid(),
+      customerId,
+      region,
+      name: "Default",
+    });
+  });
 }
 
 export function isValidDsn(s: unknown): s is string {

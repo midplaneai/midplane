@@ -476,6 +476,7 @@ describe("createProject plan caps", () => {
     // Free allows 1 project. Stage the customers FOR UPDATE select, then
     // the project-count select returning one existing row → 1 >= 1.
     handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([]); // empty-project detection → none (existing project has a DB), so the create-new path runs the project cap
     handle.queueSelect([{ id: "conn-existing" }]); // project count
     const err = await createProject(customer, DSN, null, "read", ACTOR, {
       plan: "free",
@@ -499,6 +500,7 @@ describe("createProject plan caps", () => {
       seats: 10,
     };
     handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([]); // empty-project detection → none → create-new path
     handle.queueSelect([{ id: "c1" }]); // project count → 1 < 5 ✓
     handle.queueSelect([{ id: "c1" }]); // countUsableTokens: project ids
     handle.queueSelect([{ count: 1 }]); // countUsableTokens: usable count → 1 >= 1
@@ -519,6 +521,7 @@ describe("createProject plan caps", () => {
     );
     // Under cap: 0 existing projects, 0 usable tokens (Free 1 conn / 5 tokens).
     handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([]); // empty-project detection → none → create-new path
     handle.queueSelect([]); // project count → 0 < 1 ✓
     handle.queueSelect([]); // countUsableTokens: project ids → none → 0 < 1 ✓
     const result = await createProject(customer, DSN, null, "read", ACTOR, {
@@ -536,6 +539,61 @@ describe("createProject plan caps", () => {
     const tokenIdx = inserts.findIndex((c) => c.table === mcpTokens);
     expect(connIdx, "project must be inserted").toBeGreaterThanOrEqual(0);
     expect(tokenIdx, "default token must be inserted").toBeGreaterThan(connIdx);
+  });
+
+  it("reuses the customer's empty project instead of creating a second one (D7-A)", async () => {
+    const { createProject } = await import("../src/lib/projects.ts");
+    const { CAPS } = await import("../src/lib/plan.ts");
+    const {
+      projects: projectsTable,
+      projectDatabases,
+      mcpTokens,
+    } = await import("@midplane-cloud/db");
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "empty-default", name: "Default" }]); // empty-project detection → FOUND (the auto-seeded Default)
+    handle.queueSelect([{ id: "empty-default" }]); // countUsableTokens: project ids
+    handle.queueSelect([{ count: 0 }]); // countUsableTokens: usable → 0 < 5 ✓
+    const result = await createProject(customer, DSN, null, "read", ACTOR, {
+      plan: "free",
+      caps: CAPS.free,
+    });
+    // First DB + token attach to the reused empty project — NO second project
+    // is inserted, so a Free customer (cap = 1, auto-seeded) is never blocked.
+    expect(result.id).toBe("empty-default");
+    const inserts = handle.calls.filter((c) => c.op === "insert");
+    expect(inserts.some((c) => c.table === projectsTable)).toBe(false);
+    expect(inserts.some((c) => c.table === projectDatabases)).toBe(true);
+    expect(inserts.some((c) => c.table === mcpTokens)).toBe(true);
+  });
+});
+
+describe("ensureDefaultProject", () => {
+  it("seeds one empty project (no DB, no token) and is idempotent", async () => {
+    const { ensureDefaultProject } = await import("../src/lib/projects.ts");
+    const {
+      projects: projectsTable,
+      projectDatabases,
+      mcpTokens,
+    } = await import("@midplane-cloud/db");
+    // First onboarding: no project yet → seed one empty project.
+    handle.queueSelect([]); // existence check → none
+    await ensureDefaultProject(customer.id, customer.region);
+    const seeded = handle.calls.filter((c) => c.op === "insert");
+    expect(
+      seeded.some((c) => c.table === projectsTable),
+      "an empty project is inserted",
+    ).toBe(true);
+    // Empty by construction: no database, no token minted — so it never reaches
+    // the proxy / spawner zero-database invariants (the D6 safety property).
+    expect(seeded.some((c) => c.table === projectDatabases)).toBe(false);
+    expect(seeded.some((c) => c.table === mcpTokens)).toBe(false);
+    // Second call (returning user / double-submitted onboard): a project already
+    // exists → no-op, no second insert.
+    const before = handle.calls.filter((c) => c.op === "insert").length;
+    handle.queueSelect([{ id: "existing" }]); // existence check → found
+    await ensureDefaultProject(customer.id, customer.region);
+    const after = handle.calls.filter((c) => c.op === "insert").length;
+    expect(after, "idempotent: no second project inserted").toBe(before);
   });
 });
 
