@@ -679,6 +679,10 @@ export default async function ConnectionWorkspace({
           connectionId={conn.id}
           connectionName={conn.name}
           region={conn.region}
+          databases={databases.map((d) => ({
+            connectionDatabaseId: d.id,
+            name: d.name,
+          }))}
           tokens={tokens}
           createAction={createTokenAction}
           revokeAction={revokeTokenAction}

@@ -3,6 +3,11 @@
 import { useMemo, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DbAccessControl,
+  type ScopeDbAccess,
+  type ScopeDbState,
+} from "@/components/scope/db-access-control";
 import { writeConsentGrants } from "@/app/oauth/consent/actions";
 
 // Allow / Deny + per-database scope picker for the OAuth consent screen.
@@ -20,8 +25,8 @@ import { writeConsentGrants } from "@/app/oauth/consent/actions";
 // server action. Prop types are declared inline (not imported from the
 // server-only scope-grants lib) so nothing server-side leaks into the bundle.
 
-type Access = "read" | "write";
-type DbState = "none" | Access;
+type Access = ScopeDbAccess;
+type DbState = ScopeDbState;
 
 interface ConsentDatabase {
   connectionDatabaseId: string;
@@ -167,7 +172,7 @@ export function ConsentForm({
                     <span className="font-mono text-sm text-foreground">
                       {db.name}
                     </span>
-                    <AccessControl
+                    <DbAccessControl
                       value={state[db.connectionDatabaseId] ?? "none"}
                       disabled={pending}
                       onChange={(v) => setDb(db.connectionDatabaseId, v)}
@@ -217,53 +222,3 @@ export function ConsentForm({
   );
 }
 
-// Three-way per-DB control: No access / Read / Write. A segmented set of
-// buttons (accessible, no native-select styling drift) using semantic tokens.
-function AccessControl({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: DbState;
-  disabled: boolean;
-  onChange: (v: DbState) => void;
-}) {
-  const options: Array<{ v: DbState; label: string }> = [
-    { v: "none", label: "No access" },
-    { v: "read", label: "Read" },
-    { v: "write", label: "Write" },
-  ];
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Database access"
-      className="inline-flex overflow-hidden border border-border"
-    >
-      {options.map((o) => {
-        const active = value === o.v;
-        return (
-          <button
-            key={o.v}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            disabled={disabled}
-            onClick={() => onChange(o.v)}
-            className={[
-              "px-2.5 py-1 text-xs transition-colors",
-              active
-                ? o.v === "write"
-                  ? "bg-warn/15 font-medium text-warn"
-                  : o.v === "read"
-                    ? "bg-allow/15 font-medium text-allow"
-                    : "bg-secondary font-medium text-foreground"
-                : "text-muted-foreground hover:bg-secondary/60",
-            ].join(" ")}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}

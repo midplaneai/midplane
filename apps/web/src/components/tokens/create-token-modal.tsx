@@ -5,6 +5,10 @@ import { Plus, X } from "lucide-react";
 import { useId, useState, useTransition } from "react";
 
 import { ConnectAgentGuide } from "@/components/connections/connect-agent-guide";
+import {
+  DbAccessControl,
+  type ScopeDbState,
+} from "@/components/scope/db-access-control";
 import { ShowOnceUrl } from "@/components/show-once-url";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,7 +35,11 @@ import { cn } from "@/lib/utils";
 
 export type CreateTokenAction = (
   connectionId: string,
-  input: { name: string; expiresInDays: 30 | 90 | 365 | null },
+  input: {
+    name: string;
+    expiresInDays: 30 | 90 | 365 | null;
+    scope?: Array<{ connectionDatabaseId: string; access: "read" | "write" }>;
+  },
 ) => Promise<
   | { ok: true; mcpUrl: string; id: string; name: string }
   | {
@@ -50,6 +58,9 @@ export type CreateTokenAction = (
 interface CreateTokenModalProps {
   connectionId: string;
   action: CreateTokenAction;
+  /** This connection's databases, for the per-DB scope picker (P6.1). The
+   *  token is granted access only to the ones selected, at the chosen access. */
+  databases?: Array<{ connectionDatabaseId: string; name: string }>;
   /** Used to label the MCP server key in the setup snippets. */
   connectionName?: string | null;
   /** Region host for the setup snippets' example URL. */
@@ -67,6 +78,17 @@ interface CreateTokenModalProps {
   limitReached?: { limit: number; plan: string; upgradeUrl: string };
 }
 
+// Default every database to read access — a new token is read-only on the whole
+// connection out of the box (least-privilege but usable); the user opts specific
+// DBs up to write or down to no-access.
+function defaultScope(
+  databases: Array<{ connectionDatabaseId: string; name: string }>,
+): Record<string, ScopeDbState> {
+  const out: Record<string, ScopeDbState> = {};
+  for (const db of databases) out[db.connectionDatabaseId] = "read";
+  return out;
+}
+
 const EXPIRY_OPTIONS = [
   { value: "30", label: "30 days", days: 30 },
   { value: "90", label: "90 days (recommended)", days: 90 },
@@ -79,6 +101,7 @@ const DEFAULT_EXPIRY = "90";
 export function CreateTokenModal({
   connectionId,
   action,
+  databases = [],
   connectionName,
   region,
   triggerLabel = "Connect an agent",
@@ -87,6 +110,12 @@ export function CreateTokenModal({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [expiry, setExpiry] = useState<string>(DEFAULT_EXPIRY);
+  // Per-DB scope. Default every DB to "read" so a new token is least-privilege
+  // (read-only on the whole connection) yet immediately usable; the user flips
+  // specific DBs to write or "no access". Keyed by connectionDatabaseId.
+  const [scope, setScope] = useState<Record<string, ScopeDbState>>(() =>
+    defaultScope(databases),
+  );
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   // Set alongside `error` only when the failure is a plan cap, so the form
@@ -106,9 +135,14 @@ export function CreateTokenModal({
   const remaining = useUnlockCountdown(reveal, 3);
   const locked = reveal && remaining > 0;
 
+  const selectedScopeCount = Object.values(scope).filter(
+    (v) => v !== "none",
+  ).length;
+
   function reset() {
     setName("");
     setExpiry(DEFAULT_EXPIRY);
+    setScope(defaultScope(databases));
     setError(null);
     setUpgradeUrl(null);
     setMcpUrl(null);
@@ -145,10 +179,28 @@ export function CreateTokenModal({
       return;
     }
 
+    const selections = databases
+      .map((db) => ({
+        connectionDatabaseId: db.connectionDatabaseId,
+        access: scope[db.connectionDatabaseId] ?? "none",
+      }))
+      .filter((s): s is { connectionDatabaseId: string; access: "read" | "write" } =>
+        s.access !== "none",
+      );
+    // Require at least one database when this connection has any — a token with
+    // no databases selected would be useless, and (because empty PAT grants
+    // mean "unscoped = full" on the proxy) silently full-access, the opposite
+    // of what picking "no access" everywhere implies.
+    if (databases.length > 0 && selections.length === 0) {
+      setError("Grant the agent access to at least one database.");
+      return;
+    }
+
     startTransition(async () => {
       const result = await action(connectionId, {
         name: trimmed,
         expiresInDays: choice.days,
+        scope: selections,
       });
       if (result.ok) {
         setMcpUrl(result.mcpUrl);
@@ -274,6 +326,43 @@ export function CreateTokenModal({
                   ))}
                 </select>
               </div>
+              {databases.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Database access</Label>
+                    <span className="text-[11px] text-subtle">
+                      {selectedScopeCount} of {databases.length} selected
+                    </span>
+                  </div>
+                  <div className="space-y-2 rounded-md border border-border bg-background p-3">
+                    {databases.map((db) => (
+                      <div
+                        key={db.connectionDatabaseId}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span className="truncate font-mono text-sm text-foreground">
+                          {db.name}
+                        </span>
+                        <DbAccessControl
+                          value={scope[db.connectionDatabaseId] ?? "none"}
+                          disabled={pending}
+                          onChange={(v) =>
+                            setScope((s) => ({
+                              ...s,
+                              [db.connectionDatabaseId]: v,
+                            }))
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-subtle">
+                    The agent can only reach the databases you select, at the
+                    access you grant. The connection&apos;s own policy still
+                    applies on top.
+                  </p>
+                </div>
+              ) : null}
               {error ? (
                 <p
                   role="alert"

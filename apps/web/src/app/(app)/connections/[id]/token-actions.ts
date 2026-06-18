@@ -25,6 +25,7 @@ import {
   createToken,
   revokeToken,
 } from "@/lib/tokens";
+import { setTokenGrants } from "@/lib/scope-grants";
 
 const MAX_TOKEN_NAME_LENGTH = 64;
 
@@ -45,7 +46,15 @@ const VALID_EXPIRY_DAYS = new Set([30, 90, 365]);
  *  string code the client renders as inline form copy. */
 export async function createTokenAction(
   connectionId: string,
-  input: { name: string; expiresInDays: 30 | 90 | 365 | null },
+  input: {
+    name: string;
+    expiresInDays: 30 | 90 | 365 | null;
+    // Per-agent DB scope (P6.1), keyed to the new token. Each entry is a DB of
+    // THIS connection at the granted access. Empty/omitted → no grant rows →
+    // the token is unscoped (full access), the back-compat path for
+    // API-created tokens. The dashboard picker always sends a non-empty scope.
+    scope?: Array<{ connectionDatabaseId: string; access: "read" | "write" }>;
+  },
 ): Promise<CreateTokenResult> {
   const customer = await currentCustomer();
   if (!customer) return { ok: false, error: "internal" };
@@ -97,6 +106,29 @@ export async function createTokenAction(
       { kid: firstKid, pepper: pepperBuf },
     );
     if (!result) return { ok: false, error: "not_found" };
+
+    // Persist the token's DB scope (P6.1), keyed to the new token id. If this
+    // fails we must NOT leave an unscoped (= full-access) token behind, so
+    // compensate by revoking the just-created token and surfacing an error —
+    // the user retries and gets a correctly-scoped token. Skipped when the
+    // caller sent no scope (API/legacy path → unscoped by design).
+    if (input.scope && input.scope.length > 0) {
+      try {
+        await setTokenGrants(customer, {
+          mcpTokenId: result.id,
+          connectionId,
+          selections: input.scope,
+        });
+      } catch (err) {
+        console.error("[createTokenAction] scope write failed; revoking", err);
+        await revokeToken(customer, connectionId, result.id, {
+          reason: "user_action",
+          actorUserId: userId,
+        }).catch(() => undefined);
+        return { ok: false, error: "internal" };
+      }
+    }
+
     // mintMcpUrl turns the bare plaintext (mp_live_…/mp_test_…) into the
     // full https://<region>.midplane.ai/mcp/<plaintext> URL the agent
     // pastes into Cursor. Returning the full URL keeps the client modal
