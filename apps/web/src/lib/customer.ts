@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import { ulid } from "ulid";
 
@@ -8,6 +8,7 @@ import type { Region } from "@midplane-cloud/kms";
 import { getAuth } from "./auth.ts";
 import { getActorEmail, getOrgContext } from "./org-context.ts";
 import { bootRegion } from "./region-context.ts";
+import { resolveSelfHostAccess } from "./self-host-gate.ts";
 import {
   isSelfHost,
   SELF_HOST_CUSTOMER_ID,
@@ -27,22 +28,47 @@ import {
 // One Midplane customer == one organization. Org members are the actors who
 // can sign in and act on its behalf.
 export async function currentCustomer(): Promise<Customer | null> {
-  // Self-host: one tenant. Any authenticated user resolves to the single
-  // implicit customer (seeded at boot by ensureImplicitCustomer). We still
-  // require an authed session so an anonymous request returns null and the
-  // (app) layout's gate holds. orgId is deliberately NOT consulted — there's no
-  // org-creation dance in self-host, and SELF_HOST_CUSTOMER_ID is the id every
-  // RLS bind (audit/tokens/connections) and `region = …` filter keys on, so a
-  // returning user can never mint a second customer.
+  // Self-host: one implicit tenant (seeded at boot by ensureImplicitCustomer).
+  // Access requires ACCEPTED MEMBERSHIP (or being the claimed owner) — NOT just
+  // a session. An invited email can sign up (the gate allows it), but gets NO
+  // tenant data until acceptInvitation writes their member row; an unaccepted,
+  // abandoned, or REVOKED invite therefore never yields a usable session, and
+  // removing a member cuts access. The claimed owner is always resolved so an
+  // instance can't lock its owner out. orgId is NOT consulted —
+  // SELF_HOST_CUSTOMER_ID is fixed, so a returning user can never mint a second
+  // customer. See lib/self-host-gate.ts (resolveSelfHostAccess).
   if (isSelfHost()) {
-    const { userId } = await getOrgContext();
-    if (!userId) return null;
+    const session = await getAuth().api.getSession({ headers: await headers() });
+    if (!session?.user.id) return null;
+    const userId = session.user.id;
     const db = getDb(SELF_HOST_REGION);
-    const rows = await db
-      .select()
-      .from(customers)
-      .where(eq(customers.id, SELF_HOST_CUSTOMER_ID));
-    return rows[0] ?? null;
+    const customer = (
+      await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, SELF_HOST_CUSTOMER_ID))
+    )[0];
+    if (!customer) return null;
+    const isMember =
+      (
+        await db
+          .select({ id: member.id })
+          .from(member)
+          .where(
+            and(
+              eq(member.userId, userId),
+              eq(member.organizationId, SELF_HOST_ORG_ID),
+            ),
+          )
+          .limit(1)
+      ).length > 0;
+    return resolveSelfHostAccess({
+      isMember,
+      sessionEmail: session.user.email ?? null,
+      ownerEmail: customer.ownerEmail,
+    })
+      ? customer
+      : null;
   }
 
   const { orgId } = await getOrgContext();

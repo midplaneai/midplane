@@ -169,3 +169,93 @@ describe("linkSelfHostOwnerMember", () => {
     expect(inserts).toHaveLength(0);
   });
 });
+
+describe("resolveSelfHostAccess", () => {
+  it("grants access to an accepted member", async () => {
+    const { resolveSelfHostAccess } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    expect(
+      resolveSelfHostAccess({
+        isMember: true,
+        sessionEmail: "mate@team.com",
+        ownerEmail: "founder@team.com",
+      }),
+    ).toBe(true);
+  });
+
+  it("grants access to the claimed owner even without a member row", async () => {
+    const { resolveSelfHostAccess } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    expect(
+      resolveSelfHostAccess({
+        isMember: false,
+        sessionEmail: "Founder@Team.com",
+        ownerEmail: "founder@team.com",
+      }),
+    ).toBe(true);
+  });
+
+  it("DENIES a bare session that is neither a member nor the owner", async () => {
+    // The crux: signed up via a pending invite, but hasn't accepted (or it was
+    // revoked) → no member row, not the owner → no tenant access.
+    const { resolveSelfHostAccess } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    expect(
+      resolveSelfHostAccess({
+        isMember: false,
+        sessionEmail: "invited@team.com",
+        ownerEmail: "founder@team.com",
+      }),
+    ).toBe(false);
+  });
+
+  it("denies when there is no owner_email or no session email", async () => {
+    const { resolveSelfHostAccess } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    expect(
+      resolveSelfHostAccess({
+        isMember: false,
+        sessionEmail: "invited@team.com",
+        ownerEmail: null,
+      }),
+    ).toBe(false);
+    expect(
+      resolveSelfHostAccess({
+        isMember: false,
+        sessionEmail: null,
+        ownerEmail: "founder@team.com",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("selfHostNonMemberRedirect", () => {
+  it("sends a non-member with a pending invite to its accept page", async () => {
+    selectResults = [[{ id: "inv_1", status: "pending", expiresAt: future }]];
+    const { selfHostNonMemberRedirect } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    expect(await selfHostNonMemberRedirect("invited@team.com")).toBe(
+      "/accept-invitation/inv_1",
+    );
+  });
+
+  it("sends a non-member with only expired/used invites to sign-in", async () => {
+    selectResults = [[{ id: "inv_2", status: "accepted", expiresAt: past }]];
+    const { selfHostNonMemberRedirect } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    expect(await selfHostNonMemberRedirect("ghost@team.com")).toBe("/sign-in");
+  });
+
+  it("sends an emailless session to sign-in without a DB read", async () => {
+    const { selfHostNonMemberRedirect } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    expect(await selfHostNonMemberRedirect(null)).toBe("/sign-in");
+  });
+});
