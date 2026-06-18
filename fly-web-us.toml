@@ -46,7 +46,7 @@ primary_region = "iad"
 #   FLY_APP_US="midplane-us"
 #   FLY_REGION_US="iad"
 #   MIDPLANE_PUBLIC_HOST_US               # e.g. "us.midplane.ai"
-#   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.9.0"
+#   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.10.0"
 #   INDEXER_TOKEN                         # shared with regional containers
 #   MIDPLANE_STAFF_USER_IDS               # comma-separated user IDs (staff allowlist)
 

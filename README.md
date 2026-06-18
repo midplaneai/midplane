@@ -73,7 +73,7 @@ bun run test:e2e             # Playwright smoke (E2E_LIVE=1 for live)
 
 ## OSS engine image
 
-The router spawns `midplane/midplane:0.9.0` (published on Docker Hub). The image
+The router spawns `midplane/midplane:0.10.0` (published on Docker Hub). The image
 tag has a single source of truth — `OSS_ENGINE_IMAGE` in
 `packages/router/src/oss-image.ts` — and `bun scripts/check-image-pin.ts` (CI)
 fails if any config/doc site drifts from it.
@@ -150,7 +150,7 @@ fly secrets set --app midplane-web \
   FLY_APP_EU='midplane-eu' \
   FLY_REGION_EU='fra' \
   MIDPLANE_PUBLIC_HOST_EU='eu.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.9.0' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.10.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
   MIDPLANE_STAFF_USER_IDS='user_...'
 
@@ -168,7 +168,7 @@ fly secrets set --app midplane-web-us \
   FLY_APP_US='midplane-us' \
   FLY_REGION_US='iad' \
   MIDPLANE_PUBLIC_HOST_US='us.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.9.0' \
+  MIDPLANE_OSS_IMAGE='midplane/midplane:0.10.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
   MIDPLANE_STAFF_USER_IDS='user_...'
 

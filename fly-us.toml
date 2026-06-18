@@ -16,7 +16,12 @@ app = "midplane-us"
 primary_region = "iad"
 
 [build]
-  image = "midplane/midplane:0.9.0"
+  # Prod is pinned by immutable digest (the multi-arch manifest-list sha256 of
+  # midplane/midplane:0.10.0) so a re-pushed tag can't silently change what runs
+  # here, and the adoption image-check is digest-exact. Tag kept for readability;
+  # bump via OSS_ENGINE_IMAGE + re-resolve the digest. (scripts/check-image-pin.ts
+  # validates the 0.10.0 tag part.)
+  image = "midplane/midplane:0.10.0@sha256:fedce9f6515d43474234782ee8a1e2ecaa3b4c666135f1253c6b6d6f0724123d"
 
 [env]
   PORT = "8080"

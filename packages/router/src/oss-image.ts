@@ -11,7 +11,11 @@
 // the spawners + their tests follow automatically; the drift check tells you
 // which config/doc sites still need updating.
 //
-// NOTE: this is the human-readable TAG. Pinning prod by immutable digest
-// (`midplane/midplane:<tag>@sha256:...`) is a tracked follow-up — it also closes
-// the tag-granular adoption-image-check gap (TODOS.md). See the P7 plan 5b#2.
-export const OSS_ENGINE_IMAGE = "midplane/midplane:0.9.0";
+// NOTE: this is the human-readable TAG — the spawner fallback + dev/docs use it.
+// PROD (fly-eu.toml / fly-us.toml) pins the immutable multi-arch *digest* of this
+// version, which closes the tag-granular adoption-image-check gap (TODOS.md) and
+// makes "prod == tested" byte-exact. Bumping the engine: change the version here,
+// re-resolve the digest (`docker buildx imagetools inspect midplane/midplane:<v>
+// --format '{{.Manifest.Digest}}'`), update the two fly configs, run
+// scripts/check-image-pin.ts.
+export const OSS_ENGINE_IMAGE = "midplane/midplane:0.10.0";
