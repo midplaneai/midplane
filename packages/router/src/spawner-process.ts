@@ -44,6 +44,30 @@ import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 // raw-DSN-holding engine off every other interface.
 const ENGINE_HOST = "127.0.0.1";
 
+// Documented engine runtime config forwarded from the control plane's env into
+// each spawned engine (when set). This is an ALLOWLIST, not a passthrough of
+// process.env: it keeps the operator's documented engine knobs working —
+// telemetry opt-out (MIDPLANE_TELEMETRY / DO_NOT_TRACK), deny-notification
+// webhook, log level — while the control plane's own secrets (DATABASE_URL,
+// BETTER_AUTH_SECRET, KMS / token-pepper material, FLY_API_TOKEN, …) stay out
+// of the engine's env. Spawn-managed vars (PORT, MIDPLANE_HOST,
+// MIDPLANE_TRANSPORT, MIDPLANE_POLICY_FILE, DB_PATH, INDEXER_TOKEN,
+// MIDPLANE_DSN_*) are deliberately NOT here — the spawner sets those itself and
+// they must win over anything ambient (a stray MIDPLANE_TRANSPORT=stdio would
+// otherwise break the HTTP proxy). Exported for the unit suite.
+export const ENGINE_CONFIG_PASSTHROUGH = [
+  "MIDPLANE_TELEMETRY",
+  "MIDPLANE_TELEMETRY_ENDPOINT",
+  "MIDPLANE_TELEMETRY_HEARTBEAT_MS",
+  "MIDPLANE_TELEMETRY_STARTUP_DELAY_MS",
+  "DO_NOT_TRACK",
+  "MIDPLANE_DENY_WEBHOOK",
+  "MIDPLANE_DENY_WEBHOOK_RULES",
+  "MIDPLANE_TENANT_ID",
+  "LOG_LEVEL",
+  "NO_COLOR",
+] as const;
+
 /** Minimal child-process surface the spawner depends on. node's ChildProcess
  *  satisfies it; tests pass a fake so no real process is forked. */
 export interface ChildHandle {
@@ -157,16 +181,24 @@ export class ProcessSpawner implements Spawner {
     const dataDir = await mkdtemp(join(tmpdir(), "midplane-engine-"));
     const dbPath = join(dataDir, "audit.db");
 
+    // Curated env — NOT the control plane's full environment. Start with
+    // run/binary-lookup essentials plus the allowlisted engine config the
+    // operator set; then layer the spawn-managed vars on top so THEY win.
     const env: NodeJS.ProcessEnv = {
-      // Run + binary-lookup essentials only — NOT the control plane's env.
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      NODE_ENV: "production",
-      PORT: String(port),
-      MIDPLANE_HOST: ENGINE_HOST,
-      MIDPLANE_POLICY_FILE: policyPath,
-      DB_PATH: dbPath,
     };
+    for (const key of ENGINE_CONFIG_PASSTHROUGH) {
+      const value = process.env[key];
+      if (value !== undefined) env[key] = value;
+    }
+    // Spawn-managed (set AFTER the passthrough so an ambient value can't win).
+    env.NODE_ENV = "production";
+    env.PORT = String(port);
+    env.MIDPLANE_HOST = ENGINE_HOST;
+    env.MIDPLANE_TRANSPORT = "http"; // the proxy speaks HTTP to the engine
+    env.MIDPLANE_POLICY_FILE = policyPath;
+    env.DB_PATH = dbPath;
     for (const db of opts.databases) {
       env[dsnEnvVarFor(db.connectionDatabaseId)] = db.dsn;
     }

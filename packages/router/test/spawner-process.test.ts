@@ -106,12 +106,20 @@ describe("allocateFreePort", () => {
 });
 
 describe("ProcessSpawner", () => {
-  // Keep secrets out of the engine's curated env (see test below).
+  // Ambient env for the curated-env test below: a control-plane secret +
+  // control-plane DATABASE_URL (must NOT leak), an allowlisted engine knob
+  // (must forward), and an ambient MIDPLANE_TRANSPORT (spawn-managed must win).
   beforeEach(() => {
     process.env.BETTER_AUTH_SECRET = "super-secret-do-not-leak";
+    process.env.DATABASE_URL = "postgres://control:plane@localhost/cp";
+    process.env.MIDPLANE_TELEMETRY = "0";
+    process.env.MIDPLANE_TRANSPORT = "stdio";
   });
   afterEach(() => {
     delete process.env.BETTER_AUTH_SECRET;
+    delete process.env.DATABASE_URL;
+    delete process.env.MIDPLANE_TELEMETRY;
+    delete process.env.MIDPLANE_TRANSPORT;
   });
 
   it("spawns `midplane server`, waits for /health, returns 127.0.0.1:<port>", async () => {
@@ -137,7 +145,7 @@ describe("ProcessSpawner", () => {
     await c.stop();
   });
 
-  it("injects the per-connection DSN as MIDPLANE_DSN_<id>, never DATABASE_URL, and isolates control-plane secrets", async () => {
+  it("injects the per-connection DSN as MIDPLANE_DSN_<id>, never DATABASE_URL, forwards allowlisted engine config, and isolates control-plane secrets", async () => {
     const child = new FakeChild();
     child.exitOnSignal = "any";
     let capturedEnv: NodeJS.ProcessEnv = {};
@@ -157,13 +165,22 @@ describe("ProcessSpawner", () => {
     expect(capturedEnv.MIDPLANE_DSN_01HXYZMAIN0000000000000000).toBe(
       "postgres://user:pw@localhost:5432/app",
     );
-    expect(capturedEnv.DATABASE_URL).toBeUndefined();
     expect(capturedEnv.PORT).toBe("52001");
     expect(capturedEnv.MIDPLANE_HOST).toBe("127.0.0.1");
     expect(capturedEnv.MIDPLANE_POLICY_FILE).toMatch(/policy\.yaml$/);
     expect(capturedEnv.DB_PATH).toMatch(/audit\.db$/);
     expect(capturedEnv.INDEXER_TOKEN).toBe("idx-tok");
-    // Curated env: the control plane's own secrets must NOT reach the engine.
+
+    // Allowlisted engine config the operator set IS forwarded.
+    expect(capturedEnv.MIDPLANE_TELEMETRY).toBe("0");
+
+    // Spawn-managed vars WIN over an ambient value: the proxy speaks HTTP, so
+    // an ambient MIDPLANE_TRANSPORT=stdio must not survive.
+    expect(capturedEnv.MIDPLANE_TRANSPORT).toBe("http");
+
+    // Control-plane secrets + the control-plane DATABASE_URL must NOT reach the
+    // engine (it gets its DSN via MIDPLANE_DSN_<id>, never DATABASE_URL).
+    expect(capturedEnv.DATABASE_URL).toBeUndefined();
     expect(capturedEnv.BETTER_AUTH_SECRET).toBeUndefined();
 
     await c.stop();

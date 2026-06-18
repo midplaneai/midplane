@@ -110,12 +110,20 @@ Two ways to run it:
 
   ```bash
   docker build -f Dockerfile.self-host -t midplane/self-host:local .
-  docker run --env-file .env.self-host -p 3000:3000 midplane/self-host:local
+  # `localhost` inside the container is the container itself, not your host —
+  # point DATABASE_URL at a host the container can reach (host.docker.internal
+  # on Docker Desktop):
+  docker run --env-file .env.self-host \
+    -e DATABASE_URL='postgres://midplane:midplane@host.docker.internal:5432/midplane?sslmode=disable' \
+    -p 3000:3000 midplane/self-host:local
   ```
 
   The binary is baked at `/usr/local/bin/midplane` (with `MIDPLANE_ENGINE_BIN`
   preset), and `MIDPLANE_SELF_HOST=1` is set in the image. This works the same
-  on Linux and macOS — there is no host-networking or VM-socket caveat anymore.
+  on Linux and macOS — there is no host-networking or VM-socket caveat. The
+  engine runs in-container too, so the connection DSNs you add in the dashboard
+  follow the same rule: a `localhost` Postgres on your host is
+  `host.docker.internal` from inside (or put the DB on the same Docker network).
 
 The audit pipeline's internal bearer (`INDEXER_TOKEN`) is auto-provisioned at
 boot when unset: the engine is loopback-only, so the token never leaves the
