@@ -318,20 +318,32 @@ export async function proxyMcpOAuth(
   });
 
   // Per-agent DB scope for the OAuth credential (mcp_scope_grants keyed by
-  // client + user, written at consent). Grants present → the engine narrows
-  // the session to them (+ read clamp).
-  //
-  // P6.1 sequencing: an EMPTY scope flips to 403 ("you approved no databases")
-  // once the consent DB picker lands — the picker is what writes these rows.
-  // Until then OAuth stays back-compat (empty → full access, the coarse v1
-  // behavior), so this commit never breaks the shipped flow; grants that DO
-  // exist are enforced immediately. Self-host is owner-all here too (empty →
-  // full), and stays that way (the self-host no-grant default).
+  // client + user, written by the consent DB picker). Scope-on-the-credential
+  // is the access boundary on top of ownership.
   const scope = await resolveScope(
     db,
     { kind: "oauth", clientId, userId },
     resolved.databases,
   );
+
+  // No grant for any of this connection's DBs → the user owns it but this agent
+  // was approved for nothing here. Consent is FORCED on every authorize, and the
+  // picker writes a grant per chosen DB, so an empty grant means "approved no
+  // databases" → 403 (fail closed), not a connection-probing 404. Self-host is
+  // the exception: single-tenant, so an unscoped owner gets all their DBs (empty
+  // → full access) rather than being locked out of their own data.
+  if (scope.size === 0 && !isSelfHost()) {
+    return Response.json(
+      { ok: false, error: "no_database_grant" },
+      {
+        status: 403,
+        headers: {
+          "WWW-Authenticate":
+            'Bearer error="insufficient_scope", error_description="no database access granted for this connection; re-connect to choose databases"',
+        },
+      },
+    );
+  }
 
   return forwardResolved(req, {
     connection: resolved.connection,
