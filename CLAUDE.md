@@ -1,5 +1,23 @@
 # Claude operating notes — midplane-cloud
 
+## Monorepo layout (one codebase, two deployables)
+
+- **Control plane** (repo root: `apps/web`, `packages/{db,kms,router}`,
+  `infra/telemetry-proxy`) — the web app + hosted MCP proxy. Tests: **vitest**
+  (`./node_modules/.bin/vitest run`). MIT except `apps/web/src/ee/` (commercial).
+- **Engine** (`engine/`, grafted via `git subtree`) — the MIT query-path engine,
+  shipped as the compiled `midplane/midplane` Docker image. Tests: **`bun test`**
+  via `bun run test:engine` (NEVER a bare `bun test` from root — it would sweep in
+  the control-plane vitest files). Engine governance lives under `engine/`
+  (LICENSE, THREAT_MODEL.md, TELEMETRY.md, CONTRIBUTING.md, SECURITY.md).
+
+One root `bun.lock` covers everything (`linker = "hoisted"`). The engine image is
+a self-contained `bun build --compile` binary (`engine/docker/Dockerfile`, repo-root
+context) — no `node_modules` in the runtime image. CI: `engine-test.yml` /
+`engine-publish.yml` (tags `engine-v*`) are separate from the control-plane
+`deploy-fly.yml`. The engine still ships as its own image, so the version pin
+persists — see "OSS image version pin sites" below.
+
 ## Design System
 
 Always read `DESIGN.md` (at repo root) before making any visual or UI decision.

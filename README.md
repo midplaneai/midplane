@@ -6,12 +6,19 @@ MCP client) and your database and parses every statement with a real SQL AST
 (not regex) — enforcing declarative table-access policy, blocking no-WHERE DML
 and DDL, and writing an event-sourced audit log of which agent ran what.
 
-This repository is the **control plane**: the dashboard, connection + policy
-management, audit views, agent-token issuance, and the hosted MCP proxy. The
-query-path engine ships separately as the MIT Docker image `midplane/midplane`
-([midplaneai/midplane](https://github.com/midplaneai/midplane)); this repo
-CONSUMES that image and never reimplements it, so hosted/self-host parity is
-mechanically enforced by spawning the same image self-hosters run.
+This repository is the open-core monorepo — **one codebase, two deployables**:
+
+- **control plane** (repo root): the dashboard, connection + policy management,
+  audit views, agent-token issuance, and the hosted MCP proxy. Open core — MIT
+  except `apps/web/src/ee/` (the commercial Enterprise Edition).
+- **engine** ([`engine/`](./engine)): the MIT query-path engine (SQL parsing,
+  policy enforcement, guardrails), shipped as the minimal Docker image
+  `midplane/midplane`. The control plane spawns this image per connection and
+  never reimplements it, so hosted/self-host parity is mechanically enforced by
+  running the same engine everywhere.
+
+"One codebase" is not "one process": the engine stays a tiny, minimal-attack-
+surface image in the query path; the control plane is one web app.
 
 ## Open core
 
@@ -64,19 +71,23 @@ bun run test                 # vitest baseline — note `bun run test`, not
 bun run test:e2e             # Playwright smoke (E2E_LIVE=1 for live)
 ```
 
-## OSS image dependency
+## OSS engine image
 
-The router spawns `midplane/midplane:0.9.0` (published on Docker Hub). For local dev against an unreleased OSS branch, override the tag and build from source:
+The router spawns `midplane/midplane:0.9.0` (published on Docker Hub). The image
+tag has a single source of truth — `OSS_ENGINE_IMAGE` in
+`packages/router/src/oss-image.ts` — and `bun scripts/check-image-pin.ts` (CI)
+fails if any config/doc site drifts from it.
+
+For local dev (when the published tag isn't on Docker Hub yet, or while iterating
+on the engine), build the image from the in-tree engine:
 
 ```bash
-docker build -t midplane/midplane:0.9.0 /path/to/midplaneai/midplane
+bun run dev:image            # builds engine/docker/Dockerfile, tag from MIDPLANE_OSS_IMAGE
 ```
 
-Or use the convenience script (auto-detects `~/dev/midplane`, override with `OSS_REPO=...`):
-
-```bash
-bun run dev:image
-```
+The engine source lives at [`engine/`](./engine) — no separate clone needed. Run
+its tests with `bun run test:engine`; run the full production-image battery with
+`bash engine/scripts/test-image.sh`.
 
 ### Neon (control-plane Postgres)
 
