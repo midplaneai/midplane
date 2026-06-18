@@ -5,10 +5,10 @@
 // `docker run`-ing the OSS image (DockerSpawner) or creating a Fly machine
 // (FlyMachineSpawner), it exec's the self-contained compiled engine binary
 // (`midplane server`, the `bun build --compile` artifact shipped inside the
-// self-host image) as a child process — one process per CONNECTION, bound to
+// self-host image) as a child process — one process per PROJECT, bound to
 // a loopback-only ephemeral port. The proxy reaches it at 127.0.0.1:<port>.
 //
-// Why one process PER CONNECTION (not one standing engine): the engine binds
+// Why one process PER PROJECT (not one standing engine): the engine binds
 // exactly one set of databases for its lifetime — the policy file + the
 // MIDPLANE_DSN_* env vars are read once at boot. Collapsing to a single
 // standing engine would require an engine change (dynamic per-request DSN

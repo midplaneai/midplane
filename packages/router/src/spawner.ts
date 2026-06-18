@@ -11,7 +11,7 @@
 // don't double-spawn, and a 30-minute idle timer that triggers stop().
 //
 // Keying note (PR2 of mcp_url_auth_security): the registry keys on the
-// CONNECTION id, not the plaintext token. The hybrid multi-token model
+// PROJECT id, not the plaintext token. The hybrid multi-token model
 // shares one container across every sibling token on a project — the
 // container's session-frozen X-Midplane-Token-Id (set by the proxy from
 // the matched mcp_tokens row) is what discriminates audit attribution.
@@ -63,7 +63,7 @@ export interface SpawnOptions {
    *  spawner. */
   projectId: string;
   region: Region;
-  /** One container per CONNECTION, N>=1 DBs per container. The cloud
+  /** One container per PROJECT, N>=1 DBs per container. The cloud
    *  always emits the multi-DB YAML shape, even for N=1; OSS 0.2.0
    *  treats a one-entry `databases:` array identically to the legacy
    *  single-DB shape, so the spawn path stays single-branched. */
