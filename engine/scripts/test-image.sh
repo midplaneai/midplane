@@ -20,8 +20,11 @@ source "$(dirname "$0")/lib/image-boot.sh"
 trap cleanup_image_boot EXIT
 precleanup_image_boot
 
-echo "[test-image] === BUILD ==="
-docker build -f docker/Dockerfile -t "$IMAGE" .
+# Build context is the REPO ROOT: the merged monorepo has one root bun.lock and
+# `bun install --frozen-lockfile` needs every workspace manifest present.
+REPO_ROOT="$(cd .. && pwd)"
+echo "[test-image] === BUILD (compiled binary, repo-root context) ==="
+docker build -f "$REPO_ROOT/engine/docker/Dockerfile" -t "$IMAGE" "$REPO_ROOT"
 echo
 echo "[test-image] image size:"
 docker images "$IMAGE" --format "  {{.Size}}"

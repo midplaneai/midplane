@@ -13,13 +13,20 @@ FROM oven/bun:1.3-slim AS deps
 WORKDIR /app
 
 # Workspace root + every per-package package.json so bun install sees the
-# same graph as CI. bunfig.toml pins linker = "hoisted".
+# same graph as CI. bunfig.toml pins linker = "hoisted". The engine manifests
+# are required too: post-merge there is ONE root bun.lock covering the whole
+# monorepo, and `bun install --frozen-lockfile` errors if any workspace member
+# named in the lockfile is missing. (The web image does not USE the engine —
+# Next's standalone trace prunes it — but the install must still resolve it.)
 COPY package.json bun.lock bunfig.toml ./
 COPY apps/web/package.json apps/web/package.json
 COPY packages/db/package.json packages/db/package.json
 COPY packages/kms/package.json packages/kms/package.json
 COPY packages/router/package.json packages/router/package.json
 COPY infra/telemetry-proxy/package.json infra/telemetry-proxy/package.json
+COPY engine/packages/engine/package.json engine/packages/engine/package.json
+COPY engine/packages/mcp-server/package.json engine/packages/mcp-server/package.json
+COPY engine/examples/smoketest/package.json engine/examples/smoketest/package.json
 
 RUN bun install --frozen-lockfile
 
