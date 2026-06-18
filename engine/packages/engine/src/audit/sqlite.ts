@@ -4,19 +4,21 @@
 // fails to load native bindings under Bun (Bun issue #4290). bun:sqlite has
 // a similar enough API. Engine package is Bun-runtime primary.
 //
-// Schema is loaded from `schema.sql` at construction. WAL mode is set
-// inline so concurrent reads while a single writer commits work cleanly.
+// Schema is embedded at build time via a static text import (see schemaSql
+// below). WAL mode is set inline so concurrent reads while a single writer
+// commits work cleanly.
 
 import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import type { AuditWriter } from "./index.ts";
 import { AuditEvent } from "./types.ts";
 import { AuditUnavailableError } from "../errors.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = join(__dirname, "schema.sql");
+// Static text import so `bun build --compile` embeds the DDL in the binary.
+// A runtime `readFileSync(join(__dirname, "schema.sql"))` is NOT embedded by
+// --compile and crashes the compiled `server` with
+// `ENOENT … open '/$bunfs/root/schema.sql'`. The .sql file is still the source
+// of truth on disk for `bun` runtime + bun:test; the import just makes it
+// travel inside the single-file binary too.
+import schemaSql from "./schema.sql" with { type: "text" };
 
 const INSERT_SQL = `
   INSERT INTO audit_events (
@@ -168,7 +170,7 @@ export class SqliteAuditWriter implements AuditWriter {
 
     // PRAGMAs in the schema file run during table create. We also explicitly
     // ensure WAL mode in case the file pre-existed without it.
-    const ddl = readFileSync(SCHEMA_PATH, "utf8");
+    const ddl = schemaSql;
     // Strip the commented-out Postgres section so SQLite doesn't choke.
     const sqliteOnly = stripPostgresSection(ddl);
     this.db.run(sqliteOnly);
