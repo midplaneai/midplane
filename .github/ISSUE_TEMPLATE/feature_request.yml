@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an improvement or new capability.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and what is getting in the way? Focus on the "why".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to see? Sketches and alternatives welcome.
+    validations:
+      required: false
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Which side of the open-core line?
+      description: >-
+        Rule of thumb — makes a single developer/agent safer → core (MIT);
+        exists for org compliance/identity/governance → ee/ (commercial).
+        See CONTRIBUTING.md.
+      options:
+        - Core (MIT)
+        - Enterprise (ee/)
+        - Not sure
+    validations:
+      required: true
