@@ -7,7 +7,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { filterUpstreamResponseHeaders } from "../src/lib/proxy.ts";
+import {
+  buildForwardHeaders,
+  filterUpstreamResponseHeaders,
+} from "../src/lib/proxy.ts";
 
 describe("filterUpstreamResponseHeaders", () => {
   it("strips fly-replay control headers so they can't loop the public edge", () => {
@@ -38,5 +41,51 @@ describe("filterUpstreamResponseHeaders", () => {
     expect(out.get("transfer-encoding")).toBeNull();
     expect(out.get("connection")).toBeNull();
     expect(out.get("x-custom")).toBe("keep-me");
+  });
+});
+
+describe("buildForwardHeaders — proxy is the sole authority for control headers", () => {
+  it("stamps our token id over any client-supplied X-Midplane-Token-Id", () => {
+    const out = buildForwardHeaders(
+      new Headers({ "x-midplane-token-id": "client-forged", accept: "application/json" }),
+      { tokenId: "real-token-id", scopeHeader: null },
+    );
+    expect(out.get("x-midplane-token-id")).toBe("real-token-id");
+    expect(out.get("accept")).toBe("application/json"); // ordinary headers pass through
+  });
+
+  it("sets X-Midplane-Scope when the credential is scoped", () => {
+    const out = buildForwardHeaders(new Headers(), {
+      tokenId: "t",
+      scopeHeader: '{"main":"read"}',
+    });
+    expect(out.get("x-midplane-scope")).toBe('{"main":"read"}');
+  });
+
+  it("strips a client-supplied X-Midplane-Scope when the credential is UNSCOPED", () => {
+    // An unscoped credential must not be able to smuggle a scope to the engine.
+    const out = buildForwardHeaders(
+      new Headers({ "x-midplane-scope": '{"main":"write"}' }),
+      { tokenId: "t", scopeHeader: null },
+    );
+    expect(out.get("x-midplane-scope")).toBeNull();
+  });
+
+  it("overrides a client-supplied X-Midplane-Scope with the resolved grant", () => {
+    const out = buildForwardHeaders(
+      new Headers({ "x-midplane-scope": '{"secret":"write"}' }),
+      { tokenId: "t", scopeHeader: '{"main":"read"}' },
+    );
+    expect(out.get("x-midplane-scope")).toBe('{"main":"read"}');
+  });
+
+  it("drops hop-by-hop request headers", () => {
+    const out = buildForwardHeaders(
+      new Headers({ connection: "keep-alive", host: "evil", "x-keep": "yes" }),
+      { tokenId: "t", scopeHeader: null },
+    );
+    expect(out.get("connection")).toBeNull();
+    expect(out.get("host")).toBeNull();
+    expect(out.get("x-keep")).toBe("yes");
   });
 });
