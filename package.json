@@ -23,6 +23,7 @@
     "test:e2e:live": "E2E_LIVE=1 playwright test",
     "lint": "bun --filter '@midplane-cloud/*' lint",
     "typecheck": "bun --filter '@midplane-cloud/*' typecheck",
+    "check:pins": "bun scripts/check-image-pin.ts",
     "db:generate": "bun --filter '@midplane-cloud/db' generate",
     "db:studio": "bun --filter '@midplane-cloud/db' studio",
     "migrate:eu": "bun --filter '@midplane-cloud/db' migrate:eu",

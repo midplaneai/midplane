@@ -4,13 +4,32 @@ name: engine-test
 # control-plane-only PR doesn't pay for it. The control-plane suite runs under
 # vitest (see CONTRIBUTING.md); the engine runs under bun:test.
 
+# Triggers include the repo-root build inputs because engine/docker/Dockerfile
+# builds from the root: a bun.lock / root-manifest / bunfig change can break the
+# compiled engine image without touching engine/**, so it must run docker-build.
 on:
   push:
     branches: [main]
-    paths: ["engine/**"]
+    paths:
+      - "engine/**"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - "apps/web/package.json"
+      - "packages/*/package.json"
+      - "infra/*/package.json"
+      - ".github/workflows/engine-test.yml"
   pull_request:
     branches: [main]
-    paths: ["engine/**"]
+    paths:
+      - "engine/**"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - "apps/web/package.json"
+      - "packages/*/package.json"
+      - "infra/*/package.json"
+      - ".github/workflows/engine-test.yml"
 
 jobs:
   test:

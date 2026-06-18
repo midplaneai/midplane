@@ -13,6 +13,11 @@ on:
     tags:
       - "engine-v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Engine version X.Y.Z to (re)publish, e.g. 0.10.0 (no engine-v prefix)."
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -33,9 +38,19 @@ jobs:
 
       - name: Extract version
         id: version
-        # Strip the `engine-v` prefix → bare X.Y.Z. (Was `v` pre-merge; the
-        # engine-v* namespace means the strip prefix changes too — Codex F2.)
-        run: echo "tag=${GITHUB_REF#refs/tags/engine-v}" >> $GITHUB_OUTPUT
+        # On a tag push, strip the `engine-v` prefix → bare X.Y.Z. On a manual
+        # workflow_dispatch GITHUB_REF is a BRANCH ref (refs/heads/...), so the
+        # strip would yield an invalid Docker tag — use the required input instead.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.version }}"
+          else
+            tag="${GITHUB_REF#refs/tags/engine-v}"
+          fi
+          case "$tag" in
+            *refs/*|"") echo "::error::could not resolve a valid version (got '$tag')"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v5

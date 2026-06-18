@@ -1,0 +1,23 @@
+name: check-pins
+
+# Fails CI if any authoritative site (Fly configs, scripts, .env examples, docs,
+# the deploy-fly default) drifts from OSS_ENGINE_IMAGE
+# (packages/router/src/oss-image.ts). This is the guarantee scripts/check-image-pin.ts
+# and the docs rely on. Cheap (no install needed — the script has no external deps),
+# so it runs on every push/PR to main rather than path-scoped.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pin-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun run check:pins
