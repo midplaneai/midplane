@@ -2,13 +2,9 @@
   "name": "midplane-monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Safety layer between AI coding agents and Postgres. Workspace root.",
+  "description": "Safety layer between AI coding agents and Postgres. Engine subtree of midplane-cloud; members are declared by the root workspaces globs (engine/packages/*, engine/examples/*), not here.",
   "license": "MIT",
   "type": "module",
-  "workspaces": [
-    "packages/*",
-    "examples/*"
-  ],
   "scripts": {
     "test": "bun test",
     "test:cov": "bun test --coverage",
