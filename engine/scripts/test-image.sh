@@ -12,10 +12,16 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Absolute script dir, resolved BEFORE the cd below. $0 is a relative path when
+# CI invokes this as `bash engine/scripts/test-image.sh` from the repo root, so
+# sourcing via "$(dirname "$0")/..." AFTER cd'ing would look under the new cwd
+# (engine/) and miss. Capturing the absolute dir first makes the source robust
+# to the invocation directory.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
 
 # shellcheck source=lib/image-boot.sh
-source "$(dirname "$0")/lib/image-boot.sh"
+source "$SCRIPT_DIR/lib/image-boot.sh"
 
 trap cleanup_image_boot EXIT
 precleanup_image_boot

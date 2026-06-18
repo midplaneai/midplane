@@ -11,7 +11,11 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Absolute script dir, resolved BEFORE the cd below — $0 is relative when run as
+# `bash engine/scripts/agent-smoke.sh` from the repo root, so the source must
+# not depend on the post-cd cwd. (Mirrors test-image.sh.)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
 
 # Friendlier names than the test-image defaults — these will show up in
 # `docker ps` while the user is poking around.
@@ -23,7 +27,7 @@ export HOST_PORT="${HOST_PORT:-8080}"
 export PG_DB="${PG_DB:-midplane_smoke}"
 
 # shellcheck source=lib/image-boot.sh
-source "$(dirname "$0")/lib/image-boot.sh"
+source "$SCRIPT_DIR/lib/image-boot.sh"
 
 trap cleanup_image_boot EXIT INT TERM
 precleanup_image_boot
