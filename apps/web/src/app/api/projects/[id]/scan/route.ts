@@ -16,6 +16,7 @@ import {
 } from "@midplane-cloud/db";
 
 import { currentCustomer } from "@/lib/customer";
+import { requireManagerRest } from "@/lib/org-auth";
 import {
   DEFAULT_DATABASE_NAME,
   getProjectWithDatabaseAndCredential,
@@ -47,6 +48,13 @@ export async function GET(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  // Owner/admin only — the UI mounts the scan behind canManage, and this handler
+  // decrypts the DB credential and returns schema + masking-policy details. A
+  // signed-in member who is intentionally blocked from this surface must not be
+  // able to reach it by calling the route directly. Gate BEFORE any credential
+  // resolution or introspection.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
   const { id } = await params;
 
   const url = new URL(req.url);
