@@ -7,7 +7,7 @@ import {
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
 } from "@midplane-cloud/db";
-import { mcpProjectUrl } from "@midplane-cloud/router";
+import { mcpGenericUrl, mcpProjectUrl } from "@midplane-cloud/router";
 
 import { ProjectRail } from "@/components/projects/project-rail";
 import { OAuthConnectGuide } from "@/components/projects/oauth-connect-guide";
@@ -180,6 +180,10 @@ export default async function ProjectWorkspace({
   // This project's OAuth MCP endpoint — /mcp/<projectId>. Non-secret
   // (auth is the OAuth sign-in), so it's shown openly with a copy button.
   const mcpUrl = mcpProjectUrl(conn.region, conn.id, process.env);
+  // The region-wide OAuth endpoint — /mcp (no id, no token), the default the
+  // connect snippets lead with. Computed here (server) so it uses this
+  // deployment's real MCP host, not a hardcoded *.midplane.ai.
+  const oauthMcpUrl = mcpGenericUrl(conn.region, process.env);
 
   // ---- server actions ----------------------------------------------------
 
@@ -710,7 +714,7 @@ export default async function ProjectWorkspace({
         <TokenList
           projectId={conn.id}
           projectName={conn.name}
-          region={conn.region}
+          oauthUrl={oauthMcpUrl}
           databases={databases.map((d) => ({
             projectDatabaseId: d.id,
             name: d.name,

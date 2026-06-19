@@ -2,6 +2,8 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { mcpGenericUrl } from "@midplane-cloud/router";
+
 import { ConnectAgentGuide } from "@/components/projects/connect-agent-guide";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -43,6 +45,9 @@ export default async function ProjectCreated({
 
   const cookieStore = await cookies();
   const mcpUrl = cookieStore.get(SHOW_ONCE_COOKIE)?.value ?? null;
+  // The region-wide OAuth endpoint — /mcp — the connect guide leads with.
+  // Computed server-side so it uses this deployment's real MCP host.
+  const oauthUrl = mcpGenericUrl(customer.region, process.env);
   const label = projectLabel(project);
   const projectHref = `/projects/${project.id}`;
 
@@ -67,7 +72,7 @@ export default async function ProjectCreated({
           <div className="space-y-4">
             <ConnectAgentGuide
               projectName={project.name}
-              region={customer.region}
+              oauthUrl={oauthUrl}
               tokenUrl={mcpUrl}
             />
 

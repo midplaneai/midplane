@@ -43,13 +43,17 @@ function slugify(name: string | null | undefined): string {
 
 export function ConnectAgentGuide({
   projectName,
-  region,
+  oauthUrl,
   tokenUrl,
   primary = "oauth",
   className,
 }: {
   projectName?: string | null;
-  region?: string | null;
+  /** The region-wide OAuth endpoint (mcpGenericUrl) — non-secret. Computed
+   *  server-side so it honors the deployment's actual MCP host (localhost in
+   *  dev, the self-host domain, or any MIDPLANE_PUBLIC_HOST_* override); a
+   *  client component can't see process.env, so it must NOT be derived here. */
+  oauthUrl: string;
   /** The show-once machine-token URL (/mcp/<token>), when one was just minted.
    *  Absent on reference surfaces — the machine section then explains the URL
    *  appears once at token creation. */
@@ -62,18 +66,6 @@ export function ConnectAgentGuide({
   const tablistId = useId();
 
   const serverKey = slugify(projectName);
-
-  // The region-wide OAuth URL — non-secret. Derive the origin from the token URL
-  // when we have one (correct host in every environment, incl. localhost dev);
-  // otherwise fall back to this region's public host.
-  let oauthUrl = `https://${region ?? "<region>"}.midplane.ai/mcp`;
-  if (tokenUrl) {
-    try {
-      oauthUrl = `${new URL(tokenUrl).origin}/mcp`;
-    } catch {
-      // keep the region fallback
-    }
-  }
 
   const hasToken = Boolean(tokenUrl);
   // "token" only leads when we actually have one to show.
@@ -112,7 +104,7 @@ export function ConnectAgentGuide({
         onTab={setActive}
         tablistId={`${tablistId}-machine`}
         serverKey={serverKey}
-        url={`https://${region ?? "<region>"}.midplane.ai/mcp/<token>`}
+        url={`${oauthUrl}/<token>`}
         copyable={false}
       />
       <p className="text-[11px] text-subtle">
