@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
 import { projectLabel } from "@/lib/format";
-import { getProjectWithMainDatabase } from "@/lib/projects";
+import { getProjectWithFirstDatabase } from "@/lib/projects";
 import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
 import { SavedItButton } from "./saved-it-button";
@@ -39,7 +39,10 @@ export default async function ProjectCreated({
   if (!customer) redirect("/signup/region");
 
   const { id } = await params;
-  const result = await getProjectWithMainDatabase(customer, id);
+  // Resolve the project by its first database rather than a fixed "main"
+  // alias — createProject now names the first DB from the DSN, so a
+  // name-pinned lookup would 404 the success page and lose the show-once URL.
+  const result = await getProjectWithFirstDatabase(customer, id);
   if (!result) redirect("/dashboard");
   const { project } = result;
 

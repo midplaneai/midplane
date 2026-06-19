@@ -922,8 +922,12 @@ export async function setGuardrails(
 // old DSN keeps serving traffic until the 30-min idle timer fires —
 // that's the security incident.
 //
-// `dbName` defaults to "main" so existing single-DB callers keep
-// working; multi-DB callers pass the agent-facing alias explicitly.
+// `dbName` is the agent-facing alias of the child to rotate — required,
+// no default. It used to default to "main", but the first database is no
+// longer always named "main" (createProject names it from the DSN), so an
+// implicit default would silently rotate the wrong / a nonexistent child.
+// Single-DB callers without a name in hand resolve it via
+// getProjectWithFirstDatabase first.
 //
 // Returns null when the id is unknown OR owned by another customer OR
 // the named child does not exist (caller can't distinguish, mirroring
@@ -946,7 +950,7 @@ export async function rotateProject(
   id: string,
   dsn: string,
   caches: RotationCaches,
-  dbName: string = DEFAULT_DATABASE_NAME,
+  dbName: string,
 ): Promise<{ id: string; region: Region } | null> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
@@ -1159,51 +1163,47 @@ export async function getProjectWithDatabasesAndCredentials(
   return { project: conn, databases };
 }
 
-/** Back-compat shim for callers that still expect the {project,
- *  mainDatabase} shape. New code should call getProjectWithDatabase
- *  directly with the name from the URL.
+/** Resolve a project plus its first database (by name order) — the
+ *  single-database convenience read for surfaces that act on "the
+ *  project's database" with no name in the URL: the post-create success
+ *  page and the JSON DSN-rotate route. A freshly created project has
+ *  exactly one child, so "first" is unambiguous there; a multi-DB project
+ *  resolves the alphabetically-first child (deterministic). Returns null
+ *  when the project is unknown, owned by another customer, or has no
+ *  database.
  *
- *  Returns the safe-projection database. For credential-bearing reads
- *  use {@link getProjectWithMainDatabaseAndCredential}. */
-export async function getProjectWithMainDatabase(
+ *  Replaces the old getProjectWithMainDatabase shim: the first database is
+ *  no longer always named "main" (createProject names it from the DSN), so
+ *  a fixed-name lookup would miss it.
+ *
+ *  Safe projection — no encryptedDsn / kmsKeyId. */
+export async function getProjectWithFirstDatabase(
   customer: Customer,
   id: string,
 ): Promise<
   | {
       project: typeof projects.$inferSelect;
-      mainDatabase: SafeProjectDatabase;
+      database: SafeProjectDatabase;
     }
   | null
 > {
-  const result = await getProjectWithDatabase(
-    customer,
-    id,
-    DEFAULT_DATABASE_NAME,
-  );
-  if (!result) return null;
-  return { project: result.project, mainDatabase: result.database };
-}
-
-/** Credential-bearing variant of {@link getProjectWithMainDatabase}.
- *  Used by the table-introspection route which decrypts the main DB's
- *  DSN to query `information_schema`. */
-export async function getProjectWithMainDatabaseAndCredential(
-  customer: Customer,
-  id: string,
-): Promise<
-  | {
-      project: typeof projects.$inferSelect;
-      mainDatabase: typeof projectDatabases.$inferSelect;
-    }
-  | null
-> {
-  const result = await getProjectWithDatabaseAndCredential(
-    customer,
-    id,
-    DEFAULT_DATABASE_NAME,
-  );
-  if (!result) return null;
-  return { project: result.project, mainDatabase: result.database };
+  const db = getDb(customer.region);
+  const connRows = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, id), eq(projects.customerId, customer.id)))
+    .limit(1);
+  const conn = connRows[0];
+  if (!conn) return null;
+  const dbRows = await db
+    .select(SAFE_DATABASE_COLUMNS)
+    .from(projectDatabases)
+    .where(eq(projectDatabases.projectId, conn.id))
+    .orderBy(asc(projectDatabases.name))
+    .limit(1);
+  const database = dbRows[0];
+  if (!database) return null;
+  return { project: conn, database };
 }
 
 // Dependency shape for the add / remove / rename helpers — narrower
