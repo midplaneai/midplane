@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
-// Per-row revoke confirm. Mirrors DeleteConnectionButton's posture
+// Per-row revoke confirm. Mirrors DeleteProjectButton's posture
 // (AlertDialog + Server Action submit), with the dialog body parametrized
 // on the token name so the customer sees which row they're revoking. The
 // destructive action is the only style the deny-color is used for here —
@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button";
 // rewriting timestamps.
 
 export type RevokeTokenAction = (
-  connectionId: string,
+  projectId: string,
   tokenId: string,
 ) => Promise<
   | { ok: true; id: string }
@@ -34,12 +34,12 @@ export type RevokeTokenAction = (
 >;
 
 export function RevokeTokenButton({
-  connectionId,
+  projectId,
   tokenId,
   tokenName,
   action,
 }: {
-  connectionId: string;
+  projectId: string;
   tokenId: string;
   tokenName: string;
   action: RevokeTokenAction;
@@ -51,7 +51,7 @@ export function RevokeTokenButton({
   function onConfirm() {
     setError(null);
     startTransition(async () => {
-      const result = await action(connectionId, tokenId);
+      const result = await action(projectId, tokenId);
       if (result.ok) {
         setOpen(false);
         return;

@@ -64,12 +64,12 @@ export class DockerSpawner implements Spawner {
     if (opts.databases.length === 0) {
       throw new Error("DockerSpawner.spawn: at least one database required");
     }
-    // Container name derived from the connection ULID. Docker rejects
+    // Container name derived from the project ULID. Docker rejects
     // uppercase in container names, so we lowercase the slice. Stable
-    // for the connection's lifetime — siblings tokens on the same
-    // connection share one container. Plaintext token is NEVER part of
+    // for the project's lifetime — siblings tokens on the same
+    // project share one container. Plaintext token is NEVER part of
     // the name (PR2 of mcp_url_auth_security).
-    const name = `midplane-${opts.connectionId.slice(0, 16).toLowerCase()}`;
+    const name = `midplane-${opts.projectId.slice(0, 16).toLowerCase()}`;
     // Materialize the multi-DB policy YAML to a host tempfile, bind-mount
     // it ro into the container at MIDPLANE_POLICY_FILE. The dir is per-
     // spawn so a concurrent spawn for a different token can't observe or
@@ -83,7 +83,7 @@ export class DockerSpawner implements Spawner {
       serializeMultiDbPolicyToYaml(
         opts.databases.map((db) => ({
           name: db.name,
-          connectionDatabaseId: db.connectionDatabaseId,
+          projectDatabaseId: db.projectDatabaseId,
           tableAccess: db.tableAccess,
           tenantScope: db.tenantScope,
           guardrails: db.guardrails,
@@ -111,7 +111,7 @@ export class DockerSpawner implements Spawner {
       `${policyHostPath}:${POLICY_FILE_GUEST_PATH}:ro`,
     ];
     for (const db of opts.databases) {
-      args.push("-e", `${dsnEnvVarFor(db.connectionDatabaseId)}=${db.dsn}`);
+      args.push("-e", `${dsnEnvVarFor(db.projectDatabaseId)}=${db.dsn}`);
     }
     if (this.indexerToken) {
       args.push("-e", `INDEXER_TOKEN=${this.indexerToken}`);

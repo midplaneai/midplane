@@ -1,4 +1,4 @@
-// Cookie name shared between the create-connection Server Action
+// Cookie name shared between the create-project Server Action
 // (which writes the plaintext MCP URL) and the consume Server Action
 // (which deletes it on the success page).
 //
@@ -6,7 +6,7 @@
 // async functions — the bare const has to live outside that boundary.
 //
 // PR2 of mcp_url_auth_security: this cookie is the only delivery
-// channel for the default token's plaintext after createConnection
+// channel for the default token's plaintext after createProject
 // mints + hashes it. 5-minute TTL bounds the leakage window if the
 // user walks away from the browser between create and read; the
 // consume Server Action deletes the cookie on the success page's

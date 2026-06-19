@@ -13,12 +13,12 @@ import { dryRunPolicy, type DryRunRequest } from "../src/dry-run.ts";
 import type { ContainerRegistry, SpawnOptions } from "../src/spawner.ts";
 
 const SPAWN: SpawnOptions = {
-  connectionId: "01HXYZCNN000000000000000AA",
+  projectId: "01HXYZCNN000000000000000AA",
   region: "eu",
   databases: [
     {
       name: "main",
-      connectionDatabaseId: "01HXYZMAIN0000000000000000",
+      projectDatabaseId: "01HXYZMAIN0000000000000000",
       dsn: "postgres://x",
       tableAccess: { default: "read", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -290,7 +290,7 @@ describe("dryRunPolicy", () => {
       freshEntries: async () => [
         {
           name: "main",
-          connectionDatabaseId: "01HXYZMAIN0000000000000000",
+          projectDatabaseId: "01HXYZMAIN0000000000000000",
           tableAccess: { default: "read", tables: {} },
           tenantScope: { column: null, overrides: {}, exempt: [] },
           // Differs from SPAWN's snapshot (both true) — the re-read wins.
@@ -310,13 +310,13 @@ describe("dryRunPolicy", () => {
       indexerToken: "t",
       fetch: fn,
       freshEntries: async () => {
-        throw new Error("connection disappeared during dry-run");
+        throw new Error("project disappeared during dry-run");
       },
     });
     expect(result).toMatchObject({
       ok: false,
       kind: "engine_unavailable",
-      detail: "connection disappeared during dry-run",
+      detail: "project disappeared during dry-run",
     });
     expect(calls.filter((c) => c.includes("/admin/policy"))).toHaveLength(0);
   });

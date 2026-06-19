@@ -8,12 +8,12 @@ and DDL, and writing an event-sourced audit log of which agent ran what.
 
 This repository is the open-core monorepo — **one codebase, two deployables**:
 
-- **control plane** (repo root): the dashboard, connection + policy management,
+- **control plane** (repo root): the dashboard, project + policy management,
   audit views, agent-token issuance, and the hosted MCP proxy. Open core — MIT
   except `apps/web/src/ee/` (the commercial Enterprise Edition).
 - **engine** ([`engine/`](./engine)): the MIT query-path engine (SQL parsing,
   policy enforcement, guardrails), built once via `bun build --compile` into a
-  self-contained binary. The control plane spawns it per connection and never
+  self-contained binary. The control plane spawns it per project and never
   reimplements it, so hosted/self-host parity is mechanically enforced by
   running the same engine everywhere — only the packaging differs: hosted and
   local-dev run it as the minimal `midplane/midplane` Docker image (Fly machine
@@ -42,11 +42,11 @@ Contributions: [`CONTRIBUTING.md`](./CONTRIBUTING.md). Security:
 ## Layout
 
 ```
-apps/web              Next.js dashboard + Better Auth + connections API
+apps/web              Next.js dashboard + Better Auth + projects API
 apps/web/Dockerfile   Multi-stage bun + Next.js standalone build (control plane)
-packages/db           Drizzle schema (customers, connections, audit_events_index)
+packages/db           Drizzle schema (customers, projects, audit_events_index)
 packages/kms          encryptDsn / decryptDsn (env-mode dev, AWS KMS prod)
-packages/router       Hosted MCP request handler — token → connection → Fly app
+packages/router       Hosted MCP request handler — token → project → Fly app
 fly-web-eu.toml       EU control-plane Fly app (also serves apex app.midplane.ai)
 fly-web-us.toml       US control-plane Fly app
 fly-eu.toml           EU regional MCP runtime app (pinned to Frankfurt)
@@ -310,7 +310,7 @@ fly secrets set --app midplane-web-us \
 > key policy denying decryption under the wrong `EncryptionContext`, not
 > a missing env var.
 
-The `kmsKeyId` column on `connections` routes per row: existing rows with
+The `kmsKeyId` column on `projects` routes per row: existing rows with
 `env:eu` / `env:us` keep decrypting via the env-mode path; new rows written
 after the cutover store the CMK ARN and decrypt via KMS. No backfill is
 needed for the cutover itself — rotation of pre-existing env-mode rows is
@@ -318,7 +318,7 @@ a separate operation.
 
 ### Analytics (PostHog)
 
-Authenticated cloud-user events — `signup_completed`, `connection_*`,
+Authenticated cloud-user events — `signup_completed`, `project_*`,
 `token_*`, `database_test_run` — are captured server-side from the Next.js
 app via `posthog-node` (see `apps/web/src/lib/posthog.ts`). The client
 returns `null` when either env var is unset, so dev and CI no-op without

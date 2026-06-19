@@ -15,6 +15,7 @@ import {
   SELF_HOST_ORG_ID,
   SELF_HOST_REGION,
 } from "./self-host.ts";
+import { ensureDefaultProject } from "./projects.ts";
 import {
   slugifyWorkspaceName,
   suggestWorkspaceName,
@@ -114,6 +115,9 @@ export async function ensureImplicitCustomer(): Promise<void> {
       region: SELF_HOST_REGION,
     })
     .onConflictDoNothing();
+  // Seed the empty Default project at boot so a fresh self-host lands on a
+  // ready project (D6/D7-A). Idempotent + uncapped.
+  await ensureDefaultProject(SELF_HOST_CUSTOMER_ID, SELF_HOST_REGION);
 }
 
 // Create the customer row for the current org, OR return the existing row if
@@ -164,6 +168,7 @@ export async function upsertCustomerRegion(
     .returning();
 
   const winner = inserted[0];
+  let customer: Customer;
   if (!winner) {
     // Conflict path: another transaction (or our own retry) already created
     // the row. Fetch and return it.
@@ -174,18 +179,24 @@ export async function upsertCustomerRegion(
     const row = existing[0];
     if (!row)
       throw new Error("customer row vanished after onConflictDoNothing");
-    // Defensive: region is immutable per 0001_constraints.sql; a double-submit
-    // for a different region must reject loudly, not silently return the
-    // existing row.
+    // Defensive: region is immutable; a double-submit for a different region
+    // must reject loudly, not silently return the existing row.
     if (row.region !== region) {
       throw new Error(
         `org already has customer row in ${row.region}; cannot rewrite to ${region}`,
       );
     }
-    return row;
+    customer = row;
+  } else {
+    customer = winner;
   }
 
-  return winner;
+  // Seed the customer's empty Default project on first onboarding (D6/D7-A) so
+  // they land on a ready project instead of creating a container first.
+  // Idempotent + race-safe; a no-op for a returning user who already has one.
+  await ensureDefaultProject(customer.id, customer.region);
+
+  return customer;
 }
 
 // Resolve the user's organization, creating it on first onboarding. Idempotent
@@ -194,8 +205,8 @@ export async function upsertCustomerRegion(
 // org — the first creates it; the rest see the membership and reuse it. One org
 // == one customer.
 //
-// The lock must live inside a transaction: postgres-js pools connections, and
-// only `db.transaction` pins one connection for the callback, so the
+// The lock must live inside a transaction: postgres-js pools projects, and
+// only `db.transaction` pins one project for the callback, so the
 // xact-scoped advisory lock (auto-released on commit) is the pool-safe choice.
 async function getOrCreateOrgForUser(
   userId: string,

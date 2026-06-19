@@ -1,5 +1,5 @@
 // addDatabaseFromForm — the shared body of the dashboard's and the
-// connection home's add-database server actions (REGRESSION-RISK: this
+// project home's add-database server actions (REGRESSION-RISK: this
 // logic moved out of the dashboard action where it shipped untested;
 // the extraction is the moment to pin it). Validation messages are
 // user-visible (the client form renders thrown Error messages inline),
@@ -27,9 +27,9 @@ vi.mock("@/lib/mcp-proxy", () => ({
   getMcpProxyContext: () => ({ fake: "ctx" }),
 }));
 
-vi.mock("@/lib/connections", async () => {
-  const real = await vi.importActual<typeof import("../src/lib/connections.ts")>(
-    "../src/lib/connections.ts",
+vi.mock("@/lib/projects", async () => {
+  const real = await vi.importActual<typeof import("../src/lib/projects.ts")>(
+    "../src/lib/projects.ts",
   );
   return {
     ...real,
@@ -40,7 +40,7 @@ vi.mock("@/lib/connections", async () => {
 });
 
 import { addDatabaseFromForm } from "../src/lib/database-form.ts";
-import { DatabaseNameTaken } from "../src/lib/connections.ts";
+import { DatabaseNameTaken } from "../src/lib/projects.ts";
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -57,7 +57,7 @@ function form(fields: Record<string, string>): FormData {
 }
 
 const VALID = {
-  connectionId: "conn-1",
+  projectId: "conn-1",
   name: "analytics",
   dsn: "postgres://u:p@db.example.com/app",
   default_access: "deny",
@@ -72,10 +72,10 @@ afterEach(() => {
 });
 
 describe("addDatabaseFromForm", () => {
-  it("throws on missing connectionId (tamper-shape, not user-reachable)", async () => {
-    const { connectionId: _omit, ...rest } = VALID;
+  it("throws on missing projectId (tamper-shape, not user-reachable)", async () => {
+    const { projectId: _omit, ...rest } = VALID;
     await expect(addDatabaseFromForm(customer, form(rest))).rejects.toThrow(
-      /missing connectionId/,
+      /missing projectId/,
     );
   });
 
@@ -94,7 +94,7 @@ describe("addDatabaseFromForm", () => {
       customer,
       form({ ...VALID, name: "  analytics  " }),
     );
-    expect(result).toEqual({ connectionId: "conn-1", name: "analytics" });
+    expect(result).toEqual({ projectId: "conn-1", name: "analytics" });
     expect(addDatabaseMock).toHaveBeenCalledWith(
       customer,
       "conn-1",
@@ -105,7 +105,7 @@ describe("addDatabaseFromForm", () => {
     );
   });
 
-  it("falls back to read on a tampered access value (same posture as createConnection)", async () => {
+  it("falls back to read on a tampered access value (same posture as createProject)", async () => {
     await addDatabaseFromForm(
       customer,
       form({ ...VALID, default_access: "superuser" }),
@@ -123,7 +123,7 @@ describe("addDatabaseFromForm", () => {
     );
   });
 
-  it("404s (notFound) when the connection is unknown or foreign", async () => {
+  it("404s (notFound) when the project is unknown or foreign", async () => {
     addDatabaseMock = vi.fn(async () => null);
     await expect(addDatabaseFromForm(customer, form(VALID))).rejects.toThrow(
       NotFoundSentinel,

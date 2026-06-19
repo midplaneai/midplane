@@ -17,7 +17,7 @@ import {
 describe("eventSummary — GUARDRAILS_CHANGED rows", () => {
   it("says both nets hold when both flags are on", () => {
     const s = eventSummary("POLICY_RELOAD", {
-      connection_id: "conn-1",
+      project_id: "conn-1",
       database_name: "main",
       guardrails: { block_unqualified_dml: true, block_ddl: true },
     });
@@ -71,7 +71,7 @@ describe("eventSummary — GUARDRAILS_CHANGED rows", () => {
 
   it("pause/resume markers still win over the guardrails branch ordering", () => {
     expect(eventSummary("POLICY_RELOAD", { action: "paused" })).toBe(
-      "connection paused by owner",
+      "project paused by owner",
     );
   });
 

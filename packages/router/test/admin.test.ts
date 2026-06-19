@@ -32,7 +32,7 @@ class FakeSpawner implements Spawner {
 const databases: readonly DatabaseEntry[] = [
   {
     name: "main",
-    connectionDatabaseId: "01HXYZMAIN0000000000000000",
+    projectDatabaseId: "01HXYZMAIN0000000000000000",
     tableAccess: { default: "read", tables: { users: "deny" } },
     tenantScope: { column: null, overrides: {}, exempt: [] },
     guardrails: { block_unqualified_dml: true, block_ddl: true },
@@ -42,13 +42,13 @@ const databases: readonly DatabaseEntry[] = [
 const CONN_A = "01HXYZCONNAAAAAAAAAAAAAAAA";
 const CONN_B = "01HXYZCONNBBBBBBBBBBBBBBBB";
 
-const opts = (connectionId = CONN_A): SpawnOptions => ({
-  connectionId,
+const opts = (projectId = CONN_A): SpawnOptions => ({
+  projectId,
   region: "eu",
   databases: [
     {
       name: "main",
-      connectionDatabaseId: "01HXYZMAIN0000000000000000",
+      projectDatabaseId: "01HXYZMAIN0000000000000000",
       dsn: "postgres://x",
       tableAccess: { default: "deny", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -58,10 +58,10 @@ const opts = (connectionId = CONN_A): SpawnOptions => ({
 });
 
 async function makeRegWithActive(
-  connectionId = CONN_A,
+  projectId = CONN_A,
 ): Promise<ContainerRegistry> {
   const reg = new ContainerRegistry(new FakeSpawner());
-  await reg.acquire(opts(connectionId));
+  await reg.acquire(opts(projectId));
   return reg;
 }
 
@@ -183,13 +183,13 @@ describe("pushPolicy", () => {
     ).rejects.toThrow("ECONNREFUSED");
   });
 
-  // Per-connection push mutex: closes the narrower race the FOR UPDATE
-  // lock on the parent connection row doesn't cover. Two writers can
+  // Per-project push mutex: closes the narrower race the FOR UPDATE
+  // lock on the parent project row doesn't cover. Two writers can
   // commit in order, then both reach the network and (because HTTP
   // isn't ordered) the older view can land last, leaving the engine on
-  // stale state. The mutex chains pushes for the same connection so the
+  // stale state. The mutex chains pushes for the same project so the
   // second push doesn't start until the first one resolves.
-  it("serializes two concurrent pushes for the same connection (FIFO push order)", async () => {
+  it("serializes two concurrent pushes for the same project (FIFO push order)", async () => {
     const CONN_SERIAL = "01HXYZCONNSERIAL0000000000";
     const reg = await makeRegWithActive(CONN_SERIAL);
 
@@ -240,7 +240,7 @@ describe("pushPolicy", () => {
     expect(peakInFlight).toBe(1);
   });
 
-  it("does not block pushes for different connections (mutex is per-connection)", async () => {
+  it("does not block pushes for different projects (mutex is per-project)", async () => {
     const reg = await makeRegWithActive(CONN_A);
     // Acquire a second container so /admin/policy resolves for CONN_B too.
     await reg.acquire(opts(CONN_B));
@@ -289,7 +289,7 @@ describe("pushPolicy", () => {
 
     await new Promise((r) => setTimeout(r, 10));
     // CONN_B shouldn't be blocked by CONN_A — both pushes can be in
-    // flight at the same time since the mutex keys on connection.
+    // flight at the same time since the mutex keys on project.
     expect(peakConcurrent).toBe(2);
 
     resolveA!();

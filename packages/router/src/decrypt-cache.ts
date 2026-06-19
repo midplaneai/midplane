@@ -18,9 +18,9 @@
 // credential for up to TTL minutes (the security incident the rotation
 // path is meant to prevent).
 //
-// Key shape: cache entries are scoped to `(region, connectionDatabaseId)`
-// — the per-credential row in connection_databases. Keying per-DB rather
-// than per-connection means rotating one DB's DSN does not invalidate
+// Key shape: cache entries are scoped to `(region, projectDatabaseId)`
+// — the per-credential row in project_databases. Keying per-DB rather
+// than per-project means rotating one DB's DSN does not invalidate
 // cached plaintext for siblings; each DB has its own grace window.
 
 import type { Region } from "@midplane-cloud/kms";
@@ -81,13 +81,13 @@ export class DecryptCache {
    * `now()`, which never trips the fence.
    */
   set(
-    connectionDatabaseId: string,
+    projectDatabaseId: string,
     region: Region,
     plaintext: string,
     decryptStartedAt?: number,
   ): boolean {
     const now = this.now();
-    const key = `${region}:${connectionDatabaseId}`;
+    const key = `${region}:${projectDatabaseId}`;
     const fenceAt = this.invalidatedAt.get(key);
     if (fenceAt !== undefined && decryptStartedAt !== undefined && decryptStartedAt < fenceAt) {
       // The decryption began before the most recent invalidate; this
@@ -118,8 +118,8 @@ export class DecryptCache {
    *  - "expired": past TTL + grace — must refuse new sessions.
    *  - "miss"  : never cached.
    */
-  get(connectionDatabaseId: string, region: Region): DecryptResult {
-    const key = `${region}:${connectionDatabaseId}`;
+  get(projectDatabaseId: string, region: Region): DecryptResult {
+    const key = `${region}:${projectDatabaseId}`;
     const entry = this.map.get(key);
     if (!entry) return { kind: "miss" };
     const now = this.now();
@@ -137,8 +137,8 @@ export class DecryptCache {
     return { kind: "expired" };
   }
 
-  invalidate(connectionDatabaseId: string, region: Region): void {
-    const key = `${region}:${connectionDatabaseId}`;
+  invalidate(projectDatabaseId: string, region: Region): void {
+    const key = `${region}:${projectDatabaseId}`;
     this.invalidatedAt.set(key, this.now());
     this.evict(key);
   }

@@ -101,7 +101,7 @@ export default async function SsoSettingsPage() {
           />
           <Card>
             <CardHeader>
-              <CardTitle>saml connection</CardTitle>
+              <CardTitle>saml project</CardTitle>
             </CardHeader>
             <CardContent>
               <SsoSettings

@@ -2,7 +2,7 @@
 # Compile the self-contained engine binary for self-host process-spawn.
 #
 # In self-host (MIDPLANE_SELF_HOST=1) the control plane exec's `midplane server`
-# as a subprocess per connection (ProcessSpawner) — no Docker daemon. This
+# as a subprocess per project (ProcessSpawner) — no Docker daemon. This
 # produces the binary it spawns. Point ProcessSpawner at it with
 # MIDPLANE_ENGINE_BIN, or put it on PATH as `midplane`.
 #

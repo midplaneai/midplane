@@ -20,7 +20,7 @@ test("dashboard redirects unauthenticated visitors", async ({ page }) => {
   const res = await page.goto("/dashboard");
   // middleware bounces unauthenticated visitors to /sign-in. We don't assert
   // the exact destination URL — only that we don't render the dashboard.
-  await expect(page.getByText("No connections yet")).not.toBeVisible();
+  await expect(page.getByText("No projects yet")).not.toBeVisible();
   // The response itself may be a redirect or the sign-in page; either is
   // fine as long as we left the dashboard route.
   expect(res?.status() ?? 200).toBeLessThan(500);

@@ -18,9 +18,9 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   {
     href: "/dashboard",
-    label: "Connections",
+    label: "Projects",
     icon: Database,
-    match: (p) => p === "/dashboard" || p.startsWith("/connections"),
+    match: (p) => p === "/dashboard" || p.startsWith("/projects"),
   },
   {
     href: "/audit",

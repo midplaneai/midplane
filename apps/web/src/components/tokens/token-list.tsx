@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Badge } from "@/components/ui/badge";
-import { ConnectAgentGuide } from "@/components/connections/connect-agent-guide";
+import { ConnectAgentGuide } from "@/components/projects/connect-agent-guide";
 import { CreateTokenModal } from "@/components/tokens/create-token-modal";
 import type { CreateTokenAction } from "@/components/tokens/create-token-modal";
 import {
@@ -36,8 +36,8 @@ const STALE_DAYS = 30;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export async function TokenList({
-  connectionId,
-  connectionName,
+  projectId,
+  projectName,
   region,
   databases = [],
   tokens,
@@ -46,18 +46,18 @@ export async function TokenList({
   tokenLimit,
   now = new Date(),
 }: {
-  connectionId: string;
-  connectionName?: string | null;
+  projectId: string;
+  projectName?: string | null;
   region?: string | null;
-  /** This connection's databases, for the token scope picker (P6.1). */
-  databases?: Array<{ connectionDatabaseId: string; name: string }>;
+  /** This project's databases, for the token scope picker (P6.1). */
+  databases?: Array<{ projectDatabaseId: string; name: string }>;
   tokens: TokenSummary[];
   createAction: CreateTokenAction;
   revokeAction: RevokeTokenAction;
   /** Set when the org is already at its (finite) token cap — the create
    *  modal opens to a limit panel (upgrade + revoke-to-free-a-slot) instead
    *  of the form. The cap is org-wide, so this is decided by the page from
-   *  total usable-token usage, not this connection's rows. */
+   *  total usable-token usage, not this project's rows. */
   tokenLimit?: { limit: number; plan: string; upgradeUrl: string };
   now?: Date;
 }) {
@@ -73,7 +73,7 @@ export async function TokenList({
   const creatorIds = Array.from(new Set(sorted.map((t) => t.createdByUserId)));
   const creators = await resolveUsers(creatorIds);
 
-  // No agents yet → lead with the quickstart: teach that this connection is
+  // No agents yet → lead with the quickstart: teach that this project is
   // an MCP server, then a single prominent "Connect" CTA, with the setup
   // card as a preview so they see what they're about to wire up.
   if (sorted.length === 0) {
@@ -89,7 +89,7 @@ export async function TokenList({
             Connect your first agent
           </h2>
           <p className="text-sm text-muted-foreground">
-            Generate this connection&apos;s first{" "}
+            Generate this project&apos;s first{" "}
             <strong className="font-medium text-foreground">
               MCP server URL
             </strong>{" "}
@@ -98,15 +98,15 @@ export async function TokenList({
           </p>
         </div>
         <CreateTokenModal
-          connectionId={connectionId}
-          connectionName={connectionName}
+          projectId={projectId}
+          projectName={projectName}
           region={region}
           databases={databases}
           action={createAction}
           triggerLabel="Connect an agent"
           limitReached={tokenLimit}
         />
-        <ConnectAgentGuide connectionName={connectionName} region={region} />
+        <ConnectAgentGuide projectName={projectName} region={region} />
       </section>
     );
   }
@@ -129,8 +129,8 @@ export async function TokenList({
           </p>
         </div>
         <CreateTokenModal
-          connectionId={connectionId}
-          connectionName={connectionName}
+          projectId={projectId}
+          projectName={projectName}
           region={region}
           databases={databases}
           action={createAction}
@@ -142,7 +142,7 @@ export async function TokenList({
         {sorted.map((token) => (
           <TokenRow
             key={token.id}
-            connectionId={connectionId}
+            projectId={projectId}
             token={token}
             creatorLabel={creators.get(token.createdByUserId)?.label ?? token.createdByUserId}
             creatorResolved={creators.get(token.createdByUserId)?.resolved ?? false}
@@ -163,7 +163,7 @@ export async function TokenList({
           how to connect an agent
         </summary>
         <div className="px-4 pb-4">
-          <ConnectAgentGuide connectionName={connectionName} region={region} />
+          <ConnectAgentGuide projectName={projectName} region={region} />
         </div>
       </details>
     </section>
@@ -171,14 +171,14 @@ export async function TokenList({
 }
 
 function TokenRow({
-  connectionId,
+  projectId,
   token,
   creatorLabel,
   creatorResolved,
   revokeAction,
   now,
 }: {
-  connectionId: string;
+  projectId: string;
   token: TokenSummary;
   creatorLabel: string;
   creatorResolved: boolean;
@@ -216,7 +216,7 @@ function TokenRow({
       {token.status === "active" ? (
         <div className="shrink-0">
           <RevokeTokenButton
-            connectionId={connectionId}
+            projectId={projectId}
             tokenId={token.id}
             tokenName={token.name}
             action={revokeAction}

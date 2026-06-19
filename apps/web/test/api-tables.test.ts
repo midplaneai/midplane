@@ -1,4 +1,4 @@
-// Route-layer coverage for GET /api/connections/[id]/tables — the
+// Route-layer coverage for GET /api/projects/[id]/tables — the
 // per-db rewrite (REGRESSION: was main-db-only; the permission grid's
 // autocomplete used to introspect the wrong database on non-main db
 // pages). Pins: the ?db= default ("main", back-compat), the 404
@@ -21,9 +21,9 @@ const CONN = { id: "conn-1", customerId: customer.id, region: "eu" as const };
 let currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
 let getConnDbMock = vi.fn(async (_c: unknown, _id: string, name: string) =>
   ({
-    connection: CONN,
+    project: CONN,
     database: { id: `cdb-${name}`, name, encryptedDsn: new Uint8Array([1]) },
-  }) as { connection: typeof CONN; database: { id: string; name: string } } | null,
+  }) as { project: typeof CONN; database: { id: string; name: string } } | null,
 );
 let resolveMock = vi.fn(async () => ({
   ok: true,
@@ -37,11 +37,11 @@ vi.mock("@/lib/customer", () => ({
   },
 }));
 
-vi.mock("@/lib/connections", () => ({
+vi.mock("@/lib/projects", () => ({
   DEFAULT_DATABASE_NAME: "main",
   isValidDatabaseName: (s: unknown) =>
     typeof s === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(s),
-  get getConnectionWithDatabaseAndCredential() {
+  get getProjectWithDatabaseAndCredential() {
     return getConnDbMock;
   },
 }));
@@ -65,7 +65,7 @@ vi.mock("@/lib/list-tables", () => ({
 beforeEach(() => {
   currentCustomerMock = vi.fn(async () => customer);
   getConnDbMock = vi.fn(async (_c, _id, name: string) => ({
-    connection: CONN,
+    project: CONN,
     database: { id: `cdb-${name}`, name, encryptedDsn: new Uint8Array([1]) },
   }));
   resolveMock = vi.fn(async () => ({ ok: true, plaintext: "postgres://decrypted" }));
@@ -77,16 +77,16 @@ afterEach(() => {
 });
 
 async function loadRoute() {
-  return await import("../src/app/api/connections/[id]/tables/route.ts");
+  return await import("../src/app/api/projects/[id]/tables/route.ts");
 }
 
 const params = { params: Promise.resolve({ id: CONN.id }) };
 
 function get(query: string): Request {
-  return new Request(`https://midplane.test/api/connections/conn-1/tables${query}`);
+  return new Request(`https://midplane.test/api/projects/conn-1/tables${query}`);
 }
 
-describe("GET /api/connections/[id]/tables (per-db)", () => {
+describe("GET /api/projects/[id]/tables (per-db)", () => {
   it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { GET } = await loadRoute();

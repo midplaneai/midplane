@@ -1,6 +1,6 @@
 // GET /api/dashboard/freshness — slim per-customer snapshot of the
 // freshness signals the dashboard polls every 60s. Returns the
-// connection-level cursor (lastIndexedAt + lastErrorAt) AND per-DB
+// project-level cursor (lastIndexedAt + lastErrorAt) AND per-DB
 // lastQueryAt aggregated from audit_events_index, but no policy /
 // ciphertext / mcp_token. The client hook merges this into local
 // state and re-renders only the freshness dots + meta lines; rename
@@ -12,7 +12,7 @@
 // Cache: no-store. The route exists to deliver fresher-than-page-cache
 // data; an HTTP cache here would defeat the purpose.
 
-import { getDashboardFreshness } from "@/lib/connections";
+import { getDashboardFreshness } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
 import { resolvePlan } from "@/lib/plan";
 

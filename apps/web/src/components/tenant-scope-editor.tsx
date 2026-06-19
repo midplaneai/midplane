@@ -56,13 +56,13 @@ interface ScopeRow {
 
 export function TenantScopeEditor({
   initialConfig,
-  connectionId,
+  projectId,
   action,
 }: {
   initialConfig: TenantScopeConfig;
   /** For the table-name autocomplete (introspects the customer's DB
    *  schema). Same endpoint the permission grid uses. */
-  connectionId: string;
+  projectId: string;
   // Server action signature: (FormData) => Promise<void>. The form
   // posts a single `config` field with JSON-encoded TenantScopeConfig.
   action: (formData: FormData) => Promise<void>;
@@ -298,7 +298,7 @@ export function TenantScopeEditor({
                     <TableNameInput
                       value={r.table}
                       onChange={(v) => updateRow(r.key, { table: v })}
-                      connectionId={connectionId}
+                      projectId={projectId}
                       excludeNames={
                         new Set(
                           [...usedNames].filter((n) => n !== r.table.trim()),

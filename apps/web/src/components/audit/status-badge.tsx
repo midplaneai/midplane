@@ -110,8 +110,8 @@ export function eventSummary(status: QueryStatus, payload: unknown): string {
       // Pause/resume ride in the POLICY_RELOAD bucket (same as REGION_CHANGED)
       // but carry an `action` marker so the list reads the real event rather
       // than a generic "policy reloaded".
-      if (p?.action === "paused") return "connection paused by owner";
-      if (p?.action === "resumed") return "connection resumed by owner";
+      if (p?.action === "paused") return "project paused by owner";
+      if (p?.action === "resumed") return "project resumed by owner";
       // Engine POLICY_RELOADED rows must dispatch BEFORE the guardrails
       // sniff: since OSS 0.9.0 every hot-swap payload carries a
       // `guardrails` posture object alongside sections_changed, so the

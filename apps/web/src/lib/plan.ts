@@ -6,7 +6,7 @@
 // three it's `free`. hasEntitlement(feature) gates ee features (e.g. "sso") on
 // the ee build switch AND the resolved plan caps.
 // The numeric caps below are OURS — boolean entitlements can't answer "10
-// connections", so we map plan tier to caps here and count rows in Postgres
+// projects", so we map plan tier to caps here and count rows in Postgres
 // ourselves. Callers thread `caps` down to the auth-free enforcement functions
 // unchanged.
 //
@@ -19,10 +19,10 @@ import { isSelfHost } from "./self-host.ts";
 export type Plan = "free" | "pro" | "team";
 
 export interface PlanCaps {
-  /** Max connections. Infinity = unlimited (Team). */
-  connections: number;
+  /** Max projects. Infinity = unlimited (Team). */
+  projects: number;
   /** Max total USABLE MCP tokens (agent identities) across all the
-   *  customer's connections. The per-connection default token counts.
+   *  customer's projects. The per-project default token counts.
    *  Infinity = unlimited (Team). See decision D8. */
   tokens: number;
   /** How far back /audit reads are visible, in days. This is a query-time
@@ -39,22 +39,22 @@ export interface PlanCaps {
 }
 
 export const CAPS: Record<Plan, PlanCaps> = {
-  // Tokens > connections on every finite tier ON PURPOSE — they are not the
-  // same axis. A token IS the value metric (agents governed); a connection is
-  // an infra count. Two forces push the token cap above the connection cap:
+  // Tokens > projects on every finite tier ON PURPOSE — they are not the
+  // same axis. A token IS the value metric (agents governed); a project is
+  // an infra count. Two forces push the token cap above the project cap:
   //   1. Zero-downtime rotation is mint-new → cut the agent over → revoke-old,
   //      so it needs +1 usable slot over steady state. A cap of 1 made safe
   //      rotation impossible on a product whose whole pitch is credential
   //      hygiene — the N+1 floor, not a pricing lever.
-  //   2. The headline demo is many agents on ONE connection, each with its own
+  //   2. The headline demo is many agents on ONE project, each with its own
   //      identity in the audit log. With one token you cannot even show it.
-  // Free stays gated on connections (1) / retention (7d) / seats (1) / SSO, so
+  // Free stays gated on projects (1) / retention (7d) / seats (1) / SSO, so
   // a generous token count there sells the multi-agent story without
   // cannibalizing Pro.
-  free: { connections: 1, tokens: 5, auditRetentionDays: 7, sso: false, seats: 1 },
-  pro: { connections: 10, tokens: 50, auditRetentionDays: 30, sso: false, seats: 10 },
+  free: { projects: 1, tokens: 5, auditRetentionDays: 7, sso: false, seats: 1 },
+  pro: { projects: 10, tokens: 50, auditRetentionDays: 30, sso: false, seats: 10 },
   team: {
-    connections: Infinity,
+    projects: Infinity,
     tokens: Infinity,
     // Team retention EXCEEDS Pro (90 vs 30): audit history is what the
     // compliance buyer at this tier actually pays for, so the premium tier
@@ -67,7 +67,7 @@ export const CAPS: Record<Plan, PlanCaps> = {
 };
 
 /** Uncapped self-host caps: it's your DB, your infra (the metering levers are a
- *  cloud-billing construct). Unlimited connections / tokens / seats and full
+ *  cloud-billing construct). Unlimited projects / tokens / seats and full
  *  audit history — auditRetentionDays = Infinity makes retentionSince() return
  *  null, so reads apply no window clamp. `sso` stays FALSE: it's ee-gated and
  *  the signed-license verifier is deferred (D3), so community runs uncapped-core
@@ -75,20 +75,20 @@ export const CAPS: Record<Plan, PlanCaps> = {
  *  hasEntitlement("sso") reads this `sso:false`, so SSO stays dark in self-host
  *  even if MIDPLANE_EE were set. */
 export const SELF_HOST_CAPS: PlanCaps = {
-  connections: Infinity,
+  projects: Infinity,
   tokens: Infinity,
   auditRetentionDays: Infinity,
   sso: false,
   seats: Infinity,
 };
 
-/** Thrown by createConnection / createToken when a plan cap is hit. Caught
+/** Thrown by createProject / createToken when a plan cap is hit. Caught
  *  at the call sites and translated to a 402 (JSON API) or inline upgrade
  *  CTA (browser forms) — never bubbles to the user as a raw 500. Mirrors
  *  the typed-error idiom (DuplicateTokenName, LastDatabaseProtected). */
 export class PlanLimitError extends Error {
   constructor(
-    public readonly resource: "connections" | "tokens",
+    public readonly resource: "projects" | "tokens",
     public readonly limit: number,
     public readonly plan: Plan,
   ) {
@@ -102,22 +102,22 @@ export interface ResolvedPlan {
   caps: PlanCaps;
 }
 
-/** Which plan cap (if any) blocks creating ONE more connection right now.
+/** Which plan cap (if any) blocks creating ONE more project right now.
  *
- *  Pure + read-only: mirrors the order of checks inside createConnection
- *  (connection cap first, then the token slot the auto-minted default
+ *  Pure + read-only: mirrors the order of checks inside createProject
+ *  (project cap first, then the token slot the auto-minted default
  *  consumes) so a pre-flight gate renders the SAME resource the authoritative
  *  transaction would throw on. Returns null when a create would succeed.
  *
- *  This is advisory UX only — the locked count in createConnection is the
+ *  This is advisory UX only — the locked count in createProject is the
  *  real enforcer and is what closes the concurrent-create race. Callers use
  *  this to hide the create form / show usage, never to skip that check. */
-export function connectionCreateBlock(
-  usage: { connections: number; tokens: number },
+export function projectCreateBlock(
+  usage: { projects: number; tokens: number },
   caps: PlanCaps,
-): { resource: "connections" | "tokens"; limit: number } | null {
-  if (usage.connections >= caps.connections) {
-    return { resource: "connections", limit: caps.connections };
+): { resource: "projects" | "tokens"; limit: number } | null {
+  if (usage.projects >= caps.projects) {
+    return { resource: "projects", limit: caps.projects };
   }
   if (usage.tokens >= caps.tokens) {
     return { resource: "tokens", limit: caps.tokens };
@@ -130,11 +130,11 @@ export function connectionCreateBlock(
 export const UPGRADE_URL = "/billing";
 
 /** JSON body for a 402 Payment Required when a plan cap is hit (decision D5).
- *  Shared by POST /api/connections and POST /api/connections/[id]/tokens so
+ *  Shared by POST /api/projects and POST /api/projects/[id]/tokens so
  *  the machine-readable shape is identical on both routes. */
 export function planLimitBody(err: PlanLimitError): {
   error: "plan_limit";
-  resource: "connections" | "tokens";
+  resource: "projects" | "tokens";
   limit: number;
   plan: Plan;
   upgradeUrl: string;
@@ -159,7 +159,7 @@ export function planLimitBody(err: PlanLimitError): {
  *
  *  Dynamic import keeps the top of this module dependency-free so the pure
  *  exports (CAPS, PlanLimitError, types) stay importable by tokens.ts /
- *  connections.ts + their unit tests without pulling auth/db into those paths. */
+ *  projects.ts + their unit tests without pulling auth/db into those paths. */
 export async function resolvePlan(): Promise<ResolvedPlan> {
   // Self-host is uncapped core. Returned before any DB read — keeps this the
   // single entitlement seam without pulling customer.ts into the self-host

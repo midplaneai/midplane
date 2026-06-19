@@ -9,11 +9,11 @@ import {
   DatabaseNameTaken,
   isValidDatabaseName,
   isValidDsn,
-} from "@/lib/connections";
+} from "@/lib/projects";
 import type { Customer } from "@midplane-cloud/db";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 
-// Shared body of the add-database server action. The connection
+// Shared body of the add-database server action. The project
 // workspace's Database pane posts the AddDatabaseForm (via AddDatabaseSheet);
 // its thin "use server" action (actions must live in server files) delegates
 // here and then revalidates its own paths. Kept shared so any future surface
@@ -21,21 +21,21 @@ import { getMcpProxyContext } from "@/lib/mcp-proxy";
 //
 // Error contract: throws Error with a user-renderable message — the
 // client form wraps the action in try/catch and renders inline (see
-// add-database-form.tsx). Tamper-shaped failures (missing connectionId)
+// add-database-form.tsx). Tamper-shaped failures (missing projectId)
 // also throw; they're not reachable through the real form.
 //
 // Callers' revalidation duty: besides their own surface, membership
-// changes alter EVERY per-DB page of the connection (the sibling strip
+// changes alter EVERY per-DB page of the project (the sibling strip
 // in databases/[name]/layout.tsx renders the db list) — revalidate the
 // bracketed page path too.
 
 export async function addDatabaseFromForm(
   customer: Customer,
   formData: FormData,
-): Promise<{ connectionId: string; name: string }> {
-  const connectionId = formData.get("connectionId");
-  if (typeof connectionId !== "string" || connectionId.length === 0) {
-    throw new Error("missing connectionId");
+): Promise<{ projectId: string; name: string }> {
+  const projectId = formData.get("projectId");
+  if (typeof projectId !== "string" || projectId.length === 0) {
+    throw new Error("missing projectId");
   }
   const nameRaw = formData.get("name");
   if (typeof nameRaw !== "string" || !isValidDatabaseName(nameRaw.trim())) {
@@ -51,7 +51,7 @@ export async function addDatabaseFromForm(
   // The form posts a string; validate against the canonical enum so a
   // tampered request can't smuggle in something the spawner would
   // refuse. Missing field falls back to "read" — same posture as
-  // createConnection.
+  // createProject.
   const accessRaw = formData.get("default_access");
   const defaultAccess: AccessLevel =
     typeof accessRaw === "string" &&
@@ -63,7 +63,7 @@ export async function addDatabaseFromForm(
   try {
     const result = await addDatabase(
       customer,
-      connectionId,
+      projectId,
       dbName,
       dsn,
       defaultAccess,
@@ -76,5 +76,5 @@ export async function addDatabaseFromForm(
     }
     throw err;
   }
-  return { connectionId, name: dbName };
+  return { projectId, name: dbName };
 }

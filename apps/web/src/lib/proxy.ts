@@ -15,13 +15,13 @@
 // header. See STRIP_RESPONSE_HEADERS below.
 //
 // Multi-DB rollout (0008): one OSS container fronts N DBs. The proxy
-// resolves the parent connection + its children, decrypts each DSN
+// resolves the parent project + its children, decrypts each DSN
 // independently (one DecryptCache entry per credential), then hands the
 // full set to the spawner — which writes the multi-DB YAML and injects
 // per-DB env vars.
 //
 // PR2 of mcp_url_auth_security (hybrid model):
-//   - resolveByToken returns a token id alongside connection+databases.
+//   - resolveByToken returns a token id alongside project+databases.
 //   - The proxy injects `X-Midplane-Token-Id: <tokenId>` on the forwarded
 //     request; OSS 0.6.0 session-freezes the value on MCP initialize and
 //     stamps it on every emitted audit row.
@@ -32,7 +32,7 @@
 import {
   bumpLastUsed,
   resolveByToken,
-  resolveConnectionForCustomer,
+  resolveProjectForCustomer,
   resolveScope,
   scopeHeaderValue,
 } from "@midplane-cloud/router";
@@ -42,8 +42,8 @@ import {
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
-  type Connection,
-  type ConnectionDatabase,
+  type Project,
+  type ProjectDatabase,
   type Region,
 } from "@midplane-cloud/db";
 import { member } from "@midplane-cloud/db/auth-schema";
@@ -56,6 +56,8 @@ import { isSelfHost, SELF_HOST_CUSTOMER_ID } from "./self-host.ts";
 import { ensureOAuthAttributionToken } from "./tokens.ts";
 
 const HOP_BY_HOP = new Set([
+  // The HTTP/1.1 hop-by-hop header (RFC 7230) — NOT the product "project"
+  // concept; the rename sweep must never touch this literal.
   "connection",
   "keep-alive",
   "proxy-authenticate",
@@ -97,7 +99,7 @@ export function filterUpstreamResponseHeaders(src: Headers): Headers {
 //   X-Midplane-Token-Id: always set to our resolved attribution id. OSS 0.6.0
 //     reads it at MCP initialize, session-freezes it, and stamps it on every
 //     audit row (re-sends post-initialize are ignored). For the OAuth path it's
-//     the (connection, client) attribution row id, so audit attribution is
+//     the (project, client) attribution row id, so audit attribution is
 //     identical across auth methods. NEVER the plaintext token.
 //
 //   X-Midplane-Scope: the per-agent DB scope (P6.1). We delete any client value
@@ -185,10 +187,10 @@ export async function proxyMcp(
   if (!resolved.ok) {
     // Paused → distinct 403 so the agent (and our logs) can tell "owner
     // hit the kill switch" apart from a bad/unknown token (404). The token
-    // and its URL are intact; resuming the connection restores service.
+    // and its URL are intact; resuming the project restores service.
     if (resolved.reason === "paused") {
       return Response.json(
-        { ok: false, error: "connection_paused" },
+        { ok: false, error: "project_paused" },
         { status: 403 },
       );
     }
@@ -214,7 +216,7 @@ export async function proxyMcp(
   );
 
   return forwardResolved(req, {
-    connection: resolved.connection,
+    project: resolved.project,
     databases: resolved.databases,
     tokenId: resolved.tokenId,
     scopeHeader: scopeHeaderValue(scope),
@@ -231,22 +233,22 @@ export interface OAuthMcpSession {
 }
 
 /** MCP-OAuth ingress: the agent presented an OAuth 2.1 bearer (already validated
- *  by withMcpAuth) and reached `/mcp/<connectionId>`. The bearer authenticates
- *  the user + OAuth client; the path selects the connection. We:
+ *  by withMcpAuth) and reached `/mcp/<projectId>`. The bearer authenticates
+ *  the user + OAuth client; the path selects the project. We:
  *    1. require the `mcp` scope on the token (else 403 insufficient_scope),
  *    2. map the OAuth user → their Midplane customer (the tenant),
- *    3. resolve the connection ONLY if that customer owns it (else 404),
- *    4. mint-or-get the (connection, client) attribution token so the engine
+ *    3. resolve the project ONLY if that customer owns it (else 404),
+ *    4. mint-or-get the (project, client) attribution token so the engine
  *       still stamps a per-agent mcp_token_id on every audit row,
  *    5. forward to the engine through the SAME spawn/forward core as the URL
  *       path — same decrypt, same policy validation, same response filtering.
  *
  *  Coarse v1 scope model: an `mcp`-scoped bearer for a user who owns the
- *  connection grants full MCP access to it; per-connection policy/guardrails
+ *  project grants full MCP access to it; per-project policy/guardrails
  *  still apply in the engine exactly as for URL tokens. */
 export async function proxyMcpOAuth(
   req: Request,
-  connectionId: string,
+  projectId: string,
   session: OAuthMcpSession,
 ): Promise<Response> {
   const region = bootRegion();
@@ -257,7 +259,7 @@ export async function proxyMcpOAuth(
   if (!userId || !clientId) {
     // A well-formed access token always carries both; absence means a
     // malformed/forged record slipped through. Refuse without confirming the
-    // connection exists.
+    // project exists.
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
@@ -265,7 +267,7 @@ export async function proxyMcpOAuth(
   // authorization to reach a database — a token minted for some other purpose
   // (a future OAuth-protected resource, or a client that requested only
   // openid/profile) must not grant MCP access. Require the `mcp` capability
-  // scope before touching any connection. Our authorize before-hook forces this
+  // scope before touching any project. Our authorize before-hook forces this
   // scope onto every flow we issue (lib/auth.ts), so compliant clients always
   // carry it; this check is the defense-in-depth that rejects tokens that don't.
   const scopes = new Set((session.scopes ?? "").split(" ").filter(Boolean));
@@ -284,27 +286,27 @@ export async function proxyMcpOAuth(
   const customerId = await resolveCustomerIdForUser(db, userId, region);
   if (!customerId) {
     // Authenticated user with no Midplane customer (e.g. signed up but never
-    // picked a region). Nothing they can own — 403, not a connection-probing
+    // picked a region). Nothing they can own — 403, not a project-probing
     // 404/401.
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
 
-  const resolved = await resolveConnectionForCustomer(db, connectionId, customerId);
+  const resolved = await resolveProjectForCustomer(db, projectId, customerId);
   if (!resolved.ok) {
     if (resolved.reason === "paused") {
       return Response.json(
-        { ok: false, error: "connection_paused" },
+        { ok: false, error: "project_paused" },
         { status: 403 },
       );
     }
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }
 
-  // Per-agent attribution: one mcp_tokens row per (connection, OAuth client).
+  // Per-agent attribution: one mcp_tokens row per (project, OAuth client).
   // Its id is what the engine stamps as mcp_token_id — so the OAuth flow keeps
   // the SAME audit attribution shape the URL token had.
   const tokenId = await ensureOAuthAttributionToken(db, {
-    connectionId: resolved.connection.id,
+    projectId: resolved.project.id,
     clientId,
     userId,
   });
@@ -326,10 +328,10 @@ export async function proxyMcpOAuth(
     resolved.databases,
   );
 
-  // No grant for any of this connection's DBs → the user owns it but this agent
+  // No grant for any of this project's DBs → the user owns it but this agent
   // was approved for nothing here. Consent is FORCED on every authorize, and the
   // picker writes a grant per chosen DB, so an empty grant means "approved no
-  // databases" → 403 (fail closed), not a connection-probing 404. Self-host is
+  // databases" → 403 (fail closed), not a project-probing 404. Self-host is
   // the exception: single-tenant, so an unscoped owner gets all their DBs (empty
   // → full access) rather than being locked out of their own data.
   if (scope.size === 0 && !isSelfHost()) {
@@ -339,14 +341,14 @@ export async function proxyMcpOAuth(
         status: 403,
         headers: {
           "WWW-Authenticate":
-            'Bearer error="insufficient_scope", error_description="no database access granted for this connection; re-connect to choose databases"',
+            'Bearer error="insufficient_scope", error_description="no database access granted for this project; re-connect to choose databases"',
         },
       },
     );
   }
 
   return forwardResolved(req, {
-    connection: resolved.connection,
+    project: resolved.project,
     databases: resolved.databases,
     tokenId,
     scopeHeader: scopeHeaderValue(scope),
@@ -373,7 +375,7 @@ async function resolveCustomerIdForUser(
 }
 
 /** The shared engine spawn + forward core, reached by BOTH the URL-token path
- *  (proxyMcp) and the OAuth path (proxyMcpOAuth) once a connection + databases
+ *  (proxyMcp) and the OAuth path (proxyMcpOAuth) once a project + databases
  *  + attribution token id are resolved. Decrypts each DSN, validates policy at
  *  the boundary, spawns/reuses the container, forwards the Streamable HTTP
  *  request, and streams the filtered response back. The ONLY auth-method-
@@ -381,8 +383,8 @@ async function resolveCustomerIdForUser(
 async function forwardResolved(
   req: Request,
   resolved: {
-    connection: Connection;
-    databases: ConnectionDatabase[];
+    project: Project;
+    databases: ProjectDatabase[];
     tokenId: string;
     // Pre-serialized X-Midplane-Scope value (db name → access), or null when
     // the credential is unscoped (full access). Resolved per-path by the
@@ -390,14 +392,14 @@ async function forwardResolved(
     scopeHeader: string | null;
   },
 ): Promise<Response> {
-  const { connection, databases, tokenId, scopeHeader } = resolved;
+  const { project, databases, tokenId, scopeHeader } = resolved;
   if (databases.length === 0) {
-    // Connection without children is a torn migration / data corruption —
+    // Project without children is a torn migration / data corruption —
     // can't spawn a container with no DSN. Treat as not_found to avoid
     // leaking the row's existence; the underlying issue surfaces in logs.
     // Log with tokenId only, never the plaintext token.
     console.error(
-      `forwardResolved: connection ${connection.id} has no databases (tokenId=${tokenId})`,
+      `forwardResolved: project ${project.id} has no databases (tokenId=${tokenId})`,
     );
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }
@@ -411,9 +413,9 @@ async function forwardResolved(
   const spawnDatabases = [];
   for (const cdb of databases) {
     const decrypt = await ctx.resolver.resolve({
-      connectionDatabase: cdb,
-      region: connection.region,
-      customerId: connection.customerId,
+      projectDatabase: cdb,
+      region: project.region,
+      customerId: project.customerId,
     });
     if (!decrypt.ok) {
       return Response.json(
@@ -453,7 +455,7 @@ async function forwardResolved(
     }
     spawnDatabases.push({
       name: cdb.name,
-      connectionDatabaseId: cdb.id,
+      projectDatabaseId: cdb.id,
       dsn: decrypt.plaintext,
       tableAccess,
       tenantScope,
@@ -464,8 +466,8 @@ async function forwardResolved(
   let upstream;
   try {
     upstream = await ctx.registry.acquire({
-      connectionId: connection.id,
-      region: connection.region,
+      projectId: project.id,
+      region: project.region,
       databases: spawnDatabases,
     });
   } catch (err) {
@@ -498,7 +500,7 @@ async function forwardResolved(
   } catch (err) {
     // Container may have been killed externally. Drop registry entry so the
     // next request respawns.
-    await ctx.registry.invalidate(connection.id).catch(() => undefined);
+    await ctx.registry.invalidate(project.id).catch(() => undefined);
     console.error("proxy fetch failed", err);
     return Response.json(
       {

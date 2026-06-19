@@ -17,9 +17,9 @@
 //      indexed (id <= cursor.lastId).
 //
 // PR2 of mcp_url_auth_security:
-//   - Cursor rows keyed on connection_id (was: plaintext mcp_token).
-//     Synthetic id PK; nullable connection_id FK ON DELETE SET NULL so a
-//     cursor survives connection deletion long enough to drain the
+//   - Cursor rows keyed on project_id (was: plaintext mcp_token).
+//     Synthetic id PK; nullable project_id FK ON DELETE SET NULL so a
+//     cursor survives project deletion long enough to drain the
 //     engine's remaining rows.
 //   - mcp_token_id propagated from the OSS pull JSON (lockstep OSS 0.6.0)
 //     to audit_events_index.mcp_token_id so dashboards can attribute
@@ -29,7 +29,7 @@
 //   - Postgres unreachable: leave cursor row untouched, log onError, do
 //     NOT issue the container DELETE. Container's SQLite keeps growing
 //     until indexer recovers — this is the design.
-//   - Container 5xx / network error: log onError, skip this connection
+//   - Container 5xx / network error: log onError, skip this project
 //     this tick, retry next tick. Cursor unchanged.
 //   - Container 401: indexer token rotation drift; log loudly and skip
 //     — operator alert.
@@ -41,7 +41,7 @@ import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
-  connections,
+  projects,
   indexerCursors,
   mcpTokens,
 } from "@midplane-cloud/db";
@@ -82,7 +82,7 @@ export interface IndexerOptions {
   onError?: (
     err: unknown,
     ctx: {
-      connectionId: string;
+      projectId: string;
       phase: "fetch" | "write" | "retention";
     },
   ) => void;
@@ -163,7 +163,7 @@ export class Indexer {
     | ((
         err: unknown,
         ctx: {
-          connectionId: string;
+          projectId: string;
           phase: "fetch" | "write" | "retention";
         },
       ) => void)
@@ -171,26 +171,26 @@ export class Indexer {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private retentionTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRetentionAt = 0;
-  /** Per-connection customer_id cache. customer_id is immutable for the
-   *  lifetime of the connection (and connection lifetime > registry
+  /** Per-project customer_id cache. customer_id is immutable for the
+   *  lifetime of the project (and project lifetime > registry
    *  entry), so there's no staleness concern. */
   private readonly customerCache = new Map<
     string,
     { customerId: string; region: Region }
   >();
-  /** Per-connection synthetic cursor id. Populated on first cursor hit
+  /** Per-project synthetic cursor id. Populated on first cursor hit
    *  (or first writeBatch upsert) and used afterwards for all reads and
-   *  writes on that cursor — by id, never by connection_id. This is what
+   *  writes on that cursor — by id, never by project_id. This is what
    *  preserves the drain-after-delete promise: ON DELETE SET NULL on the
-   *  indexer_cursors → connections FK flips the cursor's connection_id
-   *  to NULL, so any WHERE connection_id = $1 query misses. The synthetic
-   *  id is stable; re-INSERTing with the (now-dangling) connection_id
+   *  indexer_cursors → projects FK flips the cursor's project_id
+   *  to NULL, so any WHERE project_id = $1 query misses. The synthetic
+   *  id is stable; re-INSERTing with the (now-dangling) project_id
    *  would also violate the FK. Process-local — on restart, undrained
    *  orphan cursors are unrecoverable (same limitation the in-memory
    *  ContainerRegistry has had since day one). */
-  private readonly cursorIdByConnectionId = new Map<string, string>();
+  private readonly cursorIdByProjectId = new Map<string, string>();
 
-  /** Last time recordError stamped a row, per connection — write
+  /** Last time recordError stamped a row, per project — write
    *  throttle so a persistently-down engine doesn't churn
    *  indexer_cursors every tick (see recordError). */
   private readonly lastErrorStampMs = new Map<string, number>();
@@ -238,7 +238,7 @@ export class Indexer {
         await this.indexOne(container);
       } catch (err) {
         this.onError?.(err, {
-          connectionId: container.connectionId,
+          projectId: container.projectId,
           phase: "fetch",
         });
         await this.recordError(container, err);
@@ -252,7 +252,7 @@ export class Indexer {
           await this.sweepRetention(container);
         } catch (err) {
           this.onError?.(err, {
-            connectionId: container.connectionId,
+            projectId: container.projectId,
             phase: "retention",
           });
         }
@@ -274,17 +274,17 @@ export class Indexer {
 
   private async indexOne(container: ActiveContainer): Promise<void> {
     // Prefer the cursor row's customer_id (stamped on first index). It
-    // survives connection deletion via FK ON DELETE SET NULL: the row's
-    // connection_id flips to NULL but customer_id stays, so backlog
-    // drainage works even when the user deletes a connection 5 seconds
-    // after first use. Fall back to the connections table on first
+    // survives project deletion via FK ON DELETE SET NULL: the row's
+    // project_id flips to NULL but customer_id stays, so backlog
+    // drainage works even when the user deletes a project 5 seconds
+    // after first use. Fall back to the projects table on first
     // sighting only.
-    const cursorRow = await this.loadCursorRow(container.connectionId);
+    const cursorRow = await this.loadCursorRow(container.projectId);
     let customerId = cursorRow?.customerId;
     if (!customerId) {
-      const meta = await this.resolveCustomer(container.connectionId);
+      const meta = await this.resolveCustomer(container.projectId);
       if (!meta) {
-        // Truly orphaned: no cursor row AND no connection row. Skip.
+        // Truly orphaned: no cursor row AND no project row. Skip.
         return;
       }
       customerId = meta.customerId;
@@ -299,14 +299,14 @@ export class Indexer {
       if (resp.rows.length === 0) return;
       try {
         await this.writeBatch(
-          container.connectionId,
+          container.projectId,
           container.region,
           customerId,
           resp,
         );
       } catch (err) {
         this.onError?.(err, {
-          connectionId: container.connectionId,
+          projectId: container.projectId,
           phase: "write",
         });
         await this.recordError(container, err);
@@ -341,7 +341,7 @@ export class Indexer {
   }
 
   private async writeBatch(
-    connectionId: string,
+    projectId: string,
     region: Region,
     customerId: string,
     resp: AuditSinceResponse,
@@ -357,7 +357,7 @@ export class Indexer {
     if (skipped > 0) {
       this.onError?.(
         new Error(`indexer: ${skipped} audit rows failed schema validation`),
-        { connectionId, phase: "write" },
+        { projectId, phase: "write" },
       );
     }
     const lastId = resp.rows[resp.rows.length - 1]!.id;
@@ -365,7 +365,7 @@ export class Indexer {
     if (!ULID_RE.test(customerId)) {
       // customer_id is the value the RLS policy in 0001_constraints.sql
       // matches against; an unsanitized string here would let a stray
-      // single-quote break the SET LOCAL statement. Connection rows
+      // single-quote break the SET LOCAL statement. Project rows
       // populate customer_id via ulid() at signup, so this should be
       // unreachable — guard anyway, fail closed.
       throw new Error(`indexer: invalid customer_id ${customerId}`);
@@ -373,9 +373,9 @@ export class Indexer {
 
     // FK guard for audit_events_index.mcp_token_id (FK ON DELETE SET
     // NULL on existing rows; INSERTs still fail if the referenced
-    // mcp_tokens row is gone). When a customer deletes a connection
+    // mcp_tokens row is gone). When a customer deletes a project
     // while the OSS container still has backlog rows in its SQLite, the
-    // CASCADE through connections → mcp_tokens has already fired by the
+    // CASCADE through projects → mcp_tokens has already fired by the
     // time the indexer drains those rows. INSERTing them with the
     // (now-dangling) mcp_token_id would violate
     // audit_events_index_mcp_token_id_fk and roll back the whole batch.
@@ -419,11 +419,11 @@ export class Indexer {
               tenantId: row.tenant_id,
               region,
               // Cloud-only attribution. writeBatch is called once per
-              // connection (the indexer drains each container per-
-              // connection), so connectionId is in scope here; the engine
+              // project (the indexer drains each container per-
+              // project), so projectId is in scope here; the engine
               // never emits it. FK ON DELETE SET NULL keeps the audit row
-              // after the connection is deleted.
-              connectionId,
+              // after the project is deleted.
+              projectId,
               queryId: row.query_id,
               agentName: row.agent_name ?? null,
               agentVersion: row.agent_version ?? null,
@@ -441,7 +441,7 @@ export class Indexer {
               // every row from a session via X-Midplane-Token-Id. NULL
               // for pre-0.6.0 sessions, rows where the header was
               // missing/malformed at session initialize, and the
-              // post-connection-delete case where the referenced
+              // post-project-delete case where the referenced
               // mcp_tokens row has been CASCADE-deleted (see FK guard
               // above).
               mcpTokenId:
@@ -456,17 +456,17 @@ export class Indexer {
       // Cursor write. Two paths:
       //
       // (a) cached cursor id → UPDATE by id. Stable across ON DELETE SET
-      //     NULL flipping the cursor's connection_id to NULL. Without
+      //     NULL flipping the cursor's project_id to NULL. Without
       //     this branch, the upsert below would try to re-INSERT a row
-      //     carrying the now-deleted connection_id and trip the FK.
+      //     carrying the now-deleted project_id and trip the FK.
       //
-      // (b) no cache yet → INSERT with full row + connection_id (which
+      // (b) no cache yet → INSERT with full row + project_id (which
       //     still exists at first sighting since the container is
-      //     running; the connections row hasn't been deleted yet). ON
+      //     running; the projects row hasn't been deleted yet). ON
       //     CONFLICT on the partial unique index updates the existing
       //     row. After the upsert, look up the row's synthetic id to
       //     stamp the cache for subsequent ticks.
-      const cachedCursorId = this.cursorIdByConnectionId.get(connectionId);
+      const cachedCursorId = this.cursorIdByProjectId.get(projectId);
       if (cachedCursorId) {
         await tx
           .update(indexerCursors)
@@ -483,15 +483,15 @@ export class Indexer {
           .insert(indexerCursors)
           .values({
             id: cursorId,
-            connectionId,
+            projectId,
             customerId,
             region,
             lastId,
             lastIndexedAt: indexedAt,
           })
           .onConflictDoUpdate({
-            target: indexerCursors.connectionId,
-            targetWhere: drizzleSql`connection_id IS NOT NULL`,
+            target: indexerCursors.projectId,
+            targetWhere: drizzleSql`project_id IS NOT NULL`,
             set: {
               lastId,
               lastIndexedAt: indexedAt,
@@ -505,10 +505,10 @@ export class Indexer {
         const stamped = await tx
           .select({ id: indexerCursors.id })
           .from(indexerCursors)
-          .where(eq(indexerCursors.connectionId, connectionId))
+          .where(eq(indexerCursors.projectId, projectId))
           .limit(1);
         if (stamped[0]) {
-          this.cursorIdByConnectionId.set(connectionId, stamped[0].id);
+          this.cursorIdByProjectId.set(projectId, stamped[0].id);
         }
       }
     });
@@ -517,10 +517,10 @@ export class Indexer {
     // recordError throttle too, so a fail→recover→fail-again sequence
     // inside ERROR_STAMP_MIN_MS stamps the NEW outage immediately
     // instead of staying green for up to a minute (codex review P2).
-    this.lastErrorStampMs.delete(connectionId);
+    this.lastErrorStampMs.delete(projectId);
   }
 
-  /** Best-effort: stamp last_error / last_error_at on the connection's
+  /** Best-effort: stamp last_error / last_error_at on the project's
    *  cursor row so the dashboard freshness dot can actually go red —
    *  computeFreshness returns "down" only when last_error_at is newer
    *  than last_indexed_at. Before this, drain errors only reached the
@@ -533,7 +533,7 @@ export class Indexer {
    *    (a) cursor row exists → UPDATE by synthetic id (stable across the
    *        FK ON DELETE SET NULL flip).
    *    (b) no row yet (engine erroring since first sighting) → INSERT
-   *        with customer_id resolved from connections; if that row is
+   *        with customer_id resolved from projects; if that row is
    *        already gone the cursor is truly orphaned and there is
    *        nothing for the dashboard to paint — skip.
    */
@@ -547,11 +547,11 @@ export class Indexer {
       // churn an UPDATE (plus the cursor lookup) on indexer_cursors
       // every tick indefinitely.
       const nowMs = this.nowFn();
-      const lastStamp = this.lastErrorStampMs.get(container.connectionId);
+      const lastStamp = this.lastErrorStampMs.get(container.projectId);
       if (lastStamp !== undefined && nowMs - lastStamp < ERROR_STAMP_MIN_MS) {
         return;
       }
-      this.lastErrorStampMs.set(container.connectionId, nowMs);
+      this.lastErrorStampMs.set(container.projectId, nowMs);
 
       const message = (err instanceof Error ? err.message : String(err)).slice(
         0,
@@ -559,10 +559,10 @@ export class Indexer {
       );
       const errorAt = new Date(nowMs);
 
-      // loadCursorRow populates cursorIdByConnectionId as a side effect.
-      await this.loadCursorRow(container.connectionId);
-      const cachedCursorId = this.cursorIdByConnectionId.get(
-        container.connectionId,
+      // loadCursorRow populates cursorIdByProjectId as a side effect.
+      await this.loadCursorRow(container.projectId);
+      const cachedCursorId = this.cursorIdByProjectId.get(
+        container.projectId,
       );
       if (cachedCursorId) {
         await this.db
@@ -572,21 +572,21 @@ export class Indexer {
         return;
       }
 
-      const meta = await this.resolveCustomer(container.connectionId);
+      const meta = await this.resolveCustomer(container.projectId);
       if (!meta) return;
       await this.db
         .insert(indexerCursors)
         .values({
           id: ulid(),
-          connectionId: container.connectionId,
+          projectId: container.projectId,
           customerId: meta.customerId,
           region: container.region,
           lastError: message,
           lastErrorAt: errorAt,
         })
         .onConflictDoUpdate({
-          target: indexerCursors.connectionId,
-          targetWhere: drizzleSql`connection_id IS NOT NULL`,
+          target: indexerCursors.projectId,
+          targetWhere: drizzleSql`project_id IS NOT NULL`,
           set: { lastError: message, lastErrorAt: errorAt },
         });
     } catch {
@@ -596,16 +596,16 @@ export class Indexer {
   }
 
   private async loadCursorRow(
-    connectionId: string,
+    projectId: string,
   ): Promise<{ lastId: string; customerId: string } | null> {
     // Consult the in-memory cache first: once we know the cursor's
-    // synthetic id, the lookup is stable even after the connection FK
-    // sets connection_id to NULL. A stale cache (e.g., the orphan-cursor
+    // synthetic id, the lookup is stable even after the project FK
+    // sets project_id to NULL. A stale cache (e.g., the orphan-cursor
     // sweeper deleted the row out from under us) drops the entry and
-    // falls through to the connection_id query — at which point we'll
+    // falls through to the project_id query — at which point we'll
     // also miss and the caller treats this as no-cursor-yet (which is
     // correct: the row is gone).
-    const cachedCursorId = this.cursorIdByConnectionId.get(connectionId);
+    const cachedCursorId = this.cursorIdByProjectId.get(projectId);
     if (cachedCursorId) {
       const rows = await this.db
         .select({
@@ -616,7 +616,7 @@ export class Indexer {
         .where(eq(indexerCursors.id, cachedCursorId))
         .limit(1);
       if (rows[0]) return rows[0];
-      this.cursorIdByConnectionId.delete(connectionId);
+      this.cursorIdByProjectId.delete(projectId);
     }
 
     const rows = await this.db
@@ -626,18 +626,18 @@ export class Indexer {
         customerId: indexerCursors.customerId,
       })
       .from(indexerCursors)
-      .where(eq(indexerCursors.connectionId, connectionId))
+      .where(eq(indexerCursors.projectId, projectId))
       .limit(1);
     if (!rows[0]) return null;
-    this.cursorIdByConnectionId.set(connectionId, rows[0].id);
+    this.cursorIdByProjectId.set(projectId, rows[0].id);
     return { lastId: rows[0].lastId, customerId: rows[0].customerId };
   }
 
   private async sweepRetention(container: ActiveContainer): Promise<void> {
     // Retention reads customer_id off the cursor row — no fallback to
-    // connections needed because the cursor row is always populated by
+    // projects needed because the cursor row is always populated by
     // the time any rows are ack'd into Postgres (writeBatch upserts it).
-    const cursorRow = await this.loadCursorRow(container.connectionId);
+    const cursorRow = await this.loadCursorRow(container.projectId);
     if (!cursorRow || !cursorRow.lastId) return;
     const customerId = cursorRow.customerId;
     const ackId = cursorRow.lastId;
@@ -686,22 +686,22 @@ export class Indexer {
   }
 
   private async resolveCustomer(
-    connectionId: string,
+    projectId: string,
   ): Promise<{ customerId: string; region: Region } | null> {
-    const cached = this.customerCache.get(connectionId);
+    const cached = this.customerCache.get(projectId);
     if (cached) return cached;
     const rows = await this.db
       .select({
-        customerId: connections.customerId,
-        region: connections.region,
+        customerId: projects.customerId,
+        region: projects.region,
       })
-      .from(connections)
-      .where(eq(connections.id, connectionId))
+      .from(projects)
+      .where(eq(projects.id, projectId))
       .limit(1);
     const row = rows[0];
     if (!row) return null;
     const meta = { customerId: row.customerId, region: row.region as Region };
-    this.customerCache.set(connectionId, meta);
+    this.customerCache.set(projectId, meta);
     return meta;
   }
 }

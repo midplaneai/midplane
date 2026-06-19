@@ -18,7 +18,7 @@
 // Signup is NOT exercised here — this suite seeds the cloud DB directly and
 // drives the proxy/container pipeline. The signup → first MCP request path is
 // covered end-to-end by signup.live.e2e.ts. The
-// programmatic createConnection path uses the same encryption code that
+// programmatic createProject path uses the same encryption code that
 // the Server Action behind the paste-DSN form uses, so the cryptographic
 // trust posture is identical to what a real signup would produce.
 
@@ -27,9 +27,9 @@ import { execSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 import { eq } from "drizzle-orm";
 
-import { connections, customers, getDb } from "@midplane-cloud/db";
+import { projects, customers, getDb } from "@midplane-cloud/db";
 
-import { containerNameFor, seedConnection } from "./_seed-helpers";
+import { containerNameFor, seedProject } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -43,7 +43,7 @@ const PG_DB = "midplane_e2e";
 let pgPort = 0;
 let mcpToken = "";
 let customerId = "";
-let connectionId = "";
+let projectId = "";
 let proxiedContainerName = "";
 
 test.beforeAll(async () => {
@@ -65,17 +65,17 @@ test.beforeAll(async () => {
     { stdio: ["ignore", "pipe", "pipe"] },
   );
 
-  // 2. Cloud DB seed: customer + encrypted connection + connection_databases
-  // + mcp_tokens row pointing at the sidecar Postgres. seedConnection
+  // 2. Cloud DB seed: customer + encrypted project + project_databases
+  // + mcp_tokens row pointing at the sidecar Postgres. seedProject
   // mints a real token (HMAC-hashed via the regional pepper) so the
-  // proxy's resolveByToken finds it the same way a UI-created connection
+  // proxy's resolveByToken finds it the same way a UI-created project
   // would. The container reaches the sidecar via host.docker.internal.
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
-  const seeded = await seedConnection({ region: "eu", dsn: customerDsn });
+  const seeded = await seedProject({ region: "eu", dsn: customerDsn });
   customerId = seeded.customerId;
-  connectionId = seeded.connectionId;
+  projectId = seeded.projectId;
   mcpToken = seeded.tokenPlaintext;
-  proxiedContainerName = containerNameFor(connectionId);
+  proxiedContainerName = containerNameFor(projectId);
 });
 
 test.afterAll(async () => {
@@ -88,10 +88,10 @@ test.afterAll(async () => {
       execSync(`docker rm -f ${proxiedContainerName}`, { stdio: "ignore" });
     } catch {}
   }
-  if (connectionId || customerId) {
+  if (projectId || customerId) {
     const db = getDb("eu");
-    if (connectionId) {
-      await db.delete(connections).where(eq(connections.id, connectionId));
+    if (projectId) {
+      await db.delete(projects).where(eq(projects.id, projectId));
     }
     if (customerId) {
       await db.delete(customers).where(eq(customers.id, customerId));

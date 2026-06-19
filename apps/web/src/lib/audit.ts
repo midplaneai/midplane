@@ -303,8 +303,8 @@ export interface ListAuditOpts {
   /** Empty/undefined = all tenants. */
   tenantId?: string;
   /** Empty/undefined = all databases. The name is the OSS-side `database:`
-   *  on a connection (the per-DB row in `connection_databases`), not a
-   *  per-client connection. Hits audit_customer_region_database_ts_idx. */
+   *  on a project (the per-DB row in `project_databases`), not a
+   *  per-client project. Hits audit_customer_region_database_ts_idx. */
   database?: string;
   /** Empty/undefined = all agents. Matches audit_events_index.agent_name
    *  (e.g. "claude-code"). Hits audit_customer_region_agent_ts_idx. Excludes
@@ -315,15 +315,15 @@ export interface ListAuditOpts {
    *  audit_customer_region_token_ts_idx. Answers "everything this credential
    *  did". Excludes config events (they carry no token id). */
   tokenId?: string;
-  /** Empty/undefined = all connections. Matches audit_events_index
-   *  .connection_id (stamped per-drain by the indexer on query rows, and by
+  /** Empty/undefined = all projects. Matches audit_events_index
+   *  .project_id (stamped per-drain by the indexer on query rows, and by
    *  the cloud emitters on config/token rows). Hits
-   *  audit_customer_region_connection_ts_idx. The dashboard "last query"
+   *  audit_customer_region_project_ts_idx. The dashboard "last query"
    *  stat deep-links here. Unlike the agent/token filters — which drop the
    *  non-query events that carry no agent/token — this keeps the
-   *  connection's config + credential events, so the filtered view is the
-   *  whole story of one connection. */
-  connectionId?: string;
+   *  project's config + credential events, so the filtered view is the
+   *  whole story of one project. */
+  projectId?: string;
   /** Substring match against payload->>'sql_raw',
    *  payload->>'sql_fingerprint', and query_id. Matches if ANY event for
    *  the query matches — so a search hit on the ATTEMPTED row's SQL
@@ -399,12 +399,12 @@ export async function listAuditQueries(
     const tokenClause = opts.tokenId
       ? sql`AND mcp_token_id = ${opts.tokenId}`
       : sql``;
-    // connection_id is identical across a query's lifecycle (the indexer
+    // project_id is identical across a query's lifecycle (the indexer
     // stamps it per-drain) and is also stamped on cloud config/token
     // events, so this one clause scopes BOTH branches to a single
-    // connection without dropping its non-query events.
-    const connectionClause = opts.connectionId
-      ? sql`AND connection_id = ${opts.connectionId}`
+    // project without dropping its non-query events.
+    const projectClause = opts.projectId
+      ? sql`AND project_id = ${opts.projectId}`
       : sql``;
     const cursorClause = opts.cursor
       ? sql`AND attempted_event_id < ${opts.cursor}`
@@ -488,7 +488,7 @@ export async function listAuditQueries(
           ${databaseClause}
           ${agentClause}
           ${tokenClause}
-          ${connectionClause}
+          ${projectClause}
           ${searchClause}
         GROUP BY query_id
       ),
@@ -547,13 +547,13 @@ export async function listAuditQueries(
         FROM audit_events_index
         WHERE customer_id = ${customerId}
           AND region = ${opts.region}
-          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'GUARDRAILS_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
+          AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'GUARDRAILS_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'PROJECT_PAUSED', 'PROJECT_RESUMED')
           ${retentionClause}
           ${tenantClause}
           ${databaseClause}
           ${agentClause}
           ${tokenClause}
-          ${connectionClause}
+          ${projectClause}
           ${policySearchClause}
       )
       SELECT * FROM (
@@ -657,7 +657,7 @@ export async function listTenantIds(
 
 /** Distinct database names for the customer in this region. The values are
  *  the OSS-side `database:` field stamped on each audit row (one row per DB
- *  attached to a connection). Same ORDER BY before LIMIT contract as
+ *  attached to a project). Same ORDER BY before LIMIT contract as
  *  listTenantIds — without it, customers with >50 DBs would see the chip
  *  set shuffle and lose the ability to pick certain databases. */
 export async function listDatabases(
@@ -801,10 +801,10 @@ export interface VolumeFilters {
   agentName?: string;
   /** Empty/undefined = all tokens. */
   tokenId?: string;
-  /** Empty/undefined = all connections. Keeps the sparkline in step with a
-   *  connection-filtered table (otherwise a quiet connection reads as a
+  /** Empty/undefined = all projects. Keeps the sparkline in step with a
+   *  project-filtered table (otherwise a quiet project reads as a
    *  non-zero chart over an empty table — the "broken filter" look). */
-  connectionId?: string;
+  projectId?: string;
   /** Substring against query_id, payload->>'sql_raw', or
    *  payload->>'sql_fingerprint'. Restricts which queries contribute via a
    *  query_id IN (...) subquery so the chart matches what the table below
@@ -873,8 +873,8 @@ export async function eventVolumeByHour(
   const tokenClause = opts.tokenId
     ? sql`AND mcp_token_id = ${opts.tokenId}`
     : sql``;
-  const connectionClause = opts.connectionId
-    ? sql`AND connection_id = ${opts.connectionId}`
+  const projectClause = opts.projectId
+    ? sql`AND project_id = ${opts.projectId}`
     : sql``;
   const searchClause =
     opts.search && opts.search.trim().length > 0
@@ -932,7 +932,7 @@ export async function eventVolumeByHour(
           ${databaseClause}
           ${agentClause}
           ${tokenClause}
-          ${connectionClause}
+          ${projectClause}
           ${searchClause}
         ORDER BY
           query_id,
@@ -980,7 +980,7 @@ export async function countByStatus(
   now: () => Date = () => new Date(),
   retentionDays?: number,
   windowSince?: Date,
-  connectionId?: string,
+  projectId?: string,
 ): Promise<Record<QueryStatus, number>> {
   const result: Record<QueryStatus, number> = {
     ALLOWED: 0,
@@ -1003,12 +1003,12 @@ export async function countByStatus(
   // actually shows for the selected window.
   const retIso = lowerBoundIso(retentionDays, windowSince, nowDate);
   const retentionClause = retIso ? sql`AND ts >= ${retIso}::timestamptz` : sql``;
-  // Scope the badge totals to one connection when the page is connection-
+  // Scope the badge totals to one project when the page is project-
   // filtered, so the chip counts and the "of N" total match the rows the
-  // table shows for that connection. Applied to both the query agg and the
+  // table shows for that project. Applied to both the query agg and the
   // event count.
-  const connectionClause = connectionId
-    ? sql`AND connection_id = ${connectionId}`
+  const projectClause = projectId
+    ? sql`AND project_id = ${projectId}`
     : sql``;
   return withCustomerScope(region, customerId, async (tx) => {
     // Single statement: query lifecycles classified by status, plus a
@@ -1028,7 +1028,7 @@ export async function countByStatus(
           AND region = ${region}
           AND event_type IN ('ATTEMPTED', 'DECIDED', 'EXECUTED', 'FAILED')
           ${retentionClause}
-          ${connectionClause}
+          ${projectClause}
         GROUP BY query_id
       )
       SELECT
@@ -1053,9 +1053,9 @@ export async function countByStatus(
       FROM audit_events_index
       WHERE customer_id = ${customerId}
         AND region = ${region}
-        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'GUARDRAILS_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'CONNECTION_PAUSED', 'CONNECTION_RESUMED')
+        AND event_type IN ('POLICY_RELOADED', 'POLICY_CHANGED', 'TENANT_SCOPE_CHANGED', 'GUARDRAILS_CHANGED', 'REGION_CHANGED', 'TOKEN_CREATED', 'TOKEN_REVOKED', 'PROJECT_PAUSED', 'PROJECT_RESUMED')
         ${retentionClause}
-        ${connectionClause}
+        ${projectClause}
       GROUP BY 1
     `;
     const raw = await tx.execute(stmt);
@@ -1127,8 +1127,8 @@ export async function getRelatedEvents(
 
 export interface StalenessRead {
   /** Most recent indexer tick for the customer's region, across all of the
-   *  customer's connections. Null when the customer has no cursor rows yet
-   *  (no traffic ever, OR connections deleted before the indexer first
+   *  customer's projects. Null when the customer has no cursor rows yet
+   *  (no traffic ever, OR projects deleted before the indexer first
    *  drained). The banner copy treats "no rows" as "live" — we show the
    *  amber banner only when we have evidence the indexer is behind. */
   lastIndexedAt: Date | null;

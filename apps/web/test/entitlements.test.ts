@@ -45,7 +45,7 @@ describe("CAPS — sso entitlement by tier", () => {
 
   it("self-host is uncapped core but sso stays false (ee-gated)", () => {
     expect(SELF_HOST_CAPS.sso).toBe(false);
-    expect(SELF_HOST_CAPS.connections).toBe(Infinity);
+    expect(SELF_HOST_CAPS.projects).toBe(Infinity);
   });
 });
 

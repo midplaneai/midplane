@@ -9,8 +9,8 @@ import {
   MCP_SCOPE_ACCESS_LEVELS,
   REGIONS,
   auditEventsIndex,
-  connectionDatabases,
-  connections,
+  projectDatabases,
+  projects,
   customers,
   mcpScopeGrants,
 } from "../src/schema.ts";
@@ -45,9 +45,9 @@ describe("schema parity with OSS audit_events", () => {
     expect(cols).toContain("region");
     // 0009: per-DB attribution from OSS 0.2.0 audit pull payload.
     expect(cols).toContain("database");
-    // 0020: cloud-only connection attribution (FK ON DELETE SET NULL so
-    // audit history survives connection deletion).
-    expect(cols).toContain("connectionId");
+    // 0020: cloud-only project attribution (FK ON DELETE SET NULL so
+    // audit history survives project deletion).
+    expect(cols).toContain("projectId");
   });
 });
 
@@ -57,9 +57,9 @@ describe("regions", () => {
   });
 });
 
-describe("connections (0008-slimmed parent + 0018 cleanup)", () => {
-  it("holds identity only — credential columns moved to connection_databases; mcp_token moved to mcp_tokens", () => {
-    const cols = Object.keys(connections);
+describe("projects (0008-slimmed parent + 0018 cleanup)", () => {
+  it("holds identity only — credential columns moved to project_databases; mcp_token moved to mcp_tokens", () => {
+    const cols = Object.keys(projects);
     for (const col of [
       "id",
       "customerId",
@@ -69,7 +69,7 @@ describe("connections (0008-slimmed parent + 0018 cleanup)", () => {
     ]) {
       expect(cols).toContain(col);
     }
-    // Moved to connection_databases in migration 0008 (encryptedDsn etc.)
+    // Moved to project_databases in migration 0008 (encryptedDsn etc.)
     // and to mcp_tokens in migration 0017/0018 (mcpToken). Asserting absence
     // here protects against accidentally re-adding any of them to the
     // parent: encryptedDsn would silently regress the per-credential cache
@@ -88,12 +88,12 @@ describe("connections (0008-slimmed parent + 0018 cleanup)", () => {
   });
 });
 
-describe("connection_databases (0008 child)", () => {
+describe("project_databases (0008 child)", () => {
   it("carries per-credential state and per-DB policy", () => {
-    const cols = Object.keys(connectionDatabases);
+    const cols = Object.keys(projectDatabases);
     for (const col of [
       "id",
-      "connectionId",
+      "projectId",
       "name",
       "encryptedDsn",
       "kmsKeyId",
@@ -119,11 +119,11 @@ describe("customers", () => {
 });
 
 describe("mcpScopeGrants (0028, per-agent DB scope)", () => {
-  it("holds a polymorphic subject (OAuth client+user OR PAT token) + access, keyed by connection_database_id", () => {
+  it("holds a polymorphic subject (OAuth client+user OR PAT token) + access, keyed by project_database_id", () => {
     const cols = Object.keys(mcpScopeGrants);
     for (const col of [
       "id",
-      "connectionDatabaseId",
+      "projectDatabaseId",
       "clientId",
       "userId",
       "mcpTokenId",

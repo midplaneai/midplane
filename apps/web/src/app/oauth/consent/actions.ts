@@ -24,7 +24,7 @@ export type ConsentGrantResult =
  *  approved the client but no databases). */
 export async function writeConsentGrants(
   clientId: string,
-  selections: Array<{ connectionDatabaseId: string; access: "read" | "write" }>,
+  selections: Array<{ projectDatabaseId: string; access: "read" | "write" }>,
 ): Promise<ConsentGrantResult> {
   if (typeof clientId !== "string" || clientId.length === 0) {
     return { ok: false, error: "bad_request" };

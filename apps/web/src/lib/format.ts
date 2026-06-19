@@ -19,7 +19,7 @@ export function formatRelative(d: Date, now: Date = new Date()): string {
 }
 
 /** Meta-line copy for a database's last agent query — shared by the
- *  dashboard rows and the connection home so the two surfaces can't
+ *  dashboard rows and the project home so the two surfaces can't
  *  drift ("awaiting first query" / "last query 12m ago"). */
 export function lastQueryLabel(
   lastQueryAt: Date | null,
@@ -29,10 +29,10 @@ export function lastQueryLabel(
   return `last query ${formatRelative(lastQueryAt, now)}`;
 }
 
-/** Display label for a connection — the user's name, or a stable
- *  id-prefix fallback for unnamed connections. One definition for the
+/** Display label for a project — the user's name, or a stable
+ *  id-prefix fallback for unnamed projects. One definition for the
  *  five surfaces that render it. */
-export function connectionLabel(conn: {
+export function projectLabel(conn: {
   name: string | null;
   id: string;
 }): string {

@@ -29,19 +29,19 @@ type Access = ScopeDbAccess;
 type DbState = ScopeDbState;
 
 interface ConsentDatabase {
-  connectionDatabaseId: string;
+  projectDatabaseId: string;
   name: string;
 }
-interface ConsentConnection {
-  connectionId: string;
-  connectionName: string | null;
+interface ConsentProject {
+  projectId: string;
+  projectName: string | null;
   databases: ConsentDatabase[];
 }
 
 export interface ConsentFormProps {
   consentCode: string;
   clientId: string;
-  connections: ConsentConnection[];
+  projects: ConsentProject[];
   /** Prior grant (cdbId → access) so a re-consent pre-selects the last choice. */
   existing: Record<string, Access>;
 }
@@ -49,15 +49,15 @@ export interface ConsentFormProps {
 export function ConsentForm({
   consentCode,
   clientId,
-  connections,
+  projects,
   existing,
 }: ConsentFormProps) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const allDbs = useMemo(
-    () => connections.flatMap((c) => c.databases),
-    [connections],
+    () => projects.flatMap((c) => c.databases),
+    [projects],
   );
 
   // cdbId → "none" | "read" | "write". Default a DB to its prior grant, else
@@ -67,7 +67,7 @@ export function ConsentForm({
   const [state, setState] = useState<Record<string, DbState>>(() => {
     const init: Record<string, DbState> = {};
     for (const db of allDbs) {
-      init[db.connectionDatabaseId] = existing[db.connectionDatabaseId] ?? "none";
+      init[db.projectDatabaseId] = existing[db.projectDatabaseId] ?? "none";
     }
     return init;
   });
@@ -81,7 +81,7 @@ export function ConsentForm({
   function setAll(value: DbState) {
     setState(() => {
       const next: Record<string, DbState> = {};
-      for (const db of allDbs) next[db.connectionDatabaseId] = value;
+      for (const db of allDbs) next[db.projectDatabaseId] = value;
       return next;
     });
   }
@@ -111,8 +111,8 @@ export function ConsentForm({
         if (accept) {
           const selections = Object.entries(state)
             .filter(([, v]) => v !== "none")
-            .map(([connectionDatabaseId, v]) => ({
-              connectionDatabaseId,
+            .map(([projectDatabaseId, v]) => ({
+              projectDatabaseId,
               access: v as Access,
             }));
           const grant = await writeConsentGrants(clientId, selections);
@@ -159,23 +159,23 @@ export function ConsentForm({
           </div>
 
           <div className="space-y-4">
-            {connections.map((conn) => (
-              <fieldset key={conn.connectionId} className="space-y-2">
+            {projects.map((conn) => (
+              <fieldset key={conn.projectId} className="space-y-2">
                 <legend className="text-xs font-medium uppercase tracking-wide text-subtle">
-                  {conn.connectionName || conn.connectionId}
+                  {conn.projectName || conn.projectId}
                 </legend>
                 {conn.databases.map((db) => (
                   <div
-                    key={db.connectionDatabaseId}
+                    key={db.projectDatabaseId}
                     className="flex items-center justify-between gap-3"
                   >
                     <span className="font-mono text-sm text-foreground">
                       {db.name}
                     </span>
                     <DbAccessControl
-                      value={state[db.connectionDatabaseId] ?? "none"}
+                      value={state[db.projectDatabaseId] ?? "none"}
                       disabled={pending}
-                      onChange={(v) => setDb(db.connectionDatabaseId, v)}
+                      onChange={(v) => setDb(db.projectDatabaseId, v)}
                     />
                   </div>
                 ))}

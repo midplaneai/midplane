@@ -2,7 +2,7 @@
 //
 // What this proves — the two NEW risks Stage 2 introduces:
 //   1. ProcessSpawner spawns the REAL compiled engine binary (`bun build
-//      --compile`) as a subprocess on a loopback port, binds the per-connection
+//      --compile`) as a subprocess on a loopback port, binds the per-project
 //      DSN, and the MCP query path runs against it (audit rows land in the
 //      engine's SQLite).
 //   2. rls-self-host-bind: the indexer drains those rows into
@@ -35,7 +35,7 @@ import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
-  connections,
+  projects,
   customers,
   getDb,
   indexerCursors,
@@ -66,8 +66,8 @@ const INDEXER_TOKEN = `selfhost-idx-${randomUUID()}`;
 
 let pgPort = 0;
 let binaryPath = "";
-let connectionId = "";
-let connectionDatabaseId = "";
+let projectId = "";
+let projectDatabaseId = "";
 let registry: ContainerRegistry | null = null;
 
 test.beforeAll(async () => {
@@ -97,13 +97,13 @@ test.beforeAll(async () => {
     { stdio: ["ignore", "pipe", "pipe"] },
   );
 
-  // 3. Seed the implicit customer + a connection owned by it — exactly the
-  //    shape the self-host control plane has (connections.customer_id ==
+  // 3. Seed the implicit customer + a project owned by it — exactly the
+  //    shape the self-host control plane has (projects.customer_id ==
   //    SELF_HOST_CUSTOMER_ID). The indexer resolves customer_id off this row
-  //    and binds it; the FKs (connections→customers, audit→connections) need
+  //    and binds it; the FKs (projects→customers, audit→projects) need
   //    both rows present.
-  connectionId = ulid();
-  connectionDatabaseId = ulid();
+  projectId = ulid();
+  projectDatabaseId = ulid();
   const db = getDb(REGION);
   await db
     .insert(customers)
@@ -114,8 +114,8 @@ test.beforeAll(async () => {
       region: REGION,
     })
     .onConflictDoNothing({ target: customers.id });
-  await db.insert(connections).values({
-    id: connectionId,
+  await db.insert(projects).values({
+    id: projectId,
     customerId: SELF_HOST_CUSTOMER_ID,
     region: REGION,
   });
@@ -127,17 +127,17 @@ test.afterAll(async () => {
     execSync(`docker rm -f ${PG_NAME}`, { stdio: "ignore" });
   } catch {}
   const db = getDb(REGION);
-  if (connectionId) {
-    // Scope cleanup to THIS connection's rows so we never touch other
+  if (projectId) {
+    // Scope cleanup to THIS project's rows so we never touch other
     // self-host data sharing the implicit customer id. Leave the implicit
     // customer row in place (it's the well-known shared id; harmless).
     await db
       .delete(auditEventsIndex)
-      .where(eq(auditEventsIndex.connectionId, connectionId));
+      .where(eq(auditEventsIndex.projectId, projectId));
     await db
       .delete(indexerCursors)
-      .where(eq(indexerCursors.connectionId, connectionId));
-    await db.delete(connections).where(eq(connections.id, connectionId));
+      .where(eq(indexerCursors.projectId, projectId));
+    await db.delete(projects).where(eq(projects.id, projectId));
   }
 });
 
@@ -149,12 +149,12 @@ test("self-host process-spawn → indexer drains audit bound to the implicit org
 
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@127.0.0.1:${pgPort}/${PG_DB}?sslmode=disable`;
   const container = await registry.acquire({
-    connectionId,
+    projectId,
     region: REGION,
     databases: [
       {
         name: "main",
-        connectionDatabaseId,
+        projectDatabaseId,
         dsn: customerDsn,
         tableAccess: { default: "read", tables: {} },
         tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -179,7 +179,7 @@ test("self-host process-spawn → indexer drains audit bound to the implicit org
   // Drive a real query through the engine's MCP endpoint → writes audit rows.
   await runEngineQuery(engineBase);
 
-  // Now the indexer: it resolves customer_id from the connections row
+  // Now the indexer: it resolves customer_id from the projects row
   // (== SELF_HOST_CUSTOMER_ID) and writes audit_events_index inside a txn that
   // SET LOCAL app.customer_id = that id. Run ticks until rows land.
   const db = getDb(REGION);
@@ -201,7 +201,7 @@ test("self-host process-spawn → indexer drains audit bound to the implicit org
         .where(
           and(
             eq(auditEventsIndex.customerId, SELF_HOST_CUSTOMER_ID),
-            eq(auditEventsIndex.connectionId, connectionId),
+            eq(auditEventsIndex.projectId, projectId),
           ),
         );
     });

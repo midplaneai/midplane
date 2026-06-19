@@ -74,12 +74,12 @@ class FakeChild implements ChildHandle {
 
 function spawnOpts(overrides: Partial<SpawnOptions> = {}): SpawnOptions {
   return {
-    connectionId: "01HXYZCONNABCDEFGHIJKLMNOP",
+    projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
     region: "eu",
     databases: [
       {
         name: "main",
-        connectionDatabaseId: "01HXYZMAIN0000000000000000",
+        projectDatabaseId: "01HXYZMAIN0000000000000000",
         dsn: "postgres://user:pw@localhost:5432/app",
         tableAccess: { default: "read", tables: {} },
         tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -145,7 +145,7 @@ describe("ProcessSpawner", () => {
     await c.stop();
   });
 
-  it("injects the per-connection DSN as MIDPLANE_DSN_<id>, never DATABASE_URL, forwards allowlisted engine config, and isolates control-plane secrets", async () => {
+  it("injects the per-project DSN as MIDPLANE_DSN_<id>, never DATABASE_URL, forwards allowlisted engine config, and isolates control-plane secrets", async () => {
     const child = new FakeChild();
     child.exitOnSignal = "any";
     let capturedEnv: NodeJS.ProcessEnv = {};

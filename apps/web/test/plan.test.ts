@@ -15,7 +15,7 @@ import {
   CAPS,
   PlanLimitError,
   SELF_HOST_CAPS,
-  connectionCreateBlock,
+  projectCreateBlock,
   hasEntitlement,
   resolvePlan,
 } from "../src/lib/plan.ts";
@@ -53,21 +53,21 @@ beforeEach(() => {
 describe("CAPS", () => {
   it("encodes the PRICING.md tiers exactly", () => {
     expect(CAPS.free).toEqual({
-      connections: 1,
+      projects: 1,
       tokens: 5,
       auditRetentionDays: 7,
       sso: false,
       seats: 1,
     });
     expect(CAPS.pro).toEqual({
-      connections: 10,
+      projects: 10,
       tokens: 50,
       auditRetentionDays: 30,
       sso: false,
       seats: 10,
     });
     expect(CAPS.team).toEqual({
-      connections: Infinity,
+      projects: Infinity,
       tokens: Infinity,
       auditRetentionDays: 90,
       sso: true,
@@ -76,7 +76,7 @@ describe("CAPS", () => {
   });
 
   it("models unlimited tiers as Infinity so `count >= cap` is never true", () => {
-    expect(999_999 >= CAPS.team.connections).toBe(false);
+    expect(999_999 >= CAPS.team.projects).toBe(false);
     expect(999_999 >= CAPS.team.tokens).toBe(false);
   });
 });
@@ -166,7 +166,7 @@ describe("resolvePlan in self-host (MIDPLANE_SELF_HOST=1)", () => {
     expect(plan).toBe("team");
     expect(caps).toEqual(SELF_HOST_CAPS);
     // Uncapped: count >= cap is never true; Infinity retention = no clamp.
-    expect(caps.connections).toBe(Infinity);
+    expect(caps.projects).toBe(Infinity);
     expect(caps.tokens).toBe(Infinity);
     expect(caps.auditRetentionDays).toBe(Infinity);
     expect(caps.seats).toBe(Infinity);
@@ -181,41 +181,41 @@ describe("hasEntitlement", () => {
   });
 });
 
-describe("connectionCreateBlock", () => {
+describe("projectCreateBlock", () => {
   it("returns null when both caps have room", () => {
     expect(
-      connectionCreateBlock({ connections: 3, tokens: 4 }, CAPS.pro),
+      projectCreateBlock({ projects: 3, tokens: 4 }, CAPS.pro),
     ).toBeNull();
   });
 
-  it("flags the connection cap first when it's reached", () => {
+  it("flags the project cap first when it's reached", () => {
     expect(
-      connectionCreateBlock({ connections: 1, tokens: 1 }, CAPS.free),
-    ).toEqual({ resource: "connections", limit: 1 });
+      projectCreateBlock({ projects: 1, tokens: 1 }, CAPS.free),
+    ).toEqual({ resource: "projects", limit: 1 });
   });
 
-  it("flags the token cap when connections have room but tokens don't", () => {
-    // Pro: 10 connections / 50 tokens. Manually minting extra tokens can
-    // exhaust the token slot a new connection's default would need before
-    // the connection cap is hit.
+  it("flags the token cap when projects have room but tokens don't", () => {
+    // Pro: 10 projects / 50 tokens. Manually minting extra tokens can
+    // exhaust the token slot a new project's default would need before
+    // the project cap is hit.
     expect(
-      connectionCreateBlock({ connections: 4, tokens: 50 }, CAPS.pro),
+      projectCreateBlock({ projects: 4, tokens: 50 }, CAPS.pro),
     ).toEqual({ resource: "tokens", limit: 50 });
   });
 
   it("never blocks on unlimited (Infinity) caps", () => {
     expect(
-      connectionCreateBlock({ connections: 999_999, tokens: 999_999 }, CAPS.team),
+      projectCreateBlock({ projects: 999_999, tokens: 999_999 }, CAPS.team),
     ).toBeNull();
   });
 });
 
 describe("PlanLimitError", () => {
   it("carries resource, limit, and plan for call-site translation", () => {
-    const err = new PlanLimitError("connections", 1, "free");
+    const err = new PlanLimitError("projects", 1, "free");
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe("PlanLimitError");
-    expect(err.resource).toBe("connections");
+    expect(err.resource).toBe("projects");
     expect(err.limit).toBe(1);
     expect(err.plan).toBe("free");
   });
