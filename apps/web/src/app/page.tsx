@@ -116,13 +116,13 @@ export default async function Landing() {
             <div>
               <h2 className="sec-h">
                 Same agent. Same Postgres.{" "}
-                <em>Two ways it ends badly.</em>
+                <em>One query from disaster.</em>
               </h2>
               <p className="sec-sub">
                 The same SQL your engineer&apos;s agent might run on a Tuesday
                 morning, with and without midplane in front of Postgres. One
-                deletes prod. One leaks every customer — and looks like a
-                normal read.
+                careless <span className="mono">DELETE</span>, hidden in a CTE,
+                wipes prod — unless the policy catches it at parse time.
               </p>
             </div>
           </div>
@@ -186,95 +186,6 @@ export default async function Landing() {
                 <span className="mono">SELECT</span>
               </div>
             </article>
-          </div>
-
-          {/* Second stakes beat — cross-tenant leak. Same .ba-pair device as
-              the nuke above. The wedge: the leaking query is a plain SELECT,
-              so a read-only Postgres role (GRANT SELECT) would ALLOW it; only
-              a required tenant predicate (tenant_scope) catches it. The shape
-              — a bare reference to a tenant-scoped table with no tenant_id
-              predicate — is exactly what the engine denies, with reason
-              `tenant_scope_missing` (verified against packages/db policy +
-              infra/telemetry-proxy PolicyRuleName). */}
-          <div className="ba-beat">
-            <div className="ba-lead">
-              <span className="k">the leak a read-only role lets through</span>
-              <h3>
-                A leak doesn&apos;t need a <em>DELETE.</em>
-              </h3>
-            </div>
-            <div className="ba-pair">
-              <article className="ba-card bad">
-                <div className="ba-tag">
-                  <span className="dot" aria-hidden />
-                  <span>before<span className="c">:</span>midplane</span>
-                  <span className="ts mono">tue 11:42:07</span>
-                </div>
-                <h2 className="ba-claim">
-                  Every customer&apos;s data, <em>one SELECT.</em>
-                </h2>
-                <pre className="ba-query">
-                  <span className="com">
-                    # cursor agent: &ldquo;list recent signups&rdquo;
-                  </span>
-                  {"\n"}SELECT email, plan FROM users{"\n"}ORDER BY created_at
-                  DESC{"\n"}LIMIT 50;
-                </pre>
-                <div className="ba-arrow">runs against your Postgres</div>
-                <div className="ba-outcome bad">
-                  <div className="o-head">
-                    <span>postgres · prod</span>
-                    <span>7 ms</span>
-                  </div>
-                  50 rows — from <b className="d">14 different customers</b>
-                  <br />
-                  tenant boundary: <b className="d">gone</b>
-                </div>
-                <div className="ba-epilogue">
-                  11:42 — <b>no error, no alert</b> · it reads like a normal
-                  query
-                </div>
-              </article>
-
-              <article className="ba-card good">
-                <div className="ba-tag">
-                  <span className="dot" aria-hidden />
-                  <span>after<span className="c">:</span>midplane</span>
-                  <span className="ts mono">tue 11:42:07</span>
-                </div>
-                <h2 className="ba-claim">
-                  Denied <em>before it runs.</em>
-                </h2>
-                <pre className="ba-query">
-                  <span className="com"># same agent, same query</span>
-                  {"\n"}SELECT email, plan FROM users{"\n"}ORDER BY created_at
-                  DESC{"\n"}LIMIT 50;
-                </pre>
-                <div className="ba-arrow">hits midplane policy first</div>
-                <div className="ba-outcome good">
-                  <div className="o-head">
-                    <span>midplane · policy</span>
-                    <span>tenant_scope_missing</span>
-                  </div>
-                  <b className="d">DENIED</b> ·{" "}
-                  <span className="mono">users</span> requires a{" "}
-                  <span className="mono">tenant_id</span> predicate; none
-                  present
-                  <br />
-                  enforced in the policy engine — before Postgres sees the read
-                </div>
-                <div className="ba-epilogue">
-                  11:42 — <b>audit logged</b> · agent retries with{" "}
-                  <span className="mono">WHERE tenant_id = $1</span>
-                </div>
-              </article>
-            </div>
-            <p className="ba-note">
-              A read-only role would have <b>allowed this</b> — it&apos;s a{" "}
-              <span className="mono">SELECT</span>.{" "}
-              <span className="mono">tenant_scope</span> is the one rule a
-              database role can&apos;t give you.
-            </p>
           </div>
         </section>
 
@@ -353,16 +264,13 @@ export default async function Landing() {
                   <pre className="flow-check-body">
                     {"table_access · "}
                     <span className="a">allow</span>
-                    {"\ntenant_scope · "}
-                    <span className="a">allow</span>
                     {"\nmulti_stmt   · "}
                     <span className="d">deny</span>
                     {"\nddl          · "}
                     <span className="d">deny</span>
                   </pre>
                   <p className="flow-check-caption">
-                    Read-only default, writes per opt-in table, tenant
-                    predicate required.
+                    Read-only default, writes per opt-in table.
                   </p>
                 </article>
                 <article className="flow-check">
@@ -402,11 +310,10 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* §02 — Policy: an abstract mockup of the actual shipped editor. */}
+        {/* §03 — Policy: an abstract mockup of the actual shipped editor. */}
         {/*    Matches PermissionGrid (default access pill row + per-table
-              overrides) and TenantScopeEditor (off/on toggle + default
-              column input + per-table override/exempt rows). Vocabulary
-              from @midplane-cloud/db/policy: deny / read / read_write. */}
+              overrides). Vocabulary from @midplane-cloud/db/policy:
+              deny / read / read_write. */}
         <section className="sec" id="policy">
           <div className="sec-top">
             <div className="sec-num">
@@ -419,9 +326,8 @@ export default async function Landing() {
               </h2>
               <p className="sec-sub">
                 Default access in one click. Per-table overrides for the few
-                that need write. Tenant scope on or off, with a column you
-                control. Saved policy reaches the engine in milliseconds — no
-                agent restart, no DSN reshuffle.
+                that need write. Saved policy reaches the engine in
+                milliseconds — no agent restart, no DSN reshuffle.
               </p>
             </div>
           </div>
@@ -533,18 +439,6 @@ export default async function Landing() {
                 </div>
               </div>
 
-              <div className="pui-section">
-                <div className="pui-sec-title">Tenant scope</div>
-                <div className="pui-row">
-                  <span className="pui-key">Enforce on every query</span>
-                  <span className="pui-toggle">on</span>
-                </div>
-                <div className="pui-row">
-                  <span className="pui-key">Default column</span>
-                  <span className="pui-val">tenant_id</span>
-                </div>
-              </div>
-
               <div className="pui-foot">
                 <span>Changes take effect immediately — no agent restart.</span>
                 <span className="pui-actions">
@@ -569,8 +463,8 @@ export default async function Landing() {
                 Every query. Every decision. <em>Filterable.</em>
               </h2>
               <p className="sec-sub">
-                Append-only. Filter by agent, token, table, tenant, decision,
-                or time window — then export the filtered view to CSV or JSON.
+                Append-only. Filter by agent, token, table, decision, or time
+                window — then export the filtered view to CSV or JSON.
                 Every row records the MCP client and the agent&apos;s declared
                 intent — and for changes you make in the dashboard, the
                 engineer who made them. So six months later you can ask
@@ -600,7 +494,7 @@ export default async function Landing() {
                 <span className="dec-allow">ALLOW</span>
                 <span className="sql">
                   <span className="sk read">read</span>
-                  SELECT id, email FROM users WHERE tenant_id = $1
+                  SELECT id, email FROM users WHERE created_at &gt; $1
                 </span>
                 <span>cursor · v0.45</span>
                 <span className="dur">4.1</span>
@@ -644,11 +538,11 @@ export default async function Landing() {
                 Pay for scale, <em>not the safety engine.</em>
               </h2>
               <p className="sec-sub">
-                Policy enforcement, audit log, and tenant isolation are on
-                every tier. Tiers gate structural growth — more connections,
-                more seats, longer retention, enterprise SSO. Query volume is
-                never metered. Hosted in EU or US, or self-host the
-                MIT-licensed engine — same engine and audit format either way.
+                Policy enforcement and the audit log are on every tier. Tiers
+                gate structural growth — more connections, more seats, longer
+                retention, enterprise SSO. Query volume is never metered.
+                Hosted in EU or US, or self-host the MIT-licensed engine —
+                same engine and audit format either way.
               </p>
             </div>
           </div>

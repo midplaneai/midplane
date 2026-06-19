@@ -1,7 +1,6 @@
 // Probe-matrix builder — the zero-typing path's input to the engine
-// dry-run. Pinned here: the V1 probe set (4 actions per table +
-// cross-tenant select on scoped tables), dedupe across
-// introspection ∪ policy sources, the 50-table cap with accurate
+// dry-run. Pinned here: the probe set (4 actions per table), dedupe
+// across introspection ∪ policy sources, the 50-table cap with accurate
 // truncation facts, and the row labels the panel renders.
 
 import { describe, expect, it } from "vitest";
@@ -12,7 +11,6 @@ import {
   buildGuardrailProbes,
   buildProbeMatrix,
   expectedDecision,
-  isTenantScoped,
   MAX_GUARDRAIL_PROBES,
   MAX_PROBES_PER_RUN,
   pickGuardrailTable,
@@ -21,74 +19,35 @@ import {
   reconcileGuardrails,
 } from "../src/lib/probe-matrix.ts";
 
-const NO_SCOPE = { column: null, overrides: {}, exempt: [] };
-const SCOPED = { column: "account_id", overrides: {}, exempt: ["plans"] };
-
-describe("isTenantScoped", () => {
-  it("default column scopes every table except exempt", () => {
-    expect(isTenantScoped("orders", SCOPED)).toBe(true);
-    expect(isTenantScoped("plans", SCOPED)).toBe(false);
-  });
-
-  it("override scopes a table even without a default column", () => {
-    const scope = {
-      column: null,
-      overrides: { orders: "org_id" },
-      exempt: [],
-    };
-    expect(isTenantScoped("orders", scope)).toBe(true);
-    expect(isTenantScoped("users", scope)).toBe(false);
-  });
-
-  it("no column, no overrides → nothing scoped", () => {
-    expect(isTenantScoped("orders", NO_SCOPE)).toBe(false);
-  });
-});
-
 describe("buildProbeMatrix", () => {
-  it("emits 4 probes per table without scoping", () => {
-    const m = buildProbeMatrix(["orders", "users"], NO_SCOPE);
+  it("emits 4 probes per table", () => {
+    const m = buildProbeMatrix(["orders", "users"]);
     expect(m.probes).toHaveLength(8);
     expect(m.truncated).toBe(false);
     expect(m.totalTables).toBe(2);
-    expect(m.probes.filter((p) => p.cross_tenant)).toHaveLength(0);
-  });
-
-  it("adds a cross-tenant select per scoped table only", () => {
-    const m = buildProbeMatrix(["orders", "plans"], SCOPED);
-    // orders: 4 + 1 cross-tenant; plans (exempt): 4.
-    expect(m.probes).toHaveLength(9);
-    const cross = m.probes.filter((p) => p.cross_tenant);
-    expect(cross).toEqual([
-      { table: "orders", action: "select", cross_tenant: true },
-    ]);
   });
 
   it("dedupes the introspection ∪ policy union and drops empties", () => {
-    const m = buildProbeMatrix(["orders", "orders", "", "users"], NO_SCOPE);
+    const m = buildProbeMatrix(["orders", "orders", "", "users"]);
     expect(m.tables).toEqual(["orders", "users"]);
     expect(m.probes).toHaveLength(8);
   });
 
   it("caps at PROBE_TABLE_CAP with accurate truncation facts", () => {
     const tables = Array.from({ length: 60 }, (_, i) => `t${i}`);
-    const m = buildProbeMatrix(tables, NO_SCOPE);
+    const m = buildProbeMatrix(tables);
     expect(m.tables).toHaveLength(PROBE_TABLE_CAP);
     expect(m.totalTables).toBe(60);
     expect(m.truncated).toBe(true);
     expect(m.probes).toHaveLength(PROBE_TABLE_CAP * 4);
   });
 
-  it("worst case (every capped table scoped) stays within MAX_PROBES_PER_RUN", () => {
+  it("worst case (every capped table) stays within MAX_PROBES_PER_RUN", () => {
     // The dry-run route's request validator enforces this ceiling — if a
     // cap or action change pushes the panel's own request past it, this
     // test fails before the route starts 400ing in production.
     const tables = Array.from({ length: 60 }, (_, i) => `t${i}`);
-    const m = buildProbeMatrix(tables, {
-      column: "account_id",
-      overrides: {},
-      exempt: [],
-    });
+    const m = buildProbeMatrix(tables);
     expect(m.probes).toHaveLength(MAX_PROBES_PER_RUN);
   });
 });
@@ -103,25 +62,21 @@ describe("expectedDecision", () => {
   it("select allowed at read+, denied only at deny", () => {
     // default read
     expect(
-      expectedDecision({ table: "users", action: "select" }, policy, NO_SCOPE),
+      expectedDecision({ table: "users", action: "select" }, policy),
     ).toBe("allow");
     expect(
-      expectedDecision(
-        { table: "secrets", action: "select" },
-        policy,
-        NO_SCOPE,
-      ),
+      expectedDecision({ table: "secrets", action: "select" }, policy),
     ).toBe("deny");
   });
 
   it("writes allowed only at read_write", () => {
     // default read → writes denied
     expect(
-      expectedDecision({ table: "users", action: "insert" }, policy, NO_SCOPE),
+      expectedDecision({ table: "users", action: "insert" }, policy),
     ).toBe("deny");
     // orders override read_write → writes allowed
     expect(
-      expectedDecision({ table: "orders", action: "update" }, policy, NO_SCOPE),
+      expectedDecision({ table: "orders", action: "update" }, policy),
     ).toBe("allow");
   });
 
@@ -131,28 +86,10 @@ describe("expectedDecision", () => {
       tables: { orders: "read_write" },
     };
     expect(
-      expectedDecision(
-        { table: "orders", action: "delete" },
-        denyDefault,
-        NO_SCOPE,
-      ),
+      expectedDecision({ table: "orders", action: "delete" }, denyDefault),
     ).toBe("allow");
     expect(
-      expectedDecision(
-        { table: "anything-else", action: "select" },
-        denyDefault,
-        NO_SCOPE,
-      ),
-    ).toBe("deny");
-  });
-
-  it("a cross-tenant read is always denied", () => {
-    expect(
-      expectedDecision(
-        { table: "orders", action: "select", cross_tenant: true },
-        policy,
-        SCOPED,
-      ),
+      expectedDecision({ table: "anything-else", action: "select" }, denyDefault),
     ).toBe("deny");
   });
 });
@@ -346,8 +283,5 @@ describe("probeLabel", () => {
     expect(probeLabel({ table: "orders", action: "delete" })).toBe(
       "delete from orders",
     );
-    expect(
-      probeLabel({ table: "orders", action: "select", cross_tenant: true }),
-    ).toBe("select another tenant's rows from orders");
   });
 });
