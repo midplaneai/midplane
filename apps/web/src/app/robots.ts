@@ -1,29 +1,13 @@
 import type { MetadataRoute } from "next";
 
-// Served at /robots.txt. The middleware matcher excludes paths containing a dot
-// (".*\\..*"), so this is reachable without a session. Allow the public
-// marketing + legal surfaces; keep the authenticated app, APIs, auth, and the
-// agent MCP endpoint out of the index.
-const BASE_URL = "https://midplane.ai";
-
+// This origin (app.midplane.ai) is the authenticated product. The public
+// marketing + legal surfaces moved to midplane.ai, which serves its own
+// robots + sitemap. Keep the whole app out of search indexes.
 export default function robots(): MetadataRoute.Robots {
   return {
     rules: {
       userAgent: "*",
-      allow: "/",
-      disallow: [
-        "/dashboard",
-        "/audit",
-        "/projects",
-        "/billing",
-        "/admin",
-        "/api/",
-        "/mcp/",
-        "/signup",
-        "/sign-in",
-        "/sign-up",
-      ],
+      disallow: "/",
     },
-    sitemap: `${BASE_URL}/sitemap.xml`,
   };
 }
