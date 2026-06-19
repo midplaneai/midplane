@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.11.0}"
+IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.12.0}"
 
 echo "building $IMAGE_TAG from the in-tree engine (engine/docker/Dockerfile) ..."
 # Build context is the repo root (the merged monorepo has one root bun.lock);
