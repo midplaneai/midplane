@@ -14,10 +14,14 @@ cd "$(git rev-parse --show-toplevel)"
 # are valid literal-DB-connection phrases.
 PAT='connectionId|connectionDatabaseId|connection_id|connection_database|ResolvedConnection|resolveConnectionForCustomer|mcpConnectionUrl|ConnectionResolveResult|CONNECTION_PAUSED|CONNECTION_RESUMED|CONNECTION_SECTIONS|MAX_CONNECTION_NAME|connection_(created|paused|deleted|rotated|resumed)|/connections(/|"|$)'
 
-if hits=$(rg -n -e "$PAT" \
-      -g '!node_modules' -g '!bun.lock' -g '!engine/**' \
-      -g '!scripts/check-connection-rename.sh' \
-      apps packages infra scripts 2>/dev/null); then
+# git grep (not rg/grep -r) so CI needs no extra install AND .gitignore is
+# honored — skips .next/ build caches and node_modules, which bundle
+# third-party SQL like `connection_id()`. --untracked also catches new
+# uncommitted drift. -a forces text on lib/projects.ts (one control byte).
+# engine/ is a sibling of these paths, so it's excluded by the pathspec.
+if hits=$(git grep --untracked -aEn "$PAT" -- \
+      apps packages infra scripts \
+      ':!scripts/check-connection-rename.sh' 2>/dev/null); then
   echo "✗ connection→project rename drift — container 'connection' identifiers reappeared:"
   echo "$hits"
   echo ""
