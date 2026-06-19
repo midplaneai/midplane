@@ -1,3 +1,21 @@
+-- =============================================================================
+-- SQUASHED BASELINE — connection→project rename (pre-launch, Approach C).
+--
+-- This SINGLE migration REPLACES the original migrations 0000-0028 and applies
+-- ONLY to a FRESH database. Any database that already ran 0000-0028 (a deployed
+-- Fly Postgres, a dev branch) MUST be DROPPED and recreated before deploying
+-- this — otherwise Drizzle tries to apply this baseline against existing tables
+-- and the deploy fails. The DO-block guard below turns that into an explicit,
+-- actionable error instead of a cryptic "relation already exists".
+--
+-- DEPLOY STEP (pre-launch, authorized): reset every target database before the
+-- first migrate against this baseline.
+--
+-- Built by pg_dump of the fully-migrated schema with a connection->project
+-- substitution; equivalence-validated against the old history. RLS policies and
+-- CHECK constraints are preserved verbatim below.
+-- =============================================================================
+
 --
 -- PostgreSQL database dump
 --
@@ -16,6 +34,19 @@ SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
+
+-- Guard: refuse to apply the squash baseline onto a database that still carries
+-- the pre-rename schema (see header). A FRESH database has no public.connections
+-- table, so it passes straight through to the CREATEs below.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'connections'
+  ) THEN
+    RAISE EXCEPTION 'connection->project squash baseline cannot apply: this database still has the pre-rename schema (table public.connections). This baseline replaces migrations 0000-0028 and only runs on a FRESH database — DROP and recreate the database before deploying. See migrations/0000_clean_mastermind.sql header.';
+  END IF;
+END $$;
 
 --
 -- Name: enforce_customer_region_immutable(); Type: FUNCTION; Schema: public; Owner: -
