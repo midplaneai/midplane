@@ -38,7 +38,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export async function TokenList({
   projectId,
   projectName,
-  region,
+  oauthUrl,
   databases = [],
   tokens,
   createAction,
@@ -48,7 +48,9 @@ export async function TokenList({
 }: {
   projectId: string;
   projectName?: string | null;
-  region?: string | null;
+  /** The region-wide OAuth endpoint (mcpGenericUrl), computed server-side by the
+   *  page so the connect snippets use the deployment's real MCP host. */
+  oauthUrl: string;
   /** This project's databases, for the token scope picker (P6.1). */
   databases?: Array<{ projectDatabaseId: string; name: string }>;
   tokens: TokenSummary[];
@@ -89,24 +91,25 @@ export async function TokenList({
             Connect your first agent
           </h2>
           <p className="text-sm text-muted-foreground">
-            Generate this project&apos;s first{" "}
+            Point your agent at this project&apos;s{" "}
             <strong className="font-medium text-foreground">
               MCP server URL
             </strong>{" "}
-            and paste it into your agent. Every query it runs is proxied
-            through your access policy.
+            and sign in — no secret to copy. Every query it runs is proxied
+            through your access policy. Headless callers (CI, cron) can mint a
+            machine token instead.
           </p>
         </div>
+        <ConnectAgentGuide projectName={projectName} oauthUrl={oauthUrl} />
         <CreateTokenModal
           projectId={projectId}
           projectName={projectName}
-          region={region}
+          oauthUrl={oauthUrl}
           databases={databases}
           action={createAction}
-          triggerLabel="Connect an agent"
+          triggerLabel="Create a machine token"
           limitReached={tokenLimit}
         />
-        <ConnectAgentGuide projectName={projectName} region={region} />
       </section>
     );
   }
@@ -131,7 +134,7 @@ export async function TokenList({
         <CreateTokenModal
           projectId={projectId}
           projectName={projectName}
-          region={region}
+          oauthUrl={oauthUrl}
           databases={databases}
           action={createAction}
           limitReached={tokenLimit}
@@ -163,7 +166,7 @@ export async function TokenList({
           how to connect an agent
         </summary>
         <div className="px-4 pb-4">
-          <ConnectAgentGuide projectName={projectName} region={region} />
+          <ConnectAgentGuide projectName={projectName} oauthUrl={oauthUrl} />
         </div>
       </details>
     </section>

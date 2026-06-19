@@ -63,8 +63,9 @@ interface CreateTokenModalProps {
   databases?: Array<{ projectDatabaseId: string; name: string }>;
   /** Used to label the MCP server key in the setup snippets. */
   projectName?: string | null;
-  /** Region host for the setup snippets' example URL. */
-  region?: string | null;
+  /** The region-wide OAuth endpoint (mcpGenericUrl) for the setup snippets,
+   *  computed server-side so it uses the deployment's real MCP host. */
+  oauthUrl: string;
   /** Override the trigger button label (e.g. "Connect your first agent"). */
   triggerLabel?: string;
   /** When the org is already at its token cap, the modal opens to a limit
@@ -103,7 +104,7 @@ export function CreateTokenModal({
   action,
   databases = [],
   projectName,
-  region,
+  oauthUrl,
   triggerLabel = "Connect an agent",
   limitReached,
 }: CreateTokenModalProps) {
@@ -273,7 +274,7 @@ export function CreateTokenModal({
             <SuccessPanel
               mcpUrl={mcpUrl}
               projectName={projectName}
-              region={region}
+              oauthUrl={oauthUrl}
               locked={locked}
               remaining={remaining}
               onClose={() => handleOpenChange(false)}
@@ -409,14 +410,14 @@ export function CreateTokenModal({
 function SuccessPanel({
   mcpUrl,
   projectName,
-  region,
+  oauthUrl,
   locked,
   remaining,
   onClose,
 }: {
   mcpUrl: string;
   projectName?: string | null;
-  region?: string | null;
+  oauthUrl: string;
   /** True while the dismiss countdown is still running. */
   locked: boolean;
   /** Seconds left on that countdown (for the button label). */
@@ -437,8 +438,9 @@ function SuccessPanel({
       <ShowOnceUrl mcpUrl={mcpUrl} />
       <ConnectAgentGuide
         projectName={projectName}
-        region={region}
-        mcpUrl={mcpUrl}
+        oauthUrl={oauthUrl}
+        tokenUrl={mcpUrl}
+        primary="token"
       />
       <div className="flex items-center justify-end pt-2">
         <Button

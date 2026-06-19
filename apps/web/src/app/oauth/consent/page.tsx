@@ -76,6 +76,16 @@ export default async function OAuthConsentPage({
       ? Object.fromEntries(await getOAuthGrantMap(customer, clientId, userId))
       : {};
 
+  // Pre-select the project this credential is already bound to (the project that
+  // owns any prior grant) on a re-consent; otherwise the first project. One
+  // OAuth credential → one project, so the picker binds to exactly one.
+  const existingCdbIds = new Set(Object.keys(existing));
+  const boundProject = projects.find((p) =>
+    p.databases.some((d) => existingCdbIds.has(d.projectDatabaseId)),
+  );
+  const defaultProjectId =
+    boundProject?.projectId ?? projects[0]?.projectId ?? null;
+
   return (
     <main className="flex min-h-screen flex-col">
       <header className="border-b border-border px-10 py-5">
@@ -125,6 +135,7 @@ export default async function OAuthConsentPage({
               consentCode={consentCode!}
               clientId={clientId}
               projects={projects}
+              defaultProjectId={defaultProjectId}
               existing={existing}
             />
 

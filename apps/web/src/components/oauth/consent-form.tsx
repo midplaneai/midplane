@@ -10,13 +10,19 @@ import {
 } from "@/components/scope/db-access-control";
 import { writeConsentGrants } from "@/app/oauth/consent/actions";
 
-// Allow / Deny + per-database scope picker for the OAuth consent screen.
+// Allow / Deny + project + per-database scope picker for the OAuth consent
+// screen.
 //
-// On Allow: write the chosen per-DB grant set FIRST (server action →
+// One OAuth credential is bound to ONE project. The user picks a project (the
+// default project is pre-selected) and then which of that project's databases
+// the agent may reach, at what access.
+//
+// On Allow: write the chosen project + per-DB grant set FIRST (server action →
 // mcp_scope_grants, keyed by this OAuth client + the signed-in user), THEN post
 // the decision to the Better Auth consent endpoint (/api/auth/oauth2/consent).
 // The endpoint returns the redirect URI to send the MCP client back to. The
-// agent's bearer is then enforced against the grant set on every request.
+// agent's bearer is then enforced against the grant set on every request, and
+// the region-wide /mcp endpoint resolves the bound project from it.
 //
 // On Deny: post the denial only — no grants written.
 //
@@ -42,6 +48,9 @@ export interface ConsentFormProps {
   consentCode: string;
   clientId: string;
   projects: ConsentProject[];
+  /** Project to pre-select: the credential's current binding on a re-consent,
+   *  else the default project. The form falls back to the first project. */
+  defaultProjectId: string | null;
   /** Prior grant (cdbId → access) so a re-consent pre-selects the last choice. */
   existing: Record<string, Access>;
 }
@@ -50,38 +59,53 @@ export function ConsentForm({
   consentCode,
   clientId,
   projects,
+  defaultProjectId,
   existing,
 }: ConsentFormProps) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const allDbs = useMemo(
-    () => projects.flatMap((c) => c.databases),
-    [projects],
+  // The one project this credential will be bound to. Pre-select the default
+  // (re-consent binding, else the default project), falling back to the first.
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    () =>
+      (defaultProjectId &&
+      projects.some((p) => p.projectId === defaultProjectId)
+        ? defaultProjectId
+        : projects[0]?.projectId) ?? null,
   );
+  const selectedProject = useMemo(
+    () => projects.find((p) => p.projectId === selectedProjectId) ?? null,
+    [projects, selectedProjectId],
+  );
+  const selectedDbs = selectedProject?.databases ?? [];
 
-  // cdbId → "none" | "read" | "write". Default a DB to its prior grant, else
-  // "read" (the safe default a user is most likely to want) — but only DBs the
-  // user flips off "none"... no: default unselected ("none") unless previously
-  // granted, so consent is an explicit opt-IN per database.
+  // cdbId → "none" | "read" | "write". Default unselected ("none") unless
+  // previously granted, so consent is an explicit opt-IN per database. Prior
+  // grants seed every project's DBs so switching back to the bound project
+  // restores its selection.
   const [state, setState] = useState<Record<string, DbState>>(() => {
     const init: Record<string, DbState> = {};
-    for (const db of allDbs) {
-      init[db.projectDatabaseId] = existing[db.projectDatabaseId] ?? "none";
+    for (const p of projects) {
+      for (const db of p.databases) {
+        init[db.projectDatabaseId] = existing[db.projectDatabaseId] ?? "none";
+      }
     }
     return init;
   });
 
-  const selectedCount = Object.values(state).filter((v) => v !== "none").length;
+  const selectedCount = selectedDbs.filter(
+    (db) => (state[db.projectDatabaseId] ?? "none") !== "none",
+  ).length;
 
   function setDb(cdbId: string, value: DbState) {
     setState((s) => ({ ...s, [cdbId]: value }));
   }
 
   function setAll(value: DbState) {
-    setState(() => {
-      const next: Record<string, DbState> = {};
-      for (const db of allDbs) next[db.projectDatabaseId] = value;
+    setState((s) => {
+      const next = { ...s };
+      for (const db of selectedDbs) next[db.projectDatabaseId] = value;
       return next;
     });
   }
@@ -108,14 +132,21 @@ export function ConsentForm({
     setError(null);
     startTransition(async () => {
       try {
-        if (accept) {
-          const selections = Object.entries(state)
-            .filter(([, v]) => v !== "none")
-            .map(([projectDatabaseId, v]) => ({
-              projectDatabaseId,
-              access: v as Access,
+        // Only write grants when there's a project to bind to. With no projects
+        // yet, approve the client with no grants (the proxy 403s until the user
+        // grants access later) — matching the prior empty-selection behavior.
+        if (accept && selectedProjectId) {
+          const selections = selectedDbs
+            .filter((db) => (state[db.projectDatabaseId] ?? "none") !== "none")
+            .map((db) => ({
+              projectDatabaseId: db.projectDatabaseId,
+              access: state[db.projectDatabaseId] as Access,
             }));
-          const grant = await writeConsentGrants(clientId, selections);
+          const grant = await writeConsentGrants(
+            clientId,
+            selectedProjectId,
+            selections,
+          );
           if (!grant.ok) {
             setError(
               "Could not save the database selection. Please try again.",
@@ -130,12 +161,47 @@ export function ConsentForm({
     });
   }
 
-  const hasDbs = allDbs.length > 0;
+  const hasDbs = projects.length > 0;
 
   return (
     <div className="flex w-full flex-col gap-4">
       {hasDbs ? (
         <div className="w-full space-y-4 border border-border bg-card p-5">
+          {projects.length > 1 ? (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="consent-project"
+                className="text-sm font-medium text-foreground"
+              >
+                Project
+              </label>
+              <select
+                id="consent-project"
+                value={selectedProjectId ?? ""}
+                disabled={pending}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                className="w-full border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[hsl(var(--brand))] focus:outline-none disabled:opacity-50"
+              >
+                {projects.map((p) => (
+                  <option key={p.projectId} value={p.projectId}>
+                    {p.projectName || p.projectId}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-subtle">
+                This agent connects to one project. Pick its databases below.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-subtle">
+              Connecting to{" "}
+              <span className="font-medium text-foreground">
+                {selectedProject?.projectName || selectedProject?.projectId}
+              </span>
+              . Pick its databases below.
+            </p>
+          )}
+
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-foreground">
               Choose which databases this agent can use
@@ -158,28 +224,21 @@ export function ConsentForm({
             </div>
           </div>
 
-          <div className="space-y-4">
-            {projects.map((conn) => (
-              <fieldset key={conn.projectId} className="space-y-2">
-                <legend className="text-xs font-medium uppercase tracking-wide text-subtle">
-                  {conn.projectName || conn.projectId}
-                </legend>
-                {conn.databases.map((db) => (
-                  <div
-                    key={db.projectDatabaseId}
-                    className="flex items-center justify-between gap-3"
-                  >
-                    <span className="font-mono text-sm text-foreground">
-                      {db.name}
-                    </span>
-                    <DbAccessControl
-                      value={state[db.projectDatabaseId] ?? "none"}
-                      disabled={pending}
-                      onChange={(v) => setDb(db.projectDatabaseId, v)}
-                    />
-                  </div>
-                ))}
-              </fieldset>
+          <div className="space-y-2">
+            {selectedDbs.map((db) => (
+              <div
+                key={db.projectDatabaseId}
+                className="flex items-center justify-between gap-3"
+              >
+                <span className="font-mono text-sm text-foreground">
+                  {db.name}
+                </span>
+                <DbAccessControl
+                  value={state[db.projectDatabaseId] ?? "none"}
+                  disabled={pending}
+                  onChange={(v) => setDb(db.projectDatabaseId, v)}
+                />
+              </div>
             ))}
           </div>
           <p className="text-xs text-subtle">

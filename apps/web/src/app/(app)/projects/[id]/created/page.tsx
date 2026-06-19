@@ -2,9 +2,10 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { mcpGenericUrl } from "@midplane-cloud/router";
+
 import { ConnectAgentGuide } from "@/components/projects/connect-agent-guide";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { ShowOnceUrl } from "@/components/show-once-url";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -15,20 +16,19 @@ import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
 
 import { SavedItButton } from "./saved-it-button";
 
-// Post-create success page. The default token's plaintext URL arrives
-// via an httpOnly cookie set by the /projects/new server action
-// (cookie crosses the redirect boundary; the React state in the calling
-// component is gone by the time we render).
+// Post-create success page. The default connection is OAuth: point the agent at
+// the region-wide /mcp URL and sign in — no secret to copy. We also mint a
+// machine token whose plaintext URL arrives via an httpOnly cookie set by the
+// /projects/new server action (it has to cross the create → success redirect);
+// it's offered under the connect card's "machine / CI connection" disclosure for
+// headless callers, shown once.
 //
-// The cookie is NOT cleared on render — that would mean an accidental
-// reload or back-nav drops the user straight to "already shown" with the
-// URL gone (the bug this page used to have). Instead the SavedItButton
-// clears it explicitly, gated behind a short countdown, only once the
-// user acknowledges they've copied it. So a reload keeps showing the URL
-// until acknowledged; the cookie's 5-minute TTL still bounds exposure.
-// After acknowledgment (or once the TTL lapses) the cookie is gone and we
-// render the "already shown" fallback pointing back to the project
-// page where the token list lives.
+// The cookie is NOT cleared on render — an accidental reload or back-nav would
+// otherwise drop the machine URL before it's copied. The SavedItButton clears it
+// explicitly (gated behind a short countdown); the cookie's 5-minute TTL also
+// bounds exposure. After acknowledgment (or once the TTL lapses) the machine URL
+// is gone, but OAuth still works — the connect card just shows the token slot as
+// a placeholder.
 
 export default async function ProjectCreated({
   params,
@@ -45,6 +45,9 @@ export default async function ProjectCreated({
 
   const cookieStore = await cookies();
   const mcpUrl = cookieStore.get(SHOW_ONCE_COOKIE)?.value ?? null;
+  // The region-wide OAuth endpoint — /mcp — the connect guide leads with.
+  // Computed server-side so it uses this deployment's real MCP host.
+  const oauthUrl = mcpGenericUrl(customer.region, process.env);
   const label = projectLabel(project);
   const projectHref = `/projects/${project.id}`;
 
@@ -63,67 +66,28 @@ export default async function ProjectCreated({
         <div className="mx-auto max-w-[760px]">
           <PageHeader
             title="Project ready"
-            subtitle="One default token has been minted. Point your agent at the URL below; Midplane proxies its calls through your access policy."
+            subtitle="Point your agent at the URL below and sign in — Midplane proxies its calls through your access policy. Headless callers (CI, cron) can grab a machine token under the connect card."
           />
 
-          {mcpUrl ? (
-            <div className="space-y-4">
-              <section className="space-y-4 rounded-lg border border-[hsl(var(--warn)/0.4)] bg-card p-6">
-                <div className="space-y-1">
-                  <h2 className="text-sm font-medium text-foreground">
-                    Copy this URL now
-                  </h2>
-                  <p className="text-xs text-muted-foreground">
-                    This is the{" "}
-                    <strong className="font-medium text-foreground">
-                      only time
-                    </strong>{" "}
-                    you&apos;ll see the full URL — we store only a hashed
-                    digest. Copy it, then click{" "}
-                    <strong className="font-medium text-foreground">
-                      I&apos;ve saved it
-                    </strong>{" "}
-                    below; after that the plaintext is gone for good and
-                    you&apos;d need to revoke the token and mint a new one
-                    from the project page.
-                  </p>
-                </div>
-                <ShowOnceUrl mcpUrl={mcpUrl} />
-              </section>
+          <div className="space-y-4">
+            <ConnectAgentGuide
+              projectName={project.name}
+              oauthUrl={oauthUrl}
+              tokenUrl={mcpUrl}
+            />
 
-              <ConnectAgentGuide
-                projectName={project.name}
-                region={customer.region}
-                mcpUrl={mcpUrl}
-              />
+            <WhatsNext projectHref={projectHref} />
 
-              <WhatsNext projectHref={projectHref} />
-
-              <div className="pt-2">
+            <div className="pt-2">
+              {mcpUrl ? (
                 <SavedItButton projectHref={projectHref} />
-              </div>
-            </div>
-          ) : (
-            <section className="space-y-3 rounded-lg border border-border bg-card p-6">
-              <h2 className="text-sm font-medium text-foreground">
-                URL already shown
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                The default token&apos;s URL was displayed once when this
-                project was created. We{" "}
-                <strong className="font-medium text-foreground">
-                  don&apos;t persist the plaintext
-                </strong>
-                ; mint a new token from the project page to set up an
-                additional agent.
-              </p>
-              <div className="pt-2">
+              ) : (
                 <Link href={projectHref}>
                   <Button size="sm">Open project</Button>
                 </Link>
-              </div>
-            </section>
-          )}
+              )}
+            </div>
+          </div>
         </div>
       </PageContainer>
     </>
@@ -137,7 +101,9 @@ function WhatsNext({ projectHref }: { projectHref: string }) {
       <ol className="space-y-2 text-xs text-muted-foreground">
         <li>
           <span className="font-medium text-foreground">1. Add the config above to your agent</span>{" "}
-          using the tab for your client, then reload it.
+          using the tab for your client, then reload it. Your client opens a
+          browser to sign in and choose which of this project&apos;s databases
+          the agent can use.
         </li>
         <li>
           <span className="font-medium text-foreground">2. Try a query.</span>{" "}

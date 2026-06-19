@@ -5,6 +5,7 @@ import * as schema from "@midplane-cloud/db/schema";
 import {
   projectDatabases,
   projects,
+  mcpScopeGrants,
   mcpTokens,
   parseToken,
   validateChecksum,
@@ -184,6 +185,62 @@ export async function resolveProjectForCustomer(
     .where(eq(projectDatabases.projectId, project.id))
     .orderBy(asc(projectDatabases.name));
   return { ok: true, project, databases: dbRows };
+}
+
+/** Resolve the single project an OAuth credential is bound to, for the
+ *  region-wide `/mcp` endpoint (no project id in the URL).
+ *
+ *  One OAuth credential → one project: the consent picker writes the agent's
+ *  per-DB grants (mcp_scope_grants, keyed by client_id + user_id) for exactly
+ *  ONE project, replacing the cred's whole grant set. So the project the
+ *  generic URL reaches is simply the project those grants belong to — derived
+ *  here, ownership-gated on the customer the OAuth bearer mapped to. No grant
+ *  rows (the user approved the client but chose no databases, or never
+ *  consented) → null, and the caller 403s "re-connect to choose a project".
+ *
+ *  A cred whose grants somehow span >1 project (not reachable through the
+ *  single-project consent picker) collapses to the first by project id — the
+ *  others remain reachable via the explicit /mcp/<projectId> address. */
+export async function resolveOAuthProjectId(
+  db: Db,
+  subject: { clientId: string; userId: string; customerId: string },
+): Promise<string | null> {
+  const rows = (await db
+    .select({ projectId: projects.id })
+    .from(mcpScopeGrants)
+    .innerJoin(
+      projectDatabases,
+      eq(projectDatabases.id, mcpScopeGrants.projectDatabaseId),
+    )
+    .innerJoin(projects, eq(projects.id, projectDatabases.projectId))
+    .where(
+      sql`${mcpScopeGrants.clientId} = ${subject.clientId}
+          AND ${mcpScopeGrants.userId} = ${subject.userId}
+          AND ${projects.customerId} = ${subject.customerId}`,
+    )
+    .orderBy(asc(projects.id))
+    .limit(1)) as Array<{ projectId: string }>;
+  return rows[0]?.projectId ?? null;
+}
+
+/** The customer's project id when they own EXACTLY ONE, else null. The
+ *  region-wide `/mcp` self-host fallback: a single-tenant owner who approved a
+ *  client without picking databases has no grant to derive the bound project
+ *  from, but their intent is unambiguous when there's only one project (the
+ *  empty-scope → full-access exception then applies in the proxy). With zero or
+ *  several projects it's ambiguous → null, and the caller 403s (use the explicit
+ *  /mcp/<projectId> address). Cloud never calls this — there consent is forced
+ *  to choose a project + databases. */
+export async function resolveSoleProjectId(
+  db: Db,
+  customerId: string,
+): Promise<string | null> {
+  const rows = (await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.customerId, customerId))
+    .limit(2)) as Array<{ id: string }>;
+  return rows.length === 1 ? rows[0]!.id : null;
 }
 
 /** Truncate length-bound user-agent. The mcp_tokens.last_used_ua column

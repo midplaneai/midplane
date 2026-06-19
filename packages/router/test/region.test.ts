@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { loadRegions, mintMcpUrl } from "../src/region.ts";
+import { loadRegions, mcpGenericUrl, mintMcpUrl } from "../src/region.ts";
 
 describe("loadRegions", () => {
   it("falls back to localhost:3000 in dev (Next.js handles /mcp/<token> directly)", () => {
@@ -41,5 +41,19 @@ describe("mintMcpUrl", () => {
   it("produces http://localhost:3000 in dev", () => {
     const url = mintMcpUrl("eu", "tok_abc", {} as NodeJS.ProcessEnv);
     expect(url).toBe("http://localhost:3000/mcp/tok_abc");
+  });
+});
+
+describe("mcpGenericUrl", () => {
+  it("produces https://<region>.midplane.ai/mcp — no id, no token", () => {
+    const url = mcpGenericUrl("eu", {
+      MIDPLANE_PUBLIC_HOST_EU: "eu.midplane.ai",
+    } as NodeJS.ProcessEnv);
+    expect(url).toBe("https://eu.midplane.ai/mcp");
+  });
+
+  it("produces http://localhost:3000/mcp in dev", () => {
+    const url = mcpGenericUrl("eu", {} as NodeJS.ProcessEnv);
+    expect(url).toBe("http://localhost:3000/mcp");
   });
 });
