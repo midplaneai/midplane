@@ -20,6 +20,7 @@ import { currentCustomer } from "@/lib/customer";
 import {
   createProject,
   getPlanUsage,
+  hasEmptyProject,
   isValidDsn,
 } from "@/lib/projects";
 import {
@@ -51,7 +52,16 @@ export default async function NewProject() {
   // catches the concurrent-tab race this unlocked read can't). Mirrors the
   // resource the action would throw on, so the messaging is consistent.
   const { caps, plan } = await resolvePlan();
-  const block = projectCreateBlock(await getPlanUsage(customer), caps);
+  // A projects-cap block is cleared when the customer has a reusable empty
+  // project: createProject attaches the first DB + token to it without consuming
+  // a new slot, so the DSN form must stay open (a tokens-cap block still
+  // stands). Without this, a fresh Free customer (auto-seeded Default, 1/1) is
+  // wrongly told they're at their project limit and can't add a first database.
+  const rawBlock = projectCreateBlock(await getPlanUsage(customer), caps);
+  const block =
+    rawBlock?.resource === "projects" && (await hasEmptyProject(customer))
+      ? null
+      : rawBlock;
 
   return (
     <>

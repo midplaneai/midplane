@@ -19,7 +19,7 @@ import { expect, test } from "@playwright/test";
 import { and, eq, sql } from "drizzle-orm";
 
 import {
-  connections,
+  projects,
   customers,
   getDb,
   indexerCursors,
@@ -27,7 +27,7 @@ import {
 } from "@midplane-cloud/db";
 import { ExpirySweeper } from "@midplane-cloud/router";
 
-import { containerNameFor, seedConnection } from "./_seed-helpers";
+import { containerNameFor, seedProject } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -40,7 +40,7 @@ const PG_DB = "midplane_tokens_e2e";
 
 let pgPort = 0;
 let customerId = "";
-let connectionId = "";
+let projectId = "";
 let mcpToken = "";
 let tokenId = "";
 let proxiedContainerName = "";
@@ -61,12 +61,12 @@ test.beforeAll(async () => {
   );
 
   const dsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
-  const seeded = await seedConnection({ region: "eu", dsn });
+  const seeded = await seedProject({ region: "eu", dsn });
   customerId = seeded.customerId;
-  connectionId = seeded.connectionId;
+  projectId = seeded.projectId;
   mcpToken = seeded.tokenPlaintext;
   tokenId = seeded.tokenId;
-  proxiedContainerName = containerNameFor(connectionId);
+  proxiedContainerName = containerNameFor(projectId);
 });
 
 test.afterAll(async () => {
@@ -79,11 +79,11 @@ test.afterAll(async () => {
     } catch {}
   }
   const db = getDb("eu");
-  if (connectionId) {
+  if (projectId) {
     await db
       .delete(indexerCursors)
-      .where(eq(indexerCursors.connectionId, connectionId));
-    await db.delete(connections).where(eq(connections.id, connectionId));
+      .where(eq(indexerCursors.projectId, projectId));
+    await db.delete(projects).where(eq(projects.id, projectId));
   }
   if (customerId) {
     await db.delete(customers).where(eq(customers.id, customerId));
@@ -146,7 +146,7 @@ test("expiry sweeper flips past-due tokens to expired", async ({
   request,
   baseURL,
 }) => {
-  // Mint a fresh active token on the same connection with an expiry
+  // Mint a fresh active token on the same project with an expiry
   // already in the past. The runtime lookup's WHERE filter rejects this
   // immediately (NOW() vs expires_at), but status stays 'active' until
   // the sweeper runs — that's exactly what we exercise here.
@@ -163,7 +163,7 @@ test("expiry sweeper flips past-due tokens to expired", async ({
   const expiredTokenId = ulid();
   await db.insert(mcpTokens).values({
     id: expiredTokenId,
-    connectionId,
+    projectId,
     name: "already-expired",
     prefix: generated.prefix,
     last4: generated.last4,

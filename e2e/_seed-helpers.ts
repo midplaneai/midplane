@@ -1,11 +1,11 @@
 // Shared DB-seeding helpers for live E2E suites.
 //
-// PR2 of mcp_url_auth_security: connections no longer carry a plaintext
+// PR2 of mcp_url_auth_security: projects no longer carry a plaintext
 // mcp_token column; the agent-facing token lives in the new mcp_tokens
 // table, hashed at rest via HMAC-SHA256(pepper). E2E suites that bypass
 // the UI and seed the cloud DB directly need to mint a real token row
 // (and capture its plaintext) so the proxy / indexer / spawner pipeline
-// resolves it the same way a Server-Action-created connection would.
+// resolves it the same way a Server-Action-created project would.
 //
 // Trust posture: pepper is read from the env via loadPepperFromKms.
 // Tests run against MIDPLANE_KMS_MODE=env with
@@ -16,8 +16,8 @@
 import { ulid } from "ulid";
 
 import {
-  connectionDatabases,
-  connections,
+  projectDatabases,
+  projects,
   customers,
   getDb,
   mcpTokens,
@@ -27,11 +27,11 @@ import { generateToken } from "@midplane-cloud/db/token-format";
 import { encryptDsn, makeKmsContext } from "@midplane-cloud/kms";
 import { hashToken, loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
-export interface SeededConnection {
+export interface SeededProject {
   customerId: string;
   orgId: string;
-  connectionId: string;
-  connectionDatabaseId: string;
+  projectId: string;
+  projectDatabaseId: string;
   /** Default token's plaintext — the value the agent pastes into Cursor
    *  (and the value the proxy resolves via HMAC lookup). The hash is
    *  what's stored on mcp_tokens.token_hash. */
@@ -39,20 +39,20 @@ export interface SeededConnection {
   tokenId: string;
 }
 
-/** Seed a customer + connection + one connection_databases row + one
+/** Seed a customer + project + one project_databases row + one
  *  active mcp_tokens row pointing at the supplied DSN. Returns enough
  *  identifiers for the test to drive the /mcp/<token> route and clean
  *  up afterwards. */
-export async function seedConnection(opts: {
+export async function seedProject(opts: {
   region: Region;
   dsn: string;
   /** Defaults to 'main'. */
   databaseName?: string;
-}): Promise<SeededConnection> {
+}): Promise<SeededProject> {
   const customerId = ulid();
   const orgId = `org_e2e-${customerId}`;
-  const connectionId = ulid();
-  const connectionDatabaseId = ulid();
+  const projectId = ulid();
+  const projectDatabaseId = ulid();
   const dbName = opts.databaseName ?? "main";
 
   const kms = makeKmsContext(process.env);
@@ -72,7 +72,7 @@ export async function seedConnection(opts: {
   const firstKid = peppers.keys().next().value as string | undefined;
   if (!firstKid) {
     throw new Error(
-      `seedConnection: no pepper available for region '${opts.region}'`,
+      `seedProject: no pepper available for region '${opts.region}'`,
     );
   }
   const tokenHash = hashToken(peppers.get(firstKid)!, generated.plaintext);
@@ -85,14 +85,14 @@ export async function seedConnection(opts: {
     email: `e2e-${customerId}@example.test`,
     region: opts.region,
   });
-  await db.insert(connections).values({
-    id: connectionId,
+  await db.insert(projects).values({
+    id: projectId,
     customerId,
     region: opts.region,
   });
-  await db.insert(connectionDatabases).values({
-    id: connectionDatabaseId,
-    connectionId,
+  await db.insert(projectDatabases).values({
+    id: projectDatabaseId,
+    projectId,
     name: dbName,
     encryptedDsn: ciphertext,
     kmsKeyId,
@@ -100,7 +100,7 @@ export async function seedConnection(opts: {
   });
   await db.insert(mcpTokens).values({
     id: tokenId,
-    connectionId,
+    projectId,
     name: "default",
     prefix: generated.prefix,
     last4: generated.last4,
@@ -112,17 +112,17 @@ export async function seedConnection(opts: {
   return {
     customerId,
     orgId,
-    connectionId,
-    connectionDatabaseId,
+    projectId,
+    projectDatabaseId,
     tokenPlaintext: generated.plaintext,
     tokenId,
   };
 }
 
 /** Derive the container name the spawner produces for a given
- *  connectionId. PR2 of mcp_url_auth_security: container names key on
- *  the lowercased connection-id slice; the plaintext token is never
+ *  projectId. PR2 of mcp_url_auth_security: container names key on
+ *  the lowercased project-id slice; the plaintext token is never
  *  part of the name. */
-export function containerNameFor(connectionId: string): string {
-  return `midplane-${connectionId.slice(0, 16).toLowerCase()}`;
+export function containerNameFor(projectId: string): string {
+  return `midplane-${projectId.slice(0, 16).toLowerCase()}`;
 }

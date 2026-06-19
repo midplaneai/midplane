@@ -1,18 +1,18 @@
-// Live end-to-end: connection rotation actually swaps the DSN the OSS
+// Live end-to-end: project rotation actually swaps the DSN the OSS
 // container is using. CRITICAL test from the eng-review plan — failing it
 // means a customer rotates a leaked DSN but the in-memory cache + running
 // container keep serving the OLD credentials for up to 30 minutes.
 //
-// Why this isn't a Playwright UI test: rotateConnection invalidates two
+// Why this isn't a Playwright UI test: rotateProject invalidates two
 // process-local singletons (DecryptCache, ContainerRegistry). The dev
 // server's singletons live in its process; we can't reach them from a test
-// process. The /api/connections/[id] PATCH route is a thin HTTP shell over
-// rotateConnection; this test exercises rotateConnection directly against
+// process. The /api/projects/[id] PATCH route is a thin HTTP shell over
+// rotateProject; this test exercises rotateProject directly against
 // real DecryptCache, ContainerRegistry, and Docker-spawned OSS containers,
 // proving the cache-coherence invariant the route relies on.
 //
 // PR2 of mcp_url_auth_security: rotation is no longer associated with the
-// agent-facing token. ContainerRegistry keys on connection_id; the
+// agent-facing token. ContainerRegistry keys on project_id; the
 // token URL is unaffected by DSN rotation (this is the design — agents
 // don't re-paste a URL because the DB password changed).
 //
@@ -25,10 +25,10 @@
 //
 // Test plan:
 //   1. Spin up TWO sidecar Postgres instances (A, B) with distinguishable data
-//   2. Seed customer + connection + connection_databases pointing at sidecar A
-//      plus a real mcp_tokens row (via seedConnection helper)
+//   2. Seed customer + project + project_databases pointing at sidecar A
+//      plus a real mcp_tokens row (via seedProject helper)
 //   3. Resolve + spawn → query SELECT site FROM marker; assert "alpha"
-//   4. Rotate to sidecar B's DSN via rotateConnection
+//   4. Rotate to sidecar B's DSN via rotateProject
 //   5. Resolve + spawn again → query; assert "bravo" (proves both layers
 //      were invalidated — cache returned NEW plaintext, registry spawned a
 //      NEW container with the NEW DSN env)
@@ -39,8 +39,8 @@ import { expect, test } from "@playwright/test";
 import { and, eq } from "drizzle-orm";
 
 import {
-  connectionDatabases,
-  connections,
+  projectDatabases,
+  projects,
   customers,
   getDb,
   indexerCursors,
@@ -57,9 +57,9 @@ import {
   DsnResolver,
 } from "@midplane-cloud/router";
 
-import { rotateConnection } from "../apps/web/src/lib/connections";
+import { rotateProject } from "../apps/web/src/lib/projects";
 
-import { containerNameFor, seedConnection } from "./_seed-helpers";
+import { containerNameFor, seedProject } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -76,8 +76,8 @@ let pgPortB = 0;
 let dsnA = "";
 let dsnB = "";
 let customerId = "";
-let connectionId = "";
-let connectionDatabaseId = "";
+let projectId = "";
+let projectDatabaseId = "";
 let proxiedContainerName = "";
 
 let kms: KmsContext;
@@ -93,17 +93,17 @@ test.beforeAll(async () => {
   dsnA = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPortA}/${PG_DB}`;
   dsnB = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPortB}/${PG_DB}`;
 
-  // Seed customer + connection + connection_databases (DSN ciphertext on
+  // Seed customer + project + project_databases (DSN ciphertext on
   // child row, per migration 0008) + mcp_tokens (PR2 of
   // mcp_url_auth_security: token surface lives here, hashed at rest).
-  const seeded = await seedConnection({ region: "eu", dsn: dsnA });
+  const seeded = await seedProject({ region: "eu", dsn: dsnA });
   customerId = seeded.customerId;
-  connectionId = seeded.connectionId;
-  connectionDatabaseId = seeded.connectionDatabaseId;
-  proxiedContainerName = containerNameFor(connectionId);
+  projectId = seeded.projectId;
+  projectDatabaseId = seeded.projectDatabaseId;
+  proxiedContainerName = containerNameFor(projectId);
 
   // Build the same router primitives the dev server uses. These are the
-  // singletons rotateConnection must invalidate.
+  // singletons rotateProject must invalidate.
   kms = makeKmsContext(process.env);
   const db = getDb("eu");
   cache = new DecryptCache();
@@ -122,16 +122,16 @@ test.afterAll(async () => {
       execSync(`docker rm -f ${name}`, { stdio: "ignore" });
     } catch {}
   }
-  if (connectionId || customerId) {
+  if (projectId || customerId) {
     const db = getDb("eu");
-    if (connectionId) {
-      // Cursor + token rows cascade via FK on the connections delete,
+    if (projectId) {
+      // Cursor + token rows cascade via FK on the projects delete,
       // but explicitly delete the cursor first (FK ON DELETE SET NULL
       // would leave an orphan otherwise). mcp_tokens cascades.
       await db
         .delete(indexerCursors)
-        .where(eq(indexerCursors.connectionId, connectionId));
-      await db.delete(connections).where(eq(connections.id, connectionId));
+        .where(eq(indexerCursors.projectId, projectId));
+      await db.delete(projects).where(eq(projects.id, projectId));
     }
     if (customerId) {
       await db.delete(customers).where(eq(customers.id, customerId));
@@ -142,21 +142,21 @@ test.afterAll(async () => {
 test("rotation: cache + registry invalidated, next query hits the new sidecar", async () => {
   const db = getDb("eu");
   // Phase 1 — current DSN (sidecar A). Resolve + spawn + query.
-  const cdb1 = await fetchConnectionDatabase(connectionDatabaseId);
+  const cdb1 = await fetchProjectDatabase(projectDatabaseId);
   const decrypted1 = await resolver.resolve({
-    connectionDatabase: cdb1,
+    projectDatabase: cdb1,
     region: "eu",
     customerId,
   });
   expect(decrypted1.ok).toBe(true);
   if (!decrypted1.ok) return;
   const c1 = await registry.acquire({
-    connectionId,
+    projectId,
     region: "eu",
     databases: [
       {
         name: "main",
-        connectionDatabaseId,
+        projectDatabaseId,
         dsn: decrypted1.plaintext,
         tableAccess: { default: "read", tables: {} },
         tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -177,7 +177,7 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
     region: "eu" as const,
     createdAt: new Date(),
   };
-  const rotated = await rotateConnection(customer, connectionId, dsnB, {
+  const rotated = await rotateProject(customer, projectId, dsnB, {
     cache,
     registry,
   });
@@ -185,7 +185,7 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
   // PR2 of mcp_url_auth_security: rotation no longer returns mcpToken.
   // The agent-facing token surface is independent of DSN rotation — the
   // assertion below confirms the contract.
-  expect(rotated?.id).toBe(connectionId);
+  expect(rotated?.id).toBe(projectId);
   // Tokens are unaffected by rotation: the same plaintext continues to
   // resolve. Query mcp_tokens to confirm the row's hash hasn't been
   // rewritten by the rotation path.
@@ -193,17 +193,17 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
     .select()
     .from(mcpTokens)
     .where(
-      and(eq(mcpTokens.connectionId, connectionId), eq(mcpTokens.name, "default")),
+      and(eq(mcpTokens.projectId, projectId), eq(mcpTokens.name, "default")),
     );
   expect(tokenRows.length).toBe(1);
   expect(tokenRows[0]!.status).toBe("active");
 
-  // Phase 3 — same connection id, fresh resolve + acquire. Cache miss
+  // Phase 3 — same project id, fresh resolve + acquire. Cache miss
   // forces KMS to decrypt the NEW ciphertext; registry miss forces a NEW
   // container spawn with dsnB in env.
-  const cdb2 = await fetchConnectionDatabase(connectionDatabaseId);
+  const cdb2 = await fetchProjectDatabase(projectDatabaseId);
   const decrypted2 = await resolver.resolve({
-    connectionDatabase: cdb2,
+    projectDatabase: cdb2,
     region: "eu",
     customerId,
   });
@@ -215,12 +215,12 @@ test("rotation: cache + registry invalidated, next query hits the new sidecar", 
   expect(decrypted2.plaintext).toBe(dsnB);
 
   const c2 = await registry.acquire({
-    connectionId,
+    projectId,
     region: "eu",
     databases: [
       {
         name: "main",
-        connectionDatabaseId,
+        projectDatabaseId,
         dsn: decrypted2.plaintext,
         tableAccess: { default: "read", tables: {} },
         tenantScope: { column: null, overrides: {}, exempt: [] },
@@ -270,14 +270,14 @@ async function waitForPgDb(name: string, deadlineMs = 30_000): Promise<void> {
   throw new Error(`sidecar ${name} not ready within ${deadlineMs}ms`);
 }
 
-async function fetchConnectionDatabase(id: string) {
+async function fetchProjectDatabase(id: string) {
   const db = getDb("eu");
   const rows = await db
     .select()
-    .from(connectionDatabases)
-    .where(eq(connectionDatabases.id, id));
+    .from(projectDatabases)
+    .where(eq(projectDatabases.id, id));
   const row = rows[0];
-  if (!row) throw new Error(`connection_databases ${id} vanished`);
+  if (!row) throw new Error(`project_databases ${id} vanished`);
   return row;
 }
 
@@ -339,7 +339,7 @@ async function runSelectMarker(host: string, port: number): Promise<string> {
         // `intent` is a required field on the query tool (engine 0.4.0+).
         arguments: {
           sql: "SELECT site FROM marker",
-          intent: "e2e rotate-connection",
+          intent: "e2e rotate-project",
         },
       },
     }),

@@ -34,12 +34,12 @@ describe("filterUpstreamResponseHeaders", () => {
     const out = filterUpstreamResponseHeaders(
       new Headers({
         "transfer-encoding": "chunked",
-        project: "keep-alive",
+        connection: "keep-alive",
         "x-custom": "keep-me",
       }),
     );
     expect(out.get("transfer-encoding")).toBeNull();
-    expect(out.get("project")).toBeNull();
+    expect(out.get("connection")).toBeNull();
     expect(out.get("x-custom")).toBe("keep-me");
   });
 });
@@ -81,10 +81,10 @@ describe("buildForwardHeaders — proxy is the sole authority for control header
 
   it("drops hop-by-hop request headers", () => {
     const out = buildForwardHeaders(
-      new Headers({ project: "keep-alive", host: "evil", "x-keep": "yes" }),
+      new Headers({ connection: "keep-alive", host: "evil", "x-keep": "yes" }),
       { tokenId: "t", scopeHeader: null },
     );
-    expect(out.get("project")).toBeNull();
+    expect(out.get("connection")).toBeNull();
     expect(out.get("host")).toBeNull();
     expect(out.get("x-keep")).toBe("yes");
   });

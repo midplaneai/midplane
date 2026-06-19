@@ -56,7 +56,9 @@ import { isSelfHost, SELF_HOST_CUSTOMER_ID } from "./self-host.ts";
 import { ensureOAuthAttributionToken } from "./tokens.ts";
 
 const HOP_BY_HOP = new Set([
-  "project",
+  // The HTTP/1.1 hop-by-hop header (RFC 7230) — NOT the product "project"
+  // concept; the rename sweep must never touch this literal.
+  "connection",
   "keep-alive",
   "proxy-authenticate",
   "proxy-authorization",

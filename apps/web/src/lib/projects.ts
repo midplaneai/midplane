@@ -377,6 +377,25 @@ export async function ensureDefaultProject(
   });
 }
 
+// Does the customer have a reusable empty (database-less) project? createProject
+// attaches the first DB + token to such a project WITHOUT consuming a new
+// project slot, so a projects-cap preflight must treat "has an empty project" as
+// "can still add a database" — otherwise a fresh Free customer (auto-seeded
+// Default, projects 1/1) is wrongly told the DSN form is at its project limit.
+export async function hasEmptyProject(customer: Customer): Promise<boolean> {
+  const rows = await getDb(customer.region)
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(
+        eq(projects.customerId, customer.id),
+        sql`NOT EXISTS (SELECT 1 FROM project_databases pd WHERE pd.project_id = ${projects.id})`,
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 export function isValidDsn(s: unknown): s is string {
   return typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8;
 }

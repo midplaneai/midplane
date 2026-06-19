@@ -100,7 +100,7 @@ export async function onboard(page: Page): Promise<{ orgId: string }> {
 }
 
 // Best-effort delete of the auth rows (user + org). FK cascades remove the
-// session / account / member rows. The customer / connection / audit rows are
+// session / account / member rows. The customer / project / audit rows are
 // the suite's own cleanup. Failures here don't fail the test.
 export async function cleanup(opts: {
   userId?: string;

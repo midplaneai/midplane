@@ -20,7 +20,7 @@ PAT='connectionId|connectionDatabaseId|connection_id|connection_database|Resolve
 # uncommitted drift. -a forces text on lib/projects.ts (one control byte).
 # engine/ is a sibling of these paths, so it's excluded by the pathspec.
 if hits=$(git grep --untracked -aEn "$PAT" -- \
-      apps packages infra scripts \
+      apps packages infra scripts e2e \
       ':!scripts/check-connection-rename.sh' 2>/dev/null); then
   echo "✗ connection→project rename drift — container 'connection' identifiers reappeared:"
   echo "$hits"

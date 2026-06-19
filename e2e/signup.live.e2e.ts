@@ -24,7 +24,7 @@ import { and, eq, gte } from "drizzle-orm";
 
 import {
   auditEventsIndex,
-  connections,
+  projects,
   customers,
   getDb,
   indexerCursors,
@@ -46,7 +46,7 @@ let testEmail = "";
 let userId = "";
 let orgId = "";
 let mcpToken = "";
-let connectionId = "";
+let projectId = "";
 let proxiedContainerName = "";
 
 test.beforeAll(async () => {
@@ -91,16 +91,16 @@ test.afterAll(async () => {
     if (customerId) {
       const conns = await db
         .select()
-        .from(connections)
-        .where(eq(connections.customerId, customerId));
+        .from(projects)
+        .where(eq(projects.customerId, customerId));
       for (const c of conns) {
         await db
           .delete(indexerCursors)
-          .where(eq(indexerCursors.connectionId, c.id));
+          .where(eq(indexerCursors.projectId, c.id));
       }
       await db
-        .delete(connections)
-        .where(eq(connections.customerId, customerId));
+        .delete(projects)
+        .where(eq(projects.customerId, customerId));
       await db
         .delete(auditEventsIndex)
         .where(eq(auditEventsIndex.customerId, customerId));
@@ -118,7 +118,7 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   // 1. Real user + browser session via the Better Auth sign-up API. The
   // onUserCreated callback records the id the instant it's known, so
   // afterAll() can still delete the user if any later step (the region form,
-  // the connection form, the MCP request) throws.
+  // the project form, the MCP request) throws.
   testEmail = freshTestEmail();
   const result = await signUp(page, testEmail, (id) => {
     userId = id;
@@ -130,29 +130,29 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   orgId = (await onboard(page)).orgId;
 
   // 3. Connect Postgres — real Server Action runs encryptDsn + inserts
-  // connection row. host.docker.internal lets the spawned OSS container
+  // project row. host.docker.internal lets the spawned OSS container
   // reach the sidecar Postgres bound to a random host port.
-  await page.goto("/connections/new");
+  await page.goto("/projects/new");
   await expect(
     page.getByRole("heading", { name: /connect postgres/i }),
   ).toBeVisible();
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   await page.getByLabel(/database_url/i).fill(customerDsn);
-  await page.getByRole("button", { name: /create connection/i }).click();
+  await page.getByRole("button", { name: /create project/i }).click();
   // PR2 of mcp_url_auth_security: the create flow redirects to a
-  // per-connection success page at /connections/<id>/created where the
+  // per-project success page at /projects/<id>/created where the
   // plaintext URL is shown exactly once.
-  await page.waitForURL(/\/connections\/[A-Z0-9]+\/created/i, {
+  await page.waitForURL(/\/projects\/[A-Z0-9]+\/created/i, {
     timeout: 15_000,
   });
   const urlPath = new URL(page.url()).pathname;
-  const connIdMatch = /\/connections\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
+  const connIdMatch = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
     urlPath,
   );
   if (!connIdMatch?.[1]) {
-    throw new Error(`could not parse connection id from ${urlPath}`);
+    throw new Error(`could not parse project id from ${urlPath}`);
   }
-  connectionId = connIdMatch[1];
+  projectId = connIdMatch[1];
 
   // 4. MCP URL is rendered on the success page; reading it from the DOM
   // proves the dashboard surfaces what an actual user would copy into
@@ -168,9 +168,9 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   );
   if (!tokenMatch?.[1]) throw new Error(`could not parse mcp token from ${mcpUrl}`);
   mcpToken = tokenMatch[1];
-  // Container naming switched to connection-id keying (PR2). The slice
-  // matches the spawner's `midplane-${connectionId.slice(0, 16).toLowerCase()}`.
-  proxiedContainerName = `midplane-${connectionId.slice(0, 16).toLowerCase()}`;
+  // Container naming switched to project-id keying (PR2). The slice
+  // matches the spawner's `midplane-${projectId.slice(0, 16).toLowerCase()}`.
+  proxiedContainerName = `midplane-${projectId.slice(0, 16).toLowerCase()}`;
 
   // 5. Hit the MCP URL exactly the way Cursor would: initialize, ack,
   // tools/call. baseURL is rewritten in case the rendered MIDPLANE_PUBLIC_HOST

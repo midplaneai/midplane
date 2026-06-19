@@ -18,9 +18,9 @@ import { execSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 import { eq } from "drizzle-orm";
 
-import { connections, customers, getDb } from "@midplane-cloud/db";
+import { projects, customers, getDb } from "@midplane-cloud/db";
 
-import { containerNameFor, seedConnection } from "./_seed-helpers";
+import { containerNameFor, seedProject } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -34,7 +34,7 @@ const PG_DB = "midplane_policy_e2e";
 let pgPort = 0;
 let mcpToken = "";
 let customerId = "";
-let connectionId = "";
+let projectId = "";
 let proxiedContainerName = "";
 
 test.beforeAll(async () => {
@@ -56,11 +56,11 @@ test.beforeAll(async () => {
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   // Seed permissive (default 'read') so the first query succeeds; the
   // test flips a specific table to 'deny' via setTableAccess.
-  const seeded = await seedConnection({ region: "eu", dsn: customerDsn });
+  const seeded = await seedProject({ region: "eu", dsn: customerDsn });
   customerId = seeded.customerId;
-  connectionId = seeded.connectionId;
+  projectId = seeded.projectId;
   mcpToken = seeded.tokenPlaintext;
-  proxiedContainerName = containerNameFor(connectionId);
+  proxiedContainerName = containerNameFor(projectId);
 });
 
 test.afterAll(async () => {
@@ -72,10 +72,10 @@ test.afterAll(async () => {
       execSync(`docker rm -f ${proxiedContainerName}`, { stdio: "ignore" });
     } catch {}
   }
-  if (connectionId || customerId) {
+  if (projectId || customerId) {
     const db = getDb("eu");
-    if (connectionId) {
-      await db.delete(connections).where(eq(connections.id, connectionId));
+    if (projectId) {
+      await db.delete(projects).where(eq(projects.id, projectId));
     }
     if (customerId) {
       await db.delete(customers).where(eq(customers.id, customerId));
@@ -149,7 +149,7 @@ test("policy hot-reload preserves the agent's MCP session", async ({
 
   // 3. Hot-reload the policy → deny `t`.
   const { setTableAccess } = await import(
-    "../apps/web/src/lib/connections.ts"
+    "../apps/web/src/lib/projects.ts"
   );
   const { getMcpProxyContext } = await import(
     "../apps/web/src/lib/mcp-proxy.ts"
@@ -164,7 +164,7 @@ test("policy hot-reload preserves the agent's MCP session", async ({
   };
   const updated = await setTableAccess(
     customer,
-    connectionId,
+    projectId,
     { default: "read", tables: { t: "deny" } },
     ctx,
     `user_e2e-policy-${customerId}`,

@@ -22,13 +22,13 @@ import { and, eq, gte } from "drizzle-orm";
 
 import {
   auditEventsIndex,
-  connections,
+  projects,
   customers,
   getDb,
   indexerCursors,
 } from "@midplane-cloud/db";
 
-import { containerNameFor, seedConnection } from "./_seed-helpers";
+import { containerNameFor, seedProject } from "./_seed-helpers";
 
 test.skip(
   process.env.E2E_LIVE !== "1",
@@ -44,7 +44,7 @@ let pgPort = 0;
 let mcpToken = "";
 let tokenId = "";
 let customerId = "";
-let connectionId = "";
+let projectId = "";
 let containerName = "";
 
 test.beforeAll(async () => {
@@ -64,12 +64,12 @@ test.beforeAll(async () => {
   );
 
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
-  const seeded = await seedConnection({ region: "eu", dsn: customerDsn });
+  const seeded = await seedProject({ region: "eu", dsn: customerDsn });
   customerId = seeded.customerId;
-  connectionId = seeded.connectionId;
+  projectId = seeded.projectId;
   mcpToken = seeded.tokenPlaintext;
   tokenId = seeded.tokenId;
-  containerName = containerNameFor(connectionId);
+  containerName = containerNameFor(projectId);
 });
 
 test.afterAll(async () => {
@@ -82,14 +82,14 @@ test.afterAll(async () => {
     } catch {}
   }
   const db = getDb("eu");
-  if (connectionId) {
-    // FK ON DELETE SET NULL flips connection_id to NULL when the
-    // connection row is dropped; explicitly delete any cursor row first
+  if (projectId) {
+    // FK ON DELETE SET NULL flips project_id to NULL when the
+    // project row is dropped; explicitly delete any cursor row first
     // so the test doesn't leak orphans into the dev DB.
     await db
       .delete(indexerCursors)
-      .where(eq(indexerCursors.connectionId, connectionId));
-    await db.delete(connections).where(eq(connections.id, connectionId));
+      .where(eq(indexerCursors.projectId, projectId));
+    await db.delete(projects).where(eq(projects.id, projectId));
   }
   if (customerId) {
     await db.delete(customers).where(eq(customers.id, customerId));
@@ -162,11 +162,11 @@ test("indexer drains container audit rows into audit_events_index within 15s", a
   expect(types.has("EXECUTED")).toBe(true);
 
   // Step 3: cursor row updated (PR2 of mcp_url_auth_security: cursors
-  // key on connection_id, not the plaintext token).
+  // key on project_id, not the plaintext token).
   const cursorRows = await db
     .select()
     .from(indexerCursors)
-    .where(eq(indexerCursors.connectionId, connectionId));
+    .where(eq(indexerCursors.projectId, projectId));
   expect(cursorRows[0]?.lastId).toBeTruthy();
   // Each indexed row also carries mcp_token_id propagated from the OSS
   // engine (X-Midplane-Token-Id session-freeze). Assert every row in

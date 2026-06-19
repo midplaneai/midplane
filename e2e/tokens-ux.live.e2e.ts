@@ -1,13 +1,13 @@
 // Live UX E2E for the token-management surface (PR3 of
 // mcp_url_auth_security). Drives the dashboard pages a real customer
-// sees: create connection → success page renders the URL → connection
+// sees: create project → success page renders the URL → project
 // detail page lists the default token → open the create-token modal
 // → fill the form → see the show-once URL → close modal → list shows
 // the new row → revoke the original token → list shows Revoked.
 //
 // Does NOT exercise the MCP runtime (that's mcp-proxy.live.e2e.ts and
 // tokens.live.e2e.ts). Does NOT need Docker — the only Server Action
-// that touches the regional DB is createConnection, which encrypts a
+// that touches the regional DB is createProject, which encrypts a
 // throwaway DSN that never gets dialed; the token modal calls a
 // Server Action that goes straight to the lib.
 //
@@ -22,7 +22,7 @@ import { eq } from "drizzle-orm";
 
 import {
   auditEventsIndex,
-  connections,
+  projects,
   customers,
   getDb,
   indexerCursors,
@@ -38,7 +38,7 @@ test.skip(
 let testEmail = "";
 let userId = "";
 let orgId = "";
-let connectionId = "";
+let projectId = "";
 
 test.afterAll(async () => {
   if (orgId) {
@@ -51,16 +51,16 @@ test.afterAll(async () => {
     if (customerId) {
       const conns = await db
         .select()
-        .from(connections)
-        .where(eq(connections.customerId, customerId));
+        .from(projects)
+        .where(eq(projects.customerId, customerId));
       for (const c of conns) {
         await db
           .delete(indexerCursors)
-          .where(eq(indexerCursors.connectionId, c.id));
+          .where(eq(indexerCursors.projectId, c.id));
       }
       await db
-        .delete(connections)
-        .where(eq(connections.customerId, customerId));
+        .delete(projects)
+        .where(eq(projects.customerId, customerId));
       await db
         .delete(auditEventsIndex)
         .where(eq(auditEventsIndex.customerId, customerId));
@@ -70,7 +70,7 @@ test.afterAll(async () => {
   await cleanup({ userId, orgId });
 });
 
-test("create connection → mint second token → revoke default → list reflects state", async ({
+test("create project → mint second token → revoke default → list reflects state", async ({
   page,
 }) => {
   testEmail = freshTestEmail();
@@ -82,25 +82,25 @@ test("create connection → mint second token → revoke default → list reflec
   // auto-create one) and lands on /dashboard.
   ({ orgId } = await onboard(page));
 
-  // A throwaway DSN; we never dial it. createConnection encrypts at
+  // A throwaway DSN; we never dial it. createProject encrypts at
   // rest and auto-mints the default token — that's the only behavior
   // this test exercises before navigating to the UX surface.
-  await page.goto("/connections/new");
+  await page.goto("/projects/new");
   await page.getByLabel(/name/i).fill("e2e-ux");
   await page
     .getByLabel(/database_url/i)
     .fill("postgres://user:pass@nowhere.local:5432/db?sslmode=disable");
-  await page.getByRole("button", { name: /create connection/i }).click();
-  await page.waitForURL(/\/connections\/[A-Z0-9]+\/created/i, {
+  await page.getByRole("button", { name: /create project/i }).click();
+  await page.waitForURL(/\/projects\/[A-Z0-9]+\/created/i, {
     timeout: 15_000,
   });
 
   const urlPath = new URL(page.url()).pathname;
-  const match = /\/connections\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
+  const match = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
     urlPath,
   );
   if (!match?.[1]) throw new Error(`could not parse conn id from ${urlPath}`);
-  connectionId = match[1];
+  projectId = match[1];
 
   // Success page shows the default token URL exactly once. Format gate
   // matches the lib's prefix + 32 hex + 6-char checksum.
@@ -112,15 +112,15 @@ test("create connection → mint second token → revoke default → list reflec
     /^https?:\/\/.+\/mcp\/mp_(live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6}$/,
   );
 
-  // Navigate to the connection detail page. The "I've saved it" button is
+  // Navigate to the project detail page. The "I've saved it" button is
   // gated by a short countdown (it stays disabled for a few seconds);
   // Playwright's click auto-waits for it to become enabled. The default
-  // token (named "default" by createConnection) must appear in the list.
+  // token (named "default" by createProject) must appear in the list.
   await page.getByTestId("saved-it").click();
-  await page.waitForURL(`**/connections/${connectionId}`, { timeout: 10_000 });
-  // The connection page defaults to the Database section; tokens live under the
+  await page.waitForURL(`**/projects/${projectId}`, { timeout: 10_000 });
+  // The project page defaults to the Database section; tokens live under the
   // Agents section. Go there directly.
-  await page.goto(`/connections/${connectionId}?section=agents`);
+  await page.goto(`/projects/${projectId}?section=agents`);
   const list = page.getByTestId("token-list");
   await expect(list).toBeVisible();
   const defaultRow = list.locator('[data-testid="token-row"]', {
