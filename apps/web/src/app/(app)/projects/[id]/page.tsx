@@ -33,6 +33,8 @@ import { TokenList } from "@/components/tokens/token-list";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -121,6 +123,36 @@ export default async function ProjectWorkspace({
   if (tokens === null) notFound();
 
   const label = projectLabel(conn);
+
+  // D2 (plan-design-review): an empty project (no databases yet — the
+  // auto-seeded Default a new customer just landed on, or a project whose
+  // databases were all removed) shows a focused setup hero instead of empty
+  // data/token panes. The CTA routes to the paste-DSN flow, which reuses THIS
+  // empty project (createProject) and mints the default token on the first
+  // database — never the tokenless addDatabaseFromForm path.
+  if (databases.length === 0) {
+    return (
+      <>
+        <Topbar>
+          <Breadcrumb
+            items={[{ label: "Projects", href: "/dashboard" }, { label }]}
+          />
+        </Topbar>
+        <PageContainer>
+          <EmptyState
+            title="Add your first database"
+            description="Paste a Postgres connection string to connect your agent to your data. We encrypt it at rest and mint your agent's access token."
+            action={
+              <Link href="/projects/new">
+                <Button size="sm">Add a database</Button>
+              </Link>
+            }
+          />
+        </PageContainer>
+      </>
+    );
+  }
+
   // Pause is a project-level override of the freshness dot: a paused
   // project reads amber/"Paused" regardless of indexer state (see
   // resolveFreshness — the same shared override the dashboard applies), and

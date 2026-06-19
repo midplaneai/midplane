@@ -60,6 +60,14 @@ export default async function Dashboard({
     caps.auditRetentionDays,
   );
 
+  // D1 (plan-design-review): a single-project customer skips the one-row list
+  // and lands on the project itself — the container stays invisible until there
+  // is more than one. An empty default project renders its own setup hero (see
+  // the projects/[id] empty state).
+  if (rows.length === 1) {
+    redirect(`/projects/${rows[0]!.project.id}`);
+  }
+
   // Surface the project cap in the header so the limit is visible before
   // the user tries to add one (and the create form already guards the same
   // cap on /projects/new). Unlimited (Team) shows no counter. atLimit
