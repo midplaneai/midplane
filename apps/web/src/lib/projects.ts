@@ -9,10 +9,12 @@ import {
   EMPTY_TENANT_SCOPE,
   getDb,
   indexerCursors,
+  validateColumnMasks,
   validateGuardrails,
   validatePolicy,
   validateTenantScope,
   type AccessLevel,
+  type ColumnMasksConfig,
   type Customer,
   type DatabaseEntry,
   type GuardrailsConfig,
@@ -623,7 +625,7 @@ interface PolicyConfigChange {
   update: Partial<
     Pick<
       typeof projectDatabases.$inferInsert,
-      "tableAccess" | "tenantScope" | "guardrails"
+      "tableAccess" | "tenantScope" | "guardrails" | "columnMasks"
     >
   >;
   eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED" | "GUARDRAILS_CHANGED";
@@ -632,6 +634,11 @@ interface PolicyConfigChange {
   payload: Record<string, unknown>;
   /** e.g. "[setTableAccess]" — keeps logs greppable per setter. */
   logPrefix: string;
+  /** column_masks is boot-time only (the engine reads it at construction, not
+   *  via the hot-reload body), so a mask change can't be pushed to the running
+   *  engine — force a respawn so the next request reads the new masks from PG.
+   *  Hot-reloadable setters (table_access etc.) leave this false. */
+  forceRespawn?: boolean;
 }
 
 async function applyPolicyConfigChange(
@@ -705,7 +712,15 @@ async function applyPolicyConfigChange(
     guardrails: s.guardrails,
   }));
 
-  try {
+  if (change.forceRespawn) {
+    // Boot-time-only config (column_masks): the running engine can't hot-swap
+    // it, so drop the container and let the next agent request respawn with the
+    // new config from PG. Same fail-soft posture as the catch below.
+    await deps.registry.invalidate(result.id).catch((err) => {
+      console.error(`${change.logPrefix} registry.invalidate failed`, err);
+    });
+  } else {
+    try {
     const pushResult = await deps.pushPolicy(result.id, databases);
     if ("rejected" in pushResult) {
       // Engine kept the previous policy. Don't fall back — respawn
@@ -733,6 +748,7 @@ async function applyPolicyConfigChange(
       err,
     );
     await deps.registry.invalidate(result.id).catch(() => undefined);
+    }
   }
 
   // Cloud-emitted audit row, distinct from the engine's POLICY_RELOADED:
@@ -871,6 +887,36 @@ export async function setGuardrails(
     eventType: "GUARDRAILS_CHANGED",
     payload: { guardrails: validation.value },
     logPrefix: "[setGuardrails]",
+  });
+}
+
+// Column masking (design A2). Same write path as table_access / guardrails:
+// validate, persist the column_masks JSONB on the named database, and invalidate
+// the running engine so the next agent request spawns with the new masks. Reuses
+// the POLICY_CHANGED audit event (column_masks is part of the database's policy;
+// a distinct event_type would need a CHECK-constraint migration) — the payload
+// carries column_masks so the change is still legible in the audit log.
+export async function setColumnMasks(
+  customer: Customer,
+  id: string,
+  config: ColumnMasksConfig,
+  deps: PolicyPushDeps,
+  actorUserId: string,
+  dbName: string = DEFAULT_DATABASE_NAME,
+): Promise<{ id: string } | null> {
+  const validation = validateColumnMasks(config);
+  if (!validation.ok) {
+    const summary = validation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`invalid column_masks: ${summary}`);
+  }
+  return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
+    update: { columnMasks: validation.value },
+    eventType: "POLICY_CHANGED",
+    payload: { column_masks: validation.value },
+    logPrefix: "[setColumnMasks]",
+    forceRespawn: true,
   });
 }
 

@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import {
+  parseColumnMasksOrThrow,
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
 } from "@midplane-cloud/db";
@@ -16,6 +17,7 @@ import {
 } from "@/components/projects/project-sections";
 import { DatabaseStrip } from "@/components/projects/database-strip";
 import { DeleteDatabaseButton } from "@/components/projects/delete-database-button";
+import { ExposureScan } from "@/components/projects/exposure-scan";
 import { TestPolicyPanel } from "@/components/projects/test-policy-panel";
 import { TestReachabilityButton } from "@/components/projects/test-reachability-button";
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
@@ -52,6 +54,7 @@ import {
   renameDatabase,
   resumeProject,
   rotateProject,
+  setColumnMasks,
   setGuardrails,
   setTableAccess,
 } from "@/lib/projects";
@@ -378,6 +381,30 @@ export default async function ProjectWorkspace({
     revalidatePath(`/projects/${id}`);
   }
 
+  // Column masking write (design D3). Typed action (not formData) so the
+  // Exposure scan can call it with the full next mask set on a one-click mask /
+  // unmask. Manager-only; setColumnMasks forces a respawn (masks are boot-time).
+  async function columnMasksAction(
+    next: unknown,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) return { ok: false, error: "not signed in" };
+    const { userId } = await assertManager();
+    if (!selectedName) return { ok: false, error: "no database selected" };
+    let config;
+    try {
+      config = parseColumnMasksOrThrow(next);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "invalid masks" };
+    }
+    const ctx = getMcpProxyContext();
+    const result = await setColumnMasks(customer, id, config, ctx, userId, selectedName);
+    if (!result) return { ok: false, error: "not found" };
+    revalidatePath(`/projects/${id}`);
+    return { ok: true };
+  }
+
   async function guardrailsAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
@@ -676,6 +703,40 @@ export default async function ProjectWorkspace({
     memberDatabasePane
   );
 
+  // PII exposure scan (design D1). Per-DB (reuses the ?db switcher) and
+  // manager-gated like the policy editor — the scan reads the customer's schema.
+  const exposurePane = !selDb ? (
+    <p className="text-sm text-muted-foreground">No database on this project yet.</p>
+  ) : (
+    <>
+      <DatabaseStrip
+        databases={dbNames}
+        current={selDb.name}
+        projectId={conn.id}
+        addAction={addDatabaseAction}
+        showAdd={canManage}
+      />
+      {canManage ? (
+        <div className="space-y-3">
+          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+            PII exposure
+          </span>
+          {/* key remounts on ?db switch so the fetched scan tracks the selected db */}
+          <ExposureScan
+            key={selDb.name}
+            projectId={conn.id}
+            db={selDb.name}
+            onSave={columnMasksAction}
+          />
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          The exposure scan is available to an owner or admin.
+        </p>
+      )}
+    </>
+  );
+
   const agentsPane = (
     <div className="space-y-8">
       {/* Interactive agents (Claude Code, Cursor, Claude Desktop) — OAuth. The
@@ -867,6 +928,7 @@ export default async function ProjectWorkspace({
             header={railHeader}
             panes={{
               database: databasePane,
+              exposure: exposurePane,
               agents: agentsPane,
               settings: settingsPane,
             }}

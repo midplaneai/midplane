@@ -10,13 +10,16 @@
 // project-wide. The per-DB aspects are intentionally NOT separate tabs —
 // they all share one database context, so splitting them just duplicated it.
 
-export type ProjectSection = "database" | "agents" | "settings";
+export type ProjectSection = "database" | "exposure" | "agents" | "settings";
 
 export const PROJECT_SECTIONS: {
   value: ProjectSection;
   label: string;
 }[] = [
   { value: "database", label: "Database" },
+  // PII exposure scan (design D1) — sits next to Database since it reads the
+  // same schema and is where you act on what it finds.
+  { value: "exposure", label: "Exposure" },
   { value: "agents", label: "Agents" },
   { value: "settings", label: "Settings" },
 ];

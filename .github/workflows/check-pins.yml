@@ -21,6 +21,12 @@ jobs:
         with:
           bun-version: 1.3
       - run: bun run check:pins
+      # Guards the masking transform catalog: the cloud MASK_TRANSFORMS
+      # (packages/db) and engine TRANSFORM_NAMES must list the same transforms
+      # in the same order, or a cloud-authored policy could name a transform the
+      # engine rejects. Dependency-free, same cheap-on-every-PR posture.
+      - name: masking transform drift
+        run: bun run check:transforms
       # Guards the connection→project rename: fails if a container-concept
       # "connection" identifier reappears in the control plane. Dependency-free
       # (git grep), same cheap-on-every-PR posture as the pin drift check.
