@@ -19,6 +19,10 @@ const customer = {
 const CONN = { id: "conn-1", customerId: customer.id, region: "eu" as const };
 
 let currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
+// Default: a manager passes the gate (an ActiveRole, not a Response).
+let requireManagerRestMock = vi.fn(
+  async () => ({ userId: "u1", orgId: "o1", role: "owner" }) as unknown,
+);
 let getConnDbMock = vi.fn(async (_c: unknown, _id: string, name: string) =>
   ({
     project: CONN,
@@ -34,6 +38,12 @@ let listTablesMock = vi.fn(async () => ({ tables: ["orders", "users"] }));
 vi.mock("@/lib/customer", () => ({
   get currentCustomer() {
     return currentCustomerMock;
+  },
+}));
+
+vi.mock("@/lib/org-auth", () => ({
+  get requireManagerRest() {
+    return requireManagerRestMock;
   },
 }));
 
@@ -64,6 +74,7 @@ vi.mock("@/lib/list-tables", () => ({
 
 beforeEach(() => {
   currentCustomerMock = vi.fn(async () => customer);
+  requireManagerRestMock = vi.fn(async () => ({ userId: "u1", orgId: "o1", role: "owner" }));
   getConnDbMock = vi.fn(async (_c, _id, name: string) => ({
     project: CONN,
     database: { id: `cdb-${name}`, name, encryptedDsn: new Uint8Array([1]) },
@@ -91,6 +102,18 @@ describe("GET /api/projects/[id]/tables (per-db)", () => {
     currentCustomerMock = vi.fn(async () => null);
     const { GET } = await loadRoute();
     expect((await GET(get("?q=ord"), params)).status).toBe(401);
+  });
+
+  it("403 for a member, before any credential decryption or introspection", async () => {
+    requireManagerRestMock = vi.fn(async () =>
+      Response.json({ error: "forbidden" }, { status: 403 }),
+    );
+    const { GET } = await loadRoute();
+    const res = await GET(get("?q=ord"), params);
+    expect(res.status).toBe(403);
+    expect(getConnDbMock).not.toHaveBeenCalled();
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(listTablesMock).not.toHaveBeenCalled();
   });
 
   it("defaults to the main database (back-compat for pre-?db= callers)", async () => {
