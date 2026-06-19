@@ -290,6 +290,12 @@ export interface DatabaseEntry {
    *  stating it keeps /etc/midplane/policy.yaml self-describing and pins
    *  the posture even if the engine default ever moves. */
   guardrails: GuardrailsConfig;
+  /** Column masking (A2). "schema.table" -> (column -> transform). Optional;
+   *  absent/empty = no masking for this DB (the YAML omits the block). A
+   *  masked column must also be read-accessible in table_access — masking
+   *  presupposes the read; the engine never returns rows for a denied table,
+   *  so a mask on a denied column is inert. The form enforces the pairing. */
+  columnMasks?: ColumnMasksConfig;
 }
 
 // Mirrors OSS ENV_INTERP_RE so the cloud refuses to derive an env var name
@@ -363,6 +369,7 @@ export function serializeMultiDbPolicyToYaml(
       `      block_unqualified_dml: ${db.guardrails.block_unqualified_dml}`,
     );
     lines.push(`      block_ddl: ${db.guardrails.block_ddl}`);
+    emitColumnMasks(lines, db.columnMasks ?? {});
   }
   return lines.join("\n") + "\n";
 }
@@ -582,6 +589,160 @@ function emitTenantScope(
     lines.push(`      exempt:`);
     for (const t of exempt) {
       lines.push(`        - ${t}`);
+    }
+  }
+}
+
+// --- column masking ----------------------------------------------------------
+//
+// column_masks — OSS column-masking config (design A2). Sibling of
+// table_access: "schema.table" -> (column name -> transform). Stored as JSONB
+// cloud-side and serialized into the per-DB YAML the engine reads; the engine
+// transforms the masked columns' values in the result set before they reach
+// the agent, and fails CLOSED (rejects) when a masked column can't be safely
+// masked (view / computed / whole-row).
+//
+// MASK_TRANSFORMS mirrors the engine's TRANSFORM_NAMES (engine/packages/engine/
+// src/masking/transforms.ts). They are separate copies across the deployable
+// boundary (the cloud doesn't import @midplane/engine), kept in lockstep by a
+// drift check — same posture as the OSS image-version pin. An unknown
+// transform is rejected here at save time AND the engine rejects it at runtime
+// (fail-closed), so a skew can never silently pass a column through unmasked.
+
+export const MASK_TRANSFORMS = [
+  "full-redact",
+  "consistent-hash",
+  "keep-last-4",
+] as const;
+export type MaskTransform = (typeof MASK_TRANSFORMS)[number];
+
+/** "schema.table" -> (column name -> transform). */
+export type ColumnMasksConfig = Record<string, Record<string, MaskTransform>>;
+
+/** Zero-value config — no masked columns. Default for new project rows. */
+export const EMPTY_COLUMN_MASKS: ColumnMasksConfig = {};
+
+const MAX_MASK_TABLES = 1000;
+const MAX_MASK_COLUMNS_PER_TABLE = 256;
+
+export interface ColumnMasksValidationError {
+  path: string;
+  message: string;
+}
+export type ColumnMasksValidationResult =
+  | { ok: true; value: ColumnMasksConfig }
+  | { ok: false; errors: ColumnMasksValidationError[] };
+
+function isMaskTransform(v: unknown): v is MaskTransform {
+  return (
+    typeof v === "string" &&
+    (MASK_TRANSFORMS as readonly string[]).includes(v)
+  );
+}
+
+const maskTransformMessage = `transform must be one of ${MASK_TRANSFORMS.join(", ")}`;
+
+/** Validate untrusted input into a typed ColumnMasksConfig. Table names use
+ *  the same schema-qualified shape as table_access; column names are single
+ *  Postgres identifiers; transforms are the closed MASK_TRANSFORMS enum. A
+ *  table whose columns all fail validation is dropped. Structured errors so
+ *  the dashboard form can surface them per-field. */
+export function validateColumnMasks(input: unknown): ColumnMasksValidationResult {
+  if (input == null) return { ok: true, value: {} };
+  if (typeof input !== "object" || Array.isArray(input)) {
+    return {
+      ok: false,
+      errors: [{ path: "", message: "column_masks must be an object" }],
+    };
+  }
+  const obj = input as Record<string, unknown>;
+  const errors: ColumnMasksValidationError[] = [];
+  const value: ColumnMasksConfig = {};
+
+  const tableEntries = Object.entries(obj);
+  if (tableEntries.length > MAX_MASK_TABLES) {
+    errors.push({ path: "", message: `too many tables (max ${MAX_MASK_TABLES})` });
+  }
+  for (const [table, cols] of tableEntries) {
+    if (table.length > MAX_TABLE_NAME_LENGTH || !isTableIdent(table)) {
+      errors.push({ path: table, message: tableIdentMessage });
+      continue;
+    }
+    if (cols == null || typeof cols !== "object" || Array.isArray(cols)) {
+      errors.push({
+        path: table,
+        message: "must be an object of column -> transform",
+      });
+      continue;
+    }
+    const colEntries = Object.entries(cols as Record<string, unknown>);
+    if (colEntries.length > MAX_MASK_COLUMNS_PER_TABLE) {
+      errors.push({
+        path: table,
+        message: `too many columns (max ${MAX_MASK_COLUMNS_PER_TABLE})`,
+      });
+    }
+    const out: Record<string, MaskTransform> = {};
+    for (const [col, t] of colEntries) {
+      if (!isIdent(col)) {
+        errors.push({ path: `${table}.${col}`, message: identMessage });
+        continue;
+      }
+      if (!isMaskTransform(t)) {
+        errors.push({ path: `${table}.${col}`, message: maskTransformMessage });
+        continue;
+      }
+      out[col] = t;
+    }
+    if (Object.keys(out).length > 0) value[table] = out;
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value };
+}
+
+/** Strict variant for code paths that must not see invalid config (the
+ *  spawner). Fail closed rather than spawn an engine with a degraded mask set. */
+export function parseColumnMasksOrThrow(input: unknown): ColumnMasksConfig {
+  const r = validateColumnMasks(input);
+  if (r.ok) return r.value;
+  const summary = r.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+  throw new Error(`invalid column_masks: ${summary}`);
+}
+
+// Emit the column_masks block (sibling of table_access). Skipped entirely when
+// empty so the YAML reads like a pre-masking DB. When present, we also emit
+// `requires_features: [column_masks]` so a future engine that dropped masking
+// support REFUSES the policy rather than silently not enforcing it (the
+// forward half of the version-skew defense T3; an already-old engine can't be
+// taught to refuse — engine-first sequencing covers that). Defense-in-depth
+// identifier checks mirror emitTenantScope's.
+function emitColumnMasks(lines: string[], masks: ColumnMasksConfig): void {
+  const tables = Object.entries(masks)
+    .filter(([, cols]) => Object.keys(cols).length > 0)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (tables.length === 0) return;
+
+  lines.push(`    requires_features:`);
+  lines.push(`      - column_masks`);
+  lines.push(`    column_masks:`);
+  for (const [table, cols] of tables) {
+    if (!TABLE_IDENT_RE.test(table)) {
+      throw new Error(
+        `serializeMultiDbPolicyToYaml: column_masks table "${table}" contains characters that need YAML quoting`,
+      );
+    }
+    lines.push(`      ${table}:`);
+    const colEntries = Object.entries(cols).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    for (const [col, t] of colEntries) {
+      if (!IDENT_RE.test(col) || !isMaskTransform(t)) {
+        throw new Error(
+          `serializeMultiDbPolicyToYaml: column_masks ${table}.${col} -> ${String(t)} is invalid`,
+        );
+      }
+      lines.push(`        ${col}: ${t}`);
     }
   }
 }

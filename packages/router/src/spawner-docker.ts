@@ -87,6 +87,7 @@ export class DockerSpawner implements Spawner {
           tableAccess: db.tableAccess,
           tenantScope: db.tenantScope,
           guardrails: db.guardrails,
+          columnMasks: db.columnMasks,
         })),
       ),
       { mode: 0o644 },
@@ -115,6 +116,12 @@ export class DockerSpawner implements Spawner {
     }
     if (this.indexerToken) {
       args.push("-e", `INDEXER_TOKEN=${this.indexerToken}`);
+    }
+    // Masking salt (keys the deterministic transforms). Present only when a
+    // database declares column_masks; the engine refuses to boot with masks
+    // but no salt, so its presence is gated by the proxy supplying it.
+    if (opts.maskSalt) {
+      args.push("-e", `MIDPLANE_MASK_SALT=${opts.maskSalt}`);
     }
     args.push("-p", "0:8080", this.image);
     let containerId: string;

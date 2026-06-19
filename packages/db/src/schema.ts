@@ -25,6 +25,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import {
+  type ColumnMasksConfig,
   type GuardrailsConfig,
   type TableAccessPolicy,
   type TenantScopeConfig,
@@ -195,6 +196,14 @@ export const projectDatabases = pgTable(
       .default(
         sql`'{"block_unqualified_dml":true,"block_ddl":true}'::jsonb`,
       ),
+    // Column masking (design A2): "schema.table" -> (column -> transform).
+    // Empty default = no masking, the YAML omits the block. Validated by
+    // validateColumnMasks on every write; serialized into the engine YAML at
+    // spawn. The engine fails closed if a masked column can't be safely masked.
+    columnMasks: jsonb("column_masks")
+      .$type<ColumnMasksConfig>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),
     // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse
     // new sessions after 70 minutes of KMS unreachability — see design doc

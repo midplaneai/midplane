@@ -23,6 +23,7 @@
 // and held in process memory only as long as the container is alive.
 
 import type {
+  ColumnMasksConfig,
   GuardrailsConfig,
   TableAccessPolicy,
   TenantScopeConfig,
@@ -54,6 +55,9 @@ export interface SpawnDatabase {
   /** Dangerous-statement guardrails (OSS 0.9.0): no-WHERE DML + DDL
    *  blocks. Always emitted into the YAML, opt-outs included. */
   guardrails: GuardrailsConfig;
+  /** Column masking (design A2): "schema.table" -> (column -> transform).
+   *  Empty/absent yields no column_masks block in the rendered YAML. */
+  columnMasks?: ColumnMasksConfig;
 }
 
 export interface SpawnOptions {
@@ -68,6 +72,12 @@ export interface SpawnOptions {
    *  treats a one-entry `databases:` array identically to the legacy
    *  single-DB shape, so the spawn path stays single-branched. */
   databases: readonly SpawnDatabase[];
+  /** Per-engine secret keying the deterministic masking transforms, injected
+   *  as MIDPLANE_MASK_SALT. Derived by the cloud per-project (W1). Required
+   *  when any database declares column_masks — the engine refuses to boot
+   *  with masks but no salt, so the proxy must supply it. Undefined when no
+   *  database is masked. */
+  maskSalt?: string;
 }
 
 export interface Spawner {

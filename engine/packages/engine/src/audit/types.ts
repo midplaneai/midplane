@@ -77,11 +77,22 @@ export const DecidedPayload = z.discriminatedUnion("decision", [
 export type DecidedPayload = z.infer<typeof DecidedPayload>;
 
 // EXECUTED — query ran successfully. Captures performance + side-effect summary.
+//
+// Masking fields (additive + OPTIONAL under schema_version 3, NO bump — same
+// convention as `dialect` on DECIDED): `columns_masked` lists which
+// schema.table.column outputs were transformed (NAMES only, never values) on a
+// returned result; `masking_rejected` + `masking_reason` mark a query that ran
+// but whose result was withheld from the agent because a masked column could
+// not be safely masked (view/computed/whole-row — fail-closed). The cloud audit
+// indexer adds a dimension on these without renaming any existing field.
 export const ExecutedPayload = z.object({
   exec_ms: z.number().int().nonnegative(),                 // Postgres execution time
   overhead_ms: z.number().int().nonnegative(),             // Midplane-added latency (parse+policy+audit+net)
   rows_affected: z.number().int().nonnegative().optional(),// for INSERT/UPDATE/DELETE returning
   rows_returned: z.number().int().nonnegative().optional(),// for SELECT
+  columns_masked: z.array(z.string()).max(64).optional(),  // schema.table.column names masked in the result
+  masking_rejected: z.boolean().optional(),                // result withheld: masked column couldn't be masked
+  masking_reason: z.string().max(512).optional(),          // agent-facing reason for the masking reject
 });
 export type ExecutedPayload = z.infer<typeof ExecutedPayload>;
 

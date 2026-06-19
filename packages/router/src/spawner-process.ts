@@ -169,6 +169,7 @@ export class ProcessSpawner implements Spawner {
           tableAccess: db.tableAccess,
           tenantScope: db.tenantScope,
           guardrails: db.guardrails,
+          columnMasks: db.columnMasks,
         })),
       ),
       { mode: 0o644 },
@@ -210,6 +211,9 @@ export class ProcessSpawner implements Spawner {
       env[dsnEnvVarFor(db.projectDatabaseId)] = db.dsn;
     }
     if (this.indexerToken) env.INDEXER_TOKEN = this.indexerToken;
+    // Masking salt; present only when a database declares column_masks (the
+    // engine refuses to boot with masks but no salt).
+    if (opts.maskSalt) env.MIDPLANE_MASK_SALT = opts.maskSalt;
 
     const child = this.spawnFn(this.binaryPath, ["server"], {
       env: env as NodeJS.ProcessEnv,

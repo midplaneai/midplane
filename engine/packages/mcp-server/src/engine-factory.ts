@@ -26,14 +26,19 @@ import {
   tenantScope,
   dangerousStatement,
   getDialect,
+  CachingCatalogResolver,
   type AuditEvent,
   type AuditWriter,
+  type CatalogQueryFn,
+  type ColumnMasks,
   type CredentialStore,
   type DangerousStatementConfig,
   type EngineContext,
   type Executor,
+  type MaskingConfig,
   type TableAccessConfig,
   type TenantScopeConfig,
+  type TransformName,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
 import {
@@ -180,6 +185,8 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
           // No YAML still gets the default-ON guardrails safety net.
           guardrails: DEFAULT_GUARDRAILS,
           hasGuardrails: false,
+          columnMasks: null,
+          hasColumnMasks: false,
         },
       ],
       hasDatabasesBlock: false,
@@ -189,6 +196,8 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
       hasTableAccess: false,
       guardrails: DEFAULT_GUARDRAILS,
       hasGuardrails: false,
+      columnMasks: null,
+      hasColumnMasks: false,
     };
   }
   const specs = resolveDatabasesFromConfig(policy, cfg, (msg) =>
@@ -437,6 +446,11 @@ function makeEngineEntry(
     credentials,
     executor,
     databaseName: spec.name,
+    // Boot-time column masking (W3:A). Built from the resolved spec + the
+    // pool-backed catalog resolver; undefined when this DB declares no masks.
+    // Column-mask hot-reload is a follow-up — a masks edit currently lands on
+    // the next engine spawn (the same path table_access took pre-hot-reload).
+    masking: buildMaskingConfig(spec, cfg, executor),
     // Resolved per-DB from the YAML `dialect:` key (defaults to "postgres"
     // when omitted). The engine routes parse() + normalize() through this;
     // the same instance backs the metadata SQL on the EngineEntry.
@@ -481,6 +495,48 @@ function makeEngineEntry(
     listTablesSql,
     describeTableSql,
     defaultSchema,
+  };
+}
+
+// Build the engine's MaskingConfig from a resolved DatabaseSpec, or undefined
+// when the DB declares no masks. Fail-closed: declared masks without a salt, or
+// an executor that can't run catalog queries, refuse to boot rather than mask
+// weakly or not at all.
+function buildMaskingConfig(
+  spec: DatabaseSpec,
+  cfg: Config,
+  executor: Executor,
+): MaskingConfig | undefined {
+  if (!spec.columnMasks || Object.keys(spec.columnMasks).length === 0) {
+    return undefined;
+  }
+  if (!cfg.maskSalt) {
+    throw new Error(
+      `Database "${spec.name}" declares column_masks but MIDPLANE_MASK_SALT is not set. ` +
+        "Refusing to boot — masking without a salt would make the deterministic transforms predictable.",
+    );
+  }
+  const q = (executor as Partial<{ query: CatalogQueryFn }>).query;
+  if (typeof q !== "function") {
+    throw new Error(
+      `Database "${spec.name}" declares column_masks but its executor cannot run catalog queries (no query()).`,
+    );
+  }
+  const queryFn: CatalogQueryFn = (sql, params) => q.call(executor, sql, params);
+
+  const columnMasks: ColumnMasks = new Map(
+    Object.entries(spec.columnMasks).map(([table, cols]) => [
+      table,
+      new Map(
+        Object.entries(cols).map(([col, t]) => [col, t as TransformName]),
+      ),
+    ]),
+  );
+
+  return {
+    columnMasks,
+    salt: cfg.maskSalt,
+    resolver: new CachingCatalogResolver(queryFn),
   };
 }
 

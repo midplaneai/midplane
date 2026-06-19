@@ -8,6 +8,13 @@
       "when": 1781804671846,
       "tag": "0000_clean_mastermind",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781875888621,
+      "tag": "0001_moaning_maddog",
+      "breakpoints": true
     }
   ]
 }

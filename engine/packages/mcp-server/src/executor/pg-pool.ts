@@ -95,6 +95,17 @@ export class PgPoolExecutor implements Executor {
       return {
         rows: result.rows,
         rowCount: result.rowCount ?? 0,
+        // Lift per-column provenance from the driver's RowDescription so the
+        // masker can map output->source columns from Postgres' own resolution
+        // (correct through aliases / joins / `SELECT *`). node-pg field defs
+        // expose tableID (pg_class OID), columnID (attnum), dataTypeID (pg_type
+        // OID); a computed output reports tableID=0 / columnID=0.
+        fields: (result.fields ?? []).map((f) => ({
+          name: f.name,
+          tableOid: f.tableID ?? 0,
+          columnAttnum: f.columnID ?? 0,
+          dataTypeOid: f.dataTypeID ?? 0,
+        })),
       };
     } catch (err) {
       if (client && inTransaction) {
@@ -111,6 +122,14 @@ export class PgPoolExecutor implements Executor {
     } finally {
       if (client) client.release();
     }
+  }
+
+  // Plain pooled query for catalog reads (the masking OID resolver). Unlike
+  // execute(), no transaction / search_path pin — catalog lookups target
+  // pg_catalog directly by oid and carry no agent SQL. Returns just the rows.
+  async query(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
+    const res = await this.pool.query(sql, params as unknown[]);
+    return res.rows as Record<string, unknown>[];
   }
 
   async close(): Promise<void> {
