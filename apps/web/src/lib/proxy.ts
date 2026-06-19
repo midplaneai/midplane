@@ -29,6 +29,8 @@
 //     with a 5-min debounce — the request must not block on this write
 //     and must not fail because of it.
 
+import { createHmac } from "node:crypto";
+
 import {
   bumpLastUsed,
   resolveByToken,
@@ -41,6 +43,7 @@ import {
 import {
   customers,
   getDb,
+  parseColumnMasksOrThrow,
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
@@ -517,6 +520,7 @@ async function forwardResolved(
     let tableAccess;
     let tenantScope;
     let guardrails;
+    let columnMasks;
     try {
       // Validate at the boundary — Postgres should never hold malformed
       // policy (validatePolicy gates every write), but if it somehow does,
@@ -526,9 +530,12 @@ async function forwardResolved(
       // { column: null, overrides: <old map>, exempt: [] }.
       // parseGuardrailsOrThrow resolves a null row (pre-0021) to the
       // default-ON posture, matching the engine's omitted-section default.
+      // parseColumnMasksOrThrow resolves a null/legacy row (pre-masking) to
+      // an empty map, so an unmasked DB serializes with no column_masks block.
       tableAccess = parsePolicyOrThrow(cdb.tableAccess);
       tenantScope = parseTenantScopeOrThrow(cdb.tenantScope);
       guardrails = parseGuardrailsOrThrow(cdb.guardrails);
+      columnMasks = parseColumnMasksOrThrow(cdb.columnMasks);
     } catch (err) {
       console.error("invalid policy at spawn", err);
       return Response.json(
@@ -547,7 +554,38 @@ async function forwardResolved(
       tableAccess,
       tenantScope,
       guardrails,
+      columnMasks,
     });
+  }
+
+  // Masking salt (W1): when any database declares column_masks, derive a
+  // per-project secret from the control-plane master (HMAC(master, projectId))
+  // and inject it as MIDPLANE_MASK_SALT. One salt per engine (the engine takes
+  // one salt for all its DBs); per-project keying means masked join-keys never
+  // correlate across projects. Fail closed: masks declared but no master secret
+  // configured means the engine would refuse to boot — refuse here with a clear
+  // error instead of a cryptic spawn failure. No masks ⇒ no salt, no master
+  // needed (unmasked projects are unaffected).
+  const anyMasked = spawnDatabases.some(
+    (d) => Object.keys(d.columnMasks).length > 0,
+  );
+  let maskSalt: string | undefined;
+  if (anyMasked) {
+    const master = process.env.MIDPLANE_MASK_SALT_MASTER;
+    if (!master) {
+      console.error(
+        `forwardResolved: project ${project.id} has column_masks but MIDPLANE_MASK_SALT_MASTER is unset — refusing to spawn (masking would be unenforceable)`,
+      );
+      return Response.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32002, message: "upstream_unavailable" },
+          id: null,
+        },
+        { status: 502 },
+      );
+    }
+    maskSalt = createHmac("sha256", master).update(project.id).digest("hex");
   }
 
   let upstream;
@@ -556,6 +594,7 @@ async function forwardResolved(
       projectId: project.id,
       region: project.region,
       databases: spawnDatabases,
+      maskSalt,
     });
   } catch (err) {
     console.error("spawn failed", err);

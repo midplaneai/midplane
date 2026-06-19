@@ -17,6 +17,7 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import yaml from "js-yaml";
+import { TRANSFORM_NAMES } from "@midplane/engine";
 
 export const TransportSchema = z.enum(["stdio", "http"]);
 export type Transport = z.infer<typeof TransportSchema>;
@@ -44,6 +45,12 @@ export const ConfigSchema = z.object({
   transport: TransportSchema.default("http"),
   // Bearer token for the cloud indexer's pull endpoints. Unset → routes 404.
   indexerToken: z.string().min(1).optional(),
+  // Secret keying the deterministic masking transforms (consistent-hash,
+  // format-preserving). Sourced from MIDPLANE_MASK_SALT, set by the cloud
+  // per-engine (W1). Optional here; the engine factory REFUSES to boot a DB
+  // that declares column_masks without it (fail-closed — a zero/empty salt
+  // would make masked join-keys predictable).
+  maskSalt: z.string().min(1).optional(),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -82,6 +89,45 @@ const GuardrailsSchema = z.object({
   block_ddl: z.boolean().default(true), // DROP / TRUNCATE / ALTER
 });
 
+// Column masking (decision A2). A sibling of table_access: "schema.table" ->
+// (column name -> transform). The transform enum is sourced from the engine's
+// own catalog (TRANSFORM_NAMES) so the cloud-authored config and the engine's
+// enforcement can never name a transform the other doesn't know — an unknown
+// transform fails zod here at parse, and the engine fails closed at runtime
+// (decision A3). A masked column must also have read access (enforced by the
+// access policy independently; masking presupposes the read).
+const TransformNameSchema = z.enum(
+  TRANSFORM_NAMES as unknown as [string, ...string[]],
+);
+const ColumnMasksSchema = z.record(
+  z.string().min(1),
+  z.record(z.string().min(1), TransformNameSchema),
+);
+
+// Enforcement features THIS engine version implements. A policy may declare
+// `requires_features: [...]`; if it names a feature this engine doesn't support,
+// the engine REFUSES the policy (fail-closed) rather than silently not enforcing
+// it. This is the forward half of the version-skew defense (decision T3): a
+// future enforcement section can't be silently stripped by this engine. (The
+// current column_masks rollout's old-engine skew is handled by engine-first
+// sequencing E3 — an already-shipped old engine can't be taught to refuse.)
+const ENGINE_FEATURES = new Set<string>(["column_masks"]);
+
+function assertFeaturesSupported(
+  features: string[] | undefined,
+  source: string,
+  path: string,
+): void {
+  if (!features) return;
+  const unsupported = features.filter((f) => !ENGINE_FEATURES.has(f));
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Policy ${path} from ${source} requires enforcement feature(s) this engine does not support: ${unsupported.join(", ")}. ` +
+        `Upgrade the engine image, or remove the unsupported feature. Refusing to load — an unenforced security control must never be silently dropped.`,
+    );
+  }
+}
+
 // Supported dialects. Postgres-only on the public build: the engine ships one
 // concrete `Dialect` (`dialects/postgres/`). The seam is dialect-ready (a MySQL
 // adapter is implemented + tested on a branch), but the public surface stays
@@ -104,6 +150,8 @@ const DatabaseEntrySchema = z.object({
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),
   guardrails: GuardrailsSchema.optional(),
+  column_masks: ColumnMasksSchema.optional(),
+  requires_features: z.array(z.string().min(1)).optional(),
 });
 
 // Exported so `midplane policy validate` can check a candidate file against
@@ -113,6 +161,8 @@ export const PolicyFileSchema = z.object({
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),
   guardrails: GuardrailsSchema.optional(),
+  column_masks: ColumnMasksSchema.optional(),
+  requires_features: z.array(z.string().min(1)).optional(),
   // Multi-DB shape (0.2.0+). Mutually exclusive with the legacy shape at
   // resolve time; if both are present the legacy fields are ignored and a
   // warning is emitted.
@@ -173,7 +223,15 @@ export interface DatabaseSpec {
   // Preserves omit-vs-set for the hot-reload "don't touch" rule (mirrors
   // hasTenantScope) — a body editing table_access alone never clears guardrails.
   hasGuardrails: boolean;
+  // Resolved column masks: "schema.table" -> (column -> transform). null when
+  // the source carried no column_masks. Consumed at engine construction
+  // (boot-time, W3:A); column-mask hot-reload is a follow-up.
+  columnMasks: ColumnMasksSpec | null;
+  hasColumnMasks: boolean;
 }
+
+// Resolved column-mask config: "schema.table" -> (column name -> transform).
+export type ColumnMasksSpec = Record<string, Record<string, string>>;
 
 export const EMPTY_TENANT_SCOPE: TenantScopeSpec = {
   defaultColumn: null,
@@ -213,6 +271,11 @@ export interface LoadedPolicy {
   hasTableAccess: boolean;
   guardrails: GuardrailsSpec;
   hasGuardrails: boolean;
+  // Legacy-shape mirror of databases[0].columnMasks (null for the multi-DB
+  // shape). Boot reads databases[].columnMasks; this mirror keeps the shape
+  // uniform for callers that read the top-level legacy fields.
+  columnMasks: ColumnMasksSpec | null;
+  hasColumnMasks: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -240,6 +303,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     policyFile: env.MIDPLANE_POLICY_FILE,
     transport: env.MIDPLANE_TRANSPORT,
     indexerToken: env.INDEXER_TOKEN,
+    maskSalt: env.MIDPLANE_MASK_SALT,
   };
   // Strip undefined so zod defaults apply.
   const cleaned: Record<string, unknown> = {};
@@ -296,6 +360,8 @@ export function parsePolicyYaml(
           // Empty doc still gets the default-ON safety net.
           guardrails: DEFAULT_GUARDRAILS,
           hasGuardrails: false,
+          columnMasks: null,
+          hasColumnMasks: false,
         },
       ],
       hasDatabasesBlock: false,
@@ -305,6 +371,8 @@ export function parsePolicyYaml(
       hasTableAccess: false,
       guardrails: DEFAULT_GUARDRAILS,
       hasGuardrails: false,
+      columnMasks: null,
+      hasColumnMasks: false,
     };
   }
 
@@ -325,6 +393,8 @@ export function parsePolicyYaml(
   );
 
   if (hasDatabasesBlock && parsed.data.databases) {
+    // A top-level requires_features alongside a databases: block still applies.
+    assertFeaturesSupported(parsed.data.requires_features, source, "requires_features");
     const databases = parsed.data.databases.map((entry, idx) =>
       resolveDatabaseEntry(entry, idx, source, env, rawDoc),
     );
@@ -341,6 +411,8 @@ export function parsePolicyYaml(
       hasTableAccess: false,
       guardrails: DEFAULT_GUARDRAILS,
       hasGuardrails: false,
+      columnMasks: null,
+      hasColumnMasks: false,
     };
   }
 
@@ -370,6 +442,12 @@ export function parsePolicyYaml(
   const tableAccess = ta ? { default: ta.default, tables: ta.tables } : null;
   const guardrails = resolveGuardrails(parsed.data.guardrails);
 
+  // Forward-compat refuse (T3): a policy declaring a feature this engine can't
+  // enforce is rejected, not silently stripped.
+  assertFeaturesSupported(parsed.data.requires_features, source, "requires_features");
+  const columnMasks = parsed.data.column_masks ?? null;
+  const hasColumnMasks = Object.prototype.hasOwnProperty.call(rawDoc, "column_masks");
+
   return {
     databases: [
       {
@@ -382,6 +460,8 @@ export function parsePolicyYaml(
         hasTableAccess,
         guardrails,
         hasGuardrails,
+        columnMasks,
+        hasColumnMasks,
       },
     ],
     hasDatabasesBlock: false,
@@ -391,6 +471,8 @@ export function parsePolicyYaml(
     hasTableAccess,
     guardrails,
     hasGuardrails,
+    columnMasks,
+    hasColumnMasks,
   };
 }
 
@@ -474,6 +556,14 @@ function resolveDatabaseEntry(
   const hasTableAccess = Object.prototype.hasOwnProperty.call(rawEntry, "table_access");
   const hasGuardrails = Object.prototype.hasOwnProperty.call(rawEntry, "guardrails");
 
+  assertFeaturesSupported(
+    entry.requires_features,
+    source,
+    `databases[${idx}].requires_features`,
+  );
+  const columnMasks = entry.column_masks ?? null;
+  const hasColumnMasks = Object.prototype.hasOwnProperty.call(rawEntry, "column_masks");
+
   return {
     name: entry.name,
     url,
@@ -484,6 +574,8 @@ function resolveDatabaseEntry(
     hasTableAccess,
     guardrails,
     hasGuardrails,
+    columnMasks,
+    hasColumnMasks,
   };
 }
 

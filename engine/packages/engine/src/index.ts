@@ -5,6 +5,7 @@ export type {
   AgentIntent,
   EngineContext,
   EngineOptions,
+  MaskingConfig,
   Decision,
   DecisionPreview,
 } from "./engine.ts";
@@ -25,7 +26,30 @@ export { PostgresAuditWriter } from "./audit/postgres.ts";
 export type { CredentialStore } from "./crypto/credential-store.ts";
 export { EnvCredentialStore } from "./crypto/credential-store.ts";
 
-export type { Executor, ExecutionResult, ExecuteContext } from "./executor.ts";
+export type {
+  Executor,
+  ExecutionResult,
+  ExecuteContext,
+  ResultField,
+} from "./executor.ts";
+
+export {
+  applyTransform,
+  isTransformName,
+  TRANSFORM_NAMES,
+  UnknownTransformError,
+} from "./masking/transforms.ts";
+export type { TransformName, TransformContext } from "./masking/transforms.ts";
+export { maskResultSet } from "./masking/mask-result-set.ts";
+export type {
+  Catalog,
+  ColumnMasks,
+  MaskOutcome,
+  MaskResultSetInput,
+  RelInfo,
+} from "./masking/mask-result-set.ts";
+export { buildCatalog, CachingCatalogResolver } from "./masking/catalog.ts";
+export type { CatalogResolver, CatalogQueryFn } from "./masking/catalog.ts";
 
 export type { Rule, RuleVerdict } from "./policy/index.ts";
 export type {

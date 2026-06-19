@@ -292,6 +292,7 @@ export class FlyMachineSpawner implements Spawner {
         tableAccess: db.tableAccess,
         tenantScope: db.tenantScope,
         guardrails: db.guardrails,
+        columnMasks: db.columnMasks,
       })),
     );
     const res = await this.fetchFn(`${this.apiBase}/v1/apps/${app}/machines`, {
@@ -340,6 +341,9 @@ export class FlyMachineSpawner implements Spawner {
             ...(this.indexerToken
               ? { INDEXER_TOKEN: this.indexerToken }
               : {}),
+            // Masking salt; present only when a database declares column_masks
+            // (the engine refuses to boot with masks but no salt).
+            ...(opts.maskSalt ? { MIDPLANE_MASK_SALT: opts.maskSalt } : {}),
           },
           // Inline file content per machine. The Fly Machines API base64-
           // decodes raw_value into the guest filesystem at start. No volume,

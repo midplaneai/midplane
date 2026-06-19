@@ -118,7 +118,9 @@ describe("PgPoolExecutor — per-query transaction wrapping", () => {
       "COMMIT",
     ]);
     expect(client.released()).toBe(true);
-    expect(result).toEqual({ rows: [{ ok: 1 }], rowCount: 1 });
+    // `fields` is lifted from the driver RowDescription for the masker; the
+    // fake client returns no `.fields`, so it resolves to an empty array.
+    expect(result).toEqual({ rows: [{ ok: 1 }], rowCount: 1, fields: [] });
   });
 
   test("execute() ROLLBACKs and releases the client when the user SQL throws", async () => {

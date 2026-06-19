@@ -15,6 +15,9 @@ import { createHash } from "node:crypto";
 import type { AuditWriter } from "./audit/index.ts";
 import type { CredentialStore } from "./crypto/credential-store.ts";
 import type { Executor, ExecutionResult } from "./executor.ts";
+import { maskResultSet } from "./masking/mask-result-set.ts";
+import type { ColumnMasks } from "./masking/mask-result-set.ts";
+import type { CatalogResolver } from "./masking/catalog.ts";
 import type { Rule } from "./policy/rules/index.ts";
 import { evaluate } from "./policy/index.ts";
 import type { Dialect } from "./dialects/types.ts";
@@ -97,11 +100,28 @@ export type DecisionPreview = {
   tablesTouched: string[];
 };
 
+// Column-masking configuration for this engine (decision A2: a sibling of the
+// access policy, not part of the rules). Absent / empty `columnMasks` = masking
+// off = the result-set masker is a true no-op. `resolver` is injected like the
+// executor so the engine package needs no DB driver.
+export type MaskingConfig = {
+  /** "schema.table" -> (column name -> transform). */
+  columnMasks: ColumnMasks;
+  /** Per-(project|database) secret keying the deterministic transforms. */
+  salt: string;
+  /** Turns result OIDs into the catalog the masker needs (cached per conn). */
+  resolver: CatalogResolver;
+};
+
 export interface EngineOptions {
   policy: { rules: Rule[] };
   audit: AuditWriter;
   credentials: CredentialStore;
   executor: Executor;
+  // Optional column masking. When set with a non-empty columnMasks, the engine
+  // post-processes every ALLOWED result (SELECT and RETURNING) through the
+  // fail-closed masker before returning rows to the agent.
+  masking?: MaskingConfig;
   // Identifies which DB this Engine is bound to. Stamped on every audit
   // event the engine writes so consumers can group/filter per-DB. Defaults
   // to '__default__' for legacy single-DB callers and tests that don't
@@ -120,6 +140,7 @@ export class Engine {
   private readonly rules: Rule[];
   private readonly audit: AuditWriter;
   private readonly executor: Executor;
+  private readonly masking?: MaskingConfig;
   private readonly credentials: CredentialStore;
   private readonly databaseName: string;
   private readonly dialect: Dialect;
@@ -130,6 +151,7 @@ export class Engine {
     this.rules = opts.policy.rules;
     this.audit = opts.audit;
     this.executor = opts.executor;
+    this.masking = opts.masking;
     this.credentials = opts.credentials;
     this.databaseName = opts.databaseName ?? "__default__";
     this.dialect = opts.dialect ?? postgresDialect;
@@ -284,6 +306,27 @@ export class Engine {
       throw err;
     }
 
+    // ── 5b. column masking (post-execute, fail-closed). Runs only when this
+    //    engine is configured with a non-empty mask set. The query has already
+    //    executed; masking transforms the masked columns' values before the rows
+    //    leave the engine, OR rejects — withholding the rows from the agent —
+    //    when a masked column can't be safely masked (view / computed /
+    //    whole-row, or a stale catalog after one refresh). On reject the rows
+    //    never reach the agent. Covers SELECT and INSERT/UPDATE...RETURNING
+    //    (same execute path). `execResult.rows` is replaced in place on success.
+    let columnsMasked: string[] | undefined;
+    let maskingRejectReason: string | undefined;
+    if (this.masking && this.masking.columnMasks.size > 0) {
+      const masked = await this.applyMasking(execResult);
+      if (masked.ok) {
+        columnsMasked = masked.columnsMasked.length ? masked.columnsMasked : undefined;
+      } else {
+        maskingRejectReason = masked.reason;
+      }
+    }
+
+    // EXECUTED is always written (the query DID run), carrying the masking
+    // outcome. On a masking reject we then return a structured denial below.
     const executed: AuditEvent = {
       id: this.idGen(),
       query_id: queryId,
@@ -301,11 +344,54 @@ export class Engine {
         overhead_ms: Math.max(0, execStart - start),
         rows_returned: execResult.rows.length,
         rows_affected: execResult.rowCount,
+        ...(columnsMasked ? { columns_masked: columnsMasked } : {}),
+        ...(maskingRejectReason
+          ? { masking_rejected: true, masking_reason: maskingRejectReason.slice(0, 512) }
+          : {}),
       },
     };
     await this.writePostExecBestEffort(executed);
 
+    if (maskingRejectReason) {
+      return {
+        allowed: false,
+        reason: "column_masking",
+        message: maskingRejectReason,
+        auditId: decidedId,
+      };
+    }
+
     return { allowed: true, result: execResult, auditId: decidedId };
+  }
+
+  // Post-execute column masking. Maps each output column to its source via the
+  // driver's RowDescription provenance (execResult.fields) and either transforms
+  // masked values, passes through, or rejects (fail-closed). On a retryable
+  // (cache-stale) reject it invalidates the catalog and retries ONCE. On success
+  // it replaces execResult.rows in place and returns the masked column names.
+  private async applyMasking(
+    execResult: ExecutionResult,
+  ): Promise<{ ok: true; columnsMasked: string[] } | { ok: false; reason: string }> {
+    const m = this.masking!;
+    const oids = (execResult.fields ?? []).map((f) => f.tableOid);
+
+    const runOnce = async () =>
+      maskResultSet({
+        rows: execResult.rows,
+        fields: execResult.fields,
+        columnMasks: m.columnMasks,
+        catalog: await m.resolver.resolve(oids),
+        salt: m.salt,
+      });
+
+    let outcome = await runOnce();
+    if (!outcome.ok && outcome.retryable) {
+      m.resolver.invalidate();
+      outcome = await runOnce();
+    }
+    if (!outcome.ok) return { ok: false, reason: outcome.reason };
+    execResult.rows = outcome.rows;
+    return { ok: true, columnsMasked: outcome.maskedColumns };
   }
 
   // Compute the policy verdict for a statement WITHOUT auditing or executing

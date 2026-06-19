@@ -99,6 +99,84 @@ describe("DockerSpawner", () => {
     expect(stopCall).toBeDefined();
   });
 
+  it("injects MIDPLANE_MASK_SALT and emits the column_masks YAML when masking is configured", async () => {
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "run") return { stdout: "cid\n" };
+      if (args[0] === "port") return { stdout: "0.0.0.0:5000\n" };
+      return { stdout: "" };
+    });
+    const fetchFn = vi.fn(
+      async () => new Response("{}", { status: 200 }),
+    ) as unknown as typeof fetch;
+    const spawner = new DockerSpawner({ exec, fetch: fetchFn, bootTimeoutMs: 1000 });
+
+    const c = await spawner.spawn({
+      projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      region: "eu",
+      maskSalt: "derived-project-salt",
+      databases: [
+        {
+          name: "main",
+          projectDatabaseId: "01HXYZMAIN0000000000000000",
+          dsn: "postgres://x",
+          tableAccess: { default: "read", tables: {} },
+          tenantScope: { column: null, overrides: {}, exempt: [] },
+          guardrails: { block_unqualified_dml: true, block_ddl: true },
+          columnMasks: { "public.users": { email: "full-redact" } },
+        },
+      ],
+    });
+
+    const runArgs = exec.mock.calls[0]?.[1] ?? [];
+    expect(runArgs).toContain("MIDPLANE_MASK_SALT=derived-project-salt");
+
+    const mountArg = runArgs.find(
+      (a) => typeof a === "string" && a.endsWith(":/etc/midplane/policy.yaml:ro"),
+    );
+    const yaml = await readFile(mountArg!.split(":")[0]!, "utf8");
+    expect(yaml).toContain("    requires_features:\n      - column_masks");
+    expect(yaml).toContain(
+      "    column_masks:\n      public.users:\n        email: full-redact",
+    );
+
+    await c.stop();
+  });
+
+  it("omits MIDPLANE_MASK_SALT and the column_masks block when no masking is set", async () => {
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "run") return { stdout: "cid\n" };
+      if (args[0] === "port") return { stdout: "0.0.0.0:5001\n" };
+      return { stdout: "" };
+    });
+    const fetchFn = vi.fn(
+      async () => new Response("{}", { status: 200 }),
+    ) as unknown as typeof fetch;
+    const spawner = new DockerSpawner({ exec, fetch: fetchFn, bootTimeoutMs: 1000 });
+
+    const c = await spawner.spawn({
+      projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      region: "eu",
+      databases: [
+        {
+          name: "main",
+          projectDatabaseId: "01HXYZMAIN0000000000000000",
+          dsn: "postgres://x",
+          tableAccess: { default: "read", tables: {} },
+          tenantScope: { column: null, overrides: {}, exempt: [] },
+          guardrails: { block_unqualified_dml: true, block_ddl: true },
+        },
+      ],
+    });
+
+    const runArgs = exec.mock.calls[0]?.[1] ?? [];
+    expect(
+      runArgs.some(
+        (a) => typeof a === "string" && a.startsWith("MIDPLANE_MASK_SALT="),
+      ),
+    ).toBe(false);
+    await c.stop();
+  });
+
   it("removes container if health never becomes ready", async () => {
     const exec = vi.fn(async (_cmd: string, args: string[]) => {
       if (args[0] === "run") return { stdout: "cid\n" };
