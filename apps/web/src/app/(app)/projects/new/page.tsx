@@ -22,6 +22,7 @@ import {
   createProject,
   getPlanUsage,
   hasEmptyProject,
+  isValidDatabaseName,
   isValidDsn,
 } from "@/lib/projects";
 import {
@@ -183,8 +184,19 @@ async function createAction(
   if (!isValidDsn(dsn)) {
     return { error: "DSN must be a postgres:// or postgresql:// URL." };
   }
+  // The optional name is the first database's agent-facing alias (the string
+  // the agent uses to address it). Validate a supplied value so the user gets
+  // inline feedback; blank is fine — createProject derives the alias from the
+  // DSN's database name.
   const nameRaw = formData.get("name");
-  const name = typeof nameRaw === "string" ? nameRaw : null;
+  const aliasInput = typeof nameRaw === "string" ? nameRaw.trim() : "";
+  if (aliasInput && !isValidDatabaseName(aliasInput)) {
+    return {
+      error:
+        "Database name must be 1–32 lowercase letters, digits, _ or -, starting with a letter.",
+    };
+  }
+  const name = aliasInput || null;
 
   // Form-posted radio values are strings. Validate against the canonical
   // enum so a tampered request can't smuggle in something the spawner

@@ -138,7 +138,7 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   ).toBeVisible();
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   await page.getByLabel(/database_url/i).fill(customerDsn);
-  await page.getByRole("button", { name: /create project/i }).click();
+  await page.getByRole("button", { name: /^connect$/i }).click();
   // PR2 of mcp_url_auth_security: the create flow redirects to a
   // per-project success page at /projects/<id>/created where the
   // plaintext URL is shown exactly once.

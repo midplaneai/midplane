@@ -151,12 +151,43 @@ export function isValidDatabaseName(s: unknown): s is string {
   return typeof s === "string" && DB_NAME_RE.test(s);
 }
 
+// Derive an agent-facing database alias from a Postgres DSN. Takes the URL's
+// database path (postgres://…/<db>), lowercases it, and sanitizes to
+// DB_NAME_RE (the engine's name grammar). Falls back to DEFAULT_DATABASE_NAME
+// when the DSN carries no usable name, so the first database always lands a
+// valid alias even from a path-less or unparseable DSN.
+export function deriveDatabaseAlias(dsn: string): string {
+  let path: string;
+  try {
+    path = new URL(dsn).pathname;
+  } catch {
+    return DEFAULT_DATABASE_NAME;
+  }
+  let raw = path.replace(/^\/+/, "");
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    // Leave raw as-is on a malformed %-escape; the sanitizer below copes.
+  }
+  const sanitized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") // illegal runs collapse to one separator
+    .replace(/^[^a-z]+/, "") // grammar requires a leading letter
+    .slice(0, 32)
+    .replace(/[-_]+$/, ""); // no trailing separator
+  return isValidDatabaseName(sanitized) ? sanitized : DEFAULT_DATABASE_NAME;
+}
+
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
 // Shared create-project path used by both the Server Action behind the
 // paste-DSN form and the JSON POST /api/projects route. Encrypts the
 // DSN with the customer's region key, persists the ciphertext on a
-// project_databases row named "main", and auto-mints a default
+// project_databases row whose agent-facing alias is `name` (when it's a
+// valid DB alias) or, failing that, derived from the DSN's database name.
+// That same alias labels the project, so a one-database project reads
+// coherently and the container recedes until a second DB is added (the
+// project is renamable later via renameProject). Auto-mints a default
 // mcp_tokens row (PR2 of mcp_url_auth_security — D3: first-token UX).
 //
 // Returns the new parent id and the default token's PLAINTEXT — the
@@ -185,6 +216,14 @@ export async function createProject(
   );
 
   const id = ulid();
+
+  // The first database's agent-facing alias: the caller's name when it's a
+  // valid alias, otherwise derived from the DSN's database name (fallback
+  // DEFAULT_DATABASE_NAME). This same value labels the project below.
+  const dbAlias =
+    typeof name === "string" && isValidDatabaseName(name.trim())
+      ? name.trim()
+      : deriveDatabaseAlias(dsn);
 
   // Initial policy: default = customer's choice from the create form,
   // tables = {} (per-table overrides are added later from the permission
@@ -254,16 +293,16 @@ export async function createProject(
       .limit(1);
     if (emptyProject[0]) {
       resolvedProjectId = emptyProject[0].id;
-      // Let the first DSN name the project if the user supplied a name and the
-      // reused project is still unnamed or the auto-seed placeholder "Default".
-      const supplied = normalizeName(name);
+      // Label the reused project with the first database's alias when it's
+      // still unnamed or the auto-seed placeholder "Default" — a one-DB
+      // project reads coherently and stays renamable later.
       if (
-        supplied &&
-        (emptyProject[0].name === null || emptyProject[0].name === "Default")
+        emptyProject[0].name === null ||
+        emptyProject[0].name === "Default"
       ) {
         await tx
           .update(projects)
-          .set({ name: supplied })
+          .set({ name: dbAlias })
           .where(eq(projects.id, resolvedProjectId));
       }
     } else if (Number.isFinite(caps.projects)) {
@@ -289,13 +328,13 @@ export async function createProject(
         id,
         customerId: customer.id,
         region: customer.region,
-        name: normalizeName(name),
+        name: dbAlias,
       });
     }
     await tx.insert(projectDatabases).values({
       id: childId,
       projectId: resolvedProjectId,
-      name: DEFAULT_DATABASE_NAME,
+      name: dbAlias,
       encryptedDsn: ciphertext,
       kmsKeyId,
       tableAccess,

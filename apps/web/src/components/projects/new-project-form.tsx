@@ -7,7 +7,6 @@ import { TestDsnButton } from "@/components/projects/test-dsn-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MAX_PROJECT_NAME_LENGTH } from "@/lib/project-name";
 
 // Server-action result used by useActionState. On validation failure the
 // action returns `{ error }` and the form renders it inline. On success
@@ -42,13 +41,17 @@ export function NewProjectForm({
           id="name"
           name="name"
           type="text"
-          maxLength={MAX_PROJECT_NAME_LENGTH}
-          placeholder="Production read-replica"
+          autoComplete="off"
+          pattern="^[a-z][a-z0-9_\-]{0,31}$"
+          maxLength={32}
+          placeholder="analytics"
+          className="font-mono"
           disabled={pending}
         />
         <p className="text-xs text-muted-foreground">
-          A short label to tell this project apart from others.{" "}
-          <strong className="font-medium text-foreground">Optional.</strong>
+          The name your agent uses to address this database.{" "}
+          <strong className="font-medium text-foreground">Optional</strong> —
+          defaults to the database in your connection string.
         </p>
       </div>
       <div className="space-y-2">
@@ -145,7 +148,7 @@ export function NewProjectForm({
       ) : null}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" size="lg" arrow disabled={pending}>
-          {pending ? "Creating…" : "Create project"}
+          {pending ? "Connecting…" : "Connect"}
         </Button>
         <TestDsnButton
           key={testVersion}

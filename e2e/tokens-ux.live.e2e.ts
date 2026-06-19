@@ -90,7 +90,7 @@ test("create project → mint second token → revoke default → list reflects 
   await page
     .getByLabel(/database_url/i)
     .fill("postgres://user:pass@nowhere.local:5432/db?sslmode=disable");
-  await page.getByRole("button", { name: /create project/i }).click();
+  await page.getByRole("button", { name: /^connect$/i }).click();
   await page.waitForURL(/\/projects\/[A-Z0-9]+\/created/i, {
     timeout: 15_000,
   });
