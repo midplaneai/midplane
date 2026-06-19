@@ -8,9 +8,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-import { createInvite, revokeInvite } from "./members-actions";
+import { changeMemberRole, createInvite, revokeInvite } from "./members-actions";
+
+// Mirrors org-auth's AssignableRole. Declared locally rather than imported:
+// org-auth pulls in @midplane-cloud/db (the Node-only postgres driver), and a
+// "use client" file that imports it triggers the Turbopack "Can't resolve 'fs'"
+// build explosion (see CLAUDE.md). The two unions are structurally identical,
+// so passing this to the server actions typechecks fine.
+type AssignableRole = "admin" | "member";
 
 export interface MemberView {
+  /** Better Auth member-row id — the target for a role change. */
+  memberId: string;
   email: string;
   name: string;
   role: string;
@@ -68,10 +77,62 @@ function InviteLink({
   );
 }
 
+/** Per-member admin/member toggle (owner/admin only). Rendered only for
+ *  non-owner rows that aren't you — the owner's role is fixed and you can't
+ *  change your own. Optimistic locally; reverts the select on error. The server
+ *  action re-checks the role + these same constraints. */
+function RoleSelect({
+  memberId,
+  role,
+}: {
+  memberId: string;
+  role: AssignableRole;
+}) {
+  const router = useRouter();
+  const [value, setValue] = useState<AssignableRole>(role);
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="flex shrink-0 flex-col items-end gap-1">
+      <select
+        aria-label="Member role"
+        value={value}
+        disabled={pending}
+        onChange={(e) => {
+          const next = e.target.value as AssignableRole;
+          if (next === value) return;
+          setError(null);
+          setValue(next);
+          start(async () => {
+            const res = await changeMemberRole(memberId, next);
+            if (res.error) {
+              setError(res.error);
+              setValue(role);
+              return;
+            }
+            router.refresh();
+          });
+        }}
+        className="rounded-md border border-border bg-background px-2 py-1 font-mono text-[11.5px] lowercase tracking-[0.04em] text-foreground disabled:opacity-50"
+      >
+        <option value="member">member</option>
+        <option value="admin">admin</option>
+      </select>
+      {error && (
+        <span role="alert" className="text-[11px] text-[hsl(var(--deny))]">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // Members + invites for the workspace. The member list renders for everyone who
-// can see /settings; the invite form, the copyable link, and revoke render only
-// for an owner/admin (canManage). The server actions independently re-check the
-// role, so this is UX, not the security boundary.
+// can see /settings; the invite form (with an Admin/Member role select), the
+// copyable link, revoke, and the per-member role toggle render only for an
+// owner/admin (canManage). The server actions independently re-check the role,
+// so this is UX, not the security boundary.
 export function MembersCard({
   members,
   pending,
@@ -89,6 +150,7 @@ export function MembersCard({
 }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<AssignableRole>("member");
   const [link, setLink] = useState<string | null>(null);
   const [emailed, setEmailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +163,7 @@ export function MembersCard({
     setError(null);
     setLink(null);
     startInvite(async () => {
-      const res = await createInvite(email);
+      const res = await createInvite(email, inviteRole);
       if (res.error) {
         setError(res.error);
         return;
@@ -146,9 +208,16 @@ export function MembersCard({
                 {m.email}
               </p>
             </div>
-            <span className="shrink-0 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
-              {m.role}
-            </span>
+            {canManage && !m.isYou && m.role !== "owner" ? (
+              <RoleSelect
+                memberId={m.memberId}
+                role={m.role === "admin" ? "admin" : "member"}
+              />
+            ) : (
+              <span className="shrink-0 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
+                {m.role}
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -184,11 +253,24 @@ export function MembersCard({
                   onChange={(e) => setEmail(e.target.value)}
                   className="flex-1"
                 />
+                <select
+                  aria-label="Role"
+                  value={inviteRole}
+                  onChange={(e) =>
+                    setInviteRole(e.target.value as AssignableRole)
+                  }
+                  className="rounded-md border border-border bg-background px-3 text-sm text-foreground"
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
                 <Button type="submit" disabled={inviting}>
                   {inviting ? "Creating…" : "Create invite"}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
+                Members connect agents and run queries; admins also manage
+                projects, policy, tokens, and the audit log.{" "}
                 {emailDelivers
                   ? "We’ll email them a link to join — tied to their email and expiring in 7 days."
                   : "No email is sent — you’ll get a link to share with them directly."}

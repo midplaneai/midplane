@@ -36,10 +36,24 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-// Nav items for the current build. Self-host is uncapped and never bills, so
-// the Billing item is dropped there (the /billing route itself also degrades to
-// a self-host notice). Cloud shows the full list.
-export function navItemsFor(selfHost: boolean): NavItem[] {
-  if (!selfHost) return NAV_ITEMS;
-  return NAV_ITEMS.filter((item) => item.href !== "/billing");
+// Nav items for the current build + caller role. Self-host is uncapped and
+// never bills, so the Billing item is dropped there (the /billing route itself
+// also degrades to a self-host notice). A plain member operates the workspace
+// but doesn't manage it: the Audit log and Billing are owner/admin only, so
+// both are dropped for members (their routes also gate server-side). Cloud
+// owners/admins see the full list.
+export function navItemsFor({
+  selfHost,
+  canManage,
+}: {
+  selfHost: boolean;
+  canManage: boolean;
+}): NavItem[] {
+  return NAV_ITEMS.filter((item) => {
+    if (selfHost && item.href === "/billing") return false;
+    if (!canManage && (item.href === "/audit" || item.href === "/billing")) {
+      return false;
+    }
+    return true;
+  });
 }

@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { currentCustomer } from "@/lib/customer";
+import { isManager, requireManager } from "@/lib/org-auth";
 import {
   createProject,
   getPlanUsage,
@@ -45,6 +46,11 @@ const SHOW_ONCE_TTL_SECONDS = 5 * 60;
 export default async function NewProject() {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
+
+  // Adding a project is an owner/admin capability — a member operates existing
+  // projects, it doesn't provision new ones. Show a clear notice instead of the
+  // DSN form (the createAction below also re-checks the role server-side).
+  const canManage = await isManager();
 
   // Pre-flight the plan cap so a capped user sees the upgrade path BEFORE
   // pasting a DSN — not after submitting a form that's doomed to fail. This
@@ -88,7 +94,19 @@ export default async function NewProject() {
               </>
             }
           />
-          {block ? (
+          {!canManage ? (
+            <EmptyState
+              title="Only owners and admins can add projects"
+              description="Ask an owner or admin of this workspace to add a project. You can connect your agent to existing projects from your dashboard."
+              action={
+                <Link href="/dashboard">
+                  <Button size="sm" variant="outline">
+                    Back to projects
+                  </Button>
+                </Link>
+              }
+            />
+          ) : block ? (
             <EmptyState
               title={
                 block.resource === "projects"
@@ -154,6 +172,12 @@ async function createAction(
   if (!customer) redirect("/signup/region");
   const { userId } = await getOrgContext();
   if (!userId) redirect("/signup/region");
+
+  // Owner/admin only. Return state (don't throw) so the client form renders it
+  // inline — this is the tamper path; the page already hides the form for
+  // members. See CLAUDE.md "Server actions: return state, don't throw."
+  const gate = await requireManager("Only an owner or admin can add projects.");
+  if ("error" in gate) return { error: gate.error };
 
   const dsn = formData.get("dsn");
   if (!isValidDsn(dsn)) {

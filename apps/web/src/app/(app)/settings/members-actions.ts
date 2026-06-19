@@ -13,13 +13,20 @@ import {
 
 import { getAuth } from "@/lib/auth";
 import { isEmailConfigured, sendOrgInvitationEmail } from "@/lib/email";
-import { getActorEmail, getOrgContext } from "@/lib/org-context";
+import { getActorEmail } from "@/lib/org-context";
+import {
+  type AssignableRole,
+  isAssignableRole,
+  normalizeInviteRole,
+  requireManager,
+} from "@/lib/org-auth";
 import { resolvePlan, seatInviteBlock } from "@/lib/plan";
 import { bootRegion } from "@/lib/region-context";
 import { isSelfHost } from "@/lib/self-host";
 
-// Teammate invites. The owner/admin creates an invitation; the invited teammate
-// opens the accept link (/accept-invitation/<id>) and joins.
+// Teammate invites + role management. The owner/admin creates an invitation;
+// the invited teammate opens the accept link (/accept-invitation/<id>) and
+// joins. An owner/admin can also promote/demote existing members.
 //
 //  - SELF-HOST: no email is sent (keyless, no SMTP) — createInvite returns the
 //    LINK and the owner shares it out-of-band.
@@ -28,28 +35,10 @@ import { isSelfHost } from "@/lib/self-host";
 //    is still returned as a copyable fallback. Invites are a paid-plan
 //    capability — Free's seat cap is 1 (owner only).
 //
-// Both actions re-check owner/admin on the server (defense in depth, mirroring
-// settings/sso/actions.ts): Better Auth also enforces the org permission, but a
-// server action is independently reachable. Reached from a client component
-// (members-card.tsx) that reads the returned state, so these RETURN errors, they
-// don't throw.
-
-async function requireManager(): Promise<
-  { orgId: string; userId: string } | { error: string }
-> {
-  const { userId, orgId } = await getOrgContext();
-  if (!userId || !orgId) return { error: "You’re not signed in." };
-  const role = (
-    await getDb(bootRegion())
-      .select({ role: member.role })
-      .from(member)
-      .where(and(eq(member.userId, userId), eq(member.organizationId, orgId)))
-  )[0]?.role;
-  if (role !== "owner" && role !== "admin") {
-    return { error: "Only an owner or admin can manage teammates." };
-  }
-  return { orgId, userId };
-}
+// Every action re-checks owner/admin via the shared requireManager (defense in
+// depth): Better Auth also enforces the org permission, but a server action is
+// independently reachable. Reached from a client component (members-card.tsx)
+// that reads the returned state, so these RETURN errors, they don't throw.
 
 /** Build the copyable accept link from this instance's origin. */
 function inviteLink(invitationId: string): string {
@@ -106,9 +95,17 @@ async function deliverInviteEmail(args: {
 
 export async function createInvite(
   email: string,
+  role?: AssignableRole,
 ): Promise<{ link?: string; emailed?: boolean; error?: string }> {
-  const gate = await requireManager();
+  const gate = await requireManager(
+    "Only an owner or admin can manage teammates.",
+  );
   if ("error" in gate) return { error: gate.error };
+
+  // Coerce an untrusted value (the form posts a string) to a known assignable
+  // role, defaulting to the least-privileged "member" so a tampered select can
+  // never mint an admin invite.
+  const inviteRole = normalizeInviteRole(role);
 
   const trimmed = email.trim();
   if (!trimmed) return { error: "Enter an email address." };
@@ -179,7 +176,7 @@ export async function createInvite(
   let created: { id: string };
   try {
     created = await getAuth().api.createInvitation({
-      body: { email: trimmed, role: "member", organizationId: gate.orgId },
+      body: { email: trimmed, role: inviteRole, organizationId: gate.orgId },
       headers: await headers(),
     });
   } catch (e) {
@@ -214,7 +211,9 @@ export async function createInvite(
 export async function revokeInvite(
   invitationId: string,
 ): Promise<{ error?: string }> {
-  const gate = await requireManager();
+  const gate = await requireManager(
+    "Only an owner or admin can manage teammates.",
+  );
   if ("error" in gate) return { error: gate.error };
 
   try {
@@ -229,6 +228,57 @@ export async function revokeInvite(
         e instanceof Error && e.message
           ? e.message
           : "Couldn’t revoke the invitation.",
+    };
+  }
+}
+
+/** Promote/demote an existing member between admin and member. Owner/admin only
+ *  (Better Auth also enforces the org permission). The single owner's role is
+ *  not reassignable here (no Tier 1 ownership transfer), and you can't change
+ *  your own role — both are blocked before the plugin call so the UI never
+ *  surfaces a confusing Better Auth error for a case we already disallow. */
+export async function changeMemberRole(
+  memberId: string,
+  role: AssignableRole,
+): Promise<{ error?: string }> {
+  const gate = await requireManager("Only an owner or admin can change roles.");
+  if ("error" in gate) return { error: gate.error };
+
+  if (!isAssignableRole(role)) return { error: "Unknown role." };
+
+  // The target must be a member of THIS org (scope the lookup by orgId so one
+  // workspace can't touch another's membership), never the owner, and never
+  // the acting user themselves.
+  const db = getDb(bootRegion());
+  const target = (
+    await db
+      .select({ userId: member.userId, role: member.role })
+      .from(member)
+      .where(
+        and(eq(member.id, memberId), eq(member.organizationId, gate.orgId)),
+      )
+      .limit(1)
+  )[0];
+  if (!target) return { error: "That teammate isn’t in this workspace." };
+  if (target.role === "owner") {
+    return { error: "The owner’s role can’t be changed." };
+  }
+  if (target.userId === gate.userId) {
+    return { error: "You can’t change your own role." };
+  }
+
+  try {
+    await getAuth().api.updateMemberRole({
+      body: { role, memberId, organizationId: gate.orgId },
+      headers: await headers(),
+    });
+    return {};
+  } catch (e) {
+    return {
+      error:
+        e instanceof Error && e.message
+          ? e.message
+          : "Couldn’t update the role.",
     };
   }
 }

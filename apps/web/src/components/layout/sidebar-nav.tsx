@@ -6,14 +6,20 @@ import { usePathname } from "next/navigation";
 import { navItemsFor } from "@/components/layout/nav-items";
 import { cn } from "@/lib/utils";
 
-export function SidebarNav({ selfHost = false }: { selfHost?: boolean }) {
+export function SidebarNav({
+  selfHost = false,
+  canManage = false,
+}: {
+  selfHost?: boolean;
+  canManage?: boolean;
+}) {
   const pathname = usePathname() ?? "";
   return (
     <nav className="space-y-1 py-2" aria-label="Workspace">
       <div className="px-[18px] pb-1 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
         workspace
       </div>
-      {navItemsFor(selfHost).map((item) => {
+      {navItemsFor({ selfHost, canManage }).map((item) => {
         const active = item.match(pathname);
         const Icon = item.icon;
         return (

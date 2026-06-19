@@ -15,9 +15,11 @@ import type { Region } from "@midplane-cloud/kms";
 export function MobileNav({
   region,
   selfHost = false,
+  canManage = false,
 }: {
   region: Region | null;
   selfHost?: boolean;
+  canManage?: boolean;
 }) {
   const pathname = usePathname() ?? "";
   const router = useRouter();
@@ -52,7 +54,7 @@ export function MobileNav({
         aria-label="Workspace"
         className="flex items-center gap-1 overflow-x-auto px-2 pb-1"
       >
-        {navItemsFor(selfHost).map((item) => {
+        {navItemsFor({ selfHost, canManage }).map((item) => {
           const active = item.match(pathname);
           const Icon = item.icon;
           return (

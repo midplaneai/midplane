@@ -12,6 +12,9 @@ interface AppShellProps {
   region: Region | null;
   /** Self-host build: drops the Billing nav item (uncapped, never bills). */
   selfHost?: boolean;
+  /** Owner/admin: shows the manager-only nav (Audit log, Billing). A plain
+   *  member sees only Projects — those routes also gate server-side. */
+  canManage?: boolean;
   children: React.ReactNode;
 }
 
@@ -30,7 +33,12 @@ function WorkspaceMark() {
   );
 }
 
-export function AppShell({ region, selfHost = false, children }: AppShellProps) {
+export function AppShell({
+  region,
+  selfHost = false,
+  canManage = false,
+  children,
+}: AppShellProps) {
   return (
     <div className="grid min-h-screen md:grid-cols-[220px_1fr]">
       <aside className="sticky top-0 hidden h-screen flex-col overflow-y-auto border-r border-border bg-card py-4 md:flex">
@@ -40,7 +48,7 @@ export function AppShell({ region, selfHost = false, children }: AppShellProps) 
             <WorkspaceLabel />
           </div>
         </div>
-        <SidebarNav selfHost={selfHost} />
+        <SidebarNav selfHost={selfHost} canManage={canManage} />
         {region && (
           <>
             <div className="mt-2 px-[18px] pb-1 pt-2 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
@@ -61,7 +69,7 @@ export function AppShell({ region, selfHost = false, children }: AppShellProps) 
         </div>
       </aside>
       <main className="min-w-0">
-        <MobileNav region={region} selfHost={selfHost} />
+        <MobileNav region={region} selfHost={selfHost} canManage={canManage} />
         {children}
       </main>
     </div>

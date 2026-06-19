@@ -9,6 +9,7 @@
 // tooling); both routes share validation rules and error translation
 // so the two paths stay consistent.
 
+import { getActiveRole, isManagerRole } from "@/lib/org-auth";
 import { getOrgContext } from "@/lib/org-context";
 import { revalidatePath } from "next/cache";
 
@@ -60,6 +61,14 @@ export async function createTokenAction(
   if (!customer) return { ok: false, error: "internal" };
   const { userId } = await getOrgContext();
   if (!userId) return { ok: false, error: "internal" };
+
+  // Minting tokens is an owner/admin capability. The headless-token surface is
+  // hidden from members in the UI, so this guards the tamper path — members
+  // connect agents via OAuth, which needs no minted token.
+  if (!isManagerRole((await getActiveRole())?.role)) {
+    console.warn("[createTokenAction] blocked: caller is not an owner/admin");
+    return { ok: false, error: "internal" };
+  }
 
   const trimmed = input.name.trim();
   if (trimmed.length === 0) return { ok: false, error: "name_required" };
@@ -181,6 +190,13 @@ export async function revokeTokenAction(
   if (!customer) return { ok: false, error: "internal" };
   const { userId } = await getOrgContext();
   if (!userId) return { ok: false, error: "internal" };
+
+  // Revoking tokens is an owner/admin capability (tamper path — the UI is
+  // hidden from members).
+  if (!isManagerRole((await getActiveRole())?.role)) {
+    console.warn("[revokeTokenAction] blocked: caller is not an owner/admin");
+    return { ok: false, error: "internal" };
+  }
 
   try {
     const result = await revokeToken(customer, projectId, tokenId, {

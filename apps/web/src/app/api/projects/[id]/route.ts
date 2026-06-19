@@ -20,7 +20,6 @@
 // DSN rotation. Response carries only { id } (the project id).
 // Token lifecycle (list / create / revoke) lives on PR3's surface.
 
-import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import {
@@ -29,6 +28,7 @@ import {
   rotateProject,
 } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
+import { requireManagerRest } from "@/lib/org-auth";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
 
@@ -46,7 +46,11 @@ export async function PATCH(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await getOrgContext();
+  // Rotating a project's DSN is owner/admin only — it can repoint the project
+  // at another database, so it's a manager capability, not an operator one.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
+  const { userId } = gate;
   const { id } = await params;
 
   let raw: unknown;
@@ -94,7 +98,10 @@ export async function DELETE(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await getOrgContext();
+  // Deleting a project is owner/admin only.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
+  const { userId } = gate;
   const { id } = await params;
   const deleted = await deleteProject(customer, id);
   if (!deleted) {
