@@ -405,7 +405,7 @@ describe("listAuditQueries query shape", () => {
     expect(sel.params).toContain("tenant_42");
   });
 
-  it("applies database filter when present (the per-DB connection child)", async () => {
+  it("applies database filter when present (the per-DB project child)", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
@@ -550,7 +550,7 @@ describe("countByStatus", () => {
     expect(lastSelect(handle.queries).sql).toContain("'GUARDRAILS_CHANGED'");
   });
 
-  it("scopes both branches to a connection when connectionId is passed", async () => {
+  it("scopes both branches to a project when projectId is passed", async () => {
     handle.setNextResult([]);
     const { countByStatus } = await import("../src/lib/audit.ts");
     await countByStatus(
@@ -563,17 +563,17 @@ describe("countByStatus", () => {
     );
     const sel = lastSelect(handle.queries);
     // Both the query agg and the event count must carry the clause so the
-    // chip badges + "of N" total match a connection-filtered table.
-    const occurrences = (sel.sql.match(/connection_id =/g) ?? []).length;
+    // chip badges + "of N" total match a project-filtered table.
+    const occurrences = (sel.sql.match(/project_id =/g) ?? []).length;
     expect(occurrences).toBeGreaterThanOrEqual(2);
     expect(sel.params).toContain("01HXCONN0000000000000000AA");
   });
 
-  it("adds NO connection_id clause when connectionId is omitted", async () => {
+  it("adds NO project_id clause when projectId is omitted", async () => {
     handle.setNextResult([]);
     const { countByStatus } = await import("../src/lib/audit.ts");
     await countByStatus(VALID_CUSTOMER_ID, "eu");
-    expect(lastSelect(handle.queries).sql).not.toContain("connection_id =");
+    expect(lastSelect(handle.queries).sql).not.toContain("project_id =");
   });
 
   it("returns a zeroed record with every status key present", async () => {
@@ -973,27 +973,27 @@ describe("audit time window", () => {
     expect(sel.params).toContain("tok_42");
   });
 
-  it("listAuditQueries filters by connection_id in BOTH the query and config-event branches", async () => {
+  it("listAuditQueries filters by project_id in BOTH the query and config-event branches", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, {
       region: "eu",
-      connectionId: "01HXCONN0000000000000000AA",
+      projectId: "01HXCONN0000000000000000AA",
     });
     const sel = lastSelect(handle.queries);
     // The clause must appear in the query agg AND the policy_events CTE so
-    // a connection-filtered view keeps the connection's config/credential
+    // a project-filtered view keeps the project's config/credential
     // events alongside its queries.
-    const occurrences = (sel.sql.match(/connection_id =/g) ?? []).length;
+    const occurrences = (sel.sql.match(/project_id =/g) ?? []).length;
     expect(occurrences).toBeGreaterThanOrEqual(2);
     expect(sel.params).toContain("01HXCONN0000000000000000AA");
   });
 
-  it("listAuditQueries adds NO connection_id clause when connectionId is omitted", async () => {
+  it("listAuditQueries adds NO project_id clause when projectId is omitted", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");
     await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
-    expect(lastSelect(handle.queries).sql).not.toContain("connection_id =");
+    expect(lastSelect(handle.queries).sql).not.toContain("project_id =");
   });
 });
 
@@ -1058,14 +1058,14 @@ describe("eventVolumeByHour daily bucketing", () => {
     expect(sel.params).toContain("tok_42");
   });
 
-  it("threads connectionId into the chart query so the sparkline matches a connection-filtered table", async () => {
+  it("threads projectId into the chart query so the sparkline matches a project-filtered table", async () => {
     handle.setNextResult([]);
     const { eventVolumeByHour } = await import("../src/lib/audit.ts");
     await eventVolumeByHour(VALID_CUSTOMER_ID, "eu", {
-      connectionId: "01HXCONN0000000000000000AA",
+      projectId: "01HXCONN0000000000000000AA",
     });
     const sel = lastSelect(handle.queries);
-    expect(sel.sql).toContain("connection_id =");
+    expect(sel.sql).toContain("project_id =");
     expect(sel.params).toContain("01HXCONN0000000000000000AA");
   });
 });

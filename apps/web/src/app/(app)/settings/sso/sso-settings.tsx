@@ -148,7 +148,7 @@ export function SsoSettings({
     if (regError) {
       setError(
         regError.message ??
-          "Could not save the SAML connection. Check the certificate and URLs.",
+          "Could not save the SAML project. Check the certificate and URLs.",
       );
       return;
     }
@@ -242,7 +242,7 @@ export function SsoSettings({
             onClick={onRemove}
             disabled={removing}
           >
-            {removing ? "Removing…" : "Remove SAML connection"}
+            {removing ? "Removing…" : "Remove SAML project"}
           </Button>
         </div>
       ) : (
@@ -301,7 +301,7 @@ export function SsoSettings({
           )}
 
           <Button type="submit" size="sm" disabled={pending}>
-            {pending ? "Saving…" : "Save SAML connection"}
+            {pending ? "Saving…" : "Save SAML project"}
           </Button>
         </form>
       )}

@@ -2,7 +2,7 @@
 // dashboard's "test policy" panel. Computes allow/deny for probes or a
 // custom SQL statement using the SAME engine that enforces at query
 // time — never a cloud-side reimplementation (a second decision brain
-// drifts; see the connections-ux design doc, premise P1).
+// drifts; see the projects-ux design doc, premise P1).
 //
 //   acquire ──► pushPolicy ──► POST /admin/dry-run
 //      │             │                │
@@ -82,7 +82,7 @@ export interface DryRunDeps {
   timeoutMs?: number;
   /** Re-read the policy entries from the durable store immediately
    *  before the push. The spawn snapshot can be a minute old by then (a
-   *  cold spawn takes up to 60s), and the per-connection push mutex
+   *  cold spawn takes up to 60s), and the per-project push mutex
    *  orders by ENQUEUE time, not snapshot freshness — pushing the stale
    *  snapshot would overwrite a save committed during the window on the
    *  LIVE enforcement engine. Optional: callers without a durable
@@ -129,7 +129,7 @@ export async function dryRunPolicy(
       ? await deps.freshEntries()
       : spawn.databases.map((d) => ({
           name: d.name,
-          connectionDatabaseId: d.connectionDatabaseId,
+          projectDatabaseId: d.projectDatabaseId,
           tableAccess: d.tableAccess,
           tenantScope: d.tenantScope,
           guardrails: d.guardrails,
@@ -138,7 +138,7 @@ export async function dryRunPolicy(
     return { ok: false, kind: "engine_unavailable", detail: message(err) };
   }
   try {
-    const pushed = await pushPolicy(spawn.connectionId, entries, {
+    const pushed = await pushPolicy(spawn.projectId, entries, {
       registry: deps.registry,
       indexerToken: deps.indexerToken,
       fetch: deps.fetch,

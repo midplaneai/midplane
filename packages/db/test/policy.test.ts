@@ -307,7 +307,7 @@ describe("serializeMultiDbPolicyToYaml", () => {
   function entry(overrides: Partial<DatabaseEntry> = {}): DatabaseEntry {
     return {
       name: "main",
-      connectionDatabaseId: "01HXYZ123ABC456DEF789GHI01",
+      projectDatabaseId: "01HXYZ123ABC456DEF789GHI01",
       tableAccess: { default: "read", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
       guardrails: { block_unqualified_dml: true, block_ddl: true },
@@ -467,8 +467,8 @@ describe("serializeMultiDbPolicyToYaml", () => {
 
   it("emits multiple DBs, each with its own block", () => {
     const yaml = serializeMultiDbPolicyToYaml([
-      entry({ name: "prod", connectionDatabaseId: "01HXYZA000000000000000000A" }),
-      entry({ name: "analytics", connectionDatabaseId: "01HXYZB000000000000000000B" }),
+      entry({ name: "prod", projectDatabaseId: "01HXYZA000000000000000000A" }),
+      entry({ name: "analytics", projectDatabaseId: "01HXYZB000000000000000000B" }),
     ]);
     expect(yaml).toContain("  - name: prod\n    url: ${MIDPLANE_DSN_01HXYZA000000000000000000A}");
     expect(yaml).toContain("  - name: analytics\n    url: ${MIDPLANE_DSN_01HXYZB000000000000000000B}");
@@ -491,7 +491,7 @@ describe("serializeMultiDbPolicyToYaml", () => {
     expect(() =>
       serializeMultiDbPolicyToYaml([
         entry({ name: "main" }),
-        entry({ name: "main", connectionDatabaseId: "01HXYZB000000000000000000B" }),
+        entry({ name: "main", projectDatabaseId: "01HXYZB000000000000000000B" }),
       ]),
     ).toThrow(/duplicate database name/);
   });

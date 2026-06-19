@@ -21,3 +21,8 @@ jobs:
         with:
           bun-version: 1.3
       - run: bun run check:pins
+      # Guards the connection→project rename: fails if a container-concept
+      # "connection" identifier reappears in the control plane. Dependency-free
+      # (git grep), same cheap-on-every-PR posture as the pin drift check.
+      - name: connection→project rename drift
+        run: ./scripts/check-connection-rename.sh

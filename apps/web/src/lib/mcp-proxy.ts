@@ -7,7 +7,7 @@
 //
 // Backend selection:
 //   MIDPLANE_SELF_HOST=1 → ProcessSpawner (exec the in-image compiled
-//                          `midplane server` binary per connection on a
+//                          `midplane server` binary per project on a
 //                          loopback port — no Docker daemon, no Fly).
 //   FLY_API_TOKEN set    → FlyMachineSpawner (production shape).
 //   else                 → DockerSpawner (laptop / Playwright).
@@ -18,8 +18,8 @@
 // unset (dev convenience — OSS containers without the token don't expose
 // the /audit endpoints anyway).
 //
-// PR2 of mcp_url_auth_security: ContainerRegistry keys on connection_id,
-// not the plaintext mcp_token. The pushPolicy helper takes a connectionId.
+// PR2 of mcp_url_auth_security: ContainerRegistry keys on project_id,
+// not the plaintext mcp_token. The pushPolicy helper takes a projectId.
 // The ExpirySweeper runs alongside the Indexer in the regional process
 // and flips expired-but-still-active rows on mcp_tokens.
 
@@ -55,14 +55,14 @@ interface McpProxyContext {
   resolver: DsnResolver;
   indexer: Indexer | null;
   expirySweeper: ExpirySweeper | null;
-  /** Hot-reload a connection's table_access + tenant_scope.mappings on
+  /** Hot-reload a project's table_access + tenant_scope.mappings on
    *  its running engine, if any. The body must list every DB the
-   *  connection owns — DBs absent from the body are dropped from the
+   *  project owns — DBs absent from the body are dropped from the
    *  engine's registry. Resolves to `delivered:false` when there is no
    *  active container OR `INDEXER_TOKEN` is unset (laptop dev); the
    *  next spawn will read the new policy from Postgres on its own. */
   pushPolicy(
-    connectionId: string,
+    projectId: string,
     databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult>;
   /** Engine policy dry-run (acquire → push → /admin/dry-run) for the
@@ -154,7 +154,7 @@ export function getMcpProxyContext(): McpProxyContext {
         console.error(
           "[indexer]",
           ctx.phase,
-          ctx.connectionId.slice(0, 8),
+          ctx.projectId.slice(0, 8),
           err,
         );
       },
@@ -180,11 +180,11 @@ export function getMcpProxyContext(): McpProxyContext {
   expirySweeper.start();
 
   const pushPolicy = async (
-    connectionId: string,
+    projectId: string,
     databases: readonly DatabaseEntry[],
   ): Promise<PushPolicyResult> => {
     if (!indexerToken) return { delivered: false };
-    return pushPolicyHelper(connectionId, databases, {
+    return pushPolicyHelper(projectId, databases, {
       registry,
       indexerToken,
     });

@@ -108,7 +108,7 @@ export function billingPlans(): BillingPlan[] {
 // Only these Stripe subscription statuses grant the paid tier. Everything else
 // — past_due, canceled, unpaid, incomplete(_expired), paused — resolves to free.
 // We never clawback resources on the downgrade; only new creates gate (see
-// lib/plan.ts), so dropping a past_due org to free just blocks NEW connections/
+// lib/plan.ts), so dropping a past_due org to free just blocks NEW projects/
 // tokens until payment is fixed; existing ones keep serving.
 const ENTITLED_STATUSES: ReadonlySet<string> = new Set(["active", "trialing"]);
 

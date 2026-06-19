@@ -13,11 +13,11 @@ const buckets = new Map<string, Bucket>();
 const MAX_BUCKETS = 10_000;
 
 // Shared budgets + key builders — the ONLY definitions of these
-// invariants. Three surfaces share the ping budget (new-connection
+// invariants. Three surfaces share the ping budget (new-project
 // test, add-database test, saved-db test): one key per customer, so
 // switching surfaces doesn't reset the window. The dry-run budget is
-// per (customer, connection): the cost cap still holds per connection
-// per tenant, and a foreign tenant probing someone else's connection
+// per (customer, project): the cost cap still holds per project
+// per tenant, and a foreign tenant probing someone else's project
 // id can't burn the owner's budget (review finding — the key must
 // never be the unauthenticated path param alone).
 
@@ -29,8 +29,8 @@ export function pingTestKey(customerId: string): string {
 
 export const DRY_RUN_RATE_LIMIT = { limit: 6, windowMs: 60_000 } as const;
 
-export function dryRunKey(customerId: string, connectionId: string): string {
-  return `dry-run:${customerId}:${connectionId}`;
+export function dryRunKey(customerId: string, projectId: string): string {
+  return `dry-run:${customerId}:${projectId}`;
 }
 
 export interface RateLimitOptions {

@@ -1,6 +1,6 @@
 // Pure-function coverage for the dashboard freshness dot.
 //
-// Two states for now: "live" (default — the connection is ready, including
+// Two states for now: "live" (default — the project is ready, including
 // the awaiting-first-query case) and "down" (indexer error newer than the
 // last good drain). The previous "no traffic in >1h → stale" rule was
 // dropped because it fired right after creation as a scary warning, which
@@ -81,7 +81,7 @@ describe("resolveFreshness — pause override", () => {
   });
 
   it("returns 'paused' even when the indexer cursor says down", () => {
-    // The kill switch wins over the indexer signal — the connection is
+    // The kill switch wins over the indexer signal — the project is
     // gated by the owner, not broken.
     expect(resolveFreshness(downCursor, NOW)).toBe("paused");
   });

@@ -4,7 +4,7 @@ import { type AccessLevel } from "@midplane-cloud/db/policy";
 
 import { cn } from "@/lib/utils";
 
-// Default-agent-access radio used by both the create-connection form and
+// Default-agent-access radio used by both the create-project form and
 // the add-database inline form. The wrapper card uses :has(:checked) so
 // the visual selection follows the native radio without a controlled
 // state — works the same in either form's submit-via-formData posture.

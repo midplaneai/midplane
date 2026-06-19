@@ -1,6 +1,6 @@
 // Single source of truth for the OSS engine image reference.
 //
-// The router spawns this image per connection (DockerSpawner locally,
+// The router spawns this image per project (DockerSpawner locally,
 // FlyMachineSpawner in cloud). Before the monorepo merge the tag was
 // hand-copied across ~15 sites; now the TS sites import THIS constant, and
 // `scripts/check-image-pin.ts` (run in CI) fails if any non-TS site (the Fly

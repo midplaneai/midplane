@@ -30,7 +30,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import { and, eq } from "drizzle-orm";
 
 import {
-  connections,
+  projects,
   customers,
   getDb,
   indexerCursors,
@@ -52,7 +52,7 @@ const REDIRECT_URI = "http://localhost:7777/callback"; // captured, never served
 let pgPort = 0;
 let userId = "";
 let orgId = "";
-let connectionId = "";
+let projectId = "";
 let clientId = "";
 let proxiedContainerName = "";
 
@@ -91,16 +91,16 @@ test.afterAll(async () => {
     if (customerId) {
       const conns = await db
         .select()
-        .from(connections)
-        .where(eq(connections.customerId, customerId));
+        .from(projects)
+        .where(eq(projects.customerId, customerId));
       for (const c of conns) {
         await db
           .delete(indexerCursors)
-          .where(eq(indexerCursors.connectionId, c.id));
+          .where(eq(indexerCursors.projectId, c.id));
       }
-      // mcp_scope_grants + mcp_tokens cascade off connections / user; deleting
-      // the connection drops both. The customer row goes last.
-      await db.delete(connections).where(eq(connections.customerId, customerId));
+      // mcp_scope_grants + mcp_tokens cascade off projects / user; deleting
+      // the project drops both. The customer row goes last.
+      await db.delete(projects).where(eq(projects.customerId, customerId));
       await db.delete(customers).where(eq(customers.id, customerId));
     }
   }
@@ -119,18 +119,18 @@ test("OAuth: discovery → DCR → consent picker → token → query → audit 
   });
   orgId = (await onboard(page)).orgId;
 
-  // 2. A connection over the sidecar Postgres (the agent's target).
-  await page.goto("/connections/new");
+  // 2. A project over the sidecar Postgres (the agent's target).
+  await page.goto("/projects/new");
   const dsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   await page.getByLabel(/database_url/i).fill(dsn);
-  await page.getByRole("button", { name: /create connection/i }).click();
-  await page.waitForURL(/\/connections\/[0-9A-HJKMNP-TV-Z]{26}\/created/i, {
+  await page.getByRole("button", { name: /create project/i }).click();
+  await page.waitForURL(/\/projects\/[0-9A-HJKMNP-TV-Z]{26}\/created/i, {
     timeout: 15_000,
   });
-  connectionId = /\/connections\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
+  projectId = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
     new URL(page.url()).pathname,
   )![1]!;
-  proxiedContainerName = `midplane-${connectionId.slice(0, 16).toLowerCase()}`;
+  proxiedContainerName = `midplane-${projectId.slice(0, 16).toLowerCase()}`;
 
   // 3. OAuth discovery — resolve endpoints from metadata, never hard-code them.
   const disco = await (
@@ -200,10 +200,10 @@ test("OAuth: discovery → DCR → consent picker → token → query → audit 
   expect(accessToken, "access_token").toBeTruthy();
 
   // 8. Drive the MCP endpoint as the agent would — bearer at /mcp/<connId>.
-  await runMcpQuery(request, baseURL!, connectionId, accessToken);
+  await runMcpQuery(request, baseURL!, projectId, accessToken);
 
   // 9. The engine stamped the per-agent mcp_token_id on the audit rows. That id
-  // is the OAuth attribution row the proxy minted per (connection, client).
+  // is the OAuth attribution row the proxy minted per (project, client).
   const sqliteIds = execSync(
     `docker exec ${proxiedContainerName} sqlite3 /data/audit.db "SELECT DISTINCT mcp_token_id FROM audit_events WHERE mcp_token_id IS NOT NULL"`,
   )
@@ -219,7 +219,7 @@ test("OAuth: discovery → DCR → consent picker → token → query → audit 
     .from(mcpTokens)
     .where(
       and(
-        eq(mcpTokens.connectionId, connectionId),
+        eq(mcpTokens.projectId, projectId),
         eq(mcpTokens.clientId, clientId),
         eq(mcpTokens.kind, "oauth"),
       ),

@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 // tree without a full reload. useTransition wraps the call so we can
 // disable the button + show a "refreshing…" state for the duration of
 // the round-trip; without it the click feels unresponsive on slower
-// connections.
+// projects.
 export function RefreshButton({ className }: { className?: string }) {
   const router = useRouter();
   const [pending, start] = useTransition();

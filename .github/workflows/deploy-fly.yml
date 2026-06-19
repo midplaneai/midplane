@@ -67,7 +67,7 @@ on:
           - eu
           - us
       drain_engines:
-        description: "Force running customer engine machines off the old image NOW by destroying them (router respawns on the new image) instead of waiting for their idle cycle. NOT seamless: in-flight MCP calls are dropped, the first request per connection may 502, and active sessions must re-initialize. Leave OFF unless a continuously-busy connection must move immediately."
+        description: "Force running customer engine machines off the old image NOW by destroying them (router respawns on the new image) instead of waiting for their idle cycle. NOT seamless: in-flight MCP calls are dropped, the first request per project may 502, and active sessions must re-initialize. Leave OFF unless a continuously-busy project must move immediately."
         type: boolean
         required: true
         default: false
@@ -212,20 +212,20 @@ jobs:
             if [ "$DRAIN" = "true" ]; then
               echo "::group::[$region] Drain customer machines in $ENGINE_APP"
               # Customer-serving machines are spawned via the Machines API by
-              # FlyMachineSpawner and named mcp-<connectionId>. A `machine
+              # FlyMachineSpawner and named mcp-<projectId>. A `machine
               # restart` would NOT change their image (it reuses the stored
               # config) — only destroying them does.
               #
               # This is NOT seamless. The control-plane registry caches each
               # machine's 6PN IP and is not notified of an out-of-band destroy,
               # so after we kill a machine: any in-flight MCP call is dropped;
-              # the FIRST request for that connection 502s (upstream_disconnected)
+              # the FIRST request for that project 502s (upstream_disconnected)
               # because the registry still points at the dead IP, which then
               # invalidates the entry; the NEXT request respawns a fresh machine
               # on the new MIDPLANE_OSS_IMAGE; and the agent's MCP session is
               # gone, so a spec-compliant client must re-initialize. Idle
-              # connections already cycle on their own 30-min idle timer — this
-              # is the blunt "force a continuously-busy connection now" path.
+              # projects already cycle on their own 30-min idle timer — this
+              # is the blunt "force a continuously-busy project now" path.
               # We touch ONLY mcp-* machines (the spawned customer engines),
               # never any other machine that might exist in the app.
               flyctl machine list --app "$ENGINE_APP" --json > "/tmp/machines-$region.json"

@@ -141,7 +141,7 @@ export default async function BillingPage() {
                 <p>
                   SSO/SAML is available on the{" "}
                   <strong className="font-medium text-foreground">Team</strong>{" "}
-                  plan. Upgrade above to enable SAML connections for your
+                  plan. Upgrade above to enable SAML projects for your
                   organization.
                 </p>
               )}

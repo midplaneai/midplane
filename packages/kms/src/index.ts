@@ -1,7 +1,7 @@
 // Credential encryption for hosted Midplane.
 //
 // Trust posture: a US-region compromise must not decrypt EU DSNs and vice
-// versa. One KMS key per region; the key id is stored on the connection row
+// versa. One KMS key per region; the key id is stored on the project row
 // so decrypts know which key to ask for. Ciphertext is bound to (customerId,
 // region) via AAD so a misrouted decrypt fails closed.
 //
@@ -26,7 +26,7 @@ export type { Region, KmsMode } from "./types.ts";
 
 export interface EncryptResult {
   ciphertext: Buffer;
-  kmsKeyId: string; // stored on the connection row
+  kmsKeyId: string; // stored on the project row
 }
 
 export interface KmsContext {

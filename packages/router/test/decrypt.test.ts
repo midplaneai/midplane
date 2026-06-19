@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConnectionDatabase } from "@midplane-cloud/db";
+import type { ProjectDatabase } from "@midplane-cloud/db";
 import type { KmsContext } from "@midplane-cloud/kms";
 
 import { DecryptCache } from "../src/decrypt-cache.ts";
@@ -30,12 +30,12 @@ function fakeDb(): { db: Db; capture: UpdateCapture } {
   return { db, capture };
 }
 
-// Schema 0008 split: the resolver now keys on connection_databases (per-
-// credential), not on connections (parent). Region + customer_id are
+// Schema 0008 split: the resolver now keys on project_databases (per-
+// credential), not on projects (parent). Region + customer_id are
 // passed alongside since they live on the parent.
-const cdb: ConnectionDatabase = {
+const cdb: ProjectDatabase = {
   id: "cdb-1",
-  connectionId: "conn-1",
+  projectId: "conn-1",
   name: "main",
   encryptedDsn: Buffer.from("ciphertext"),
   kmsKeyId: "env:eu",
@@ -48,7 +48,7 @@ const cdb: ConnectionDatabase = {
 };
 const region = "eu" as const;
 const customerId = "cust-1";
-const input = { connectionDatabase: cdb, region, customerId };
+const input = { projectDatabase: cdb, region, customerId };
 
 const kms: KmsContext = { mode: "env", envKeys: { eu: "x".repeat(64) } };
 
@@ -173,7 +173,7 @@ describe("DsnResolver", () => {
     //    pre-rotation row); without the fence, cache.set would happily
     //    accept the write and the next request would see "fresh" old plaintext.
     //
-    // 0008: keying is per-credential (connectionDatabaseId) so rotation
+    // 0008: keying is per-credential (projectDatabaseId) so rotation
     // on one DB only invalidates its own cache slot — siblings unaffected.
     const clock = { t: 1_000_000 };
     const cache = new DecryptCache({ now: () => clock.t });

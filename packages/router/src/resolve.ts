@@ -3,13 +3,14 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 import * as schema from "@midplane-cloud/db/schema";
 import {
-  connectionDatabases,
-  connections,
+  projectDatabases,
+  projects,
+  mcpScopeGrants,
   mcpTokens,
   parseToken,
   validateChecksum,
-  type Connection,
-  type ConnectionDatabase,
+  type Project,
+  type ProjectDatabase,
 } from "@midplane-cloud/db";
 import { hashToken } from "@midplane-cloud/kms/pepper";
 import type { Region } from "@midplane-cloud/kms";
@@ -17,30 +18,30 @@ import type { Region } from "@midplane-cloud/kms";
 export type Db = PostgresJsDatabase<typeof schema>;
 
 /** Result of resolving a token: the matched token id, plus the parent
- *  connection and its child databases. PR2 adds the token id so the
+ *  project and its child databases. PR2 adds the token id so the
  *  proxy can inject `X-Midplane-Token-Id` upstream and the indexer (via
  *  the OSS engine) can stamp it on every audit row from this session. */
-export interface ResolvedConnection {
+export interface ResolvedProject {
   tokenId: string;
-  connection: Connection;
-  databases: ConnectionDatabase[];
+  project: Project;
+  databases: ProjectDatabase[];
 }
 
 /** Discriminated outcome of {@link resolveByToken}.
  *
  *  `{ ok: false, reason }` lets the two token-auth callers (the MCP proxy
- *  and the /mcp/<token>/health probe) map a paused connection to a distinct
- *  403 ("connection paused by owner") instead of a token-not-found 404 —
+ *  and the /mcp/<token>/health probe) map a paused project to a distinct
+ *  403 ("project paused by owner") instead of a token-not-found 404 —
  *  without each having to remember the check. Centralizing the gate here,
  *  next to the `status='active'` filter, means no future caller can forget
  *  it. `not_found` keeps the existing leakage-avoidance contract: malformed
  *  input, bad CRC, unknown/revoked/expired token, and wrong-region all
  *  collapse to the same opaque outcome. */
 export type ResolveResult =
-  | ({ ok: true } & ResolvedConnection)
+  | ({ ok: true } & ResolvedProject)
   | { ok: false; reason: "not_found" | "paused" };
 
-/** Resolve a plaintext MCP token to the (token_id, connection, databases)
+/** Resolve a plaintext MCP token to the (token_id, project, databases)
  *  triple the proxy needs to forward a request.
  *
  *  Pipeline (PR2 — mcp_url_auth_security):
@@ -51,8 +52,8 @@ export type ResolveResult =
  *       `status='active'` AND `(expires_at IS NULL OR expires_at > NOW())`.
  *       `NOW()` is the DB clock — clock skew can't sneak a token past
  *       its expiry on the runtime path.
- *    3. Load the parent connection + child databases for the matched
- *       connection_id, ordered by name (stable spawn-time YAML order).
+ *    3. Load the parent project + child databases for the matched
+ *       project_id, ordered by name (stable spawn-time YAML order).
  *
  *  Returns `{ ok: false, reason: "not_found" }` for every non-matching
  *  shape: malformed input, bad CRC, unknown hash, revoked/expired row,
@@ -61,8 +62,8 @@ export type ResolveResult =
  *  404 — never a 401, to avoid leaking existence of valid tokens via timing.
  *
  *  Returns `{ ok: false, reason: "paused" }` when the token is valid but its
- *  parent connection is paused — the caller turns this into a distinct 403.
- *  The token still exists and resolves; only the connection is gated, so
+ *  parent project is paused — the caller turns this into a distinct 403.
+ *  The token still exists and resolves; only the project is gated, so
  *  this is deliberately NOT folded into not_found.
  *
  *  Note on the `peppers` shape: V1 has exactly one pepper per region
@@ -87,11 +88,11 @@ export async function resolveByToken(
   // both. status + expires_at filtered in the WHERE so revoked/expired
   // rows never resolve at the runtime boundary.
   let tokenId: string | null = null;
-  let connectionId: string | null = null;
+  let projectId: string | null = null;
   for (const pepper of peppers.values()) {
     const hash = hashToken(pepper, plaintext);
     const rows = await db
-      .select({ id: mcpTokens.id, connectionId: mcpTokens.connectionId })
+      .select({ id: mcpTokens.id, projectId: mcpTokens.projectId })
       .from(mcpTokens)
       .where(
         sql`${mcpTokens.tokenHash} = ${hash}
@@ -103,11 +104,11 @@ export async function resolveByToken(
       .limit(1);
     if (rows.length > 0) {
       tokenId = rows[0]!.id;
-      connectionId = rows[0]!.connectionId;
+      projectId = rows[0]!.projectId;
       break;
     }
   }
-  if (!tokenId || !connectionId) return { ok: false, reason: "not_found" };
+  if (!tokenId || !projectId) return { ok: false, reason: "not_found" };
 
   // Region passed in is the regional process's bootRegion(); a cross-
   // region presentation would already have missed at the hash step
@@ -118,72 +119,128 @@ export async function resolveByToken(
 
   const connRows = await db
     .select()
-    .from(connections)
-    .where(eq(connections.id, connectionId))
+    .from(projects)
+    .where(eq(projects.id, projectId))
     .limit(1);
-  const connection = connRows[0];
-  if (!connection) {
+  const project = connRows[0];
+  if (!project) {
     // mcp_tokens FK ON DELETE CASCADE means this is unreachable under
-    // normal operation — a token can't outlive its connection. Bail
+    // normal operation — a token can't outlive its project. Bail
     // defensively in case a partial write or future migration leaves a
     // torn pair.
     return { ok: false, reason: "not_found" };
   }
   // Pause gate — the reversible kill switch. A valid token resolved, but the
-  // owner has paused the connection: reject before spawning/forwarding so no
+  // owner has paused the project: reject before spawning/forwarding so no
   // agent request reaches the engine. Distinct from not_found so the caller
   // can return a 403 ("paused by owner") rather than a token-not-found 404.
-  if (connection.pausedAt) return { ok: false, reason: "paused" };
+  if (project.pausedAt) return { ok: false, reason: "paused" };
   const dbRows = await db
     .select()
-    .from(connectionDatabases)
-    .where(eq(connectionDatabases.connectionId, connection.id))
-    .orderBy(asc(connectionDatabases.name));
-  return { ok: true, tokenId, connection, databases: dbRows };
+    .from(projectDatabases)
+    .where(eq(projectDatabases.projectId, project.id))
+    .orderBy(asc(projectDatabases.name));
+  return { ok: true, tokenId, project, databases: dbRows };
 }
 
-/** Outcome of {@link resolveConnectionForCustomer}: the same connection +
+/** Outcome of {@link resolveProjectForCustomer}: the same project +
  *  databases triple as a token resolve, minus the token id (the OAuth path
  *  mints/looks up its own attribution token separately). Shares the not_found /
  *  paused discrimination so the proxy maps the same statuses. */
-export type ConnectionResolveResult =
-  | { ok: true; connection: Connection; databases: ConnectionDatabase[] }
+export type ProjectResolveResult =
+  | { ok: true; project: Project; databases: ProjectDatabase[] }
   | { ok: false; reason: "not_found" | "paused" };
 
-/** Resolve a connection by id for the MCP-OAuth proxy path, ownership-gated on
+/** Resolve a project by id for the MCP-OAuth proxy path, ownership-gated on
  *  the customer the OAuth bearer mapped to.
  *
  *  The OAuth flow authenticates the agent's USER (and OAuth client); the URL
- *  path selects which connection. This loads that connection ONLY if it belongs
+ *  path selects which project. This loads that project ONLY if it belongs
  *  to the resolved customer — an unowned or unknown id collapses to `not_found`
  *  (same leakage-avoidance shape as resolveByToken; the caller returns 404,
- *  never a 403/401 that would confirm the id exists). A paused connection
+ *  never a 403/401 that would confirm the id exists). A paused project
  *  resolves to `{ ok: false, reason: "paused" }` so the caller returns the
  *  distinct 403, exactly as the token path does.
  *
  *  No HMAC, no pepper: the bearer was already validated by withMcpAuth. */
-export async function resolveConnectionForCustomer(
+export async function resolveProjectForCustomer(
   db: Db,
-  connectionId: string,
+  projectId: string,
   customerId: string,
-): Promise<ConnectionResolveResult> {
+): Promise<ProjectResolveResult> {
   const connRows = await db
     .select()
-    .from(connections)
+    .from(projects)
     .where(
-      sql`${connections.id} = ${connectionId}
-          AND ${connections.customerId} = ${customerId}`,
+      sql`${projects.id} = ${projectId}
+          AND ${projects.customerId} = ${customerId}`,
     )
     .limit(1);
-  const connection = connRows[0];
-  if (!connection) return { ok: false, reason: "not_found" };
-  if (connection.pausedAt) return { ok: false, reason: "paused" };
+  const project = connRows[0];
+  if (!project) return { ok: false, reason: "not_found" };
+  if (project.pausedAt) return { ok: false, reason: "paused" };
   const dbRows = await db
     .select()
-    .from(connectionDatabases)
-    .where(eq(connectionDatabases.connectionId, connection.id))
-    .orderBy(asc(connectionDatabases.name));
-  return { ok: true, connection, databases: dbRows };
+    .from(projectDatabases)
+    .where(eq(projectDatabases.projectId, project.id))
+    .orderBy(asc(projectDatabases.name));
+  return { ok: true, project, databases: dbRows };
+}
+
+/** Resolve the single project an OAuth credential is bound to, for the
+ *  region-wide `/mcp` endpoint (no project id in the URL).
+ *
+ *  One OAuth credential → one project: the consent picker writes the agent's
+ *  per-DB grants (mcp_scope_grants, keyed by client_id + user_id) for exactly
+ *  ONE project, replacing the cred's whole grant set. So the project the
+ *  generic URL reaches is simply the project those grants belong to — derived
+ *  here, ownership-gated on the customer the OAuth bearer mapped to. No grant
+ *  rows (the user approved the client but chose no databases, or never
+ *  consented) → null, and the caller 403s "re-connect to choose a project".
+ *
+ *  A cred whose grants somehow span >1 project (not reachable through the
+ *  single-project consent picker) collapses to the first by project id — the
+ *  others remain reachable via the explicit /mcp/<projectId> address. */
+export async function resolveOAuthProjectId(
+  db: Db,
+  subject: { clientId: string; userId: string; customerId: string },
+): Promise<string | null> {
+  const rows = (await db
+    .select({ projectId: projects.id })
+    .from(mcpScopeGrants)
+    .innerJoin(
+      projectDatabases,
+      eq(projectDatabases.id, mcpScopeGrants.projectDatabaseId),
+    )
+    .innerJoin(projects, eq(projects.id, projectDatabases.projectId))
+    .where(
+      sql`${mcpScopeGrants.clientId} = ${subject.clientId}
+          AND ${mcpScopeGrants.userId} = ${subject.userId}
+          AND ${projects.customerId} = ${subject.customerId}`,
+    )
+    .orderBy(asc(projects.id))
+    .limit(1)) as Array<{ projectId: string }>;
+  return rows[0]?.projectId ?? null;
+}
+
+/** The customer's project id when they own EXACTLY ONE, else null. The
+ *  region-wide `/mcp` self-host fallback: a single-tenant owner who approved a
+ *  client without picking databases has no grant to derive the bound project
+ *  from, but their intent is unambiguous when there's only one project (the
+ *  empty-scope → full-access exception then applies in the proxy). With zero or
+ *  several projects it's ambiguous → null, and the caller 403s (use the explicit
+ *  /mcp/<projectId> address). Cloud never calls this — there consent is forced
+ *  to choose a project + databases. */
+export async function resolveSoleProjectId(
+  db: Db,
+  customerId: string,
+): Promise<string | null> {
+  const rows = (await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.customerId, customerId))
+    .limit(2)) as Array<{ id: string }>;
+  return rows.length === 1 ? rows[0]!.id : null;
 }
 
 /** Truncate length-bound user-agent. The mcp_tokens.last_used_ua column

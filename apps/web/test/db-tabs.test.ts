@@ -37,7 +37,7 @@ describe("computeDbTabs", () => {
     expect(overflow).toEqual(["epsilon", "zeta"]);
   });
 
-  it("single-db connection renders one tab, no overflow", () => {
+  it("single-db project renders one tab, no overflow", () => {
     expect(computeDbTabs(["main"], "main")).toEqual({
       visible: ["main"],
       overflow: [],

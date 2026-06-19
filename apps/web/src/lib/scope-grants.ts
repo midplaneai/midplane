@@ -14,155 +14,145 @@ import { and, eq, inArray } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
-  connectionDatabases,
-  connections,
+  projectDatabases,
+  projects,
   getDb,
   mcpScopeGrants,
   type Customer,
   type McpScopeAccess,
 } from "@midplane-cloud/db";
 
-/** One DB the user can grant, for the consent picker — grouped by connection. */
+/** One DB the user can grant, for the consent picker — grouped by project. */
 export interface GrantableDatabase {
-  connectionDatabaseId: string;
+  projectDatabaseId: string;
   name: string;
 }
-export interface GrantableConnection {
-  connectionId: string;
-  connectionName: string | null;
+export interface GrantableProject {
+  projectId: string;
+  projectName: string | null;
   databases: GrantableDatabase[];
 }
 
 /** A single DB selection from a picker: which DB, at what access. */
 export interface ScopeSelection {
-  connectionDatabaseId: string;
+  projectDatabaseId: string;
   access: McpScopeAccess;
 }
 
-/** Every database the customer owns, grouped by connection — the universe the
+/** Every database the customer owns, grouped by project — the universe the
  *  OAuth consent picker offers (an agent's grant can span the user's
- *  connections). Ordered by connection then DB name for a stable UI. */
+ *  projects). Ordered by project then DB name for a stable UI. */
 export async function listGrantableDatabases(
   customer: Customer,
-): Promise<GrantableConnection[]> {
+): Promise<GrantableProject[]> {
   const db = getDb(customer.region);
   const rows = await db
     .select({
-      connectionId: connections.id,
-      connectionName: connections.name,
-      cdbId: connectionDatabases.id,
-      cdbName: connectionDatabases.name,
+      projectId: projects.id,
+      projectName: projects.name,
+      cdbId: projectDatabases.id,
+      cdbName: projectDatabases.name,
     })
-    .from(connections)
+    .from(projects)
     .innerJoin(
-      connectionDatabases,
-      eq(connectionDatabases.connectionId, connections.id),
+      projectDatabases,
+      eq(projectDatabases.projectId, projects.id),
     )
-    .where(eq(connections.customerId, customer.id));
+    .where(eq(projects.customerId, customer.id));
 
-  const byConnection = new Map<string, GrantableConnection>();
+  const byProject = new Map<string, GrantableProject>();
   for (const r of rows) {
-    let entry = byConnection.get(r.connectionId);
+    let entry = byProject.get(r.projectId);
     if (!entry) {
       entry = {
-        connectionId: r.connectionId,
-        connectionName: r.connectionName,
+        projectId: r.projectId,
+        projectName: r.projectName,
         databases: [],
       };
-      byConnection.set(r.connectionId, entry);
+      byProject.set(r.projectId, entry);
     }
-    entry.databases.push({ connectionDatabaseId: r.cdbId, name: r.cdbName });
+    entry.databases.push({ projectDatabaseId: r.cdbId, name: r.cdbName });
   }
-  const out = [...byConnection.values()];
+  const out = [...byProject.values()];
   for (const c of out) c.databases.sort((a, b) => a.name.localeCompare(b.name));
   out.sort((a, b) =>
-    (a.connectionName ?? a.connectionId).localeCompare(
-      b.connectionName ?? b.connectionId,
+    (a.projectName ?? a.projectId).localeCompare(
+      b.projectName ?? b.projectId,
     ),
   );
   return out;
 }
 
-/** Which of the supplied connection_database ids the customer actually owns.
- *  The grant table FK-references connection_databases, but ownership (the cdb's
- *  connection belongs to THIS customer) isn't enforced by the FK — so we filter
- *  here before writing. A foreign id is silently dropped (a tampered picker
- *  submit can't grant another tenant's DB; the proxy ownership check is the
- *  durable backstop anyway). */
-async function ownedDbIds(
-  db: ReturnType<typeof getDb>,
-  customerId: string,
-  cdbIds: string[],
-): Promise<Set<string>> {
-  if (cdbIds.length === 0) return new Set();
-  const rows = await db
-    .select({ id: connectionDatabases.id })
-    .from(connectionDatabases)
-    .innerJoin(
-      connections,
-      eq(connections.id, connectionDatabases.connectionId),
-    )
-    .where(
-      and(
-        eq(connections.customerId, customerId),
-        inArray(connectionDatabases.id, cdbIds),
-      ),
-    );
-  return new Set(rows.map((r) => r.id));
-}
-
-/** Replace the OAuth grant set for (client_id, user_id) — SCOPED TO THIS
- *  CUSTOMER's databases — with `selections`. Ownership-validated; non-owned /
- *  duplicate selections are dropped. Runs in one txn so a re-consent is atomic
- *  (the agent never sees a half-applied set). Returns the number of grant rows
- *  written.
+/** Replace the OAuth grant set for (client_id, user_id) with `selections`,
+ *  binding the credential to ONE project. One OAuth credential → one project:
+ *  selections are restricted to `projectId`'s databases (owned by the customer),
+ *  and the replace clears the cred's ENTIRE grant set within this customer — so
+ *  re-consenting onto a different project drops the prior project's grants and
+ *  rebinds. Non-owned / off-project / duplicate selections are dropped. Runs in
+ *  one txn so a re-consent is atomic (the agent never sees a half-applied set).
+ *  Returns the number of grant rows written.
+ *
+ *  The bound project is what the region-wide `/mcp` endpoint resolves the
+ *  credential to (router resolveOAuthProjectId reads it back from these rows).
  *
  *  Why the delete is customer-scoped: a user can belong to more than one org
  *  (customer) in the same region, and the consent picker only offers the CURRENT
  *  customer's databases. The grant key is (client_id, user_id) — which spans
  *  customers — so a blanket delete on that key would wipe the SAME user+client's
- *  grants for ANOTHER customer's connections, 403-ing those agents. We restrict
- *  the replace to grants whose connection_database belongs to THIS customer; the
- *  selection then IS the complete grant set for this customer. (No customer_id
- *  column needed — the row's connection_database_id already ties it to a
- *  customer via connection_databases → connections.) */
+ *  grants for ANOTHER customer's projects, 403-ing those agents. We restrict the
+ *  replace to grants whose project_database belongs to THIS customer; the
+ *  selection then IS the complete grant set for this customer. */
 export async function setOAuthGrants(
   customer: Customer,
-  args: { clientId: string; userId: string; selections: ScopeSelection[] },
+  args: {
+    clientId: string;
+    userId: string;
+    projectId: string;
+    selections: ScopeSelection[];
+  },
 ): Promise<number> {
   const db = getDb(customer.region);
-  const owned = await ownedDbIds(
-    db,
-    customer.id,
-    args.selections.map((s) => s.connectionDatabaseId),
-  );
+  // Restrict to DBs of THIS project (owned by the customer). A selection outside
+  // the bound project — a tampered submit — is silently dropped; the proxy
+  // ownership + scope checks are the durable backstop.
+  const projectDbRows = await db
+    .select({ id: projectDatabases.id })
+    .from(projectDatabases)
+    .innerJoin(projects, eq(projects.id, projectDatabases.projectId))
+    .where(
+      and(
+        eq(projects.customerId, customer.id),
+        eq(projectDatabases.projectId, args.projectId),
+      ),
+    );
+  const owned = new Set(projectDbRows.map((r) => r.id));
   const rows = dedupeSelections(args.selections, owned).map((s) => ({
     id: ulid(),
-    connectionDatabaseId: s.connectionDatabaseId,
+    projectDatabaseId: s.projectDatabaseId,
     clientId: args.clientId,
     userId: args.userId,
     access: s.access,
   }));
 
   await db.transaction(async (tx) => {
-    // Scope the replace to THIS customer's connection_databases (subquery), so
+    // Scope the replace to THIS customer's project_databases (subquery), so
     // re-consenting in one workspace can't clear another workspace's grants for
     // the same user+client. A different-customer grant for the same key survives.
     const customerDbIds = tx
-      .select({ id: connectionDatabases.id })
-      .from(connectionDatabases)
+      .select({ id: projectDatabases.id })
+      .from(projectDatabases)
       .innerJoin(
-        connections,
-        eq(connections.id, connectionDatabases.connectionId),
+        projects,
+        eq(projects.id, projectDatabases.projectId),
       )
-      .where(eq(connections.customerId, customer.id));
+      .where(eq(projects.customerId, customer.id));
     await tx
       .delete(mcpScopeGrants)
       .where(
         and(
           eq(mcpScopeGrants.clientId, args.clientId),
           eq(mcpScopeGrants.userId, args.userId),
-          inArray(mcpScopeGrants.connectionDatabaseId, customerDbIds),
+          inArray(mcpScopeGrants.projectDatabaseId, customerDbIds),
         ),
       );
     if (rows.length > 0) await tx.insert(mcpScopeGrants).values(rows);
@@ -171,36 +161,36 @@ export async function setOAuthGrants(
 }
 
 /** Replace the grant set for an API token (mcp_token_id) with `selections`.
- *  A PAT is bound to ONE connection, so callers pass that connection's id and
+ *  A PAT is bound to ONE project, so callers pass that project's id and
  *  selections are validated to belong to it (and to the customer). Returns the
  *  number of grant rows written. */
 export async function setTokenGrants(
   customer: Customer,
   args: {
     mcpTokenId: string;
-    connectionId: string;
+    projectId: string;
     selections: ScopeSelection[];
   },
 ): Promise<number> {
   const db = getDb(customer.region);
-  // Restrict to DBs of THIS connection (owned by the customer).
+  // Restrict to DBs of THIS project (owned by the customer).
   const connDbRows = await db
-    .select({ id: connectionDatabases.id })
-    .from(connectionDatabases)
+    .select({ id: projectDatabases.id })
+    .from(projectDatabases)
     .innerJoin(
-      connections,
-      eq(connections.id, connectionDatabases.connectionId),
+      projects,
+      eq(projects.id, projectDatabases.projectId),
     )
     .where(
       and(
-        eq(connections.customerId, customer.id),
-        eq(connectionDatabases.connectionId, args.connectionId),
+        eq(projects.customerId, customer.id),
+        eq(projectDatabases.projectId, args.projectId),
       ),
     );
   const owned = new Set(connDbRows.map((r) => r.id));
   const rows = dedupeSelections(args.selections, owned).map((s) => ({
     id: ulid(),
-    connectionDatabaseId: s.connectionDatabaseId,
+    projectDatabaseId: s.projectDatabaseId,
     mcpTokenId: args.mcpTokenId,
     access: s.access,
   }));
@@ -224,7 +214,7 @@ export async function getOAuthGrantMap(
   const db = getDb(customer.region);
   const rows = await db
     .select({
-      connectionDatabaseId: mcpScopeGrants.connectionDatabaseId,
+      projectDatabaseId: mcpScopeGrants.projectDatabaseId,
       access: mcpScopeGrants.access,
     })
     .from(mcpScopeGrants)
@@ -234,7 +224,7 @@ export async function getOAuthGrantMap(
         eq(mcpScopeGrants.userId, userId),
       ),
     );
-  return new Map(rows.map((r) => [r.connectionDatabaseId, r.access]));
+  return new Map(rows.map((r) => [r.projectDatabaseId, r.access]));
 }
 
 /** Keep only owned, last-wins-per-DB selections. Exported for unit testing the
@@ -245,12 +235,12 @@ export function dedupeSelections(
 ): ScopeSelection[] {
   const byId = new Map<string, McpScopeAccess>();
   for (const s of selections) {
-    if (!owned.has(s.connectionDatabaseId)) continue;
+    if (!owned.has(s.projectDatabaseId)) continue;
     if (s.access !== "read" && s.access !== "write") continue;
-    byId.set(s.connectionDatabaseId, s.access); // last wins
+    byId.set(s.projectDatabaseId, s.access); // last wins
   }
-  return [...byId.entries()].map(([connectionDatabaseId, access]) => ({
-    connectionDatabaseId,
+  return [...byId.entries()].map(([projectDatabaseId, access]) => ({
+    projectDatabaseId,
     access,
   }));
 }

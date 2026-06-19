@@ -1,5 +1,5 @@
 // table_access policy — Cloud-native shape that mirrors the OSS engine's
-// `table_access` YAML 1:1. JSONB at rest in `connections.table_access`,
+// `table_access` YAML 1:1. JSONB at rest in `projects.table_access`,
 // serialized to YAML at container spawn time and mounted at the path the
 // engine reads via MIDPLANE_POLICY_FILE.
 //
@@ -149,7 +149,7 @@ export function isValidDbName(name: unknown): name is string {
 // branched and makes inspection of /etc/midplane/policy.yaml predictable.
 //
 // DSNs are NEVER inlined into the YAML — they're injected as env vars
-// (`MIDPLANE_DSN_<connectionDatabaseId>`) and referenced from `url:` via
+// (`MIDPLANE_DSN_<projectDatabaseId>`) and referenced from `url:` via
 // the OSS env-interpolation regex `${VAR}`. This preserves the trust
 // posture from packages/router/src/spawner.ts:13: "DSN is NEVER logged or
 // persisted; it lives in the container's env, not on disk."
@@ -183,7 +183,7 @@ export interface TenantScopeConfig {
 }
 
 /** Zero-value config — column unset, no overrides, no exempts. Cloud
- *  uses this as the default for new connection_databases rows. */
+ *  uses this as the default for new project_databases rows. */
 export const EMPTY_TENANT_SCOPE: TenantScopeConfig = {
   column: null,
   overrides: {},
@@ -218,7 +218,7 @@ export interface GuardrailsConfig {
 }
 
 /** Mirror of the engine's default-ON posture for an omitted `guardrails`
- *  section. Used as the column default for new connection_databases rows
+ *  section. Used as the column default for new project_databases rows
  *  and as the fallback when validating a null/undefined JSONB read. */
 export const DEFAULT_GUARDRAILS: GuardrailsConfig = {
   block_unqualified_dml: true,
@@ -276,10 +276,10 @@ export function parseGuardrailsOrThrow(input: unknown): GuardrailsConfig {
 
 export interface DatabaseEntry {
   name: string;
-  /** Connection-database id used to derive the DSN env var name. ULIDs
+  /** Project-database id used to derive the DSN env var name. ULIDs
    *  match OSS-side `[A-Z_][A-Z0-9_]*` so dsnEnvVarFor never produces an
    *  invalid var name. */
-  connectionDatabaseId: string;
+  projectDatabaseId: string;
   tableAccess: TableAccessPolicy;
   /** Strict-mode tenant_scope envelope. EMPTY_TENANT_SCOPE = disabled
    *  for this DB; the YAML omits the block entirely (OSS treats absent
@@ -305,11 +305,11 @@ const OSS_ENV_INTERP_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
  *  hex IDs both qualify; raw UUIDs (lowercase + hyphens) do NOT. Throws
  *  rather than silently mis-substituting, since OSS would treat an
  *  unmatched `${...}` as a literal url and refuse the connection. */
-export function dsnEnvVarFor(connectionDatabaseId: string): string {
-  const name = `MIDPLANE_DSN_${connectionDatabaseId}`;
+export function dsnEnvVarFor(projectDatabaseId: string): string {
+  const name = `MIDPLANE_DSN_${projectDatabaseId}`;
   if (!OSS_ENV_INTERP_NAME_RE.test(name)) {
     throw new Error(
-      `dsnEnvVarFor: connection_database id "${connectionDatabaseId}" produces env var name "${name}" that does not match OSS env-interpolation regex [A-Z_][A-Z0-9_]* (lowercase letters, hyphens, or other punctuation are not allowed)`,
+      `dsnEnvVarFor: project_database id "${projectDatabaseId}" produces env var name "${name}" that does not match OSS env-interpolation regex [A-Z_][A-Z0-9_]* (lowercase letters, hyphens, or other punctuation are not allowed)`,
     );
   }
   return name;
@@ -339,7 +339,7 @@ export function serializeMultiDbPolicyToYaml(
   const lines: string[] = ["databases:"];
   for (const db of databases) {
     lines.push(`  - name: ${db.name}`);
-    lines.push(`    url: \${${dsnEnvVarFor(db.connectionDatabaseId)}}`);
+    lines.push(`    url: \${${dsnEnvVarFor(db.projectDatabaseId)}}`);
     lines.push(`    table_access:`);
     lines.push(`      default: ${db.tableAccess.default}`);
     const tables = Object.entries(db.tableAccess.tables).sort(([a], [b]) =>

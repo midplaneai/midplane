@@ -1,5 +1,5 @@
 // resolveScope — maps a credential's mcp_scope_grants rows to the engine
-// X-Midplane-Scope shape (db NAME → access), intersected with the connection's
+// X-Midplane-Scope shape (db NAME → access), intersected with the project's
 // databases. scopeHeaderValue serializes it (or null when empty = unscoped).
 //
 // Like resolve.test.ts, a tiny fake Drizzle Db: resolveScope issues exactly one
@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { ConnectionDatabase } from "@midplane-cloud/db";
+import type { ProjectDatabase } from "@midplane-cloud/db";
 
 import { resolveScope, scopeHeaderValue } from "../src/scope.ts";
 import type { Db } from "../src/resolve.ts";
@@ -26,17 +26,17 @@ function fakeDb(rows: unknown[]): Db {
   return { select: () => chain } as unknown as Db;
 }
 
-// Minimal connection_databases rows — resolveScope reads only id + name.
-const cdb = (id: string, name: string): ConnectionDatabase =>
-  ({ id, name }) as unknown as ConnectionDatabase;
+// Minimal project_databases rows — resolveScope reads only id + name.
+const cdb = (id: string, name: string): ProjectDatabase =>
+  ({ id, name }) as unknown as ProjectDatabase;
 
 const DATABASES = [cdb("cdb-1", "main"), cdb("cdb-2", "analytics")];
 
 describe("resolveScope", () => {
-  it("maps OAuth grant rows (connection_database_id) to db name → access", async () => {
+  it("maps OAuth grant rows (project_database_id) to db name → access", async () => {
     const db = fakeDb([
-      { connectionDatabaseId: "cdb-1", access: "read" },
-      { connectionDatabaseId: "cdb-2", access: "write" },
+      { projectDatabaseId: "cdb-1", access: "read" },
+      { projectDatabaseId: "cdb-2", access: "write" },
     ]);
     const scope = await resolveScope(
       db,
@@ -49,7 +49,7 @@ describe("resolveScope", () => {
   });
 
   it("maps headless-token grant rows the same way", async () => {
-    const db = fakeDb([{ connectionDatabaseId: "cdb-1", access: "read" }]);
+    const db = fakeDb([{ projectDatabaseId: "cdb-1", access: "read" }]);
     const scope = await resolveScope(
       db,
       { kind: "token", mcpTokenId: "tok-1" },
@@ -68,12 +68,12 @@ describe("resolveScope", () => {
     expect(scope.size).toBe(0);
   });
 
-  it("ignores grant rows for a DB that isn't part of this connection", async () => {
+  it("ignores grant rows for a DB that isn't part of this project", async () => {
     // A row for cdb-99 (not in DATABASES) is dropped — defends against a stale
     // grant whose DB was removed, and the name mapping can't resolve it.
     const db = fakeDb([
-      { connectionDatabaseId: "cdb-1", access: "write" },
-      { connectionDatabaseId: "cdb-99", access: "write" },
+      { projectDatabaseId: "cdb-1", access: "write" },
+      { projectDatabaseId: "cdb-99", access: "write" },
     ]);
     const scope = await resolveScope(
       db,
@@ -84,10 +84,10 @@ describe("resolveScope", () => {
     expect(scope.get("main")).toBe("write");
   });
 
-  it("short-circuits (no query) when the connection has no databases", async () => {
+  it("short-circuits (no query) when the project has no databases", async () => {
     // fakeDb([]) would resolve [], but the empty-databases guard returns first.
     const scope = await resolveScope(
-      fakeDb([{ connectionDatabaseId: "cdb-1", access: "read" }]),
+      fakeDb([{ projectDatabaseId: "cdb-1", access: "read" }]),
       { kind: "oauth", clientId: "c", userId: "u" },
       [],
     );

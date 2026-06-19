@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 
 // Shared surface for displaying a freshly-minted MCP URL with a copy
 // affordance. Used by:
-//   - /connections/[id]/created — the post-create page, where the plaintext
+//   - /projects/[id]/created — the post-create page, where the plaintext
 //     arrives via an httpOnly cookie (it has to cross the create → success
 //     redirect boundary). The page's "I've saved it" button clears that
 //     cookie explicitly; until then a reload keeps showing the URL so it

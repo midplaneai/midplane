@@ -123,7 +123,7 @@ For the purposes of the GDPR, Service Providers are considered Data Processors.<
 <p>We may share Your Personal Data in the following situations:</p>
 <ul>
 <li><strong>With Service Providers:</strong> We may share Your Personal Data with Service Providers to monitor and analyze the use of our Service, for payment processing,  to contact You.</li>
-<li><strong>For business transfers:</strong> We may share or transfer Your Personal Data in connection with, or during negotiations of, any merger, sale of Company assets, financing, or acquisition of all or a portion of Our business to another company.</li>
+<li><strong>For business transfers:</strong> We may share or transfer Your Personal Data in project with, or during negotiations of, any merger, sale of Company assets, financing, or acquisition of all or a portion of Our business to another company.</li>
 <li><strong>With Affiliates:</strong> We may share Your Personal Data with Our affiliates, in which case we will require those affiliates to honor this Privacy Policy. Affiliates include Our parent company and any other subsidiaries, joint venture partners or other companies that We control or that are under common control with Us.</li>
 <li><strong>With Your consent</strong>: We may disclose Your Personal Data for any other purpose with Your consent.</li>
 </ul>
@@ -205,7 +205,7 @@ For the purposes of the GDPR, Service Providers are considered Data Processors.<
 <ul>
 <li>Comply with a legal obligation</li>
 <li>Protect and defend the rights or property of the Company</li>
-<li>Prevent or investigate possible wrongdoing in connection with the Service</li>
+<li>Prevent or investigate possible wrongdoing in project with the Service</li>
 <li>Protect the personal safety of Users of the Service or the public</li>
 <li>Protect against legal liability</li>
 </ul>
@@ -391,7 +391,7 @@ For the purposes of the GDPR, Service Providers are considered Data Processors.<
 <li>Service Providers</li>
 <li>Payment processors</li>
 <li>Our affiliates</li>
-<li>Third-party vendors to whom You or Your agents authorize Us to disclose Your personal information in connection with products or services We provide to You</li>
+<li>Third-party vendors to whom You or Your agents authorize Us to disclose Your personal information in project with products or services We provide to You</li>
 </ul>
 <h3>Sale of Personal Information</h3>
 <p>As defined in the CCPA/CPRA, &quot;sell&quot; and &quot;sale&quot; mean selling, renting, releasing, disclosing, disseminating, making available, transferring, or otherwise communicating orally, in writing, or by electronic or other means, a Consumer's personal information by the Business to a third party for valuable consideration. This means that We may have received some kind of benefit in return for sharing personal information, but not necessarily a monetary benefit.</p>

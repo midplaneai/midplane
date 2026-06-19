@@ -4,11 +4,11 @@ import { cn } from "@/lib/utils";
 
 // Breadcrumb — lowercase mono with a blue colon separator. The colon is the
 // brand mark applied to navigation, mirroring `mid:plane`. Source text can be
-// any case ("Connections", "DATABASE_URL"); CSS lowercases visually while the
+// any case ("Projects", "DATABASE_URL"); CSS lowercases visually while the
 // DOM keeps the canonical form for screen readers. The colon is aria-hidden
 // so SR users hear segments via the implicit list semantics.
 //
-//   <Breadcrumb items={[{ label: "Connections", href: "/dashboard" }, { label: "New" }]} />
+//   <Breadcrumb items={[{ label: "Projects", href: "/dashboard" }, { label: "New" }]} />
 
 export interface BreadcrumbItem {
   label: string;

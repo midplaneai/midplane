@@ -1,5 +1,5 @@
 // Human labels for TableAccessPolicy levels, shared by the dashboard's
-// DatabaseRow and the connection home's databases section. One
+// DatabaseRow and the project home's databases section. One
 // vocabulary: "read", "deny", "read · write" — the interpunct form
 // matches the audit log's badge copy.
 

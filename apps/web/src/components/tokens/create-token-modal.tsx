@@ -4,7 +4,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Plus, X } from "lucide-react";
 import { useId, useState, useTransition } from "react";
 
-import { ConnectAgentGuide } from "@/components/connections/connect-agent-guide";
+import { ConnectAgentGuide } from "@/components/projects/connect-agent-guide";
 import {
   DbAccessControl,
   type ScopeDbState,
@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 //   1. The form (name + expiry).
 //   2. After a successful submit, the show-once URL surface — the
 //      plaintext is in React state, never round-tripped through a
-//      cookie/session (unlike the connection-create flow which has to
+//      cookie/session (unlike the project-create flow which has to
 //      cross a redirect boundary). The "I've saved it" button discards
 //      the plaintext from state and closes the modal.
 //   3. The limit panel (when `limitReached` is set) — shown in place of
@@ -30,15 +30,15 @@ import { cn } from "@/lib/utils";
 //      label; we explain on open rather than swapping in a billing button.
 //
 // On a successful create the action calls revalidatePath() for the
-// connection page so the new row appears in the list when the modal
+// project page so the new row appears in the list when the modal
 // closes — no additional refresh logic needed here.
 
 export type CreateTokenAction = (
-  connectionId: string,
+  projectId: string,
   input: {
     name: string;
     expiresInDays: 30 | 90 | 365 | null;
-    scope?: Array<{ connectionDatabaseId: string; access: "read" | "write" }>;
+    scope?: Array<{ projectDatabaseId: string; access: "read" | "write" }>;
   },
 ) => Promise<
   | { ok: true; mcpUrl: string; id: string; name: string }
@@ -56,15 +56,16 @@ export type CreateTokenAction = (
 >;
 
 interface CreateTokenModalProps {
-  connectionId: string;
+  projectId: string;
   action: CreateTokenAction;
-  /** This connection's databases, for the per-DB scope picker (P6.1). The
+  /** This project's databases, for the per-DB scope picker (P6.1). The
    *  token is granted access only to the ones selected, at the chosen access. */
-  databases?: Array<{ connectionDatabaseId: string; name: string }>;
+  databases?: Array<{ projectDatabaseId: string; name: string }>;
   /** Used to label the MCP server key in the setup snippets. */
-  connectionName?: string | null;
-  /** Region host for the setup snippets' example URL. */
-  region?: string | null;
+  projectName?: string | null;
+  /** The region-wide OAuth endpoint (mcpGenericUrl) for the setup snippets,
+   *  computed server-side so it uses the deployment's real MCP host. */
+  oauthUrl: string;
   /** Override the trigger button label (e.g. "Connect your first agent"). */
   triggerLabel?: string;
   /** When the org is already at its token cap, the modal opens to a limit
@@ -72,20 +73,20 @@ interface CreateTokenModalProps {
    *  the user sees the limit before filling it in, not after submitting. The
    *  trigger keeps its normal "Connect an agent" label (we honor the intent
    *  and explain on open, rather than swapping in a billing button). The cap
-   *  is org-wide, so `limit` reads "across all your connections". createToken
+   *  is org-wide, so `limit` reads "across all your projects". createToken
    *  still enforces under a lock, and the in-form plan_limit branch below
    *  stays as the backstop for a race (another tab/device minting). */
   limitReached?: { limit: number; plan: string; upgradeUrl: string };
 }
 
 // Default every database to read access — a new token is read-only on the whole
-// connection out of the box (least-privilege but usable); the user opts specific
+// project out of the box (least-privilege but usable); the user opts specific
 // DBs up to write or down to no-access.
 function defaultScope(
-  databases: Array<{ connectionDatabaseId: string; name: string }>,
+  databases: Array<{ projectDatabaseId: string; name: string }>,
 ): Record<string, ScopeDbState> {
   const out: Record<string, ScopeDbState> = {};
-  for (const db of databases) out[db.connectionDatabaseId] = "read";
+  for (const db of databases) out[db.projectDatabaseId] = "read";
   return out;
 }
 
@@ -99,11 +100,11 @@ const EXPIRY_OPTIONS = [
 const DEFAULT_EXPIRY = "90";
 
 export function CreateTokenModal({
-  connectionId,
+  projectId,
   action,
   databases = [],
-  connectionName,
-  region,
+  projectName,
+  oauthUrl,
   triggerLabel = "Connect an agent",
   limitReached,
 }: CreateTokenModalProps) {
@@ -111,8 +112,8 @@ export function CreateTokenModal({
   const [name, setName] = useState("");
   const [expiry, setExpiry] = useState<string>(DEFAULT_EXPIRY);
   // Per-DB scope. Default every DB to "read" so a new token is least-privilege
-  // (read-only on the whole connection) yet immediately usable; the user flips
-  // specific DBs to write or "no access". Keyed by connectionDatabaseId.
+  // (read-only on the whole project) yet immediately usable; the user flips
+  // specific DBs to write or "no access". Keyed by projectDatabaseId.
   const [scope, setScope] = useState<Record<string, ScopeDbState>>(() =>
     defaultScope(databases),
   );
@@ -181,13 +182,13 @@ export function CreateTokenModal({
 
     const selections = databases
       .map((db) => ({
-        connectionDatabaseId: db.connectionDatabaseId,
-        access: scope[db.connectionDatabaseId] ?? "none",
+        projectDatabaseId: db.projectDatabaseId,
+        access: scope[db.projectDatabaseId] ?? "none",
       }))
-      .filter((s): s is { connectionDatabaseId: string; access: "read" | "write" } =>
+      .filter((s): s is { projectDatabaseId: string; access: "read" | "write" } =>
         s.access !== "none",
       );
-    // Require at least one database when this connection has any — a token with
+    // Require at least one database when this project has any — a token with
     // no databases selected would be useless, and (because empty PAT grants
     // mean "unscoped = full" on the proxy) silently full-access, the opposite
     // of what picking "no access" everywhere implies.
@@ -197,7 +198,7 @@ export function CreateTokenModal({
     }
 
     startTransition(async () => {
-      const result = await action(connectionId, {
+      const result = await action(projectId, {
         name: trimmed,
         expiresInDays: choice.days,
         scope: selections,
@@ -272,8 +273,8 @@ export function CreateTokenModal({
           ) : mcpUrl ? (
             <SuccessPanel
               mcpUrl={mcpUrl}
-              connectionName={connectionName}
-              region={region}
+              projectName={projectName}
+              oauthUrl={oauthUrl}
               locked={locked}
               remaining={remaining}
               onClose={() => handleOpenChange(false)}
@@ -337,19 +338,19 @@ export function CreateTokenModal({
                   <div className="space-y-2 rounded-md border border-border bg-background p-3">
                     {databases.map((db) => (
                       <div
-                        key={db.connectionDatabaseId}
+                        key={db.projectDatabaseId}
                         className="flex items-center justify-between gap-3"
                       >
                         <span className="truncate font-mono text-sm text-foreground">
                           {db.name}
                         </span>
                         <DbAccessControl
-                          value={scope[db.connectionDatabaseId] ?? "none"}
+                          value={scope[db.projectDatabaseId] ?? "none"}
                           disabled={pending}
                           onChange={(v) =>
                             setScope((s) => ({
                               ...s,
-                              [db.connectionDatabaseId]: v,
+                              [db.projectDatabaseId]: v,
                             }))
                           }
                         />
@@ -358,7 +359,7 @@ export function CreateTokenModal({
                   </div>
                   <p className="text-[11px] text-subtle">
                     The agent can only reach the databases you select, at the
-                    access you grant. The connection&apos;s own policy still
+                    access you grant. The project&apos;s own policy still
                     applies on top.
                   </p>
                 </div>
@@ -408,15 +409,15 @@ export function CreateTokenModal({
 
 function SuccessPanel({
   mcpUrl,
-  connectionName,
-  region,
+  projectName,
+  oauthUrl,
   locked,
   remaining,
   onClose,
 }: {
   mcpUrl: string;
-  connectionName?: string | null;
-  region?: string | null;
+  projectName?: string | null;
+  oauthUrl: string;
   /** True while the dismiss countdown is still running. */
   locked: boolean;
   /** Seconds left on that countdown (for the button label). */
@@ -436,9 +437,10 @@ function SuccessPanel({
       </div>
       <ShowOnceUrl mcpUrl={mcpUrl} />
       <ConnectAgentGuide
-        connectionName={connectionName}
-        region={region}
-        mcpUrl={mcpUrl}
+        projectName={projectName}
+        oauthUrl={oauthUrl}
+        tokenUrl={mcpUrl}
+        primary="token"
       />
       <div className="flex items-center justify-end pt-2">
         <Button
@@ -457,7 +459,7 @@ function SuccessPanel({
 // Shown in place of the form when the org is already at its token cap.
 // Names the cap, then offers BOTH ways forward — upgrade, or revoke an agent
 // from the list behind the modal to free a slot — so the paid path isn't the
-// only visible exit. Mirrors the /connections/new at-limit surface.
+// only visible exit. Mirrors the /projects/new at-limit surface.
 function LimitPanel({
   limit,
   plan,
@@ -477,7 +479,7 @@ function LimitPanel({
         </DialogPrimitive.Title>
         <DialogPrimitive.Description className="text-xs text-muted-foreground">
           The {plan} plan includes {limit} agent{" "}
-          {limit === 1 ? "token" : "tokens"} across all your connections.
+          {limit === 1 ? "token" : "tokens"} across all your projects.
           Upgrade for more, or revoke an agent you no longer use to free a
           slot.
         </DialogPrimitive.Description>
@@ -509,9 +511,9 @@ function messageForError(
     case "name_too_long":
       return "Names must be 64 characters or fewer.";
     case "name_taken":
-      return "A token with that name already exists on this connection.";
+      return "A token with that name already exists on this project.";
     case "not_found":
-      return "This connection is no longer available. Refresh the page.";
+      return "This project is no longer available. Refresh the page.";
     case "expiry_in_past":
       return "Expiry must be in the future.";
     case "internal":

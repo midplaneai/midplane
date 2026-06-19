@@ -36,16 +36,30 @@ export function mintMcpUrl(region: Region, token: string, env: NodeJS.ProcessEnv
   return `${scheme}://${host}/mcp/${token}`;
 }
 
-/** The OAuth MCP endpoint for a connection: <scheme>://<host>/mcp/<connectionId>.
+/** The OAuth MCP endpoint for a project: <scheme>://<host>/mcp/<projectId>.
  *
- *  Unlike mintMcpUrl, the path segment is the connection id — NOT a secret. The
+ *  Unlike mintMcpUrl, the path segment is the project id — NOT a secret. The
  *  agent authenticates with an OAuth bearer (interactive sign-in), so the URL is
  *  just an address: safe to display, copy, and keep on the dashboard. Same host
  *  + scheme resolution as the token URL. */
-export function mcpConnectionUrl(
+export function mcpProjectUrl(
   region: Region,
-  connectionId: string,
+  projectId: string,
   env: NodeJS.ProcessEnv,
 ): string {
-  return mintMcpUrl(region, connectionId, env);
+  return mintMcpUrl(region, projectId, env);
+}
+
+/** The region-wide OAuth MCP endpoint: <scheme>://<host>/mcp — no id, no token.
+ *
+ *  The default URL an interactive agent points at. It carries NO project id and
+ *  NO secret: the agent authenticates with an OAuth bearer (sign-in + consent),
+ *  and the project it reaches is the one its credential is bound to at consent
+ *  (one OAuth credential → one project). Safe to display, copy, and put in docs.
+ *  Same host + scheme resolution as the token URL. */
+export function mcpGenericUrl(region: Region, env: NodeJS.ProcessEnv): string {
+  const host = loadRegions(env)[region].publicHost;
+  const scheme =
+    host.startsWith("localhost") || host.endsWith(".local") ? "http" : "https";
+  return `${scheme}://${host}/mcp`;
 }

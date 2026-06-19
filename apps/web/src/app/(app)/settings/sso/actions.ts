@@ -9,7 +9,7 @@ import { getOrgContext } from "@/lib/org-context";
 import { hasEntitlement } from "@/lib/plan";
 import { bootRegion } from "@/lib/region-context";
 
-// Remove the active org's SAML connection. The @better-auth/sso plugin enforces
+// Remove the active org's SAML project. The @better-auth/sso plugin enforces
 // owner/admin on register (organizationId is supplied) but exposes no delete, so
 // we own the delete: re-check the entitlement + owner/admin role here, then drop
 // the org's provider row. Reached from a client component wrapped in
@@ -38,7 +38,7 @@ export async function removeSsoProvider(
   }
 
   // Scope the delete to BOTH the provider id and the acting org so one org can
-  // never remove another's connection.
+  // never remove another's project.
   await db
     .delete(ssoProvider)
     .where(

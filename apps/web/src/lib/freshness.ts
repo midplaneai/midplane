@@ -1,7 +1,7 @@
-// Freshness signal for the dashboard's per-connection dot. Two states
+// Freshness signal for the dashboard's per-project dot. Two states
 // for now, matching the design vocabulary in DESIGN.md:
 //   - "live" → --allow: indexer has not reported a fresh error.
-//              Includes "awaiting first query" — the connection is ready,
+//              Includes "awaiting first query" — the project is ready,
 //              the agent just hasn't called yet. The meta line on the row
 //              tells the difference.
 //   - "down" → --deny:  indexer reports an error newer than its last
@@ -11,14 +11,14 @@
 // production; the previous "no traffic in >1h → amber" rule fired as a
 // scary warning right after creation, which is the wrong UX.
 //
-// Inputs are the per-connection slice of indexer_cursors. The dashboard is
+// Inputs are the per-project slice of indexer_cursors. The dashboard is
 // server-rendered for PR-B; 60s client polling lands in PR-C and will reuse
 // this same function.
 
-// "paused" is a connection-level override, not an indexer signal:
+// "paused" is a project-level override, not an indexer signal:
 // computeFreshness never returns it (it only reads cursor state). The
-// connection workspace computes `conn.pausedAt ? "paused" : freshness` for
-// the rail dot, so a paused connection reads amber/"Paused" regardless of
+// project workspace computes `conn.pausedAt ? "paused" : freshness` for
+// the rail dot, so a paused project reads amber/"Paused" regardless of
 // indexer freshness.
 export type Freshness = "live" | "down" | "paused";
 
@@ -42,9 +42,9 @@ export function computeFreshness({
   return "live";
 }
 
-/** Connection-level display state for the freshness dot. A non-null
+/** Project-level display state for the freshness dot. A non-null
  *  `pausedAt` is a deliberate owner action — the reversible kill switch —
- *  and overrides the indexer signal: a paused connection reads "paused"
+ *  and overrides the indexer signal: a paused project reads "paused"
  *  (amber), never "live"/"down". This is the single source of truth for the
  *  override so every render site (workspace rail, dashboard header pill,
  *  dashboard db-row dots) stays in lockstep instead of each re-deriving it. */
