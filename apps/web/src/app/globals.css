@@ -242,17 +242,6 @@
 .editorial-page .ba-card.good .ba-epilogue b { color: var(--paper-allow); font-weight: 500; }
 .editorial-page .ba-foot { display: grid; grid-template-columns: 1.2fr 1fr; gap: 64px; align-items: end; padding-top: 28px; border-top: 1px solid var(--line); }
 
-/* Second stakes beat (cross-tenant leak). Reuses the .ba-pair device; the
- * wrapper adds room above, a compact in-section lead-in, and the load-
- * bearing caption under the pair. */
-.editorial-page .ba-beat { margin-top: 56px; }
-.editorial-page .ba-lead { margin: 0 0 24px; max-width: 60ch; }
-.editorial-page .ba-lead .k { display: block; margin-bottom: 12px; font-family: var(--font-geist-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
-.editorial-page .ba-lead h3 { margin: 0; font-size: 30px; line-height: 1.06; letter-spacing: -0.02em; font-weight: 600; color: var(--ink); max-width: 20ch; text-wrap: balance; }
-.editorial-page .ba-lead h3 em { font-style: normal; color: var(--ink-3); }
-.editorial-page .ba-note { margin: 20px 0 0; font-family: var(--font-geist-mono); font-size: 13px; line-height: 1.6; color: var(--ink-2); max-width: 76ch; }
-.editorial-page .ba-note b { color: var(--ink); font-weight: 500; }
-
 .editorial-page .hero-ctas { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
 .editorial-page .hero-ctas .cmd { font-family: var(--font-geist-mono); font-size: 13px; color: var(--ink-3); margin-left: 8px; }
 .editorial-page .hero-ctas .cmd b { color: var(--ink); font-weight: 500; }
@@ -373,7 +362,6 @@
 .editorial-page .pui-val-rw { color: var(--paper-allow); background: rgba(31, 111, 71, 0.08); border-color: rgba(31, 111, 71, 0.25); }
 .editorial-page .pui-val-deny { color: var(--paper-deny); background: rgba(196, 50, 30, 0.05); border-color: rgba(196, 50, 30, 0.2); }
 .editorial-page .pui-val-locked { color: var(--ink-3); background: var(--paper-3); border-color: var(--line); }
-.editorial-page .pui-toggle { font-family: var(--font-geist-mono); font-size: 11px; color: var(--paper-allow); background: rgba(31, 111, 71, 0.08); border: 1px solid rgba(31, 111, 71, 0.2); padding: 3px 10px; border-radius: 3px; }
 .editorial-page .pui-add { color: var(--ink-3); }
 .editorial-page .pui-add .pui-key { color: var(--ink-3); font-style: italic; }
 .editorial-page .pui-foot { padding: 12px 22px; font-family: var(--font-geist-mono); font-size: 11px; color: var(--ink-3); background: var(--paper-3); border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }

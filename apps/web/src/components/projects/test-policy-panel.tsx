@@ -9,7 +9,6 @@ import type {
   AccessLevel,
   GuardrailsConfig,
   TableAccessPolicy,
-  TenantScopeConfig,
 } from "@midplane-cloud/db/policy";
 
 import { Badge } from "@/components/ui/badge";
@@ -32,9 +31,9 @@ import {
 // compares each live verdict to what the policy-as-configured should
 // decide. The headline is a single pass/fail; only the parts the matrix
 // can't show get rows — mismatches (a policy that didn't reach the engine,
-// a parse surprise), the cross-tenant denies (the tenant guarantee), and a
-// risk callout when the default itself is writable. The full per-check
-// list stays available, collapsed. Nothing executes against the data.
+// a parse surprise), the guardrail guarantees, and a risk callout when the
+// default itself is writable. The full per-check list stays available,
+// collapsed. Nothing executes against the data.
 //
 // State machine:
 //
@@ -53,7 +52,6 @@ export interface TestPanelDatabase {
   /** Full table_access policy — levels drive the expected verdicts the
    *  engine's live answer is reconciled against. */
   policy: TableAccessPolicy;
-  tenantScope: TenantScopeConfig;
   /** Dangerous-statement guardrails. Flags that are ON get a literal
    *  dangerous-SQL probe (expected deny) riding along with the matrix. */
   guardrails: GuardrailsConfig;
@@ -129,14 +127,14 @@ export function TestPolicyPanel({
   const db = databases.find((d) => d.name === dbName) ?? databases[0];
 
   // A result is only meaningful against the config it ran under. After a
-  // save (permission grid / tenant scope / guardrails) the page
-  // revalidates and this prop changes — drop the old verdicts instead of
-  // leaving a stale "✓ engine enforces your policy" next to the control
-  // that just invalidated it. The run token also invalidates results from
-  // a run that was IN FLIGHT when the config changed: its setState lands
-  // after the reset and would otherwise resurrect the stale verdicts.
+  // save (permission grid / guardrails) the page revalidates and this prop
+  // changes — drop the old verdicts instead of leaving a stale "✓ engine
+  // enforces your policy" next to the control that just invalidated it. The
+  // run token also invalidates results from a run that was IN FLIGHT when
+  // the config changed: its setState lands after the reset and would
+  // otherwise resurrect the stale verdicts.
   const configFingerprint = JSON.stringify(
-    db ? { p: db.policy, t: db.tenantScope, g: db.guardrails } : null,
+    db ? { p: db.policy, g: db.guardrails } : null,
   );
   const runTokenRef = useRef(0);
   useEffect(() => {
@@ -229,10 +227,7 @@ export function TestPolicyPanel({
     }
 
     const policyTables = Object.keys(db.policy.tables);
-    const matrix = buildProbeMatrix(
-      [...introspected, ...policyTables],
-      db.tenantScope,
-    );
+    const matrix = buildProbeMatrix([...introspected, ...policyTables]);
     if (matrix.probes.length === 0) {
       apply({
         kind: "error",
@@ -276,7 +271,7 @@ export function TestPolicyPanel({
     const reconciled: ReconciledProbe[] = result.verdicts
       .filter((v): v is Verdict & { probe: Probe } => Boolean(v.probe))
       .map((v) => {
-        const expected = expectedDecision(v.probe, db.policy, db.tenantScope);
+        const expected = expectedDecision(v.probe, db.policy);
         return {
           probe: v.probe,
           expected,
@@ -464,7 +459,7 @@ export function TestPolicyPanel({
 
 // The reconciliation view: a pass/fail headline, then only the rows the
 // editor matrix can't already show — mismatches, the writable-default
-// callout, the cross-tenant guarantees — with the full check list folded
+// callout, the guardrail guarantees — with the full check list folded
 // behind a disclosure.
 function ProbeReconciliation({
   state,
@@ -474,9 +469,6 @@ function ProbeReconciliation({
   const { reconciled, shownTables, totalTables, unlistedCount, defaultLevel } =
     state;
   const mismatches = reconciled.filter((r) => !r.match);
-  const guarantees = reconciled.filter(
-    (r) => r.probe.cross_tenant && r.match && r.actual === "deny",
-  );
   const guardrailMisses = state.guardrails.filter((g) => !g.match);
   const guardrailHolds = state.guardrails.filter((g) => g.match);
   const mismatchCount = mismatches.length + guardrailMisses.length;
@@ -586,10 +578,9 @@ function ProbeReconciliation({
         </p>
       ) : null}
 
-      {/* Guardrail guarantee — like the cross-tenant deny, a categorical
-          block isn't expressible in the deny/read/write matrix, so the
-          confirmation that the net catches a live dangerous statement is
-          always worth showing. */}
+      {/* Guardrail guarantee — a categorical block isn't expressible in
+          the deny/read/write matrix, so the confirmation that the net
+          catches a live dangerous statement is always worth showing. */}
       {guardrailHolds.length > 0 ? (
         <ul className="space-y-1">
           {guardrailHolds.map((g, i) => (
@@ -607,23 +598,6 @@ function ProbeReconciliation({
                   ? "denied by guardrail"
                   : `denied by ${g.verdict?.matched_rule ?? "policy"}`}
               </span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {/* Tenant guarantee — the cross-tenant deny isn't expressible in the
-          deny/read/write matrix, so it's always worth showing. */}
-      {guarantees.length > 0 ? (
-        <ul className="space-y-1">
-          {guarantees.map((r, i) => (
-            <li
-              key={i}
-              className="flex items-center gap-2 text-xs text-muted-foreground"
-            >
-              <span className="text-[hsl(var(--allow))]">✓</span>
-              <span className="font-mono text-foreground">{r.probe.table}</span>
-              <span>cross-tenant read denied</span>
             </li>
           ))}
         </ul>

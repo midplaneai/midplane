@@ -24,7 +24,7 @@ import { useState, useTransition } from "react";
 
 // Pure-types subpath — the bare `@midplane-cloud/db` entrypoint pulls in
 // `postgres` (Node-only) via getDb, which would crash the client bundle
-// with `Can't resolve 'fs'`. Same as permission-grid / tenant-scope-editor.
+// with `Can't resolve 'fs'`. Same as permission-grid.
 import type { GuardrailsConfig } from "@midplane-cloud/db/policy";
 
 import { Button } from "@/components/ui/button";

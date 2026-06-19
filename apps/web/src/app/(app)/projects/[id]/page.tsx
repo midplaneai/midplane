@@ -5,7 +5,6 @@ import { notFound, redirect } from "next/navigation";
 import {
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
-  parseTenantScopeOrThrow,
 } from "@midplane-cloud/db";
 import { mcpGenericUrl, mcpProjectUrl } from "@midplane-cloud/router";
 
@@ -28,7 +27,6 @@ import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/projects/rename-database-control";
 import { RotateCredentialSheet } from "@/components/projects/rotate-credential-sheet";
-import { TenantScopeEditor } from "@/components/tenant-scope-editor";
 import { TokenList } from "@/components/tokens/token-list";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -56,7 +54,6 @@ import {
   rotateProject,
   setGuardrails,
   setTableAccess,
-  setTenantScope,
 } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
@@ -398,35 +395,6 @@ export default async function ProjectWorkspace({
     revalidatePath(`/projects/${id}`);
   }
 
-  async function scopeAction(formData: FormData) {
-    "use server";
-    const customer = await currentCustomer();
-    if (!customer) redirect("/");
-    const { userId } = await getOrgContext();
-    if (!userId) redirect("/");
-    if (!selectedName) notFound();
-    const raw = formData.get("config");
-    if (typeof raw !== "string") throw new Error("missing config");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error("config is not valid JSON");
-    }
-    const config = parseTenantScopeOrThrow(parsed);
-    const ctx = getMcpProxyContext();
-    const result = await setTenantScope(
-      customer,
-      id,
-      config,
-      ctx,
-      userId,
-      selectedName,
-    );
-    if (!result) notFound();
-    revalidatePath(`/projects/${id}`);
-  }
-
   async function rotateAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
@@ -613,26 +581,6 @@ export default async function ProjectWorkspace({
         </div>
       </section>
 
-      <section className={CARD}>
-        <h2 className="text-base font-medium text-foreground">Tenant scoping</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Force agent queries to only see rows belonging to one tenant. Set the
-          default tenant column once; every queried table is{" "}
-          <strong className="font-medium text-foreground">
-            automatically scoped on it
-          </strong>
-          . List exceptions for tables that use a different column or are shared
-          across tenants.
-        </p>
-        <div className="pt-3">
-          <TenantScopeEditor
-            key={selDb.name}
-            projectId={conn.id}
-            initialConfig={parseTenantScopeOrThrow(selDb.tenantScope)}
-            action={scopeAction}
-          />
-        </div>
-      </section>
       </div>
 
       <TestPolicyPanel
@@ -641,7 +589,6 @@ export default async function ProjectWorkspace({
           {
             name: selDb.name,
             policy: parsePolicyOrThrow(selDb.tableAccess),
-            tenantScope: parseTenantScopeOrThrow(selDb.tenantScope),
             guardrails: parseGuardrailsOrThrow(selDb.guardrails),
           },
         ]}
