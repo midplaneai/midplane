@@ -24,18 +24,28 @@ export interface PendingInviteView {
 }
 
 /** Read-only copyable invite link with a copy button. The link is a capability
- *  (anyone who opens it can register as the invited email). When `emailed` it's
- *  been sent to the teammate already and this is a copyable fallback; otherwise
- *  the owner shares it out-of-band. */
-function InviteLink({ link, emailed }: { link: string; emailed: boolean }) {
+ *  (anyone who opens it can register as the invited email). The message reflects
+ *  the actual outcome: emailed (this build sends and delivery succeeded),
+ *  email-failed (this build sends but delivery didn't go through — share the
+ *  link), or link-only (self-host, no email — share it out-of-band). */
+function InviteLink({
+  link,
+  emailDelivers,
+  emailed,
+}: {
+  link: string;
+  emailDelivers: boolean;
+  emailed: boolean;
+}) {
   const [copied, setCopied] = useState(false);
+  const message = !emailDelivers
+    ? "Invite created. Copy this link and share it with your teammate — it works once, for that email, and expires."
+    : emailed
+      ? "Invite sent — we emailed them the link. You can also copy it below to share directly."
+      : "Invite created, but the email didn’t send. Copy this link and share it with them directly.";
   return (
     <div className="space-y-2 border border-border bg-secondary px-4 py-3">
-      <p className="text-sm text-foreground">
-        {emailed
-          ? "Invite sent. We’ve emailed them the link — or copy it below to share directly."
-          : "Invite created. Copy this link and share it with your teammate — it works once, for that email, and expires."}
-      </p>
+      <p className="text-sm text-foreground">{message}</p>
       <div className="flex items-stretch gap-2">
         <code className="flex-1 break-all border border-border bg-background px-3 py-2 font-mono text-xs text-foreground">
           {link}
@@ -192,7 +202,13 @@ export function MembersCard({
             </p>
           )}
 
-          {link && <InviteLink link={link} emailed={emailed} />}
+          {link && (
+            <InviteLink
+              link={link}
+              emailDelivers={emailDelivers}
+              emailed={emailed}
+            />
+          )}
 
           {pending.length > 0 && (
             <div className="space-y-2">

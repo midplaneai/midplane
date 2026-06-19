@@ -4,10 +4,15 @@ import { and, eq, gt } from "drizzle-orm";
 import { headers } from "next/headers";
 
 import { getDb } from "@midplane-cloud/db";
-import { invitation, member, user } from "@midplane-cloud/db/auth-schema";
+import {
+  invitation,
+  member,
+  organization,
+  user,
+} from "@midplane-cloud/db/auth-schema";
 
 import { getAuth } from "@/lib/auth";
-import { isEmailConfigured } from "@/lib/email";
+import { isEmailConfigured, sendOrgInvitationEmail } from "@/lib/email";
 import { getActorEmail, getOrgContext } from "@/lib/org-context";
 import { resolvePlan, seatInviteBlock } from "@/lib/plan";
 import { bootRegion } from "@/lib/region-context";
@@ -18,9 +23,10 @@ import { isSelfHost } from "@/lib/self-host";
 //
 //  - SELF-HOST: no email is sent (keyless, no SMTP) — createInvite returns the
 //    LINK and the owner shares it out-of-band.
-//  - CLOUD: the link is emailed via Resend (lib/auth.ts sendInvitationEmail);
-//    createInvite still returns the link as a copyable fallback. Invites are a
-//    paid-plan capability — Free's seat cap is 1 (owner only).
+//  - CLOUD: createInvite emails the link via Resend right here (not the Better
+//    Auth plugin callback) so it can report the TRUE delivery result; the link
+//    is still returned as a copyable fallback. Invites are a paid-plan
+//    capability — Free's seat cap is 1 (owner only).
 //
 // Both actions re-check owner/admin on the server (defense in depth, mirroring
 // settings/sso/actions.ts): Better Auth also enforces the org permission, but a
@@ -29,7 +35,7 @@ import { isSelfHost } from "@/lib/self-host";
 // don't throw.
 
 async function requireManager(): Promise<
-  { orgId: string } | { error: string }
+  { orgId: string; userId: string } | { error: string }
 > {
   const { userId, orgId } = await getOrgContext();
   if (!userId || !orgId) return { error: "You’re not signed in." };
@@ -42,13 +48,60 @@ async function requireManager(): Promise<
   if (role !== "owner" && role !== "admin") {
     return { error: "Only an owner or admin can manage teammates." };
   }
-  return { orgId };
+  return { orgId, userId };
 }
 
 /** Build the copyable accept link from this instance's origin. */
 function inviteLink(invitationId: string): string {
   const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "");
   return `${base}/accept-invitation/${invitationId}`;
+}
+
+/** Send the invite email (cloud) and report whether it ACTUALLY went out.
+ *  Best-effort: any failure (Resend outage, lookup miss) is logged and returns
+ *  false so the caller can tell the owner to share the copyable link instead of
+ *  claiming a delivery that didn't happen. Only called behind isEmailConfigured(). */
+async function deliverInviteEmail(args: {
+  to: string;
+  orgId: string;
+  inviterId: string;
+  link: string;
+}): Promise<boolean> {
+  try {
+    const db = getDb(bootRegion());
+    const orgRow = (
+      await db
+        .select({ name: organization.name })
+        .from(organization)
+        .where(eq(organization.id, args.orgId))
+        .limit(1)
+    )[0];
+    const inviterRow = (
+      await db
+        .select({ name: user.name, email: user.email })
+        .from(user)
+        .where(eq(user.id, args.inviterId))
+        .limit(1)
+    )[0];
+    await sendOrgInvitationEmail({
+      to: args.to,
+      orgName: orgRow?.name ?? "your workspace",
+      inviterName: inviterRow?.name ?? null,
+      inviterEmail: inviterRow?.email ?? args.to,
+      inviteLink: args.link,
+    });
+    return true;
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "invite.email_failed",
+        orgId: args.orgId,
+        error: e instanceof Error ? e.message : String(e),
+      }),
+    );
+    return false;
+  }
 }
 
 export async function createInvite(
@@ -60,10 +113,12 @@ export async function createInvite(
   const trimmed = email.trim();
   if (!trimmed) return { error: "Enter an email address." };
 
+  const cloud = !isSelfHost();
+
   // Cloud-only pre-flight: self-invite, existing-account, and seat-cap guards.
   // Self-host is uncapped and single-region, so none apply (the seat cap also
   // short-circuits to Infinity there — lib/seats.ts).
-  if (!isSelfHost()) {
+  if (cloud) {
     const db = getDb(bootRegion());
 
     const actorEmail = await getActorEmail();
@@ -121,15 +176,12 @@ export async function createInvite(
     }
   }
 
+  let created: { id: string };
   try {
-    const created = await getAuth().api.createInvitation({
+    created = await getAuth().api.createInvitation({
       body: { email: trimmed, role: "member", organizationId: gate.orgId },
       headers: await headers(),
     });
-    return {
-      link: inviteLink(created.id),
-      emailed: !isSelfHost() && isEmailConfigured(),
-    };
   } catch (e) {
     // Better Auth throws an APIError with a human message (already a member,
     // already invited, invalid email, seat limit, …) — surface it rather than a
@@ -141,6 +193,22 @@ export async function createInvite(
           : "Couldn’t create the invitation.",
     };
   }
+
+  const link = inviteLink(created.id);
+
+  // Cloud: send the email ourselves so `emailed` reflects ACTUAL delivery, not
+  // just "email is configured". On failure the owner shares the link instead.
+  const emailed =
+    cloud && isEmailConfigured()
+      ? await deliverInviteEmail({
+          to: trimmed,
+          orgId: gate.orgId,
+          inviterId: gate.userId,
+          link,
+        })
+      : false;
+
+  return { link, emailed };
 }
 
 export async function revokeInvite(
