@@ -1,0 +1,25 @@
+# Code owners — required reviewers on protected paths.
+# Syntax: https://docs.github.com/articles/about-code-owners
+#
+# Reviews route to the @midplaneai/maintainers team. For enforcement, enable
+# "Require review from Code Owners" in branch protection on the default branch.
+
+# Default owner for anything without a more specific rule below.
+*                                    @midplaneai/maintainers
+
+# Commercial Enterprise Edition. Must be maintainer-reviewed; external
+# contributions here are not accepted (see CONTRIBUTING.md).
+/apps/web/src/ee/                    @midplaneai/maintainers
+
+# Licensing, governance, and security posture.
+/LICENSE                             @midplaneai/maintainers
+/CODE_OF_CONDUCT.md                  @midplaneai/maintainers
+/CONTRIBUTING.md                     @midplaneai/maintainers
+/SECURITY.md                         @midplaneai/maintainers
+/AGENTS.md                           @midplaneai/maintainers
+/.github/                            @midplaneai/maintainers
+/engine/SECURITY.md                  @midplaneai/maintainers
+/engine/THREAT_MODEL.md              @midplaneai/maintainers
+
+# Engine release pin — single source of truth (see AGENTS.md).
+/packages/router/src/oss-image.ts    @midplaneai/maintainers

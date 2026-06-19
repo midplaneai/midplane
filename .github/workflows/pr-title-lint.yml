@@ -1,0 +1,41 @@
+name: PR title lint
+
+# Enforces the Conventional Commits convention documented in CONTRIBUTING.md and
+# AGENTS.md. We squash-merge with the PR title as the commit subject, so the
+# title is the thing that matters — per-commit linting is unnecessary.
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Keep in sync with CONTRIBUTING.md "Commit & PR conventions".
+          types: |
+            feat
+            fix
+            docs
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+            security
+          # Scope is optional: both `feat(audit): …` and `feat: …` are valid.
+          requireScope: false
