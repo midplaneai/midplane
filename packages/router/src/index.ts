@@ -7,11 +7,18 @@ export type {
 } from "./decrypt-cache.ts";
 export { DsnResolver } from "./decrypt.ts";
 export type { ResolveDsnDeps, ResolveDsnResult } from "./decrypt.ts";
-export { loadRegions, mintMcpUrl, mcpProjectUrl } from "./region.ts";
+export {
+  loadRegions,
+  mintMcpUrl,
+  mcpProjectUrl,
+  mcpGenericUrl,
+} from "./region.ts";
 export type { RegionConfig } from "./region.ts";
 export {
   resolveByToken,
   resolveProjectForCustomer,
+  resolveOAuthProjectId,
+  resolveSoleProjectId,
   bumpLastUsed,
 } from "./resolve.ts";
 export type {

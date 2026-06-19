@@ -438,7 +438,8 @@ function SuccessPanel({
       <ConnectAgentGuide
         projectName={projectName}
         region={region}
-        mcpUrl={mcpUrl}
+        tokenUrl={mcpUrl}
+        primary="token"
       />
       <div className="flex items-center justify-end pt-2">
         <Button

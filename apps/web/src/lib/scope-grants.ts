@@ -83,59 +83,49 @@ export async function listGrantableDatabases(
   return out;
 }
 
-/** Which of the supplied project_database ids the customer actually owns.
- *  The grant table FK-references project_databases, but ownership (the cdb's
- *  project belongs to THIS customer) isn't enforced by the FK — so we filter
- *  here before writing. A foreign id is silently dropped (a tampered picker
- *  submit can't grant another tenant's DB; the proxy ownership check is the
- *  durable backstop anyway). */
-async function ownedDbIds(
-  db: ReturnType<typeof getDb>,
-  customerId: string,
-  cdbIds: string[],
-): Promise<Set<string>> {
-  if (cdbIds.length === 0) return new Set();
-  const rows = await db
-    .select({ id: projectDatabases.id })
-    .from(projectDatabases)
-    .innerJoin(
-      projects,
-      eq(projects.id, projectDatabases.projectId),
-    )
-    .where(
-      and(
-        eq(projects.customerId, customerId),
-        inArray(projectDatabases.id, cdbIds),
-      ),
-    );
-  return new Set(rows.map((r) => r.id));
-}
-
-/** Replace the OAuth grant set for (client_id, user_id) — SCOPED TO THIS
- *  CUSTOMER's databases — with `selections`. Ownership-validated; non-owned /
- *  duplicate selections are dropped. Runs in one txn so a re-consent is atomic
- *  (the agent never sees a half-applied set). Returns the number of grant rows
- *  written.
+/** Replace the OAuth grant set for (client_id, user_id) with `selections`,
+ *  binding the credential to ONE project. One OAuth credential → one project:
+ *  selections are restricted to `projectId`'s databases (owned by the customer),
+ *  and the replace clears the cred's ENTIRE grant set within this customer — so
+ *  re-consenting onto a different project drops the prior project's grants and
+ *  rebinds. Non-owned / off-project / duplicate selections are dropped. Runs in
+ *  one txn so a re-consent is atomic (the agent never sees a half-applied set).
+ *  Returns the number of grant rows written.
+ *
+ *  The bound project is what the region-wide `/mcp` endpoint resolves the
+ *  credential to (router resolveOAuthProjectId reads it back from these rows).
  *
  *  Why the delete is customer-scoped: a user can belong to more than one org
  *  (customer) in the same region, and the consent picker only offers the CURRENT
  *  customer's databases. The grant key is (client_id, user_id) — which spans
  *  customers — so a blanket delete on that key would wipe the SAME user+client's
- *  grants for ANOTHER customer's projects, 403-ing those agents. We restrict
- *  the replace to grants whose project_database belongs to THIS customer; the
- *  selection then IS the complete grant set for this customer. (No customer_id
- *  column needed — the row's project_database_id already ties it to a
- *  customer via project_databases → projects.) */
+ *  grants for ANOTHER customer's projects, 403-ing those agents. We restrict the
+ *  replace to grants whose project_database belongs to THIS customer; the
+ *  selection then IS the complete grant set for this customer. */
 export async function setOAuthGrants(
   customer: Customer,
-  args: { clientId: string; userId: string; selections: ScopeSelection[] },
+  args: {
+    clientId: string;
+    userId: string;
+    projectId: string;
+    selections: ScopeSelection[];
+  },
 ): Promise<number> {
   const db = getDb(customer.region);
-  const owned = await ownedDbIds(
-    db,
-    customer.id,
-    args.selections.map((s) => s.projectDatabaseId),
-  );
+  // Restrict to DBs of THIS project (owned by the customer). A selection outside
+  // the bound project — a tampered submit — is silently dropped; the proxy
+  // ownership + scope checks are the durable backstop.
+  const projectDbRows = await db
+    .select({ id: projectDatabases.id })
+    .from(projectDatabases)
+    .innerJoin(projects, eq(projects.id, projectDatabases.projectId))
+    .where(
+      and(
+        eq(projects.customerId, customer.id),
+        eq(projectDatabases.projectId, args.projectId),
+      ),
+    );
+  const owned = new Set(projectDbRows.map((r) => r.id));
   const rows = dedupeSelections(args.selections, owned).map((s) => ({
     id: ulid(),
     projectDatabaseId: s.projectDatabaseId,

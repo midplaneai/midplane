@@ -89,24 +89,25 @@ export async function TokenList({
             Connect your first agent
           </h2>
           <p className="text-sm text-muted-foreground">
-            Generate this project&apos;s first{" "}
+            Point your agent at this project&apos;s{" "}
             <strong className="font-medium text-foreground">
               MCP server URL
             </strong>{" "}
-            and paste it into your agent. Every query it runs is proxied
-            through your access policy.
+            and sign in — no secret to copy. Every query it runs is proxied
+            through your access policy. Headless callers (CI, cron) can mint a
+            machine token instead.
           </p>
         </div>
+        <ConnectAgentGuide projectName={projectName} region={region} />
         <CreateTokenModal
           projectId={projectId}
           projectName={projectName}
           region={region}
           databases={databases}
           action={createAction}
-          triggerLabel="Connect an agent"
+          triggerLabel="Create a machine token"
           limitReached={tokenLimit}
         />
-        <ConnectAgentGuide projectName={projectName} region={region} />
       </section>
     );
   }

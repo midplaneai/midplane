@@ -32,8 +32,10 @@
 import {
   bumpLastUsed,
   resolveByToken,
+  resolveOAuthProjectId,
   resolveProjectForCustomer,
   resolveScope,
+  resolveSoleProjectId,
   scopeHeaderValue,
 } from "@midplane-cloud/router";
 import {
@@ -232,25 +234,26 @@ export interface OAuthMcpSession {
   scopes?: string | null;
 }
 
-/** MCP-OAuth ingress: the agent presented an OAuth 2.1 bearer (already validated
- *  by withMcpAuth) and reached `/mcp/<projectId>`. The bearer authenticates
- *  the user + OAuth client; the path selects the project. We:
- *    1. require the `mcp` scope on the token (else 403 insufficient_scope),
- *    2. map the OAuth user → their Midplane customer (the tenant),
- *    3. resolve the project ONLY if that customer owns it (else 404),
- *    4. mint-or-get the (project, client) attribution token so the engine
- *       still stamps a per-agent mcp_token_id on every audit row,
- *    5. forward to the engine through the SAME spawn/forward core as the URL
- *       path — same decrypt, same policy validation, same response filtering.
- *
- *  Coarse v1 scope model: an `mcp`-scoped bearer for a user who owns the
- *  project grants full MCP access to it; per-project policy/guardrails
- *  still apply in the engine exactly as for URL tokens. */
-export async function proxyMcpOAuth(
-  req: Request,
-  projectId: string,
+// An OAuth bearer that passed withMcpAuth and the proxy's `mcp`-scope +
+// customer-ownership gates: the authenticated subject the project-forward step
+// needs. Returned by authenticateOAuth; consumed by forwardOAuthForProject.
+interface AuthenticatedOAuth {
+  region: Region;
+  db: ReturnType<typeof getDb>;
+  userId: string;
+  clientId: string;
+  customerId: string;
+}
+
+/** The shared OAuth front gate for BOTH ingress shapes (region-wide `/mcp` and
+ *  the explicit `/mcp/<projectId>`). The bearer is already validated by
+ *  withMcpAuth; here we (1) require both subject fields, (2) require the `mcp`
+ *  capability scope, (3) map the user → their Midplane customer (tenant). On any
+ *  failure it returns the ready-to-send Response; on success the authenticated
+ *  subject. No project is touched yet — project selection differs per ingress. */
+async function authenticateOAuth(
   session: OAuthMcpSession,
-): Promise<Response> {
+): Promise<{ ok: true; auth: AuthenticatedOAuth } | { ok: false; response: Response }> {
   const region = bootRegion();
   const db = getDb(region);
 
@@ -258,9 +261,12 @@ export async function proxyMcpOAuth(
   const clientId = session.clientId ?? null;
   if (!userId || !clientId) {
     // A well-formed access token always carries both; absence means a
-    // malformed/forged record slipped through. Refuse without confirming the
+    // malformed/forged record slipped through. Refuse without confirming any
     // project exists.
-    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return {
+      ok: false,
+      response: Response.json({ ok: false, error: "unauthorized" }, { status: 401 }),
+    };
   }
 
   // Scope gate. The bearer is valid (withMcpAuth), but validity alone is NOT
@@ -272,15 +278,18 @@ export async function proxyMcpOAuth(
   // carry it; this check is the defense-in-depth that rejects tokens that don't.
   const scopes = new Set((session.scopes ?? "").split(" ").filter(Boolean));
   if (!scopes.has("mcp")) {
-    return Response.json(
-      { ok: false, error: "insufficient_scope" },
-      {
-        status: 403,
-        headers: {
-          "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="mcp"',
+    return {
+      ok: false,
+      response: Response.json(
+        { ok: false, error: "insufficient_scope" },
+        {
+          status: 403,
+          headers: {
+            "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="mcp"',
+          },
         },
-      },
-    );
+      ),
+    };
   }
 
   const customerId = await resolveCustomerIdForUser(db, userId, region);
@@ -288,10 +297,31 @@ export async function proxyMcpOAuth(
     // Authenticated user with no Midplane customer (e.g. signed up but never
     // picked a region). Nothing they can own — 403, not a project-probing
     // 404/401.
-    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+    return {
+      ok: false,
+      response: Response.json({ ok: false, error: "forbidden" }, { status: 403 }),
+    };
   }
 
-  const resolved = await resolveProjectForCustomer(db, projectId, customerId);
+  return { ok: true, auth: { region, db, userId, clientId, customerId } };
+}
+
+/** Resolve a project for an authenticated OAuth subject and forward. Shared by
+ *  both ingress shapes once the project id is known (from the URL for the
+ *  explicit form, from the credential's grant binding for the region-wide form):
+ *    1. resolve the project ONLY if the customer owns it (else 404 / paused 403),
+ *    2. mint-or-get the (project, client) attribution token so the engine still
+ *       stamps a per-agent mcp_token_id on every audit row,
+ *    3. resolve the per-agent DB scope (mcp_scope_grants keyed client + user),
+ *    4. forward through the SAME spawn/forward core as the URL-token path. */
+async function forwardOAuthForProject(
+  req: Request,
+  auth: AuthenticatedOAuth,
+  projectId: string,
+): Promise<Response> {
+  const { db, userId, clientId } = auth;
+
+  const resolved = await resolveProjectForCustomer(db, projectId, auth.customerId);
   if (!resolved.ok) {
     if (resolved.reason === "paused") {
       return Response.json(
@@ -353,6 +383,63 @@ export async function proxyMcpOAuth(
     tokenId,
     scopeHeader: scopeHeaderValue(scope),
   });
+}
+
+/** MCP-OAuth ingress (explicit per-project): the agent presented an OAuth 2.1
+ *  bearer (validated by withMcpAuth) and reached `/mcp/<projectId>`. The bearer
+ *  authenticates the user + OAuth client; the PATH selects the project. The
+ *  explicit address is the escape hatch for one client reaching several projects
+ *  (distinct resource URLs → distinct registrations). Auth + ownership + scope
+ *  are identical to the region-wide form. */
+export async function proxyMcpOAuth(
+  req: Request,
+  projectId: string,
+  session: OAuthMcpSession,
+): Promise<Response> {
+  const gate = await authenticateOAuth(session);
+  if (!gate.ok) return gate.response;
+  return forwardOAuthForProject(req, gate.auth, projectId);
+}
+
+/** MCP-OAuth ingress (region-wide, the default): the agent presented an OAuth
+ *  2.1 bearer at `/mcp` — no project id in the URL. The project is the one the
+ *  credential is bound to at consent (one OAuth credential → one project),
+ *  derived from its grant set. No binding (the user approved the client but
+ *  chose no project/databases, or never consented) → 403 with a re-connect
+ *  hint, fail-closed, the same shape as an empty in-project grant. */
+export async function proxyMcpOAuthGeneric(
+  req: Request,
+  session: OAuthMcpSession,
+): Promise<Response> {
+  const gate = await authenticateOAuth(session);
+  if (!gate.ok) return gate.response;
+
+  let projectId = await resolveOAuthProjectId(gate.auth.db, {
+    clientId: gate.auth.clientId,
+    userId: gate.auth.userId,
+    customerId: gate.auth.customerId,
+  });
+  // Self-host single-tenant fallback: an owner who approved the client without
+  // picking databases has no grant to derive the project from, but still gets
+  // full access (the empty-scope exception in forwardOAuthForProject). When they
+  // own exactly one project the intent is unambiguous — bind to it. Cloud never
+  // reaches this: there consent forces a project + database choice.
+  if (!projectId && isSelfHost()) {
+    projectId = await resolveSoleProjectId(gate.auth.db, gate.auth.customerId);
+  }
+  if (!projectId) {
+    return Response.json(
+      { ok: false, error: "no_database_grant" },
+      {
+        status: 403,
+        headers: {
+          "WWW-Authenticate":
+            'Bearer error="insufficient_scope", error_description="this connection is not bound to a project; re-connect to choose a project and its databases"',
+        },
+      },
+    );
+  }
+  return forwardOAuthForProject(req, gate.auth, projectId);
 }
 
 /** Map an OAuth-authenticated user to the Midplane customer (tenant) they act
