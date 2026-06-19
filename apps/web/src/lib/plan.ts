@@ -125,6 +125,24 @@ export function projectCreateBlock(
   return null;
 }
 
+/** Whether the seat cap blocks inviting (or adding) ONE more member right now.
+ *
+ *  Counts current members PLUS pending invites against the plan's seat cap, so a
+ *  Free org (cap 1 = owner only) can't stockpile pending invites that would
+ *  over-subscribe the cap. Advisory UX only — Better Auth's
+ *  organization.membershipLimit (lib/seats.ts) is the real enforcer on the
+ *  invite/accept path. Returns the cap when full, else null (a create would
+ *  succeed). Mirrors projectCreateBlock. */
+export function seatInviteBlock(
+  usage: { members: number; pending: number },
+  caps: PlanCaps,
+): { limit: number } | null {
+  if (usage.members + usage.pending >= caps.seats) {
+    return { limit: caps.seats };
+  }
+  return null;
+}
+
 /** Where a capped user goes to upgrade. Relative so it resolves on whichever
  *  regional host served the request. */
 export const UPGRADE_URL = "/billing";

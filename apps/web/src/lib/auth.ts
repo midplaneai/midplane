@@ -10,6 +10,7 @@ import * as authSchema from "@midplane-cloud/db/auth-schema";
 
 import { buildStripePlugins } from "./billing";
 import { getEeAuthPlugins } from "./ee-plugins";
+import { isEmailConfigured, sendOrgInvitationEmail } from "./email";
 import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
@@ -170,13 +171,47 @@ function createAuth() {
         // resolve the org's plan → seat cap (lib/seats.ts); Better Auth enforces
         // it on the invite/add path. Otherwise it's a single static number.
         membershipLimit: (_user, organization) => seatCapForOrg(organization.id),
-        // Teammate invites (self-host) are delivered as a LINK the owner copies
-        // and shares out-of-band, NOT an email — so we deliberately do NOT set
-        // sendInvitationEmail (the keyless self-host artifact ships no SMTP).
-        // createInvitation still mints the invitation row; we surface the
-        // accept link from /settings. invitationExpiresIn bounds the link's
-        // validity — 7 days, longer than the 48h default to tolerate an
-        // out-of-band hand-off, but still a hard expiry on a capability link.
+        // CLOUD: email the invitation link via Resend. SELF-HOST: the keyless
+        // artifact ships no SMTP, so we leave sendInvitationEmail unset there
+        // and the owner copies the link surfaced in /settings to share
+        // out-of-band. createInvitation mints the invitation row either way.
+        //
+        // Best-effort send: a Resend failure is logged, never thrown, so an
+        // outage can't block invite creation — the copyable link is always
+        // returned by createInvite() as the fallback. No-op when email isn't
+        // configured (keyless cloud dev), which also degrades to the link.
+        ...(isSelfHost()
+          ? {}
+          : {
+              sendInvitationEmail: async (data) => {
+                if (!isEmailConfigured()) return;
+                const base = (process.env.BETTER_AUTH_URL ?? "").replace(
+                  /\/$/,
+                  "",
+                );
+                try {
+                  await sendOrgInvitationEmail({
+                    to: data.email,
+                    orgName: data.organization.name,
+                    inviterName: data.inviter.user.name,
+                    inviterEmail: data.inviter.user.email,
+                    inviteLink: `${base}/accept-invitation/${data.id}`,
+                  });
+                } catch (e) {
+                  console.error(
+                    JSON.stringify({
+                      level: "error",
+                      event: "invite.email_failed",
+                      invitationId: data.id,
+                      error: e instanceof Error ? e.message : String(e),
+                    }),
+                  );
+                }
+              },
+            }),
+        // invitationExpiresIn bounds the link's validity — 7 days, longer than
+        // the 48h default to tolerate an out-of-band hand-off, but still a hard
+        // expiry on a capability link.
         invitationExpiresIn: 60 * 60 * 24 * 7,
       }),
       // MCP OAuth 2.1 provider (P6). Turns this app into the authorization
