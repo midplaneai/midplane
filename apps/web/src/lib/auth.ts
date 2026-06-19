@@ -188,13 +188,17 @@ function createAuth() {
         // resolve the org's plan → seat cap (lib/seats.ts); Better Auth enforces
         // it on the invite/add path. Otherwise it's a single static number.
         membershipLimit: (_user, organization) => seatCapForOrg(organization.id),
-        // Teammate invites (self-host) are delivered as a LINK the owner copies
-        // and shares out-of-band, NOT an email — so we deliberately do NOT set
-        // sendInvitationEmail (the keyless self-host artifact ships no SMTP).
-        // createInvitation still mints the invitation row; we surface the
-        // accept link from /settings. invitationExpiresIn bounds the link's
-        // validity — 7 days, longer than the 48h default to tolerate an
-        // out-of-band hand-off, but still a hard expiry on a capability link.
+        // We deliberately do NOT wire sendInvitationEmail here. The createInvite
+        // server action (settings/members-actions.ts) sends the email itself
+        // (cloud, via Resend) AFTER createInvitation succeeds, so it can report
+        // the TRUE delivery result to the owner — the plugin callback swallows
+        // its own outcome, so wiring it here would force createInvite to assume
+        // a send it can't observe. Self-host sends nothing: the owner shares the
+        // copyable link out-of-band (keyless, no SMTP).
+        //
+        // invitationExpiresIn bounds the link's validity — 7 days, longer than
+        // the 48h default to tolerate an out-of-band hand-off, but still a hard
+        // expiry on a capability link.
         invitationExpiresIn: 60 * 60 * 24 * 7,
       }),
       // MCP OAuth 2.1 provider (P6). Turns this app into the authorization

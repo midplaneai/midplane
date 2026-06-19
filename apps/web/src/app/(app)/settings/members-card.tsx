@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
@@ -23,16 +24,28 @@ export interface PendingInviteView {
 }
 
 /** Read-only copyable invite link with a copy button. The link is a capability
- *  (anyone who opens it can register as the invited email), so the owner copies
- *  it and hands it over out-of-band. */
-function InviteLink({ link }: { link: string }) {
+ *  (anyone who opens it can register as the invited email). The message reflects
+ *  the actual outcome: emailed (this build sends and delivery succeeded),
+ *  email-failed (this build sends but delivery didn't go through — share the
+ *  link), or link-only (self-host, no email — share it out-of-band). */
+function InviteLink({
+  link,
+  emailDelivers,
+  emailed,
+}: {
+  link: string;
+  emailDelivers: boolean;
+  emailed: boolean;
+}) {
   const [copied, setCopied] = useState(false);
+  const message = !emailDelivers
+    ? "Invite created. Copy this link and share it with your teammate — it works once, for that email, and expires."
+    : emailed
+      ? "Invite sent — we emailed them the link. You can also copy it below to share directly."
+      : "Invite created, but the email didn’t send. Copy this link and share it with them directly.";
   return (
     <div className="space-y-2 border border-border bg-secondary px-4 py-3">
-      <p className="text-sm text-foreground">
-        Invite created. Copy this link and share it with your teammate — it
-        works once, for that email, and expires.
-      </p>
+      <p className="text-sm text-foreground">{message}</p>
       <div className="flex items-stretch gap-2">
         <code className="flex-1 break-all border border-border bg-background px-3 py-2 font-mono text-xs text-foreground">
           {link}
@@ -63,14 +76,21 @@ export function MembersCard({
   members,
   pending,
   canManage,
+  seatLimitReached,
+  emailDelivers,
 }: {
   members: MemberView[];
   pending: PendingInviteView[];
   canManage: boolean;
+  /** Plan seat cap is full — show an upgrade CTA instead of the invite form. */
+  seatLimitReached: boolean;
+  /** This build emails the invite (cloud + Resend) vs. link-only (self-host). */
+  emailDelivers: boolean;
 }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [link, setLink] = useState<string | null>(null);
+  const [emailed, setEmailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inviting, startInvite] = useTransition();
   const [revokingId, setRevokingId] = useState<string | null>(null);
@@ -87,6 +107,7 @@ export function MembersCard({
         return;
       }
       setLink(res.link ?? null);
+      setEmailed(res.emailed ?? false);
       setEmail("");
       router.refresh();
     });
@@ -134,27 +155,46 @@ export function MembersCard({
 
       {canManage && (
         <div className="space-y-4 border-t border-border pt-6">
-          <form onSubmit={onInvite} className="space-y-3">
-            <Label htmlFor="invite-email">Invite a teammate</Label>
-            <div className="flex items-stretch gap-2">
-              <Input
-                id="invite-email"
-                name="invite-email"
-                type="email"
-                required
-                placeholder="teammate@company.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="flex-1"
-              />
-              <Button type="submit" disabled={inviting}>
-                {inviting ? "Creating…" : "Create invite"}
-              </Button>
+          {seatLimitReached ? (
+            <div className="space-y-2 border border-border bg-secondary px-4 py-3">
+              <p className="text-sm text-foreground">
+                You’ve reached your plan’s member limit.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                <Link
+                  href="/billing"
+                  className="font-medium text-foreground underline underline-offset-2"
+                >
+                  Upgrade your plan
+                </Link>{" "}
+                to invite more teammates.
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              No email is sent — you’ll get a link to share with them directly.
-            </p>
-          </form>
+          ) : (
+            <form onSubmit={onInvite} className="space-y-3">
+              <Label htmlFor="invite-email">Invite a teammate</Label>
+              <div className="flex items-stretch gap-2">
+                <Input
+                  id="invite-email"
+                  name="invite-email"
+                  type="email"
+                  required
+                  placeholder="teammate@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="flex-1"
+                />
+                <Button type="submit" disabled={inviting}>
+                  {inviting ? "Creating…" : "Create invite"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {emailDelivers
+                  ? "We’ll email them a link to join — tied to their email and expiring in 7 days."
+                  : "No email is sent — you’ll get a link to share with them directly."}
+              </p>
+            </form>
+          )}
 
           {error && (
             <p role="alert" className="text-sm text-[hsl(var(--deny))]">
@@ -162,7 +202,13 @@ export function MembersCard({
             </p>
           )}
 
-          {link && <InviteLink link={link} />}
+          {link && (
+            <InviteLink
+              link={link}
+              emailDelivers={emailDelivers}
+              emailed={emailed}
+            />
+          )}
 
           {pending.length > 0 && (
             <div className="space-y-2">

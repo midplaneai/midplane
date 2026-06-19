@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth-client";
 
+import { acceptInvite } from "./actions";
+
 // The interactive half of the invite-accept landing. Three states, decided by
 // the session the server resolved:
 //   - signed in AS the invited email  → one-click accept.
@@ -38,14 +40,12 @@ export function AcceptInvite({
     signedInEmail.toLowerCase() === email.toLowerCase();
 
   async function accept(): Promise<void> {
-    const { error: acceptError } = await authClient.organization.acceptInvitation(
-      { invitationId },
-    );
+    // Server action (not authClient): it accepts AND, in the cloud, pins the
+    // home-region cookie to this regional app so the new user routes correctly
+    // afterward (see ./actions.ts).
+    const { error: acceptError } = await acceptInvite(invitationId);
     if (acceptError) {
-      throw new Error(
-        acceptError.message ??
-          "Couldn’t accept the invitation. The link may have expired.",
-      );
+      throw new Error(acceptError);
     }
     router.push("/dashboard");
     router.refresh();
