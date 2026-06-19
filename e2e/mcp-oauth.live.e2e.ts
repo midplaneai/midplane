@@ -123,7 +123,7 @@ test("OAuth: discovery → DCR → consent picker → token → query → audit 
   await page.goto("/projects/new");
   const dsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   await page.getByLabel(/database_url/i).fill(dsn);
-  await page.getByRole("button", { name: /create project/i }).click();
+  await page.getByRole("button", { name: /^connect$/i }).click();
   await page.waitForURL(/\/projects\/[0-9A-HJKMNP-TV-Z]{26}\/created/i, {
     timeout: 15_000,
   });

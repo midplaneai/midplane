@@ -153,12 +153,43 @@ export function isValidDatabaseName(s: unknown): s is string {
   return typeof s === "string" && DB_NAME_RE.test(s);
 }
 
+// Derive an agent-facing database alias from a Postgres DSN. Takes the URL's
+// database path (postgres://…/<db>), lowercases it, and sanitizes to
+// DB_NAME_RE (the engine's name grammar). Falls back to DEFAULT_DATABASE_NAME
+// when the DSN carries no usable name, so the first database always lands a
+// valid alias even from a path-less or unparseable DSN.
+export function deriveDatabaseAlias(dsn: string): string {
+  let path: string;
+  try {
+    path = new URL(dsn).pathname;
+  } catch {
+    return DEFAULT_DATABASE_NAME;
+  }
+  let raw = path.replace(/^\/+/, "");
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    // Leave raw as-is on a malformed %-escape; the sanitizer below copes.
+  }
+  const sanitized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") // illegal runs collapse to one separator
+    .replace(/^[^a-z]+/, "") // grammar requires a leading letter
+    .slice(0, 32)
+    .replace(/[-_]+$/, ""); // no trailing separator
+  return isValidDatabaseName(sanitized) ? sanitized : DEFAULT_DATABASE_NAME;
+}
+
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
 // Shared create-project path used by both the Server Action behind the
 // paste-DSN form and the JSON POST /api/projects route. Encrypts the
 // DSN with the customer's region key, persists the ciphertext on a
-// project_databases row named "main", and auto-mints a default
+// project_databases row whose agent-facing alias is `name` (when it's a
+// valid DB alias) or, failing that, derived from the DSN's database name.
+// That same alias labels the project, so a one-database project reads
+// coherently and the container recedes until a second DB is added (the
+// project is renamable later via renameProject). Auto-mints a default
 // mcp_tokens row (PR2 of mcp_url_auth_security — D3: first-token UX).
 //
 // Returns the new parent id and the default token's PLAINTEXT — the
@@ -187,6 +218,14 @@ export async function createProject(
   );
 
   const id = ulid();
+
+  // The first database's agent-facing alias: the caller's name when it's a
+  // valid alias, otherwise derived from the DSN's database name (fallback
+  // DEFAULT_DATABASE_NAME). This same value labels the project below.
+  const dbAlias =
+    typeof name === "string" && isValidDatabaseName(name.trim())
+      ? name.trim()
+      : deriveDatabaseAlias(dsn);
 
   // Initial policy: default = customer's choice from the create form,
   // tables = {} (per-table overrides are added later from the permission
@@ -256,16 +295,16 @@ export async function createProject(
       .limit(1);
     if (emptyProject[0]) {
       resolvedProjectId = emptyProject[0].id;
-      // Let the first DSN name the project if the user supplied a name and the
-      // reused project is still unnamed or the auto-seed placeholder "Default".
-      const supplied = normalizeName(name);
+      // Label the reused project with the first database's alias when it's
+      // still unnamed or the auto-seed placeholder "Default" — a one-DB
+      // project reads coherently and stays renamable later.
       if (
-        supplied &&
-        (emptyProject[0].name === null || emptyProject[0].name === "Default")
+        emptyProject[0].name === null ||
+        emptyProject[0].name === "Default"
       ) {
         await tx
           .update(projects)
-          .set({ name: supplied })
+          .set({ name: dbAlias })
           .where(eq(projects.id, resolvedProjectId));
       }
     } else if (Number.isFinite(caps.projects)) {
@@ -291,13 +330,13 @@ export async function createProject(
         id,
         customerId: customer.id,
         region: customer.region,
-        name: normalizeName(name),
+        name: dbAlias,
       });
     }
     await tx.insert(projectDatabases).values({
       id: childId,
       projectId: resolvedProjectId,
-      name: DEFAULT_DATABASE_NAME,
+      name: dbAlias,
       encryptedDsn: ciphertext,
       kmsKeyId,
       tableAccess,
@@ -929,8 +968,12 @@ export async function setColumnMasks(
 // old DSN keeps serving traffic until the 30-min idle timer fires —
 // that's the security incident.
 //
-// `dbName` defaults to "main" so existing single-DB callers keep
-// working; multi-DB callers pass the agent-facing alias explicitly.
+// `dbName` is the agent-facing alias of the child to rotate — required,
+// no default. It used to default to "main", but the first database is no
+// longer always named "main" (createProject names it from the DSN), so an
+// implicit default would silently rotate the wrong / a nonexistent child.
+// Single-DB callers without a name in hand resolve it via
+// getProjectWithFirstDatabase first.
 //
 // Returns null when the id is unknown OR owned by another customer OR
 // the named child does not exist (caller can't distinguish, mirroring
@@ -953,7 +996,7 @@ export async function rotateProject(
   id: string,
   dsn: string,
   caches: RotationCaches,
-  dbName: string = DEFAULT_DATABASE_NAME,
+  dbName: string,
 ): Promise<{ id: string; region: Region } | null> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
@@ -1166,51 +1209,47 @@ export async function getProjectWithDatabasesAndCredentials(
   return { project: conn, databases };
 }
 
-/** Back-compat shim for callers that still expect the {project,
- *  mainDatabase} shape. New code should call getProjectWithDatabase
- *  directly with the name from the URL.
+/** Resolve a project plus its first database (by name order) — the
+ *  single-database convenience read for surfaces that act on "the
+ *  project's database" with no name in the URL: the post-create success
+ *  page and the JSON DSN-rotate route. A freshly created project has
+ *  exactly one child, so "first" is unambiguous there; a multi-DB project
+ *  resolves the alphabetically-first child (deterministic). Returns null
+ *  when the project is unknown, owned by another customer, or has no
+ *  database.
  *
- *  Returns the safe-projection database. For credential-bearing reads
- *  use {@link getProjectWithMainDatabaseAndCredential}. */
-export async function getProjectWithMainDatabase(
+ *  Replaces the old getProjectWithMainDatabase shim: the first database is
+ *  no longer always named "main" (createProject names it from the DSN), so
+ *  a fixed-name lookup would miss it.
+ *
+ *  Safe projection — no encryptedDsn / kmsKeyId. */
+export async function getProjectWithFirstDatabase(
   customer: Customer,
   id: string,
 ): Promise<
   | {
       project: typeof projects.$inferSelect;
-      mainDatabase: SafeProjectDatabase;
+      database: SafeProjectDatabase;
     }
   | null
 > {
-  const result = await getProjectWithDatabase(
-    customer,
-    id,
-    DEFAULT_DATABASE_NAME,
-  );
-  if (!result) return null;
-  return { project: result.project, mainDatabase: result.database };
-}
-
-/** Credential-bearing variant of {@link getProjectWithMainDatabase}.
- *  Used by the table-introspection route which decrypts the main DB's
- *  DSN to query `information_schema`. */
-export async function getProjectWithMainDatabaseAndCredential(
-  customer: Customer,
-  id: string,
-): Promise<
-  | {
-      project: typeof projects.$inferSelect;
-      mainDatabase: typeof projectDatabases.$inferSelect;
-    }
-  | null
-> {
-  const result = await getProjectWithDatabaseAndCredential(
-    customer,
-    id,
-    DEFAULT_DATABASE_NAME,
-  );
-  if (!result) return null;
-  return { project: result.project, mainDatabase: result.database };
+  const db = getDb(customer.region);
+  const connRows = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, id), eq(projects.customerId, customer.id)))
+    .limit(1);
+  const conn = connRows[0];
+  if (!conn) return null;
+  const dbRows = await db
+    .select(SAFE_DATABASE_COLUMNS)
+    .from(projectDatabases)
+    .where(eq(projectDatabases.projectId, conn.id))
+    .orderBy(asc(projectDatabases.name))
+    .limit(1);
+  const database = dbRows[0];
+  if (!database) return null;
+  return { project: conn, database };
 }
 
 // Dependency shape for the add / remove / rename helpers — narrower

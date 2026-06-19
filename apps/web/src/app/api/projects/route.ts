@@ -3,10 +3,7 @@ import { z } from "zod";
 import { ACCESS_LEVELS } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
-import {
-  createProject,
-  MAX_PROJECT_NAME_LENGTH,
-} from "@/lib/projects";
+import { createProject, isValidDatabaseName } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
 import { requireManagerRest } from "@/lib/org-auth";
 import { PlanLimitError, planLimitBody, resolvePlan } from "@/lib/plan";
@@ -14,7 +11,9 @@ import { getPostHog } from "@/lib/posthog";
 
 // POST /api/projects — JSON API (programmatic / non-browser callers).
 //
-// Body: { dsn: string, name?: string }
+// Body: { dsn: string, name?: string } — `name` is the first database's
+// agent-facing alias; omit it and the alias is derived from the DSN's
+// database name.
 // Response: { id, mcpUrl, region }
 //
 // The browser paste-DSN form uses a Server Action instead, so it can redirect
@@ -32,7 +31,15 @@ const Body = z.object({
     .refine((s) => /^postgres(ql)?:\/\//i.test(s), {
       message: "must be a postgres:// or postgresql:// URL",
     }),
-  name: z.string().max(MAX_PROJECT_NAME_LENGTH).optional(),
+  // Agent-facing alias for the first database. Omit it and createProject
+  // derives the alias from the DSN's database name. Must match the engine's
+  // DB name grammar.
+  name: z
+    .string()
+    .refine(isValidDatabaseName, {
+      message: "must match ^[a-z][a-z0-9_-]{0,31}$",
+    })
+    .optional(),
   // Initial default access level for unlisted tables. Editable later
   // from the permission grid on the detail page. Defaults to `read`.
   default_access: z.enum(ACCESS_LEVELS).optional(),

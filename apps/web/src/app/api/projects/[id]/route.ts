@@ -24,6 +24,7 @@ import { z } from "zod";
 
 import {
   deleteProject,
+  getProjectWithFirstDatabase,
   isValidDsn,
   rotateProject,
 } from "@/lib/projects";
@@ -69,8 +70,23 @@ export async function PATCH(
     );
   }
 
+  // This route has no db param — it targets the project's database (the
+  // only one for a single-DB project). Resolve its name so rotation doesn't
+  // assume a fixed "main" alias, which no longer holds now that the first DB
+  // is named from the DSN. A 404 here is the same leakage shape as below.
+  const target = await getProjectWithFirstDatabase(customer, id);
+  if (!target) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+
   const ctx = getMcpProxyContext();
-  const rotated = await rotateProject(customer, id, parsed.data.dsn, ctx);
+  const rotated = await rotateProject(
+    customer,
+    id,
+    parsed.data.dsn,
+    ctx,
+    target.database.name,
+  );
   if (!rotated) {
     return Response.json({ error: "not found" }, { status: 404 });
   }

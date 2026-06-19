@@ -634,6 +634,7 @@ describe("rotateProject", () => {
       "conn-1",
       "postgres://u:p@host:5432/db",
       caches,
+      "main",
     );
 
     expect(result).toEqual({
@@ -680,6 +681,7 @@ describe("rotateProject", () => {
       "conn-other-customer",
       "postgres://u:p@host:5432/db",
       caches,
+      "main",
     );
 
     expect(result).toBeNull();
@@ -708,6 +710,7 @@ describe("rotateProject", () => {
       "conn-1",
       "postgres://u:p@host:5432/db",
       caches,
+      "main",
     );
 
     // Rotation reports success — DB is committed; the cache failure is
@@ -2188,6 +2191,52 @@ describe("getProjectWithDatabase", () => {
     );
 
     const result = await getProjectWithDatabase(customer, "conn-1", "ghost");
+    expect(result).toBeNull();
+  });
+});
+
+describe("getProjectWithFirstDatabase", () => {
+  it("resolves the project's first database by name — NOT a fixed 'main'", async () => {
+    // Regression: createProject now names the first DB from the DSN, so a
+    // freshly created project has no "main". The success page + JSON rotate
+    // route resolve the first child by name order instead of pinning "main".
+    handle.queueSelect([
+      { id: "conn-1", customerId: customer.id, region: "eu" },
+    ]);
+    handle.queueSelect([
+      { id: "cdb-analytics-1", projectId: "conn-1", name: "analytics" },
+    ]);
+    const { getProjectWithFirstDatabase } = await import(
+      "../src/lib/projects.ts"
+    );
+
+    const result = await getProjectWithFirstDatabase(customer, "conn-1");
+
+    expect(result).not.toBeNull();
+    expect(result?.project.id).toBe("conn-1");
+    expect(result?.database.name).toBe("analytics");
+  });
+
+  it("returns null when the project is unknown / owned by another customer", async () => {
+    handle.queueSelect([]);
+    const { getProjectWithFirstDatabase } = await import(
+      "../src/lib/projects.ts"
+    );
+
+    const result = await getProjectWithFirstDatabase(customer, "conn-1");
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the project has no database", async () => {
+    handle.queueSelect([
+      { id: "conn-1", customerId: customer.id, region: "eu" },
+    ]);
+    handle.queueSelect([]);
+    const { getProjectWithFirstDatabase } = await import(
+      "../src/lib/projects.ts"
+    );
+
+    const result = await getProjectWithFirstDatabase(customer, "conn-1");
     expect(result).toBeNull();
   });
 });
