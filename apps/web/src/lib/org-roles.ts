@@ -11,9 +11,15 @@
 
 export type OrgRole = "owner" | "admin" | "member";
 
-/** Roles that may manage the workspace. */
+/** Roles that may manage the workspace (config, members, audit). */
 export function isManagerRole(role: string | null | undefined): boolean {
   return role === "owner" || role === "admin";
+}
+
+/** The single owner. A few capabilities are owner-only — billing and (later)
+ *  deleting the org — so the role still means something distinct from admin. */
+export function isOwnerRole(role: string | null | undefined): boolean {
+  return role === "owner";
 }
 
 /** Roles an owner/admin may invite-as or assign from the members surface. The

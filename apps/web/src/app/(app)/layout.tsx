@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { currentCustomer } from "@/lib/customer";
-import { isManager } from "@/lib/org-auth";
+import { getActiveRole } from "@/lib/org-auth";
 import { getActorEmail } from "@/lib/org-context";
 import { selfHostNonMemberRedirect } from "@/lib/self-host-gate";
 import { isSelfHost } from "@/lib/self-host";
@@ -41,11 +41,12 @@ export default async function AuthenticatedLayout({
   // selfHost drops the Billing nav item too.
   const selfHost = isSelfHost();
   const region = selfHost ? null : customer.region;
-  // Owner/admin see the manager-only nav (Audit log, Billing); a plain member
-  // sees only Projects. Self-host is single-owner, so this is always true there.
-  const canManage = await isManager();
+  // The caller's role drives nav gating: owner sees Billing, admin sees the
+  // Audit log but not Billing, a member sees only Projects. Resolved once here
+  // and passed down; every gated route also enforces server-side.
+  const role = (await getActiveRole())?.role ?? null;
   return (
-    <AppShell region={region} selfHost={selfHost} canManage={canManage}>
+    <AppShell region={region} selfHost={selfHost} role={role}>
       {children}
     </AppShell>
   );

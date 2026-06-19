@@ -10,6 +10,7 @@ import {
   ASSIGNABLE_ROLES,
   isAssignableRole,
   isManagerRole,
+  isOwnerRole,
   normalizeInviteRole,
 } from "../src/lib/org-roles.ts";
 
@@ -25,6 +26,16 @@ describe("isManagerRole", () => {
     expect(isManagerRole("Owner")).toBe(false); // case-sensitive on purpose
     expect(isManagerRole(null)).toBe(false);
     expect(isManagerRole(undefined)).toBe(false);
+  });
+});
+
+describe("isOwnerRole", () => {
+  it("is true only for owner — admin is a manager but not the owner", () => {
+    expect(isOwnerRole("owner")).toBe(true);
+    expect(isOwnerRole("admin")).toBe(false);
+    expect(isOwnerRole("member")).toBe(false);
+    expect(isOwnerRole(null)).toBe(false);
+    expect(isOwnerRole(undefined)).toBe(false);
   });
 });
 

@@ -5,6 +5,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { isManagerRole, isOwnerRole } from "@/lib/org-roles";
+
 export interface NavItem {
   href: string;
   label: string;
@@ -38,22 +40,23 @@ export const NAV_ITEMS: NavItem[] = [
 
 // Nav items for the current build + caller role. Self-host is uncapped and
 // never bills, so the Billing item is dropped there (the /billing route itself
-// also degrades to a self-host notice). A plain member operates the workspace
-// but doesn't manage it: the Audit log and Billing are owner/admin only, so
-// both are dropped for members (their routes also gate server-side). Cloud
-// owners/admins see the full list.
+// also degrades to a self-host notice). Role gating: a plain member operates
+// the workspace but doesn't manage it, so the Audit log (owner/admin) is hidden
+// from members; Billing is OWNER-ONLY (admins manage the workspace but not the
+// money), so it's hidden from admins too. Every gated route also enforces
+// server-side. `role` is null when unresolved → treated as least-privileged.
 export function navItemsFor({
   selfHost,
-  canManage,
+  role,
 }: {
   selfHost: boolean;
-  canManage: boolean;
+  role: string | null;
 }): NavItem[] {
+  const canManage = isManagerRole(role);
+  const owner = isOwnerRole(role);
   return NAV_ITEMS.filter((item) => {
-    if (selfHost && item.href === "/billing") return false;
-    if (!canManage && (item.href === "/audit" || item.href === "/billing")) {
-      return false;
-    }
+    if (item.href === "/billing") return owner && !selfHost;
+    if (item.href === "/audit") return canManage;
     return true;
   });
 }

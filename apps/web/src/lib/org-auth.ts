@@ -6,6 +6,7 @@ import { member } from "@midplane-cloud/db/auth-schema";
 import { getActorEmail, getOrgContext } from "@/lib/org-context";
 import {
   isManagerRole,
+  isOwnerRole,
   type OrgRole,
 } from "@/lib/org-roles";
 import { bootRegion } from "@/lib/region-context";
@@ -40,6 +41,7 @@ export {
   ASSIGNABLE_ROLES,
   isAssignableRole,
   isManagerRole,
+  isOwnerRole,
   normalizeInviteRole,
 } from "@/lib/org-roles";
 export type { AssignableRole, OrgRole } from "@/lib/org-roles";
@@ -113,10 +115,17 @@ async function getSelfHostRole(): Promise<ActiveRole | null> {
 }
 
 /** UI gating for server components: true when the caller may manage the
- *  workspace. */
+ *  workspace (owner/admin). */
 export async function isManager(): Promise<boolean> {
   const ctx = await getActiveRole();
   return isManagerRole(ctx?.role);
+}
+
+/** True when the caller is the org owner. Owner-only capabilities (billing,
+ *  later org deletion) gate on this rather than isManager. */
+export async function isOwner(): Promise<boolean> {
+  const ctx = await getActiveRole();
+  return isOwnerRole(ctx?.role);
 }
 
 /** State-returning gate for server actions reached from a form / client

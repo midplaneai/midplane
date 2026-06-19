@@ -8,10 +8,10 @@ import { cn } from "@/lib/utils";
 
 export function SidebarNav({
   selfHost = false,
-  canManage = false,
+  role = null,
 }: {
   selfHost?: boolean;
-  canManage?: boolean;
+  role?: string | null;
 }) {
   const pathname = usePathname() ?? "";
   return (
@@ -19,7 +19,7 @@ export function SidebarNav({
       <div className="px-[18px] pb-1 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
         workspace
       </div>
-      {navItemsFor({ selfHost, canManage }).map((item) => {
+      {navItemsFor({ selfHost, role }).map((item) => {
         const active = item.match(pathname);
         const Icon = item.icon;
         return (

@@ -12,9 +12,10 @@ interface AppShellProps {
   region: Region | null;
   /** Self-host build: drops the Billing nav item (uncapped, never bills). */
   selfHost?: boolean;
-  /** Owner/admin: shows the manager-only nav (Audit log, Billing). A plain
-   *  member sees only Projects — those routes also gate server-side. */
-  canManage?: boolean;
+  /** Caller's org role — drives nav gating: owner sees everything (incl.
+   *  Billing), admin sees the Audit log but not Billing, a member sees only
+   *  Projects. Those routes also gate server-side; this is just the nav. */
+  role?: string | null;
   children: React.ReactNode;
 }
 
@@ -36,7 +37,7 @@ function WorkspaceMark() {
 export function AppShell({
   region,
   selfHost = false,
-  canManage = false,
+  role = null,
   children,
 }: AppShellProps) {
   return (
@@ -48,7 +49,7 @@ export function AppShell({
             <WorkspaceLabel />
           </div>
         </div>
-        <SidebarNav selfHost={selfHost} canManage={canManage} />
+        <SidebarNav selfHost={selfHost} role={role} />
         {region && (
           <>
             <div className="mt-2 px-[18px] pb-1 pt-2 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
@@ -69,7 +70,7 @@ export function AppShell({
         </div>
       </aside>
       <main className="min-w-0">
-        <MobileNav region={region} selfHost={selfHost} canManage={canManage} />
+        <MobileNav region={region} selfHost={selfHost} role={role} />
         {children}
       </main>
     </div>
