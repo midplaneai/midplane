@@ -1,14 +1,21 @@
 import { and, eq } from "drizzle-orm";
 
-import { getDb } from "@midplane-cloud/db";
+import { customers, getDb } from "@midplane-cloud/db";
 import { member } from "@midplane-cloud/db/auth-schema";
 
-import { getOrgContext } from "@/lib/org-context";
+import { getActorEmail, getOrgContext } from "@/lib/org-context";
 import {
   isManagerRole,
   type OrgRole,
 } from "@/lib/org-roles";
 import { bootRegion } from "@/lib/region-context";
+import { resolveSelfHostAccess } from "@/lib/self-host-gate";
+import {
+  isSelfHost,
+  SELF_HOST_CUSTOMER_ID,
+  SELF_HOST_ORG_ID,
+  SELF_HOST_REGION,
+} from "@/lib/self-host";
 
 // Org-role authorization — the single source of truth for "who can manage this
 // workspace." The pure role helpers (isManagerRole / isAssignableRole /
@@ -46,6 +53,11 @@ export interface ActiveRole {
 /** The signed-in actor's role in the active org, or null when unauthenticated,
  *  org-less, or not a member of the active org. */
 export async function getActiveRole(): Promise<ActiveRole | null> {
+  // Self-host resolves against the fixed implicit org and mirrors
+  // currentCustomer()'s owner-by-identity safety net (see below), so it's
+  // handled on its own path rather than through getOrgContext's active org.
+  if (isSelfHost()) return getSelfHostRole();
+
   const { userId, orgId } = await getOrgContext();
   if (!userId || !orgId) return null;
   const role = (
@@ -56,6 +68,48 @@ export async function getActiveRole(): Promise<ActiveRole | null> {
   )[0]?.role as OrgRole | undefined;
   if (!role) return null;
   return { userId, orgId, role };
+}
+
+/** Self-host role resolution. The member row's role wins; but when it's absent
+ *  the claimed owner is still resolved as `owner` — currentCustomer() grants
+ *  that owner access by identity (a half-failed signup can leave the owner with
+ *  no member row), and the role gates MUST mirror it or the safety-net owner
+ *  loses manager nav + every project/token/audit action on their own instance.
+ *  Everyone else (invited teammates) is bounded by their member row. */
+async function getSelfHostRole(): Promise<ActiveRole | null> {
+  const { userId } = await getOrgContext();
+  if (!userId) return null;
+  const db = getDb(SELF_HOST_REGION);
+  const role = (
+    await db
+      .select({ role: member.role })
+      .from(member)
+      .where(
+        and(
+          eq(member.userId, userId),
+          eq(member.organizationId, SELF_HOST_ORG_ID),
+        ),
+      )
+      .limit(1)
+  )[0]?.role as OrgRole | undefined;
+  if (role) return { userId, orgId: SELF_HOST_ORG_ID, role };
+
+  const ownerEmail =
+    (
+      await db
+        .select({ ownerEmail: customers.ownerEmail })
+        .from(customers)
+        .where(eq(customers.id, SELF_HOST_CUSTOMER_ID))
+        .limit(1)
+    )[0]?.ownerEmail ?? null;
+  const isClaimedOwner = resolveSelfHostAccess({
+    isMember: false,
+    sessionEmail: await getActorEmail(),
+    ownerEmail,
+  });
+  return isClaimedOwner
+    ? { userId, orgId: SELF_HOST_ORG_ID, role: "owner" }
+    : null;
 }
 
 /** UI gating for server components: true when the caller may manage the

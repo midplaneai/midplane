@@ -12,6 +12,7 @@ import { eventSummary, StatusBadge } from "@/components/audit/status-badge";
 import { VolumeSparkline } from "@/components/audit/volume-sparkline";
 import { WindowSelect } from "@/components/audit/window-select";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
+import { RestrictedNotice } from "@/components/restricted-notice";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -86,8 +87,8 @@ export default async function AuditListPage({ searchParams }: PageProps) {
 
   // The audit log is owner/admin only — a member has no oversight surface in
   // v1. The nav hides the link for members; this guards the route itself
-  // (direct nav / bookmark) by bouncing them back to their projects.
-  if (!(await isManager())) redirect("/dashboard");
+  // (direct nav / bookmark) with a clear notice rather than a silent redirect.
+  if (!(await isManager())) return <RestrictedNotice label="Audit log" />;
 
   // Plan retention window (Free 7d, Pro 30d, Team 90d). Threaded into every
   // audit read so the list, chips, counts, and chart all honor the same horizon.
