@@ -16,7 +16,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { RegionBadge } from "@/components/ui/region-badge";
 import { currentCustomer } from "@/lib/customer";
+import { isEmailConfigured } from "@/lib/email";
 import { getOrgContext } from "@/lib/org-context";
+import { resolvePlan, seatInviteBlock } from "@/lib/plan";
 import { bootRegion } from "@/lib/region-context";
 import { isSelfHost } from "@/lib/self-host";
 
@@ -48,16 +50,18 @@ export default async function SettingsPage() {
   // entitlement (and shows an upgrade notice for plans without it).
   const showSso = !isSelfHost();
 
-  // Members + invites. Self-host only for now — the cloud invite model
-  // (existing users with their own orgs) is a follow-up; here it's the single
-  // implicit org. List current members, surface the invite link the owner
-  // shares out-of-band, and let an owner/admin revoke pending invites.
+  // Members + invites. Cloud and self-host both: list current members, let an
+  // owner/admin invite teammates and revoke pending invites. Cloud emails the
+  // invite link (Resend) and gates on the plan's seat cap (Free = 1 = owner
+  // only); self-host is uncapped and the owner shares the link out-of-band.
   let membersData: {
     members: MemberView[];
     pending: PendingInviteView[];
     canManage: boolean;
+    seatLimitReached: boolean;
+    emailDelivers: boolean;
   } | null = null;
-  if (isSelfHost()) {
+  {
     const { userId } = await getOrgContext();
     const memberRows = await db
       .select({
@@ -92,8 +96,20 @@ export default async function SettingsPage() {
           .orderBy(desc(invitation.createdAt))
       : [];
 
+    // Seat pre-flight for the invite form (advisory; Better Auth enforces the
+    // cap on accept). resolvePlan short-circuits self-host to uncapped seats.
+    const { caps } = await resolvePlan();
+    const seatLimitReached =
+      canManage &&
+      seatInviteBlock(
+        { members: memberRows.length, pending: pendingRows.length },
+        caps,
+      ) !== null;
+
     membersData = {
       canManage,
+      seatLimitReached,
+      emailDelivers: !isSelfHost() && isEmailConfigured(),
       members: memberRows.map((r) => ({
         email: r.email,
         name: r.name,
@@ -158,6 +174,8 @@ export default async function SettingsPage() {
                   members={membersData.members}
                   pending={membersData.pending}
                   canManage={membersData.canManage}
+                  seatLimitReached={membersData.seatLimitReached}
+                  emailDelivers={membersData.emailDelivers}
                 />
               </CardContent>
             </Card>
