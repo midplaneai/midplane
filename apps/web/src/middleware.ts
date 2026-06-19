@@ -23,17 +23,11 @@ import { isSelfHost } from "@/lib/self-host";
 // the region picker; the residency-safe central email-hash→region pointer that
 // makes that seamless is a documented follow-up (see lib/region-routing).
 
-// Public routes: landing + legal pages, the region picker (reachable
-// unauthenticated so a brand-new visitor sees it). Everything else requires a
-// session cookie.
-const PUBLIC_EXACT = new Set([
-  "/",
-  "/demo",
-  "/privacy",
-  "/terms",
-  "/imprint",
-  "/signup/region",
-]);
+// Public routes: the root (redirects to /dashboard) and the region picker
+// (reachable unauthenticated so a brand-new visitor sees it). Everything else
+// requires a session cookie. The marketing landing + legal pages moved to
+// midplane.ai (its own repo).
+const PUBLIC_EXACT = new Set(["/", "/signup/region"]);
 
 // Public path prefixes — the route itself plus any subpath. Covers the auth UI
 // (/sign-in, /sign-up), Better Auth's own API (/api/auth/*) which must never be
@@ -99,8 +93,8 @@ export default async function middleware(
   }
 
   // Apex host: route an authed user to their regional subdomain via the signed
-  // region cookie (no DB). The landing is exempt — no region-specific content,
-  // and signed-in users may revisit it.
+  // region cookie (no DB). The root is exempt — it just redirects into the
+  // product (/dashboard), which carries its own region routing downstream.
   if (host === APEX_HOST) {
     if (pathname === "/") return NextResponse.next();
     const region = await verifyRegionCookie(req);
