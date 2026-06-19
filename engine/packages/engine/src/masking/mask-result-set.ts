@@ -62,38 +62,39 @@ export interface MaskResultSetInput {
   fields: import("../executor.ts").ResultField[] | undefined;
   columnMasks: ColumnMasks;
   catalog: Catalog;
-  /** "schema.table" set the statement references (from the IR table-refs). */
-  touchedTables: Set<string>;
   /** Salt keying the deterministic transforms. */
   salt: string;
 }
 
 const key = (schema: string, table: string) => `${schema}.${table}`;
 
+// System catalogs carry no maskable customer ROW values, and information_schema
+// is how schema discovery (list_tables / describe_table) reads metadata. A
+// field resolving to one of these is never masked and never rejected — mirrors
+// the information_schema carve-out the table_access + tenant_scope rules already
+// apply. (Selecting from an information_schema view reports the VIEW's oid with
+// schema=information_schema, which would otherwise hit the view-reject below.)
+const SYSTEM_SCHEMAS = new Set(["information_schema", "pg_catalog"]);
+
 export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
-  const { rows, fields, columnMasks, catalog, touchedTables, salt } = input;
+  const { rows, fields, columnMasks, catalog, salt } = input;
 
   // Fast path / regression pin: a connection with NO column_masks is a true
   // no-op — return the original rows untouched.
   if (columnMasks.size === 0) return { ok: true, rows, maskedColumns: [] };
 
-  // Canonicalize table identity to "schema.table" (bare names => public.<name>,
-  // matching the executor's SET LOCAL search_path pin) so the policy keys, the
-  // IR's touched-table names, and the catalog's schema.relname all compare
-  // equal. Done once per query.
+  // Canonicalize the policy keys to "schema.table" (bare names => public.<name>,
+  // matching the executor's SET LOCAL search_path pin) so they compare equal to
+  // the catalog's schema.relname at lookup. Done once per query.
+  //
+  // Security decisions below are driven ONLY by per-output-column provenance
+  // resolved through the catalog (reliable), NEVER by the IR's "touched tables"
+  // — those drop the schema (private.users -> "users") and report a view's name
+  // instead of its base table, so a touched-table heuristic both over-rejects
+  // and, worse, lets computed outputs over views / non-public schemas leak.
   const canon = (t: string) => (t.includes(".") ? t : `public.${t}`);
   const normMasks = new Map<string, Map<string, TransformName>>();
   for (const [k, v] of columnMasks) normMasks.set(canon(k), v);
-
-  // Two distinct relevance gates (the touched-table gate alone is unsafe: a
-  // VIEW query touches the view, not the masked base, so it would slip the
-  // gate and leak — the exact hole the provenance probe found):
-  //   - computed (tableOid=0) outputs reject only when the query TOUCHES a
-  //     masked table (so `SELECT count(*) FROM orders` on a users-masked
-  //     project still passes — count over an unrelated table is safe).
-  //   - view/matview outputs reject whenever the project masks ANYTHING, since
-  //     we can't see the view's lineage and it might read a masked base column.
-  const touchesMaskedTable = [...touchedTables].some((t) => normMasks.has(canon(t)));
 
   // A masked-project query with no field metadata = unresolved provenance =>
   // fail closed.
@@ -113,10 +114,14 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
   for (const f of fields) {
     if (f.tableOid === 0) {
       // Computed: aggregate, expression, set-op, or whole-row serialization
-      // (to_jsonb(row)). Cannot attribute to a base column. Reject only when
-      // the query touches a masked table; an unrelated count() passes.
-      if (touchesMaskedTable) return rejectComputed(f.name);
-      continue;
+      // (to_jsonb(users_v), to_jsonb(private.users), ...). It has NO base-column
+      // provenance, so we cannot prove it doesn't carry a masked value. With
+      // masking enabled (we're past the empty fast-path), reject — fail-closed.
+      // This deliberately also rejects a count() over an unrelated table: a
+      // touched-table heuristic that views and schema-qualified refs slip past
+      // is not safe enough for a redaction control. Loosen later with AST
+      // lineage (does the expression actually reference a masked column?).
+      return rejectComputed(f.name);
     }
     const rel = catalog.get(f.tableOid);
     if (!rel) {
@@ -128,6 +133,12 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
         offendingColumns: [f.name],
         retryable: true,
       };
+    }
+    if (SYSTEM_SCHEMAS.has(rel.schema)) {
+      // information_schema / pg_catalog: system metadata, never customer row
+      // values. Never masked, never rejected — this is how schema discovery
+      // reads information_schema views (which report the view's oid).
+      continue;
     }
     if (rel.relkind === "v" || rel.relkind === "m") {
       // View / matview: tableOid is the VIEW, not the base table, so a base

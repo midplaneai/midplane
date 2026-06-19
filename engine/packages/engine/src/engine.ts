@@ -317,7 +317,7 @@ export class Engine {
     let columnsMasked: string[] | undefined;
     let maskingRejectReason: string | undefined;
     if (this.masking && this.masking.columnMasks.size > 0) {
-      const masked = await this.applyMasking(execResult, evalResult.tablesTouched);
+      const masked = await this.applyMasking(execResult);
       if (masked.ok) {
         columnsMasked = masked.columnsMasked.length ? masked.columnsMasked : undefined;
       } else {
@@ -371,10 +371,8 @@ export class Engine {
   // it replaces execResult.rows in place and returns the masked column names.
   private async applyMasking(
     execResult: ExecutionResult,
-    tablesTouched: string[],
   ): Promise<{ ok: true; columnsMasked: string[] } | { ok: false; reason: string }> {
     const m = this.masking!;
-    const touchedTables = new Set(tablesTouched);
     const oids = (execResult.fields ?? []).map((f) => f.tableOid);
 
     const runOnce = async () =>
@@ -383,7 +381,6 @@ export class Engine {
         fields: execResult.fields,
         columnMasks: m.columnMasks,
         catalog: await m.resolver.resolve(oids),
-        touchedTables,
         salt: m.salt,
       });
 
