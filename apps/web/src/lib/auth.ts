@@ -13,6 +13,7 @@ import { getEeAuthPlugins } from "./ee-plugins";
 import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
 import { seatCapForOrg } from "./seats";
+import { googleAuthEnabled } from "./social-auth";
 import {
   enforceSelfHostSignupGate,
   linkSelfHostOwnerMember,
@@ -45,6 +46,23 @@ function createAuth() {
       schema: { ...authSchema },
     }),
     emailAndPassword: { enabled: true },
+    // Google sign-in. Conditional on creds being present (same hygiene as the
+    // Stripe/ee plugins below): unset → {} → no provider, so keyless dev and
+    // self-host boot without Google env. Self-host gets Google only by setting
+    // GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET explicitly. The UI gates on the
+    // same googleAuthEnabled() check, so a credential-less build never renders
+    // the button. New users still flow through the user.create databaseHook
+    // above (self-host single-owner gate, owner member-link) — Google doesn't
+    // bypass it. The OAuth callback is <BETTER_AUTH_URL>/api/auth/callback/google
+    // per region; each regional origin must be registered in the Google console.
+    socialProviders: googleAuthEnabled()
+      ? {
+          google: {
+            clientId: process.env.GOOGLE_CLIENT_ID as string,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+          },
+        }
+      : {},
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
         // Entitlement gate (server-side, ee/SSO). Creating or modifying an SSO
