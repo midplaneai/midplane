@@ -22,6 +22,7 @@
 // save a policy. Hard 4xx is reserved for auth / not-found.
 
 import { currentCustomer } from "@/lib/customer";
+import { requireManagerRest } from "@/lib/org-auth";
 import {
   DEFAULT_DATABASE_NAME,
   getProjectWithDatabaseAndCredential,
@@ -55,6 +56,12 @@ export async function GET(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  // Owner/admin only — table-name suggestions and the test-panel matrix are
+  // manager surfaces in the UI; this handler decrypts the DB credential and
+  // introspects the schema, so a member must not reach it directly. Gate
+  // BEFORE any credential resolution. (Sibling of the scan route's gate.)
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
   const { id } = await params;
 
   const url = new URL(req.url);
