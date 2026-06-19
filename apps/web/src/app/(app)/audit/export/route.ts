@@ -23,6 +23,7 @@ import {
   toExportRecords,
 } from "@/lib/audit-export";
 import { currentCustomer } from "@/lib/customer";
+import { requireManagerRest } from "@/lib/org-auth";
 import { resolvePlan } from "@/lib/plan";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,11 @@ export async function GET(req: Request) {
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  // The audit log is owner/admin only — a member has no oversight surface in
+  // v1, so the export (full org query history) is gated to managers. 403 when
+  // signed in but not a manager.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
   const { caps } = await resolvePlan();
   const sp = new URL(req.url).searchParams;
 

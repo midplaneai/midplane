@@ -1,4 +1,4 @@
-import { getOrgContext } from "@/lib/org-context";
+import { assertManager, isManager } from "@/lib/org-auth";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
@@ -101,13 +101,22 @@ export default async function ProjectWorkspace({
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
 
+  // Owner/admin manage the project (policy, guardrails, tokens, DSN, databases,
+  // delete); a member can view it and connect their agent (OAuth) but sees no
+  // management controls. Each mutating action below also re-checks server-side.
+  const canManage = await isManager();
+
   const { id } = await params;
   const { section, db } = await searchParams;
   const initialSection: ProjectSection = SECTION_VALUES.includes(
     section as ProjectSection,
   )
     ? (section as ProjectSection)
-    : "database";
+    : // A member's useful landing is their connect URL, not the (hidden)
+      // table-permissions editor — default them to the Agents pane.
+      canManage
+      ? "database"
+      : "agents";
 
   const { plan, caps } = await resolvePlan();
   const [home, tokens, usage] = await Promise.all([
@@ -188,6 +197,9 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    // Owner/admin only — controls are hidden from members, so a throw here is
+    // the tamper-path backstop (defense in depth).
+    await assertManager();
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
       throw new Error("missing id");
@@ -204,7 +216,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await getOrgContext();
+    const { userId } = await assertManager();
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
       throw new Error("missing id");
@@ -237,7 +249,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await getOrgContext();
+    const { userId } = await assertManager();
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
       throw new Error("missing id");
@@ -289,7 +301,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await getOrgContext();
+    const { userId } = await assertManager();
     const formId = formData.get("id");
     if (typeof formId !== "string" || formId.length === 0) {
       throw new Error("missing id");
@@ -331,6 +343,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    await assertManager();
     const { projectId } = await addDatabaseFromForm(customer, formData);
     revalidatePath(`/projects/${projectId}`);
     revalidatePath("/dashboard");
@@ -341,8 +354,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await getOrgContext();
-    if (!userId) redirect("/");
+    const { userId } = await assertManager();
     if (!selectedName) notFound();
     const raw = formData.get("policy");
     if (typeof raw !== "string") throw new Error("missing policy");
@@ -370,8 +382,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await getOrgContext();
-    if (!userId) redirect("/");
+    const { userId } = await assertManager();
     if (!selectedName) notFound();
     const raw = formData.get("guardrails");
     if (typeof raw !== "string") throw new Error("missing guardrails");
@@ -399,7 +410,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    const { userId } = await getOrgContext();
+    const { userId } = await assertManager();
     if (!selectedName) notFound();
     const dsn = formData.get("dsn");
     if (!isValidDsn(dsn)) {
@@ -463,6 +474,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    await assertManager();
     if (!selectedName) notFound();
     const ctx = getMcpProxyContext();
     try {
@@ -488,6 +500,7 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
+    await assertManager();
     // oldName comes from the form (the inline editor posts the name it
     // opened on) rather than the closed-over selectedName — they're the same
     // here, but trusting the submitted old name keeps the editor self-
@@ -523,7 +536,26 @@ export default async function ProjectWorkspace({
 
   // ---- panes -------------------------------------------------------------
 
-  const databasePane = selDb ? (
+  // Members see the database list (read-only) and a pointer to who manages the
+  // controls — never the policy/guardrails editors or the rename/rotate/delete
+  // actions. The DatabaseStrip's add affordance is suppressed (showAdd={false}).
+  const memberDatabasePane = selDb ? (
+    <>
+      <DatabaseStrip
+        databases={dbNames}
+        current={selDb.name}
+        projectId={conn.id}
+        addAction={addDatabaseAction}
+        showAdd={false}
+      />
+      <p className="text-sm text-muted-foreground">
+        Table permissions and guardrails for this database are managed by an
+        owner or admin.
+      </p>
+    </>
+  ) : null;
+
+  const managerDatabasePane = selDb ? (
     <>
       <DatabaseStrip
         databases={dbNames}
@@ -632,8 +664,16 @@ export default async function ProjectWorkspace({
       </div>
       </div>
     </>
+  ) : null;
+
+  const databasePane = !selDb ? (
+    <p className="text-sm text-muted-foreground">
+      No database on this project yet.
+    </p>
+  ) : canManage ? (
+    managerDatabasePane
   ) : (
-    <p className="text-sm text-muted-foreground">No database on this project yet.</p>
+    memberDatabasePane
   );
 
   const agentsPane = (
@@ -648,30 +688,34 @@ export default async function ProjectWorkspace({
       </section>
 
       {/* Headless agents (CI, scheduled jobs, unattended workflows) — a stored
-          API-token secret, since there's no browser to sign in. */}
-      <section className="space-y-3">
-        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-          Headless agents
-        </span>
-        <p className="text-xs text-muted-foreground">
-          For CI, scheduled jobs, or unattended workflows that can&apos;t do a
-          browser sign-in. Mint a token, store it as a secret, and revoke it the
-          moment a laptop or runner is compromised.
-        </p>
-        <TokenList
-          projectId={conn.id}
-          projectName={conn.name}
-          oauthUrl={oauthMcpUrl}
-          databases={databases.map((d) => ({
-            projectDatabaseId: d.id,
-            name: d.name,
-          }))}
-          tokens={tokens}
-          createAction={createTokenAction}
-          revokeAction={revokeTokenAction}
-          tokenLimit={tokenLimit}
-        />
-      </section>
+          API-token secret, since there's no browser to sign in. Minting and
+          revoking tokens is owner/admin only, so the whole surface is hidden
+          from members (who connect via the OAuth guide above). */}
+      {canManage && (
+        <section className="space-y-3">
+          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+            Headless agents
+          </span>
+          <p className="text-xs text-muted-foreground">
+            For CI, scheduled jobs, or unattended workflows that can&apos;t do a
+            browser sign-in. Mint a token, store it as a secret, and revoke it
+            the moment a laptop or runner is compromised.
+          </p>
+          <TokenList
+            projectId={conn.id}
+            projectName={conn.name}
+            oauthUrl={oauthMcpUrl}
+            databases={databases.map((d) => ({
+              projectDatabaseId: d.id,
+              name: d.name,
+            }))}
+            tokens={tokens}
+            createAction={createTokenAction}
+            revokeAction={revokeTokenAction}
+            tokenLimit={tokenLimit}
+          />
+        </section>
+      )}
     </div>
   );
 
@@ -681,15 +725,21 @@ export default async function ProjectWorkspace({
         <div className="space-y-2">
           <Label>Name</Label>
           <div className="flex min-h-9 items-center">
-            <RenameProjectInline
-              id={conn.id}
-              initialName={conn.name}
-              placeholder="Untitled project"
-              action={renameAction}
-            />
+            {canManage ? (
+              <RenameProjectInline
+                id={conn.id}
+                initialName={conn.name}
+                placeholder="Untitled project"
+                action={renameAction}
+              />
+            ) : (
+              <span className="text-sm text-foreground">{label}</span>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
-            Shown across the dashboard and audit log. Click to edit.
+            {canManage
+              ? "Shown across the dashboard and audit log. Click to edit."
+              : "Shown across the dashboard."}
           </p>
         </div>
         <div className="space-y-2">
@@ -705,6 +755,11 @@ export default async function ProjectWorkspace({
         </div>
       </section>
 
+      {/* Service (pause/resume) and Delete are owner/admin only — a member can
+          view the project and connect an agent, but can't take it down or
+          delete it. */}
+      {canManage && (
+        <>
       {/* Service — the reversible kill switch. Sits above the danger zone
           because it's recoverable: pausing rejects agent requests but keeps
           tokens, URLs, and policy intact; resume restores service. */}
@@ -763,6 +818,8 @@ export default async function ProjectWorkspace({
         </p>
         <DeleteProjectButton id={conn.id} action={deleteAction} />
       </section>
+        </>
+      )}
     </div>
   );
 
@@ -777,10 +834,11 @@ export default async function ProjectWorkspace({
           {FRESHNESS_LABELS[railFreshness]}
         </span>
       </div>
-      {paused ? (
+      {paused && canManage ? (
         // Resume lives in the rail header so it's one click from any pane,
         // not buried in Settings — the kill switch should be as easy to undo
-        // as it was to flip.
+        // as it was to flip. Members can't resume, so they see the status line
+        // (the freshness dot above already reads "Paused").
         <form action={resumeAction} className="mt-2">
           <input type="hidden" name="id" value={conn.id} />
           <Button type="submit" variant="outline" size="sm" className="w-full">

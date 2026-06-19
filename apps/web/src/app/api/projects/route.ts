@@ -1,4 +1,3 @@
-import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import { ACCESS_LEVELS } from "@midplane-cloud/db";
@@ -9,6 +8,7 @@ import {
   MAX_PROJECT_NAME_LENGTH,
 } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
+import { requireManagerRest } from "@/lib/org-auth";
 import { PlanLimitError, planLimitBody, resolvePlan } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 
@@ -43,10 +43,12 @@ export async function POST(req: Request) {
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
-  const { userId } = await getOrgContext();
-  if (!userId) {
-    return Response.json({ error: "not signed in" }, { status: 401 });
-  }
+  // Creating a project is an owner/admin capability — a plain member operates
+  // existing projects, it doesn't provision new ones. 403 (not 401) when the
+  // caller is signed in but not a manager.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
+  const { userId } = gate;
 
   let raw: unknown;
   const contentType = req.headers.get("content-type") ?? "";

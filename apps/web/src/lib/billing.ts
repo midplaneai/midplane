@@ -5,6 +5,7 @@ import Stripe from "stripe";
 import { customers, getDb } from "@midplane-cloud/db";
 import { member, subscription as subscriptionTable } from "@midplane-cloud/db/auth-schema";
 
+import { isOwnerRole } from "./org-roles.ts";
 import type { Plan } from "./plan.ts";
 import { bootRegion } from "./region-context.ts";
 import { isSelfHost } from "./self-host.ts";
@@ -230,8 +231,9 @@ export function buildStripePlugins(): ReturnType<typeof stripePlugin>[] {
           priceId: p.priceId,
           seatPriceId: p.priceId,
         })),
-        // Only the org's owner/admin may manage its billing. referenceId is the
-        // orgId; verify the acting user actually holds that role in the org.
+        // Only the org's OWNER may manage its billing — admins manage the
+        // workspace but not the money. referenceId is the orgId; verify the
+        // acting user actually holds the owner role in the org.
         authorizeReference: async ({ user, referenceId }) => {
           const rows = await getDb(bootRegion())
             .select({ role: member.role })
@@ -242,8 +244,7 @@ export function buildStripePlugins(): ReturnType<typeof stripePlugin>[] {
                 eq(member.organizationId, referenceId),
               ),
             );
-          const role = rows[0]?.role;
-          return role === "owner" || role === "admin";
+          return isOwnerRole(rows[0]?.role);
         },
         // The four transitions that move customers.plan. Each derives the tier
         // from the subscription's current (status, plan) and writes it — see

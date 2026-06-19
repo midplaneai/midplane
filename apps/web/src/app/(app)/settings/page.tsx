@@ -65,6 +65,7 @@ export default async function SettingsPage() {
     const { userId } = await getOrgContext();
     const memberRows = await db
       .select({
+        id: member.id,
         userId: member.userId,
         role: member.role,
         email: user.email,
@@ -111,6 +112,7 @@ export default async function SettingsPage() {
       seatLimitReached,
       emailDelivers: !isSelfHost() && isEmailConfigured(),
       members: memberRows.map((r) => ({
+        memberId: r.id,
         email: r.email,
         name: r.name,
         role: r.role,

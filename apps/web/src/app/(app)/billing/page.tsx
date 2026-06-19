@@ -2,11 +2,13 @@ import { redirect } from "next/navigation";
 
 import { BillingActions } from "@/components/billing/billing-actions";
 import { PageContainer, Topbar } from "@/components/layout/app-shell";
+import { RestrictedNotice } from "@/components/restricted-notice";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { billingPlans, isBillingConfigured } from "@/lib/billing";
 import { currentCustomer } from "@/lib/customer";
+import { isOwner } from "@/lib/org-auth";
 import { getOrgContext } from "@/lib/org-context";
 import { hasEntitlement, resolvePlan } from "@/lib/plan";
 import { isSelfHost } from "@/lib/self-host";
@@ -28,6 +30,12 @@ const SALES_EMAIL = "sales@midplane.ai";
 export default async function BillingPage() {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
+
+  // Billing is OWNER-ONLY — admins manage the workspace but not the money.
+  // Mirror the nav (which shows Billing only to the owner) and gate the route
+  // itself, since the Stripe plugin's authorizeReference only guards the
+  // checkout/portal calls, not this page's plan surface.
+  if (!(await isOwner())) return <RestrictedNotice label="Plans & billing" />;
 
   const { plan } = await resolvePlan();
   // Single feature-gating seam in lib/plan.ts: hasEntitlement("sso") is the

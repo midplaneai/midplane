@@ -1,4 +1,3 @@
-import { getOrgContext } from "@/lib/org-context";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
@@ -28,6 +27,7 @@ import {
   resumeProject,
 } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
+import { assertManager, isManager } from "@/lib/org-auth";
 import { projectLabel, formatRelative } from "@/lib/format";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
@@ -53,6 +53,10 @@ export default async function Dashboard({
   // dedicated /projects/<id>/created success page instead. Strip
   // the stale param if a bookmarked URL still carries it.
   void searchParams;
+
+  // Owner/admin can add, pause, and delete projects; a member operates them
+  // (connects agents, runs queries) but sees no management controls.
+  const canManage = await isManager();
 
   const { caps } = await resolvePlan();
   const rows = await listDashboardProjects(
@@ -102,20 +106,22 @@ export default async function Dashboard({
                   {rows.length} / {projectLimit}
                 </span>
               ) : null}
-              {atProjectLimit ? (
-                <Link href={UPGRADE_URL}>
-                  <Button size="sm" variant="outline">
-                    Upgrade to add more
-                  </Button>
-                </Link>
-              ) : (
-                <Link href="/projects/new">
-                  <Button size="sm">
-                    <Plus className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-                    New project
-                  </Button>
-                </Link>
-              )}
+              {/* Members can't add projects — show the counter, hide the CTA. */}
+              {canManage &&
+                (atProjectLimit ? (
+                  <Link href={UPGRADE_URL}>
+                    <Button size="sm" variant="outline">
+                      Upgrade to add more
+                    </Button>
+                  </Link>
+                ) : (
+                  <Link href="/projects/new">
+                    <Button size="sm">
+                      <Plus className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
+                      New project
+                    </Button>
+                  </Link>
+                ))}
             </div>
           }
         />
@@ -133,9 +139,11 @@ export default async function Dashboard({
               </>
             }
             action={
-              <Link href="/projects/new">
-                <Button size="sm">Connect Postgres</Button>
-              </Link>
+              canManage ? (
+                <Link href="/projects/new">
+                  <Button size="sm">Connect Postgres</Button>
+                </Link>
+              ) : undefined
             }
           />
         ) : (
@@ -145,6 +153,7 @@ export default async function Dashboard({
                 <ProjectCard
                   key={row.project.id}
                   row={row}
+                  canManage={canManage}
                   deleteAction={deleteAction}
                   pauseAction={pauseAction}
                   resumeAction={resumeAction}
@@ -188,11 +197,13 @@ function initialFreshness(
 // warn tone instead of a dead "0".
 function ProjectCard({
   row,
+  canManage,
   deleteAction,
   pauseAction,
   resumeAction,
 }: {
   row: DashboardProjectRow;
+  canManage: boolean;
   deleteAction: (formData: FormData) => Promise<void>;
   pauseAction: (formData: FormData) => Promise<void>;
   resumeAction: (formData: FormData) => Promise<void>;
@@ -235,26 +246,32 @@ function ProjectCard({
                 initialLastIndexedAt={cursor.lastIndexedAt}
                 initialLastErrorAt={cursor.lastErrorAt}
               />
-              {/* z-10 lifts the control above the card's stretched open-link
+              {/* Pause/resume + the row menu (delete) are owner/admin only —
+                  a member sees the freshness state but no management controls.
+                  z-10 lifts the control above the card's stretched open-link
                   (::after inset-0) so clicking Pause/Resume doesn't navigate. */}
-              <span className="relative z-10">
-                <ProjectServiceControl
-                  projectId={c.id}
-                  initialPausedAt={c.pausedAt}
-                  pauseAction={pauseAction}
-                  resumeAction={resumeAction}
-                />
-              </span>
+              {canManage && (
+                <span className="relative z-10">
+                  <ProjectServiceControl
+                    projectId={c.id}
+                    initialPausedAt={c.pausedAt}
+                    pauseAction={pauseAction}
+                    resumeAction={resumeAction}
+                  />
+                </span>
+              )}
             </div>
           </div>
           <RegionBadge region={c.region} />
-          <div className="relative z-10">
-            <ProjectRowMenu
-              id={c.id}
-              name={c.name}
-              deleteAction={deleteAction}
-            />
-          </div>
+          {canManage && (
+            <div className="relative z-10">
+              <ProjectRowMenu
+                id={c.id}
+                name={c.name}
+                deleteAction={deleteAction}
+              />
+            </div>
+          )}
         </div>
 
         {/* Stat strip — deep links into the workspace's panes. Only the
@@ -372,7 +389,9 @@ async function deleteAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/");
-  const { userId } = await getOrgContext();
+  // Owner/admin only. The controls are hidden from members, so a throw here is
+  // the tamper-path backstop (defense in depth).
+  const { userId } = await assertManager();
 
   const id = formData.get("id");
   if (typeof id !== "string" || id.length === 0) {
@@ -403,7 +422,7 @@ async function pauseAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/");
-  const { userId } = await getOrgContext();
+  const { userId } = await assertManager();
   const id = formData.get("id");
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
@@ -445,7 +464,7 @@ async function resumeAction(formData: FormData) {
   "use server";
   const customer = await currentCustomer();
   if (!customer) redirect("/");
-  const { userId } = await getOrgContext();
+  const { userId } = await assertManager();
   const id = formData.get("id");
   if (typeof id !== "string" || id.length === 0) {
     throw new Error("missing id");
