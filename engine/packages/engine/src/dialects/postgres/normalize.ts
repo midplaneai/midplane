@@ -358,6 +358,32 @@ function collectAccessChecks(
             }
           }
         }
+        // `SELECT … INTO new_table` is the legacy spelling of CREATE TABLE AS:
+        // libpg models it as a SelectStmt carrying a non-null `intoClause` (the
+        // new relation), NOT a CreateTableAsStmt. Without this, the creation
+        // target is walked as a plain RangeVar `read` and a `default: read`
+        // policy ALLOWS it — letting a read-only agent materialize a table
+        // (snapshot a table it can read, or fill disk). Emit a `write` check on
+        // the target so it is governed exactly like CreateTableAsStmt's
+        // `into.rel`: denied unless the target is read_write, and denied by a
+        // read-only scope ceiling. (block_ddl deliberately does not cover table
+        // creation in v1 — same as CREATE TABLE AS — so table_access is the
+        // control surface here.)
+        //
+        // NB: the `isCteReference` guard used on read/write refs above is NOT
+        // applied here. The INTO relation is always a freshly-created catalog
+        // table, never a reference to an in-scope CTE — and the `WITH` of a
+        // `SELECT … INTO` attaches to THIS SelectStmt, so its CTE names are
+        // already in `cteScopes` when we reach the target. A name collision
+        // (`WITH foo AS (…) SELECT * INTO foo FROM foo`, where FROM resolves to
+        // the CTE but INTO still creates table `foo`) must NOT suppress the
+        // write check, or a default-read policy would allow the creation.
+        if (kind === "SelectStmt" && innerObj.intoClause) {
+          const into = innerObj.intoClause as Record<string, unknown>;
+          for (const t of refsFromRelation(into.rel)) {
+            checks.push({ kind: "write", ref: bareToTableRef(t) });
+          }
+        }
         for (const k of Object.keys(innerObj)) walk(innerObj[k]);
         if (cteNames) cteScopes.pop();
         return;

@@ -88,6 +88,26 @@ describe("adversarial/dangerous-statement: block_ddl", () => {
     await expectDeny(engine, baseCtx, "DROP SCHEMA public CASCADE", TABLE_ACCESS);
   });
 
+  test("SELECT … INTO under default:read + block_ddl ON → denied (table_access catches the table-creating copy first)", async () => {
+    // Issue #109: `SELECT … INTO foo` creates a table but parses as a SelectStmt
+    // (not CreateTableAsStmt), so it once passed the read-only policy AND the
+    // block_ddl guardrail. With the fix the creation target is a write, so
+    // table_access denies it before the guardrail is reached — denied either way,
+    // exactly like `CREATE TABLE foo AS SELECT …`.
+    const READ_ONLY: TableAccessConfig = { default: "read", tables: {} };
+    const { engine } = guardedEngine(BOTH_ON, READ_ONLY);
+    await expectDeny(engine, baseCtx, "SELECT id, email INTO _mp_leaked FROM users", TABLE_ACCESS);
+  });
+
+  test("SELECT … INTO on a read_write policy + block_ddl ON → allowed, same as CREATE TABLE AS", async () => {
+    // block_ddl deliberately does NOT cover table creation in v1 (CREATE is
+    // excluded); when the operator grants read_write to the target, the
+    // table-creating copy is authorized — and the two spellings stay consistent.
+    const { engine } = guardedEngine(BOTH_ON, PERMISSIVE);
+    await expectAllow(engine, baseCtx, "SELECT id INTO snapshot FROM users");
+    await expectAllow(engine, baseCtx, "CREATE TABLE snapshot AS SELECT id FROM users");
+  });
+
   test("block_ddl: false → DDL allowed by the guardrail (table_access permits)", async () => {
     const { engine } = guardedEngine({ blockUnqualifiedDml: true, blockDdl: false });
     await expectAllow(engine, baseCtx, "DROP TABLE webhooks");

@@ -160,6 +160,24 @@ describe("adversarial/table-access (no YAML): DDL", () => {
     );
   });
 
+  test("SELECT … INTO foo → deny (legacy CREATE TABLE AS spelling)", async () => {
+    // `SELECT … INTO foo` creates a table — libpg models it as a SelectStmt
+    // with an intoClause, not a CreateTableAsStmt, so it once slipped past as a
+    // plain read and a read-only agent could materialize a table (issue #109).
+    const { engine } = makeEngine();
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT id, email INTO foo FROM users",
+      TABLE_ACCESS,
+    );
+  });
+
+  test("SELECT … INTO TEMP foo → deny (TEMP is no escape hatch)", async () => {
+    const { engine } = makeEngine();
+    await expectDeny(engine, baseCtx, "SELECT id INTO TEMP foo FROM users", TABLE_ACCESS);
+  });
+
   test("ALTER TABLE … ADD COLUMN → deny", async () => {
     const { engine } = makeEngine();
     await expectDeny(
@@ -965,5 +983,90 @@ describe("adversarial/table-access: SET unconditional deny", () => {
     };
     const { engine } = makeEngine({ tableAccess: cfg });
     await expectDeny(engine, baseCtx, "SET search_path = whatever", TABLE_ACCESS);
+  });
+});
+
+// `SELECT … INTO new_table` is the legacy spelling of `CREATE TABLE new_table AS
+// SELECT …`. libpg models it as a SelectStmt with an intoClause (NOT a
+// CreateTableAsStmt), so it used to be classified as a plain read and a
+// read-only (`default: read`) policy ALLOWED it — letting a read-only agent
+// materialize a table (snapshot a table it can read, or fill disk). Issue #109.
+// The fix governs the creation target exactly like CreateTableAsStmt's target,
+// so the two spellings are now indistinguishable to the policy.
+describe("adversarial/table-access: SELECT … INTO (issue #109)", () => {
+  test("default: read → write to the creation target is denied", async () => {
+    const { engine } = makeEngine({ tableAccess: { default: "read", tables: {} } });
+    const d = await engine.handle({
+      sql: "SELECT id, email INTO _mp_leaked FROM users",
+      ctx: baseCtx,
+    });
+    expect(d.allowed).toBe(false);
+    if (!d.allowed) {
+      expect(d.reason).toBe(TABLE_ACCESS);
+      // The reason names the WRITE to the new table, not a read.
+      expect(d.message).toContain("writes to table `_mp_leaked`");
+    }
+  });
+
+  test("schema-qualified target → denied on the qualified name", async () => {
+    const { engine } = makeEngine({ tableAccess: { default: "read", tables: {} } });
+    const d = await engine.handle({
+      sql: "SELECT id INTO public.snapshot FROM users",
+      ctx: baseCtx,
+    });
+    expect(d.allowed).toBe(false);
+    if (!d.allowed) expect(d.message).toContain("writes to table `public.snapshot`");
+  });
+
+  test("CTE-name collision does not suppress the write — WITH foo … SELECT * INTO foo", async () => {
+    // Reviewer catch: the destination name matches an in-scope CTE. The `FROM
+    // foo` resolves to the CTE, but `INTO foo` still creates a real catalog
+    // table `foo` — so the isCteReference guard must NOT skip the creation
+    // target (it would only fire because the `WITH` attaches to this SelectStmt).
+    const { engine } = makeEngine({ tableAccess: { default: "read", tables: {} } });
+    const d = await engine.handle({
+      sql: "WITH foo AS (SELECT id FROM users) SELECT * INTO foo FROM foo",
+      ctx: baseCtx,
+    });
+    expect(d.allowed).toBe(false);
+    if (!d.allowed) {
+      expect(d.reason).toBe(TABLE_ACCESS);
+      expect(d.message).toContain("writes to table `foo`");
+    }
+  });
+
+  test("read side is still enforced — INTO a writable target FROM a denied table denies the read", async () => {
+    const { engine } = makeEngine({
+      tableAccess: { default: "read", tables: { dst: "read_write", secrets: "deny" } },
+    });
+    await expectDeny(engine, baseCtx, "SELECT * INTO dst FROM secrets", TABLE_ACCESS);
+  });
+
+  test("read_write target → allowed (operator authorized the write), same as CREATE TABLE AS", async () => {
+    const cfg: TableAccessConfig = {
+      default: "read",
+      tables: { snapshot: "read_write", users: "read" },
+    };
+    const into = makeEngine({ tableAccess: cfg });
+    const ctas = makeEngine({ tableAccess: cfg });
+    await expectAllow(into.engine, baseCtx, "SELECT id INTO snapshot FROM users");
+    // The twin spelling resolves identically — the fix unified them.
+    await expectAllow(ctas.engine, baseCtx, "CREATE TABLE snapshot AS SELECT id FROM users");
+  });
+
+  test("read-only scope ceiling denies INTO even when policy permits the write", async () => {
+    // Policy would allow the write (default read_write), but the session's
+    // per-agent credential is scoped read-only — the table-creating copy is the
+    // exact exfil vector that clamp exists to stop.
+    const { engine } = makeEngine({ tableAccess: { default: "read_write", tables: {} } });
+    const d = await engine.handle({
+      sql: "SELECT id, email INTO _mp_leaked FROM users",
+      ctx: { ...baseCtx, scope_max_access: "read" },
+    });
+    expect(d.allowed).toBe(false);
+    if (!d.allowed) {
+      expect(d.reason).toBe(TABLE_ACCESS);
+      expect(d.message).toContain("scoped to read-only");
+    }
   });
 });
