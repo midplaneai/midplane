@@ -369,10 +369,19 @@ function collectAccessChecks(
         // read-only scope ceiling. (block_ddl deliberately does not cover table
         // creation in v1 — same as CREATE TABLE AS — so table_access is the
         // control surface here.)
+        //
+        // NB: the `isCteReference` guard used on read/write refs above is NOT
+        // applied here. The INTO relation is always a freshly-created catalog
+        // table, never a reference to an in-scope CTE — and the `WITH` of a
+        // `SELECT … INTO` attaches to THIS SelectStmt, so its CTE names are
+        // already in `cteScopes` when we reach the target. A name collision
+        // (`WITH foo AS (…) SELECT * INTO foo FROM foo`, where FROM resolves to
+        // the CTE but INTO still creates table `foo`) must NOT suppress the
+        // write check, or a default-read policy would allow the creation.
         if (kind === "SelectStmt" && innerObj.intoClause) {
           const into = innerObj.intoClause as Record<string, unknown>;
           for (const t of refsFromRelation(into.rel)) {
-            if (!isCteReference(t)) checks.push({ kind: "write", ref: bareToTableRef(t) });
+            checks.push({ kind: "write", ref: bareToTableRef(t) });
           }
         }
         for (const k of Object.keys(innerObj)) walk(innerObj[k]);

@@ -1018,6 +1018,23 @@ describe("adversarial/table-access: SELECT … INTO (issue #109)", () => {
     if (!d.allowed) expect(d.message).toContain("writes to table `public.snapshot`");
   });
 
+  test("CTE-name collision does not suppress the write — WITH foo … SELECT * INTO foo", async () => {
+    // Reviewer catch: the destination name matches an in-scope CTE. The `FROM
+    // foo` resolves to the CTE, but `INTO foo` still creates a real catalog
+    // table `foo` — so the isCteReference guard must NOT skip the creation
+    // target (it would only fire because the `WITH` attaches to this SelectStmt).
+    const { engine } = makeEngine({ tableAccess: { default: "read", tables: {} } });
+    const d = await engine.handle({
+      sql: "WITH foo AS (SELECT id FROM users) SELECT * INTO foo FROM foo",
+      ctx: baseCtx,
+    });
+    expect(d.allowed).toBe(false);
+    if (!d.allowed) {
+      expect(d.reason).toBe(TABLE_ACCESS);
+      expect(d.message).toContain("writes to table `foo`");
+    }
+  });
+
   test("read side is still enforced — INTO a writable target FROM a denied table denies the read", async () => {
     const { engine } = makeEngine({
       tableAccess: { default: "read", tables: { dst: "read_write", secrets: "deny" } },
