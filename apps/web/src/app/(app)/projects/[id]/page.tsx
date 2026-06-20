@@ -18,6 +18,7 @@ import {
 import { DatabaseStrip } from "@/components/projects/database-strip";
 import { DeleteDatabaseButton } from "@/components/projects/delete-database-button";
 import { ExposureScan } from "@/components/projects/exposure-scan";
+import { MaskedPreviewPanel } from "@/components/projects/masked-preview-panel";
 import { TestPolicyPanel } from "@/components/projects/test-policy-panel";
 import { TestReachabilityButton } from "@/components/projects/test-reachability-button";
 import { FreshnessDot } from "@/components/dashboard/freshness-dot";
@@ -717,17 +718,34 @@ export default async function ProjectWorkspace({
         showAdd={canManage}
       />
       {canManage ? (
-        <div className="space-y-3">
-          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-            PII exposure
-          </span>
-          {/* key remounts on ?db switch so the fetched scan tracks the selected db */}
-          <ExposureScan
-            key={selDb.name}
-            projectId={conn.id}
-            db={selDb.name}
-            onSave={columnMasksAction}
-          />
+        <div className="space-y-8">
+          <div className="space-y-3">
+            <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+              PII exposure
+            </span>
+            {/* key remounts on ?db switch so the fetched scan tracks the selected db */}
+            <ExposureScan
+              key={selDb.name}
+              projectId={conn.id}
+              db={selDb.name}
+              onSave={columnMasksAction}
+            />
+          </div>
+
+          {/* Masked preview (design D2): the proof that masking works — run a
+              real read-only SELECT through the engine and see the agent's-eye
+              (masked) rows, or the fail-closed rejection. */}
+          <div className="space-y-3">
+            <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
+              Masked preview
+            </span>
+            <MaskedPreviewPanel
+              key={selDb.name}
+              projectId={conn.id}
+              database={selDb.name}
+              columnMasks={parseColumnMasksOrThrow(selDb.columnMasks)}
+            />
+          </div>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">

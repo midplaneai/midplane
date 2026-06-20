@@ -71,6 +71,9 @@ const SAFE_DATABASE_COLUMNS = {
   tableAccess: projectDatabases.tableAccess,
   tenantScope: projectDatabases.tenantScope,
   guardrails: projectDatabases.guardrails,
+  // Non-secret policy config (same class as tableAccess/guardrails) — the
+  // masked-preview panel reads it to prefill a query + label masked columns.
+  columnMasks: projectDatabases.columnMasks,
   rotatedAt: projectDatabases.rotatedAt,
   lastKmsSuccessAt: projectDatabases.lastKmsSuccessAt,
   createdAt: projectDatabases.createdAt,
@@ -84,6 +87,7 @@ export type SafeProjectDatabase = Pick<
   | "tableAccess"
   | "tenantScope"
   | "guardrails"
+  | "columnMasks"
   | "rotatedAt"
   | "lastKmsSuccessAt"
   | "createdAt"

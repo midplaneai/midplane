@@ -34,6 +34,7 @@ export type {
   ActiveContainer,
   ContainerRegistryOptions,
   SpawnedContainer,
+  SpawnDatabase,
   Spawner,
   SpawnOptions,
 } from "./spawner.ts";
@@ -62,3 +63,11 @@ export type {
   DryRunResponse,
   DryRunVerdict,
 } from "./dry-run.ts";
+export { previewQuery, parseQueryToolResult } from "./preview.ts";
+export type {
+  CallQueryToolArgs,
+  PreviewDeps,
+  PreviewOutcome,
+  PreviewRequest,
+  RawToolResult,
+} from "./preview.ts";

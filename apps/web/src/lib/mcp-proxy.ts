@@ -35,10 +35,13 @@ import {
   FlyMachineSpawner,
   Indexer,
   loadRegions,
+  previewQuery,
   ProcessSpawner,
   pushPolicy as pushPolicyHelper,
   type DryRunOutcome,
   type DryRunRequest,
+  type PreviewOutcome,
+  type PreviewRequest,
   type PushPolicyResult,
   type Spawner,
   type SpawnOptions,
@@ -81,6 +84,15 @@ interface McpProxyContext {
      *  snapshot stale enough to overwrite a concurrent save). */
     freshEntries?: () => Promise<DatabaseEntry[]>,
   ): Promise<DryRunOutcome>;
+  /** Masked preview (design D2): runs a real read-only SELECT through the
+   *  engine's `query` tool against the spawned container and returns the
+   *  agent's-eye (masked) rows — or the engine's structured rejection when a
+   *  query shape can't be safely masked. Unlike dryRun this EXECUTES against
+   *  the customer DB, so the caller gates it owner/admin-only + rate-limited +
+   *  read-only-validated. The spawn MUST carry columnMasks + maskSalt for
+   *  masking to apply (built the same way the proxy builds them). Independent
+   *  of INDEXER_TOKEN: it speaks MCP to the container, not the admin surface. */
+  preview(spawn: SpawnOptions, req: PreviewRequest): Promise<PreviewOutcome>;
 }
 
 const GLOBAL_KEY = "__midplane_mcp_proxy__";
@@ -209,6 +221,13 @@ export function getMcpProxyContext(): McpProxyContext {
     });
   };
 
+  const preview = async (
+    spawn: SpawnOptions,
+    req: PreviewRequest,
+  ): Promise<PreviewOutcome> => {
+    return previewQuery(spawn, req, { registry });
+  };
+
   const ctx: McpProxyContext = {
     cache,
     registry,
@@ -217,6 +236,7 @@ export function getMcpProxyContext(): McpProxyContext {
     expirySweeper,
     pushPolicy,
     dryRun,
+    preview,
   };
   g[GLOBAL_KEY] = ctx;
   return ctx;
