@@ -358,6 +358,23 @@ function collectAccessChecks(
             }
           }
         }
+        // `SELECT … INTO new_table` is the legacy spelling of CREATE TABLE AS:
+        // libpg models it as a SelectStmt carrying a non-null `intoClause` (the
+        // new relation), NOT a CreateTableAsStmt. Without this, the creation
+        // target is walked as a plain RangeVar `read` and a `default: read`
+        // policy ALLOWS it — letting a read-only agent materialize a table
+        // (snapshot a table it can read, or fill disk). Emit a `write` check on
+        // the target so it is governed exactly like CreateTableAsStmt's
+        // `into.rel`: denied unless the target is read_write, and denied by a
+        // read-only scope ceiling. (block_ddl deliberately does not cover table
+        // creation in v1 — same as CREATE TABLE AS — so table_access is the
+        // control surface here.)
+        if (kind === "SelectStmt" && innerObj.intoClause) {
+          const into = innerObj.intoClause as Record<string, unknown>;
+          for (const t of refsFromRelation(into.rel)) {
+            if (!isCteReference(t)) checks.push({ kind: "write", ref: bareToTableRef(t) });
+          }
+        }
         for (const k of Object.keys(innerObj)) walk(innerObj[k]);
         if (cteNames) cteScopes.pop();
         return;
