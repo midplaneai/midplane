@@ -33,6 +33,16 @@ export function dryRunKey(customerId: string, projectId: string): string {
   return `dry-run:${customerId}:${projectId}`;
 }
 
+// Masked preview EXECUTES a real SELECT against the customer DB (unlike
+// dry-run, which never executes), so it's a tight budget — per
+// (customer, project), same keying rationale as dry-run (a foreign tenant
+// probing someone else's project id burns their own budget).
+export const PREVIEW_RATE_LIMIT = { limit: 6, windowMs: 60_000 } as const;
+
+export function previewKey(customerId: string, projectId: string): string {
+  return `preview:${customerId}:${projectId}`;
+}
+
 export interface RateLimitOptions {
   /** Max requests per window. */
   limit: number;
