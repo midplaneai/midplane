@@ -10,7 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetRateLimits } from "../src/lib/rate-limit.ts";
 
-const PROJECT = { id: "conn-1", region: "eu" as const, customerId: "cust-1" };
+const PROJECT = {
+  id: "conn-1",
+  region: "eu" as const,
+  customerId: "cust-1",
+  pausedAt: null as Date | null,
+};
 const customer = { id: "cust-1", region: "eu" as const };
 
 const DB = {
@@ -121,6 +126,37 @@ describe("POST /api/projects/[id]/preview", () => {
     const res = await POST(post({ database: "main", sql: "delete from users" }), params);
     expect(res.status).toBe(400);
     expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it("400 on SELECT INTO (a write), before spawn", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(
+      post({ database: "main", sql: "select * into leaked from users" }),
+      params,
+    );
+    expect(res.status).toBe(400);
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it("403 (project_paused) when the project is paused, before any spawn", async () => {
+    getProjectMock = vi.fn(async () => ({
+      project: { ...PROJECT, pausedAt: new Date() },
+      databases: [DB],
+    }));
+    const { POST } = await loadRoute();
+    const res = await POST(post({ database: "main", sql: "select 1" }), params);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toBe("project_paused");
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it("appends a top-level LIMIT to an unbounded statement", async () => {
+    const { POST } = await loadRoute();
+    await POST(post({ database: "main", sql: "select email from users" }), params);
+    const callArgs = previewMock.mock.calls[0] as unknown as [unknown, { sql: string }];
+    expect(callArgs[1].sql).toMatch(/\nLIMIT 25$/);
   });
 
   it("400 on an invalid body", async () => {

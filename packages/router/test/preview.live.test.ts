@@ -96,6 +96,23 @@ d("previewQuery — live engine + Postgres", () => {
     expect(r1.ssn).not.toBe(r0.ssn);
   }, 120_000);
 
+  it("still masks when a top-level LIMIT is appended (provenance-safe bound)", async () => {
+    // The route appends `LIMIT n` to unbounded statements (blast-radius cap). A
+    // top-level LIMIT must not strip the base-table provenance the masker needs,
+    // or every bounded preview would fail closed. Prove it still masks.
+    const out = await previewQuery(
+      SPAWN,
+      reqFor("select id, email, ssn from users order by id\nLIMIT 25"),
+      { registry },
+    );
+    if (!out.ok || out.kind !== "rows") {
+      throw new Error(`expected rows, got ${JSON.stringify(out)}`);
+    }
+    const r0 = out.rows[0] as Record<string, unknown>;
+    expect(r0.email).toBe("***");
+    expect(r0.ssn).not.toBe("079-05-1120");
+  }, 120_000);
+
   it("fails closed (column_masking) on a whole-row serialization", async () => {
     const out = await previewQuery(
       SPAWN,

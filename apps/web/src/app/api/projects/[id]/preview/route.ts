@@ -37,7 +37,7 @@ import { createHmac } from "node:crypto";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { requireManagerRest } from "@/lib/org-auth";
-import { isReadOnlySelect } from "@/lib/preview-sql";
+import { isReadOnlySelect, withRowLimit } from "@/lib/preview-sql";
 import { getProjectWithDatabasesAndCredentials } from "@/lib/projects";
 import {
   checkRateLimit,
@@ -115,6 +115,16 @@ export async function POST(
     return Response.json({ error: "not found" }, { status: 404 });
   }
   const { project, databases } = result;
+
+  // Pause is a kill switch: the MCP proxy rejects a paused project before
+  // spawning/forwarding (resolve.ts → reason "paused" → 403). This preview
+  // executes through the same engine, so it must honor the switch too — refuse
+  // before any credential decrypt or spawn. Distinct 403 so the owner can tell
+  // "paused" apart from a missing project.
+  if (project.pausedAt) {
+    return Response.json({ error: "project_paused" }, { status: 403 });
+  }
+
   if (!databases.some((d) => d.name === parsed.data.database)) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
@@ -185,6 +195,13 @@ export async function POST(
     maskSalt = createHmac("sha256", master).update(project.id).digest("hex");
   }
 
+  // Bound execution: append a top-level LIMIT when the statement isn't already
+  // limited, so the engine can't execute an unbounded `select * from huge_table`
+  // and ship the whole materialized result across the engine→web boundary. A
+  // top-level LIMIT preserves the column provenance the masker needs (a subquery
+  // wrap would not), so masking still fires. rowLimit is the post-hoc backstop.
+  const boundedSql = withRowLimit(parsed.data.sql, MAX_PREVIEW_ROWS);
+
   const outcome = await ctx.preview(
     {
       projectId: project.id,
@@ -194,7 +211,7 @@ export async function POST(
     },
     {
       database: parsed.data.database,
-      sql: parsed.data.sql,
+      sql: boundedSql,
       intent: PREVIEW_INTENT,
       rowLimit: MAX_PREVIEW_ROWS,
     },
