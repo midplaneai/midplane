@@ -10,7 +10,7 @@
 // Pure module (no DB, no client-only deps) so it unit-tests trivially and can
 // run either server-side (the scan API) or in a preview.
 
-import type { MaskTransform } from "@midplane-cloud/db/policy";
+import type { MaskRule } from "@midplane-cloud/db/policy";
 
 export type PiiCategory =
   | "email"
@@ -27,42 +27,40 @@ export type PiiConfidence = "high" | "medium" | "low";
 export interface PiiMatch {
   category: PiiCategory;
   confidence: PiiConfidence;
-  /** A sensible default transform for this category; the user can change it. */
-  suggestedTransform: MaskTransform;
+  /** A sensible default mask rule for this category + column type; the user can
+   *  change it in the picker. Always type-valid (see suggestTransform). */
+  suggestedTransform: MaskRule;
 }
 
 // Ordered most-specific → least-specific; the first match wins so "ssn" beats a
 // generic "name" substring and "email" beats nothing. Each rule carries the
-// confidence and a default transform. A text-token transform (keep-last-4 or
-// full-redact) on a NON-text column would silently change the column's type, so
-// on such a column the suggestion downgrades to null-out (type-preserving — see
-// classifyColumn).
+// category + confidence; the suggested transform is derived from the category
+// AND the column's type (see suggestTransform) so it's always type-valid.
 interface Rule {
   category: PiiCategory;
   test: RegExp;
   confidence: PiiConfidence;
-  transform: MaskTransform;
 }
 
 // Column names are normalized to lower snake/word form before matching.
 const RULES: Rule[] = [
-  { category: "ssn", test: /(^|_)ssn($|_)|social_secur|(^|_)tin($|_)|tax_?id/, confidence: "high", transform: "keep-last-4" },
-  { category: "credit_card", test: /credit_?card|card_?number|(^|_)ccnum|cc_?number|card_?no(^|$|_)|(^|_)pan($|_)/, confidence: "high", transform: "keep-last-4" },
-  { category: "email", test: /(^|_)e_?mail($|_)|email_addr|mail_address/, confidence: "high", transform: "full-redact" },
-  { category: "phone", test: /(^|_)phone($|_)|phone_?number|mobile_?(no|number)?|(^|_)tel($|_)|telephone|(^|_)fax($|_)/, confidence: "high", transform: "keep-last-4" },
-  { category: "dob", test: /date_?of_?birth|(^|_)dob($|_)|birth_?date|birthday/, confidence: "high", transform: "full-redact" },
+  { category: "ssn", test: /(^|_)ssn($|_)|social_secur|(^|_)tin($|_)|tax_?id/, confidence: "high" },
+  { category: "credit_card", test: /credit_?card|card_?number|(^|_)ccnum|cc_?number|card_?no(^|$|_)|(^|_)pan($|_)/, confidence: "high" },
+  { category: "email", test: /(^|_)e_?mail($|_)|email_addr|mail_address/, confidence: "high" },
+  { category: "phone", test: /(^|_)phone($|_)|phone_?number|mobile_?(no|number)?|(^|_)tel($|_)|telephone|(^|_)fax($|_)/, confidence: "high" },
+  { category: "dob", test: /date_?of_?birth|(^|_)dob($|_)|birth_?date|birthday/, confidence: "high" },
   // Before "address" so "ip_address" classifies as ip, not a street address.
-  { category: "ip", test: /ip_?address|(^|_)ip($|_)/, confidence: "low", transform: "full-redact" },
-  { category: "address", test: /(^|_)address($|_)|street_?(addr|address|name)?|postal_?code|(^|_)zip(code)?($|_)/, confidence: "medium", transform: "full-redact" },
-  { category: "name", test: /first_?name|last_?name|full_?name|(^|_)fname($|_)|(^|_)lname($|_)|surname|given_?name|family_?name/, confidence: "medium", transform: "full-redact" },
+  { category: "ip", test: /ip_?address|(^|_)ip($|_)/, confidence: "low" },
+  { category: "address", test: /(^|_)address($|_)|street_?(addr|address|name)?|postal_?code|(^|_)zip(code)?($|_)/, confidence: "medium" },
+  { category: "name", test: /first_?name|last_?name|full_?name|(^|_)fname($|_)|(^|_)lname($|_)|surname|given_?name|family_?name/, confidence: "medium" },
   // Bare "name" is a weak signal (table_name, file_name, display_name): low.
-  { category: "name", test: /(^|_)name($|_)/, confidence: "low", transform: "full-redact" },
+  { category: "name", test: /(^|_)name($|_)/, confidence: "low" },
 ];
 
-// Postgres data types the text-token transforms can operate on (text-like). On
-// anything else, a keep-last-4 / full-redact suggestion downgrades to null-out
+// Postgres data types `partial` (text-only) and the text-token transforms can
+// operate on. On anything else, a text suggestion downgrades to null-out
 // (type-preserving), mirroring the picker's type-gate and the engine's text-only
-// keep-last-4.
+// `partial`.
 const TEXT_TYPES = new Set([
   "text",
   "character varying",
@@ -74,34 +72,64 @@ const TEXT_TYPES = new Set([
   "name",
 ]);
 
+// Date/timestamp types `generalize: year` (the dob → birth-year suggestion) is
+// valid for. time/timetz are excluded — year/month/day on a time-of-day is
+// meaningless, so a dob stored that way falls back to null-out.
+const DATE_TYPES = new Set([
+  "date",
+  "timestamp",
+  "timestamp without time zone",
+  "timestamp with time zone",
+  "timestamptz",
+]);
+
 function isTextType(dataType: string): boolean {
   const t = dataType.toLowerCase().trim();
   return TEXT_TYPES.has(t) || t.startsWith("character") || t.startsWith("varchar");
 }
 
+function isDateType(dataType: string): boolean {
+  const t = dataType.toLowerCase().trim();
+  return DATE_TYPES.has(t) || t.startsWith("timestamp");
+}
+
+// Pick a type-valid default rule for a category. Text PII reveals the last 4
+// (partial) or fully redacts; a dob on a real date column generalizes to the
+// birth YEAR (identifier dies, age-cohort analytics survive). Anything without a
+// type-valid suggestion falls back to null-out (type-preserving for every type),
+// so a suggested mask NEVER silently changes a column's type or rejects.
+function suggestTransform(category: PiiCategory, dataType: string): MaskRule {
+  const text = isTextType(dataType);
+  switch (category) {
+    case "ssn":
+    case "credit_card":
+    case "phone":
+      return text ? { t: "partial", keepEnd: 4 } : "null-out";
+    case "dob":
+      return isDateType(dataType) ? { t: "generalize", granularity: "year" } : "null-out";
+    case "email":
+    case "name":
+    case "address":
+    case "ip":
+      return text ? "full-redact" : "null-out";
+  }
+}
+
 /**
  * Classify a column as likely PII from its name + Postgres data type, or null.
  * The match is the first (most-specific) rule whose pattern hits the normalized
- * column name. A text-token suggestion (keep-last-4 / full-redact) on a non-text
- * column downgrades to null-out, so the suggestion is always type-valid.
+ * column name; the suggested transform is then derived from the category and the
+ * column's type, so it is always type-valid (the engine fail-closes on an
+ * out-of-domain transform).
  */
 export function classifyColumn(name: string, dataType: string): PiiMatch | null {
   const normalized = name.toLowerCase();
   for (const rule of RULES) {
     if (rule.test.test(normalized)) {
-      let transform = rule.transform;
-      // A text-token transform on a non-text column would change the column's
-      // type; null-out is type-preserving for any type, so prefer it there.
-      if (
-        !isTextType(dataType) &&
-        (transform === "keep-last-4" || transform === "full-redact")
-      ) {
-        transform = "null-out";
-      }
       return {
         category: rule.category,
         confidence: rule.confidence,
-        suggestedTransform: transform,
+        suggestedTransform: suggestTransform(rule.category, dataType),
       };
     }
   }

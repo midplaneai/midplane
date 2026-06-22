@@ -30,17 +30,53 @@ describe("config: column_masks parsing", () => {
 
   test("multi-DB shape resolves per-entry column_masks", () => {
     const p = parsePolicyYaml(
-      "databases:\n  - name: prod\n    url: postgres://x\n    column_masks:\n      public.users:\n        email: keep-last-4\n",
+      "databases:\n  - name: prod\n    url: postgres://x\n    column_masks:\n      public.users:\n        email: full-redact\n",
       "test",
     );
     const db = p.databases.find((d) => d.name === "prod")!;
-    expect(db.columnMasks).toEqual({ "public.users": { email: "keep-last-4" } });
+    expect(db.columnMasks).toEqual({ "public.users": { email: "full-redact" } });
   });
 
-  test("an unknown transform name is rejected at parse (engine-sourced enum)", () => {
+  test("parses the parametric object forms (partial + generalize)", () => {
+    const p = parsePolicyYaml(
+      [
+        "column_masks:",
+        "  public.users:",
+        "    ssn:",
+        "      t: partial",
+        "      keepEnd: 4",
+        "    dob:",
+        "      t: generalize",
+        "      granularity: year",
+        "    salary:",
+        "      t: generalize",
+        "      granularity: 1000",
+        "",
+      ].join("\n"),
+      "test",
+    );
+    expect(p.databases[0]!.columnMasks).toEqual({
+      "public.users": {
+        ssn: { t: "partial", keepEnd: 4 },
+        dob: { t: "generalize", granularity: "year" },
+        salary: { t: "generalize", granularity: 1000 },
+      },
+    });
+  });
+
+  test("an unknown transform kind is rejected at parse (engine-sourced union)", () => {
     expect(() =>
       parsePolicyYaml(
         "column_masks:\n  public.users:\n    email: format-preserving-fake\n",
+        "test",
+      ),
+    ).toThrow();
+  });
+
+  test("the retired keep-last-4 name is rejected at parse (absorbed by partial)", () => {
+    expect(() =>
+      parsePolicyYaml(
+        "column_masks:\n  public.users:\n    ssn: keep-last-4\n",
         "test",
       ),
     ).toThrow();

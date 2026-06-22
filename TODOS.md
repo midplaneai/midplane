@@ -92,22 +92,37 @@ Deferred work captured during reviews. Each item has enough context to pick up c
 
 ## Masking follow-ups
 
-### Publish engine image + bump pin for the `null-out` transform (P1 — engine-first sequencing)
-- **What:** The `null-out` masking transform (phase 2.0) is in the source on both
-  sides of the deployable boundary, but the deployed engine image is pinned at
-  `0.12.0`, which predates it. Cut `engine-v0.13.0` (CI builds + publishes
-  `midplane/midplane:0.13.0` + digest), then bump `OSS_ENGINE_IMAGE` in
+### Publish engine image + bump pin for `null-out` + phase 2.1 (P0 — BLOCKING, engine-first sequencing)
+- **What:** Phases 2.0 (`null-out`) and 2.1 (the `MaskRule` value-shape union +
+  `partial` + `generalize`) are in the source on both sides of the deployable
+  boundary, but the deployed engine image is pinned at `0.12.0`, which predates
+  all of it. Cut one engine release (e.g. `engine-v0.13.0` — CI builds +
+  publishes `midplane/midplane:0.13.0` + digest) that carries the union-aware
+  zod + `applyTransform` switch, then bump `OSS_ENGINE_IMAGE` in
   `packages/router/src/oss-image.ts`, run `bun scripts/check-image-pin.ts`, and
-  update every drift site until green.
-- **Why:** Until the published engine knows `null-out`, the cloud picker will
-  offer it and serialize it into the policy YAML, but a spawned `0.12.0` engine
-  fails CLOSED on the unknown transform (rejects the result set — safe, never
-  leaks — but the picked mask breaks the agent's query). Engine-first ordering
-  closes that window.
+  update every drift site until green. **Only then** deploy the cloud (the new
+  value-shape YAML emit + the DB migration below).
+- **Why (2.1 raises the stakes vs 2.0):** 2.0's `null-out` is a bare string an old
+  engine merely rejects per-query. 2.1 changes the *value shape*: the cloud now
+  emits `partial`/`generalize` as nested **objects** (`{ t: partial, keepEnd: 4 }`),
+  which the `0.12.0` engine's zod `ColumnMasksSchema` (bare-string only) rejects
+  at **boot** — so the whole DB fails to spawn, not just one query. Engine-first
+  ordering closes that window.
+- **Migration 0002 is part of the hazard — do NOT run it before the engine bump.**
+  `packages/db/migrations/0002_mask_keep_last_4_to_partial.sql` rewrites stored
+  `"keep-last-4"` values to `{ "t": "partial", "keepEnd": 4 }`. After it runs, the
+  cloud emits the object form for those DBs too — so an existing masked DB on the
+  un-bumped `0.12.0` engine would stop spawning. The deploy order is strict:
+  **engine image publish → `OSS_ENGINE_IMAGE` bump → cloud deploy (which applies
+  0002).** A back-compat reader (`normalizeMaskRule`) already accepts the legacy
+  bare `keep-last-4` at read time, so the migration is a data-at-rest cleanup, not
+  a correctness prerequisite — it can even be deferred to a deploy *after* the
+  engine bump if extra caution is wanted.
 - **Context:** Same sequencing as the original masking launch (engine code →
   image publish → pin bump → cloud offering). Pin SSOT + drift sites are
-  documented in AGENTS.md ("OSS image version pin sites"). Roadmap for the rest
-  of the catalog (2.1 `partial`/`generalize`, 2.2 `pseudonymize`/`noise`) is in
+  documented in AGENTS.md ("OSS image version pin sites"); the transform-kind
+  drift guard is `bun scripts/check-mask-transforms.ts` (CI: `check-pins.yml`).
+  Roadmap for 2.2 (`pseudonymize`/`noise`) is in
   `docs/designs/masking-transform-catalog.md`.
 
 ## Billing / pricing follow-ups

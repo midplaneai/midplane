@@ -25,7 +25,7 @@
 
 import { useMemo, useState } from "react";
 
-import type { ColumnMasksConfig } from "@midplane-cloud/db/policy";
+import { maskRuleLabel, type ColumnMasksConfig } from "@midplane-cloud/db/policy";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -87,9 +87,9 @@ export function MaskedPreviewPanel({
     const names = new Set<string>();
     const refs: string[] = [];
     for (const [table, cols] of Object.entries(columnMasks)) {
-      for (const [col, transform] of Object.entries(cols)) {
+      for (const [col, rule] of Object.entries(cols)) {
         names.add(col.toLowerCase());
-        refs.push(`${table}.${col} · ${transform}`);
+        refs.push(`${table}.${col} · ${maskRuleLabel(rule)}`);
       }
     }
     return { maskedNames: names, maskedRefs: refs.sort() };

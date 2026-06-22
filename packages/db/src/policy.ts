@@ -609,22 +609,72 @@ function emitTenantScope(
 // transform is rejected here at save time AND the engine rejects it at runtime
 // (fail-closed), so a skew can never silently pass a column through unmasked.
 
+/** Date-truncation unit, or a positive numeric bucket width (e.g. 1000 → salary
+ *  band). Mirrors the engine's Granularity. */
+export type Granularity = "year" | "month" | "day" | number;
+
+/** A declared mask rule: a param-free PRESET (a bare string) or a PARAMETRIC
+ *  transform tagged by its `t` discriminant. Mirrors the engine's MaskRule
+ *  (engine/packages/engine/src/masking/transforms.ts); the two are kept in
+ *  lockstep by scripts/check-mask-transforms.ts. The v1 `keep-last-4` name is
+ *  retired — absorbed by { t: "partial", keepEnd: 4 } (a back-compat reader +
+ *  a forward DB codemod migrate old rows). */
+export type MaskRule =
+  | "full-redact"
+  | "null-out"
+  | "consistent-hash"
+  | { t: "partial"; keepStart?: number; keepEnd?: number; glyph?: string }
+  | { t: "generalize"; granularity: Granularity };
+
+/** "schema.table" -> (column name -> mask rule). */
+export type ColumnMasksConfig = Record<string, Record<string, MaskRule>>;
+
+/** Param-free preset rule names (apply to any column type). */
+export const MASK_RULE_PRESETS = ["full-redact", "null-out", "consistent-hash"] as const;
+export type MaskRulePreset = (typeof MASK_RULE_PRESETS)[number];
+
+/** Date-truncation units a `generalize` rule accepts (alongside a positive
+ *  integer bucket width). */
+export const GRANULARITY_UNITS = ["year", "month", "day"] as const;
+
+/** The transform KINDS the catalog offers — preset names + parametric `t`
+ *  discriminants. Drift-checked against the engine's TRANSFORM_NAMES in the same
+ *  order (scripts/check-mask-transforms.ts). Replaces the v1 bare-string list;
+ *  the picker and the drift check key off it. */
 export const MASK_TRANSFORMS = [
   "full-redact",
   "null-out",
   "consistent-hash",
-  "keep-last-4",
+  "partial",
+  "generalize",
 ] as const;
-export type MaskTransform = (typeof MASK_TRANSFORMS)[number];
+export type MaskTransformKind = (typeof MASK_TRANSFORMS)[number];
 
-/** "schema.table" -> (column name -> transform). */
-export type ColumnMasksConfig = Record<string, Record<string, MaskTransform>>;
+/** The discriminant of a rule: the preset string itself, or the object's `t`. */
+export function maskRuleKind(rule: MaskRule): MaskTransformKind {
+  return typeof rule === "string" ? rule : rule.t;
+}
+
+/** A compact human label for a rule — UI chips + context lines (not YAML). */
+export function maskRuleLabel(rule: MaskRule): string {
+  if (typeof rule === "string") return rule;
+  if (rule.t === "partial") {
+    const parts: string[] = [];
+    if (rule.keepStart) parts.push(`first ${rule.keepStart}`);
+    if (rule.keepEnd) parts.push(`last ${rule.keepEnd}`);
+    return parts.length > 0 ? `partial · ${parts.join(", ")}` : "partial";
+  }
+  return `generalize · ${rule.granularity}`;
+}
 
 /** Zero-value config — no masked columns. Default for new project rows. */
 export const EMPTY_COLUMN_MASKS: ColumnMasksConfig = {};
 
 const MAX_MASK_TABLES = 1000;
 const MAX_MASK_COLUMNS_PER_TABLE = 256;
+// `partial` keepStart/keepEnd bounds — generous but finite (a value longer than
+// this isn't a realistic PII format, and an unbounded keep is a footgun).
+const MAX_KEEP_TOTAL = 64;
 
 export interface ColumnMasksValidationError {
   path: string;
@@ -634,20 +684,89 @@ export type ColumnMasksValidationResult =
   | { ok: true; value: ColumnMasksConfig }
   | { ok: false; errors: ColumnMasksValidationError[] };
 
-function isMaskTransform(v: unknown): v is MaskTransform {
+function isMaskRulePreset(v: unknown): v is MaskRulePreset {
   return (
     typeof v === "string" &&
-    (MASK_TRANSFORMS as readonly string[]).includes(v)
+    (MASK_RULE_PRESETS as readonly string[]).includes(v)
   );
 }
 
-const maskTransformMessage = `transform must be one of ${MASK_TRANSFORMS.join(", ")}`;
+function isNonNegInt(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0;
+}
+
+const maskRuleMessage =
+  `transform must be one of ${MASK_TRANSFORMS.join(", ")} ` +
+  `(parametric kinds as an object, e.g. { t: "partial", keepEnd: 4 })`;
+
+/** Normalize + validate one raw rule value into a canonical MaskRule, or return
+ *  a per-field error message. Accepts legacy bare strings — including the retired
+ *  "keep-last-4", normalized to { t: "partial", keepEnd: 4 } — so jsonb rows
+ *  written before the value-shape migration still read (the forward DB codemod
+ *  rewrites them at rest). The canonical object form is MINIMAL: zero keeps and a
+ *  default glyph are omitted, so re-validation round-trips and keep-last-4
+ *  normalizes to exactly { t: "partial", keepEnd: 4 }. */
+export function normalizeMaskRule(
+  raw: unknown,
+): { ok: true; value: MaskRule } | { ok: false; message: string } {
+  if (typeof raw === "string") {
+    if (raw === "keep-last-4") return { ok: true, value: { t: "partial", keepEnd: 4 } };
+    if (isMaskRulePreset(raw)) return { ok: true, value: raw };
+    return { ok: false, message: maskRuleMessage };
+  }
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, message: maskRuleMessage };
+  }
+  const o = raw as Record<string, unknown>;
+  if (o.t === "partial") {
+    const keepStart = o.keepStart ?? 0;
+    const keepEnd = o.keepEnd ?? 0;
+    if (!isNonNegInt(keepStart)) {
+      return { ok: false, message: "partial.keepStart must be a non-negative integer" };
+    }
+    if (!isNonNegInt(keepEnd)) {
+      return { ok: false, message: "partial.keepEnd must be a non-negative integer" };
+    }
+    if (keepStart + keepEnd > MAX_KEEP_TOTAL) {
+      return { ok: false, message: `partial keepStart + keepEnd must be <= ${MAX_KEEP_TOTAL}` };
+    }
+    let glyph: string | undefined;
+    if (o.glyph !== undefined) {
+      if (typeof o.glyph !== "string" || [...o.glyph].length !== 1) {
+        return { ok: false, message: "partial.glyph must be a single character" };
+      }
+      glyph = o.glyph;
+    }
+    const value: { t: "partial"; keepStart?: number; keepEnd?: number; glyph?: string } = {
+      t: "partial",
+    };
+    if (keepStart > 0) value.keepStart = keepStart;
+    if (keepEnd > 0) value.keepEnd = keepEnd;
+    if (glyph !== undefined) value.glyph = glyph;
+    return { ok: true, value };
+  }
+  if (o.t === "generalize") {
+    const g = o.granularity;
+    if (typeof g === "string" && (GRANULARITY_UNITS as readonly string[]).includes(g)) {
+      return { ok: true, value: { t: "generalize", granularity: g as "year" | "month" | "day" } };
+    }
+    if (typeof g === "number" && Number.isInteger(g) && g > 0) {
+      return { ok: true, value: { t: "generalize", granularity: g } };
+    }
+    return {
+      ok: false,
+      message: "generalize.granularity must be year, month, day, or a positive integer",
+    };
+  }
+  return { ok: false, message: maskRuleMessage };
+}
 
 /** Validate untrusted input into a typed ColumnMasksConfig. Table names use
  *  the same schema-qualified shape as table_access; column names are single
- *  Postgres identifiers; transforms are the closed MASK_TRANSFORMS enum. A
- *  table whose columns all fail validation is dropped. Structured errors so
- *  the dashboard form can surface them per-field. */
+ *  Postgres identifiers; each rule is normalized + validated per-shape by
+ *  normalizeMaskRule (legacy bare strings + the new object forms). A table whose
+ *  columns all fail validation is dropped. Structured errors so the dashboard
+ *  form can surface them per-field. */
 export function validateColumnMasks(input: unknown): ColumnMasksValidationResult {
   if (input == null) return { ok: true, value: {} };
   if (typeof input !== "object" || Array.isArray(input)) {
@@ -683,17 +802,18 @@ export function validateColumnMasks(input: unknown): ColumnMasksValidationResult
         message: `too many columns (max ${MAX_MASK_COLUMNS_PER_TABLE})`,
       });
     }
-    const out: Record<string, MaskTransform> = {};
+    const out: Record<string, MaskRule> = {};
     for (const [col, t] of colEntries) {
       if (!isIdent(col)) {
         errors.push({ path: `${table}.${col}`, message: identMessage });
         continue;
       }
-      if (!isMaskTransform(t)) {
-        errors.push({ path: `${table}.${col}`, message: maskTransformMessage });
+      const rule = normalizeMaskRule(t);
+      if (!rule.ok) {
+        errors.push({ path: `${table}.${col}`, message: rule.message });
         continue;
       }
-      out[col] = t;
+      out[col] = rule.value;
     }
     if (Object.keys(out).length > 0) value[table] = out;
   }
@@ -737,15 +857,52 @@ function emitColumnMasks(lines: string[], masks: ColumnMasksConfig): void {
     const colEntries = Object.entries(cols).sort(([a], [b]) =>
       a < b ? -1 : a > b ? 1 : 0,
     );
-    for (const [col, t] of colEntries) {
-      if (!IDENT_RE.test(col) || !isMaskTransform(t)) {
+    for (const [col, rule] of colEntries) {
+      if (!IDENT_RE.test(col)) {
         throw new Error(
-          `serializeMultiDbPolicyToYaml: column_masks ${table}.${col} -> ${String(t)} is invalid`,
+          `serializeMultiDbPolicyToYaml: column_masks ${table}.${col} column name needs YAML quoting`,
         );
       }
-      lines.push(`        ${col}: ${t}`);
+      // Defense-in-depth: re-normalize before emitting so the serializer can
+      // never write a rule the engine zod would reject (mirrors emitTenantScope).
+      const norm = normalizeMaskRule(rule);
+      if (!norm.ok) {
+        throw new Error(
+          `serializeMultiDbPolicyToYaml: column_masks ${table}.${col} is invalid: ${norm.message}`,
+        );
+      }
+      emitMaskRule(lines, col, norm.value);
     }
   }
+}
+
+// Emit one column's mask rule. A param-free preset stays inline (`col: name`);
+// a parametric rule becomes a nested block map with a FIXED key order, so the
+// output is deterministic and the engine's js-yaml + zod parse it back to the
+// same object. (`partial` keepStart/keepEnd/glyph; `generalize` granularity.)
+function emitMaskRule(lines: string[], col: string, rule: MaskRule): void {
+  if (typeof rule === "string") {
+    lines.push(`        ${col}: ${rule}`);
+    return;
+  }
+  lines.push(`        ${col}:`);
+  lines.push(`          t: ${rule.t}`);
+  if (rule.t === "partial") {
+    if (rule.keepStart !== undefined) lines.push(`          keepStart: ${rule.keepStart}`);
+    if (rule.keepEnd !== undefined) lines.push(`          keepEnd: ${rule.keepEnd}`);
+    // The glyph can be any single char (•, #, *, :) — double-quote it so a
+    // YAML-special glyph round-trips through js-yaml as a plain string.
+    if (rule.glyph !== undefined) lines.push(`          glyph: ${yamlDoubleQuote(rule.glyph)}`);
+  } else {
+    // year/month/day are safe plain scalars; a bucket width is a plain number.
+    lines.push(`          granularity: ${rule.granularity}`);
+  }
+}
+
+// Minimal YAML double-quoted scalar — escapes backslash + double-quote. Used for
+// the single-char `partial` glyph, the only free-form string the masks emit.
+function yamlDoubleQuote(s: string): string {
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 // --- Legacy single-DB serializer (admin hot-reload) -------------------------

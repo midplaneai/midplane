@@ -1,7 +1,7 @@
 // PII classification heuristics (design D1 scan). Pure name+type rules — these
 // pins document what the assistive scan flags and the default transform it
 // suggests. False positives are acceptable (the user confirms); these tests pin
-// the obvious hits, the confidence tiers, and the keep-last-4 type-gate.
+// the obvious hits, the confidence tiers, and the type-gated suggestions.
 
 import { describe, expect, it } from "vitest";
 
@@ -15,34 +15,43 @@ describe("classifyColumn: high-confidence categories", () => {
     }
   });
 
-  it("flags ssn / tax id → keep-last-4 on text columns", () => {
+  it("flags ssn / tax id → partial{keepEnd:4} on text columns", () => {
     for (const n of ["ssn", "social_security_number", "tax_id", "tin"]) {
       const m = classifyColumn(n, "text");
-      expect(m).toMatchObject({ category: "ssn", confidence: "high", suggestedTransform: "keep-last-4" });
+      expect(m).toMatchObject({ category: "ssn", confidence: "high" });
+      expect(m?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
     }
   });
 
-  it("flags phone → keep-last-4", () => {
+  it("flags phone → partial{keepEnd:4}", () => {
     for (const n of ["phone", "phone_number", "mobile_number", "telephone", "fax"]) {
       const m = classifyColumn(n, "varchar");
       expect(m?.category).toBe("phone");
-      expect(m?.suggestedTransform).toBe("keep-last-4");
+      expect(m?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
     }
   });
 
-  it("flags credit card → keep-last-4", () => {
+  it("flags credit card → partial{keepEnd:4}", () => {
     for (const n of ["credit_card", "card_number", "cc_number", "pan"]) {
-      expect(classifyColumn(n, "text")?.category).toBe("credit_card");
+      const m = classifyColumn(n, "text");
+      expect(m?.category).toBe("credit_card");
+      expect(m?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
     }
   });
 
-  it("flags date of birth → null-out on date columns (type-preserving)", () => {
+  it("flags date of birth → generalize{year} on date columns (analytics survive)", () => {
     for (const n of ["dob", "date_of_birth", "birth_date", "birthday"]) {
       const m = classifyColumn(n, "date");
-      expect(m).toMatchObject({ category: "dob", suggestedTransform: "null-out" });
+      expect(m?.category).toBe("dob");
+      expect(m?.suggestedTransform).toEqual({ t: "generalize", granularity: "year" });
     }
-    // A dob stored as text keeps full-redact (the text token is type-valid).
-    expect(classifyColumn("dob", "text")?.suggestedTransform).toBe("full-redact");
+    // timestamp columns also generalize.
+    expect(classifyColumn("dob", "timestamp with time zone")?.suggestedTransform).toEqual({
+      t: "generalize",
+      granularity: "year",
+    });
+    // A dob stored as text has no type-valid generalize → null-out fallback.
+    expect(classifyColumn("dob", "text")?.suggestedTransform).toBe("null-out");
   });
 });
 
@@ -62,9 +71,9 @@ describe("classifyColumn: confidence tiers + ambiguity", () => {
   });
 });
 
-describe("classifyColumn: type-gate for text-token transforms", () => {
-  it("downgrades a text-token suggestion → null-out for a non-text column", () => {
-    // An ssn stored as a bigint can't keep-last-4 (text-only); a text token would
+describe("classifyColumn: type-gate for type-changing transforms", () => {
+  it("downgrades a text suggestion → null-out for a non-text column", () => {
+    // An ssn stored as a bigint can't `partial` (text-only); a text token would
     // change the column's type, so suggest null-out (type-preserving).
     expect(classifyColumn("ssn", "bigint")).toMatchObject({
       category: "ssn",
@@ -75,9 +84,9 @@ describe("classifyColumn: type-gate for text-token transforms", () => {
     expect(classifyColumn("ip_address", "inet")?.suggestedTransform).toBe("null-out");
   });
 
-  it("keeps keep-last-4 for text-like types", () => {
-    expect(classifyColumn("ssn", "character varying")?.suggestedTransform).toBe("keep-last-4");
-    expect(classifyColumn("phone", "varchar")?.suggestedTransform).toBe("keep-last-4");
+  it("keeps partial{keepEnd:4} for text-like types", () => {
+    expect(classifyColumn("ssn", "character varying")?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
+    expect(classifyColumn("phone", "varchar")?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
   });
 });
 

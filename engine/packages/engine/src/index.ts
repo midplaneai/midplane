@@ -35,11 +35,21 @@ export type {
 
 export {
   applyTransform,
+  isPresetName,
+  isTransformKind,
   isTransformName,
+  ruleKind,
+  TRANSFORM_KINDS,
   TRANSFORM_NAMES,
   UnknownTransformError,
 } from "./masking/transforms.ts";
-export type { TransformName, TransformContext } from "./masking/transforms.ts";
+export type {
+  Granularity,
+  MaskRule,
+  TransformContext,
+  TransformKind,
+  TransformName,
+} from "./masking/transforms.ts";
 export { maskResultSet } from "./masking/mask-result-set.ts";
 export type {
   Catalog,

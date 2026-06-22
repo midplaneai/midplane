@@ -8,12 +8,19 @@
 //
 // Calibrated to DESIGN.md: table-first, lowercase-mono headers, semantic `warn`
 // for an exposed column and `allow` for a masked one (no fourth color), hairlines
-// not shadows, and a persistent result-redaction note. keep-last-4 is gated to
-// text columns (matching the engine's text-only keep-last-4).
+// not shadows, and a persistent result-redaction note. The transform editor
+// type-gates each rule (partial → text, generalize → date/numeric), matching the
+// engine's fail-closed input-type domains.
 
 import { useEffect, useState, useTransition } from "react";
 
-import { MASK_TRANSFORMS, type MaskTransform } from "@midplane-cloud/db/policy";
+import {
+  MASK_TRANSFORMS,
+  maskRuleKind,
+  maskRuleLabel,
+  type MaskRule,
+  type MaskTransformKind,
+} from "@midplane-cloud/db/policy";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +28,7 @@ import { Button } from "@/components/ui/button";
 interface PiiMatch {
   category: string;
   confidence: "high" | "medium" | "low";
-  suggestedTransform: MaskTransform;
+  suggestedTransform: MaskRule;
 }
 interface ScannedColumn {
   table: string;
@@ -29,7 +36,7 @@ interface ScannedColumn {
   dataType: string;
   match: PiiMatch;
 }
-type ColumnMasks = Record<string, Record<string, MaskTransform>>;
+type ColumnMasks = Record<string, Record<string, MaskRule>>;
 
 type SaveResult = { ok: true } | { ok: false; error: string };
 
@@ -44,8 +51,8 @@ interface Row {
   dataType: string;
   category: string | null;
   confidence: PiiMatch["confidence"] | null;
-  masked: MaskTransform | null;
-  suggested: MaskTransform | null;
+  masked: MaskRule | null;
+  suggested: MaskRule | null;
 }
 
 const TEXT_TYPES = new Set([
@@ -59,6 +66,35 @@ const TEXT_TYPES = new Set([
 ]);
 const isTextType = (t: string) =>
   TEXT_TYPES.has(t.toLowerCase().trim()) || t.toLowerCase().startsWith("character");
+
+const NUMERIC_TYPES = new Set([
+  "smallint",
+  "integer",
+  "bigint",
+  "int",
+  "int2",
+  "int4",
+  "int8",
+  "numeric",
+  "decimal",
+  "real",
+  "double precision",
+  "float",
+  "float4",
+  "float8",
+  "money",
+]);
+const isNumericType = (t: string) => NUMERIC_TYPES.has(t.toLowerCase().trim());
+
+const DATE_TYPES = new Set([
+  "date",
+  "timestamp",
+  "timestamp without time zone",
+  "timestamp with time zone",
+  "timestamptz",
+]);
+const isDateType = (t: string) =>
+  DATE_TYPES.has(t.toLowerCase().trim()) || t.toLowerCase().startsWith("timestamp");
 
 const Th = ({ children }: { children: React.ReactNode }) => (
   <th className="px-3.5 py-2.5 text-left font-mono text-[11.5px] font-normal lowercase tracking-[0.04em] text-subtle">
@@ -122,8 +158,8 @@ export function ExposureScan({
     });
   }
 
-  function setMask(table: string, column: string, transform: MaskTransform) {
-    commit({ ...masks, [table]: { ...(masks[table] ?? {}), [column]: transform } });
+  function setMask(table: string, column: string, rule: MaskRule) {
+    commit({ ...masks, [table]: { ...(masks[table] ?? {}), [column]: rule } });
   }
   function unmask(table: string, column: string) {
     const tableMasks = { ...(masks[table] ?? {}) };
@@ -214,15 +250,15 @@ export function ExposureScan({
                   </td>
                   <td className="px-3.5 py-2.5">
                     {r.masked !== null ? (
-                      <TransformSelect
+                      <TransformEditor
                         value={r.masked}
                         dataType={r.dataType}
                         disabled={pending}
-                        onChange={(t) => setMask(r.table, r.column, t)}
+                        onChange={(rule) => setMask(r.table, r.column, rule)}
                       />
                     ) : (
                       <span className="font-mono text-[11px] text-subtle">
-                        {r.suggested ? `${r.suggested}` : "—"}
+                        {r.suggested ? maskRuleLabel(r.suggested) : "—"}
                       </span>
                     )}
                   </td>
@@ -263,32 +299,237 @@ export function ExposureScan({
   );
 }
 
-function TransformSelect({
+const selectClass =
+  "rounded-none border border-input bg-background px-2 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]";
+const numInputClass =
+  "w-12 rounded-none border border-input bg-background px-1.5 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]";
+
+// The default rule when the user switches to a kind: a sensible preset whose
+// params the user then tunes. generalize defaults to year on a date column and a
+// 1000-width bucket on a numeric one.
+function defaultRuleForKind(kind: MaskTransformKind, dataType: string): MaskRule {
+  switch (kind) {
+    case "full-redact":
+    case "null-out":
+    case "consistent-hash":
+      return kind;
+    case "partial":
+      return { t: "partial", keepEnd: 4 };
+    case "generalize":
+      return isNumericType(dataType) && !isDateType(dataType)
+        ? { t: "generalize", granularity: 1000 }
+        : { t: "generalize", granularity: "year" };
+  }
+}
+
+// The transform + params editor. A kind <select> (type-gated: partial → text,
+// generalize → date/numeric) plus per-kind param inputs. Param inputs commit on
+// change for selects and on blur for free-text/number fields (each save respawns
+// the engine, so we don't persist per keystroke). An unknown column type
+// (dataType === "", a masked-but-unscanned column) leaves every kind enabled.
+function TransformEditor({
   value,
   dataType,
   disabled,
   onChange,
 }: {
-  value: MaskTransform;
+  value: MaskRule;
   dataType: string;
   disabled: boolean;
-  onChange: (t: MaskTransform) => void;
+  onChange: (rule: MaskRule) => void;
 }) {
-  const textOk = dataType === "" || isTextType(dataType);
+  const unknownType = dataType === "";
+  const textOk = unknownType || isTextType(dataType);
+  const numericOk = unknownType || isNumericType(dataType);
+  const dateOk = unknownType || isDateType(dataType);
+  const generalizeOk = dateOk || numericOk;
+  const kind = maskRuleKind(value);
+
+  function changeKind(next: MaskTransformKind) {
+    onChange(defaultRuleForKind(next, dataType));
+  }
+
+  const gateNote = (k: MaskTransformKind): string => {
+    if (k === "partial" && !textOk) return " (text only)";
+    if (k === "generalize" && !generalizeOk) return " (date / numeric only)";
+    return "";
+  };
+  const gateDisabled = (k: MaskTransformKind): boolean =>
+    (k === "partial" && !textOk) || (k === "generalize" && !generalizeOk);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        className={selectClass}
+        value={kind}
+        disabled={disabled}
+        aria-label="mask transform"
+        onChange={(e) => changeKind(e.target.value as MaskTransformKind)}
+      >
+        {MASK_TRANSFORMS.map((k) => (
+          <option key={k} value={k} disabled={gateDisabled(k)}>
+            {k}
+            {gateNote(k)}
+          </option>
+        ))}
+      </select>
+
+      {kind === "partial" && typeof value !== "string" && value.t === "partial" ? (
+        <PartialParams value={value} disabled={disabled} onChange={onChange} />
+      ) : null}
+
+      {kind === "generalize" && typeof value !== "string" && value.t === "generalize" ? (
+        <GeneralizeParams
+          value={value}
+          dataType={dataType}
+          dateOk={dateOk}
+          disabled={disabled}
+          onChange={onChange}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function PartialParams({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: { t: "partial"; keepStart?: number; keepEnd?: number; glyph?: string };
+  disabled: boolean;
+  onChange: (rule: MaskRule) => void;
+}) {
+  // Local drafts so typing doesn't save (and respawn) on every keystroke; commit
+  // on blur. Re-sync when the persisted value changes (e.g. an optimistic revert).
+  const [keepStart, setKeepStart] = useState(String(value.keepStart ?? 0));
+  const [keepEnd, setKeepEnd] = useState(String(value.keepEnd ?? 0));
+  const [glyph, setGlyph] = useState(value.glyph ?? "");
+  useEffect(() => {
+    setKeepStart(String(value.keepStart ?? 0));
+    setKeepEnd(String(value.keepEnd ?? 0));
+    setGlyph(value.glyph ?? "");
+  }, [value.keepStart, value.keepEnd, value.glyph]);
+
+  function commit() {
+    const ks = Math.max(0, Math.floor(Number(keepStart) || 0));
+    const ke = Math.max(0, Math.floor(Number(keepEnd) || 0));
+    const rule: { t: "partial"; keepStart?: number; keepEnd?: number; glyph?: string } = { t: "partial" };
+    if (ks > 0) rule.keepStart = ks;
+    if (ke > 0) rule.keepEnd = ke;
+    const g = [...glyph][0];
+    if (g) rule.glyph = g;
+    onChange(rule);
+  }
+
+  return (
+    <span className="flex items-center gap-1 font-mono text-[11px] text-subtle">
+      <label className="flex items-center gap-1">
+        start
+        <input
+          type="number"
+          min={0}
+          inputMode="numeric"
+          className={numInputClass}
+          value={keepStart}
+          disabled={disabled}
+          aria-label="keep start"
+          onChange={(e) => setKeepStart(e.target.value)}
+          onBlur={commit}
+        />
+      </label>
+      <label className="flex items-center gap-1">
+        end
+        <input
+          type="number"
+          min={0}
+          inputMode="numeric"
+          className={numInputClass}
+          value={keepEnd}
+          disabled={disabled}
+          aria-label="keep end"
+          onChange={(e) => setKeepEnd(e.target.value)}
+          onBlur={commit}
+        />
+      </label>
+      <label className="flex items-center gap-1">
+        glyph
+        <input
+          type="text"
+          maxLength={1}
+          className={`${numInputClass} w-8 text-center`}
+          value={glyph}
+          placeholder="•"
+          disabled={disabled}
+          aria-label="mask glyph"
+          onChange={(e) => setGlyph(e.target.value)}
+          onBlur={commit}
+        />
+      </label>
+    </span>
+  );
+}
+
+function GeneralizeParams({
+  value,
+  dataType,
+  dateOk,
+  disabled,
+  onChange,
+}: {
+  value: { t: "generalize"; granularity: "year" | "month" | "day" | number };
+  dataType: string;
+  dateOk: boolean;
+  disabled: boolean;
+  onChange: (rule: MaskRule) => void;
+}) {
+  // A numeric column buckets by a width; a date column truncates by a unit. When
+  // the type is unknown we offer the date units (the common dob case).
+  const numericMode = isNumericType(dataType) && !dateOk;
+  const [width, setWidth] = useState(
+    String(typeof value.granularity === "number" ? value.granularity : 1000),
+  );
+  useEffect(() => {
+    if (typeof value.granularity === "number") setWidth(String(value.granularity));
+  }, [value.granularity]);
+
+  const commitWidth = () => {
+    const w = Math.max(1, Math.floor(Number(width) || 1));
+    onChange({ t: "generalize", granularity: w });
+  };
+
+  if (numericMode || typeof value.granularity === "number") {
+    return (
+      <label className="flex items-center gap-1 font-mono text-[11px] text-subtle">
+        bucket
+        <input
+          type="number"
+          min={1}
+          inputMode="numeric"
+          className={`${numInputClass} w-16`}
+          value={width}
+          disabled={disabled}
+          aria-label="bucket width"
+          onChange={(e) => setWidth(e.target.value)}
+          onBlur={commitWidth}
+        />
+      </label>
+    );
+  }
+
   return (
     <select
-      className="rounded-none border border-input bg-background px-2 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]"
-      value={value}
+      className={selectClass}
+      value={value.granularity}
       disabled={disabled}
-      onChange={(e) => onChange(e.target.value as MaskTransform)}
+      aria-label="granularity"
+      onChange={(e) =>
+        onChange({ t: "generalize", granularity: e.target.value as "year" | "month" | "day" })
+      }
     >
-      {MASK_TRANSFORMS.map((t) => (
-        // keep-last-4 is text-only (engine + form gate); disable it on non-text.
-        <option key={t} value={t} disabled={t === "keep-last-4" && !textOk}>
-          {t}
-          {t === "keep-last-4" && !textOk ? " (text only)" : ""}
-        </option>
-      ))}
+      <option value="year">year</option>
+      <option value="month">month</option>
+      <option value="day">day</option>
     </select>
   );
 }
@@ -309,10 +550,10 @@ function mergeRows(columns: ScannedColumn[], masks: ColumnMasks): Row[] {
     });
   }
   for (const [table, cols] of Object.entries(masks)) {
-    for (const [column, transform] of Object.entries(cols)) {
+    for (const [column, rule] of Object.entries(cols)) {
       const key = `${table}.${column}`;
       const existing = byKey.get(key);
-      if (existing) existing.masked = transform;
+      if (existing) existing.masked = rule;
       else
         byKey.set(key, {
           table,
@@ -320,7 +561,7 @@ function mergeRows(columns: ScannedColumn[], masks: ColumnMasks): Row[] {
           dataType: "",
           category: null,
           confidence: null,
-          masked: transform,
+          masked: rule,
           suggested: null,
         });
     }

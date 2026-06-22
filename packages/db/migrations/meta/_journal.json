@@ -15,6 +15,13 @@
       "when": 1781875888621,
       "tag": "0001_moaning_maddog",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782100000000,
+      "tag": "0002_mask_keep_last_4_to_partial",
+      "breakpoints": true
     }
   ]
 }
