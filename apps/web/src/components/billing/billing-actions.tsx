@@ -13,10 +13,10 @@ import { authClient } from "@/lib/auth-client";
 // we never create a second subscription for an org that already has one.
 //
 // customerType "organization" + referenceId = orgId: we bill the org, not the
-// user. successUrl/cancelUrl/returnUrl point back at /billing. We do NOT pass a
-// seat count — the plans are seat-only (priceId === seatPriceId), so the plugin
-// sets quantity = member count at checkout and keeps it synced on member changes
-// (see lib/billing.ts); a client-supplied count would just go stale.
+// user. successUrl/cancelUrl/returnUrl point back at /billing. We pass no seat
+// count — the plans are flat (a fixed monthly price per org, no seatPriceId), so
+// there's no quantity to set; per-plan member caps are enforced separately (see
+// lib/seats.ts), not through Stripe.
 
 interface UpgradePlan {
   tier: "pro" | "team";

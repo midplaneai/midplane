@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// Create (or find) the Stripe TEST products + per-seat prices the cloud billing
-// flow needs, and print the env lines to paste into .env.local. Idempotent:
-// prices are keyed by a stable lookup_key, so re-running reuses what exists
-// instead of duplicating.
+// Create (or find) the Stripe TEST products + flat monthly prices the cloud
+// billing flow needs, and print the env lines to paste into .env.local.
+// Idempotent: prices are keyed by a stable lookup_key, so re-running reuses what
+// exists instead of duplicating.
 //
 // Usage (from repo root):
 //   STRIPE_SECRET_KEY=sk_test_... bun run scripts/stripe-setup.ts
@@ -10,11 +10,11 @@
 //   bun --env-file=.env.local run scripts/stripe-setup.ts
 //
 // Refuses a live key unless STRIPE_SETUP_ALLOW_LIVE=1 — this is a TEST-mode
-// bootstrap. The unit_amounts below are placeholder test prices ($/seat/month);
-// adjust them in the Stripe dashboard (or here) to the real numbers. Billing is
-// per-seat: each price is a per-seat recurring price used as a seat-only plan
-// (priceId === seatPriceId), so the @better-auth/stripe plugin sets quantity =
-// member count and auto-syncs it as members change (see apps/web/src/lib/billing.ts).
+// bootstrap. The unit_amounts below mirror the PRICING.md flat prices ($49 Pro,
+// $399 Team); adjust them in the Stripe dashboard (or here) to the real numbers.
+// Billing is FLAT: each price is a plain monthly recurring price registered with
+// no seatPriceId, so the @better-auth/stripe plugin bills one fixed-quantity (1)
+// subscription per org regardless of member count (see apps/web/src/lib/billing.ts).
 
 import Stripe from "stripe";
 
@@ -40,7 +40,7 @@ interface PlanSpec {
   tier: "pro" | "team";
   productName: string;
   lookupKey: string;
-  /** Placeholder TEST amount in cents, per seat, per month. */
+  /** Flat monthly amount in cents (per org, member-count-independent). */
   unitAmount: number;
   envVar: string;
 }
@@ -50,14 +50,14 @@ const PLANS: PlanSpec[] = [
     tier: "pro",
     productName: "Midplane Pro",
     lookupKey: "midplane_pro_monthly",
-    unitAmount: 2000,
+    unitAmount: 4900,
     envVar: "STRIPE_PRO_PRICE_ID",
   },
   {
     tier: "team",
     productName: "Midplane Team",
     lookupKey: "midplane_team_monthly",
-    unitAmount: 5000,
+    unitAmount: 39900,
     envVar: "STRIPE_TEAM_PRICE_ID",
   },
 ];
@@ -75,7 +75,7 @@ async function ensurePrice(plan: PlanSpec): Promise<string> {
     );
     return existing.data[0].id;
   }
-  // Create the product + a per-seat monthly recurring price in one call.
+  // Create the product + a flat monthly recurring price in one call.
   const price = await stripe.prices.create({
     currency: "usd",
     unit_amount: plan.unitAmount,
@@ -84,7 +84,7 @@ async function ensurePrice(plan: PlanSpec): Promise<string> {
     product_data: { name: plan.productName },
   });
   console.error(
-    `· ${plan.tier}: created price ${price.id} ($${(plan.unitAmount / 100).toFixed(2)}/seat/mo)`,
+    `· ${plan.tier}: created price ${price.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo)`,
   );
   return price.id;
 }

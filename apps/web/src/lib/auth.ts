@@ -230,7 +230,7 @@ function createAuth() {
       // Stripe billing (@better-auth/stripe). Conditionally loaded: [] in
       // self-host and in keyless cloud dev, so neither requires Stripe env to
       // boot; the configured plugin otherwise. Customer-per-org, referenceId =
-      // orgId, per-seat. MUST sit after organization() (it reads org membership)
+      // orgId, flat per-org. MUST sit after organization() (it reads org membership)
       // and before nextCookies(). It registers /api/auth/stripe/webhook —
       // already public via the /api/auth middleware prefix.
       ...buildStripePlugins(),
