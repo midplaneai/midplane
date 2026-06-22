@@ -19,6 +19,9 @@ import {
   type PseudonymizeKind,
   type TransformContext,
 } from "../../src/masking/transforms.ts";
+import { PSEUDONYM_EMAILS } from "../../src/masking/dictionaries/emails.ts";
+import { PSEUDONYM_NAMES } from "../../src/masking/dictionaries/names.ts";
+import { PSEUDONYM_PHONES } from "../../src/masking/dictionaries/phones.ts";
 
 const SALT: TransformContext = { salt: "project-salt-A" };
 const SALT_B: TransformContext = { salt: "project-salt-B" };
@@ -209,6 +212,27 @@ describe("masking/transforms: pseudonymize (realistic deterministic fakes)", () 
       // A newer cloud naming a dictionary this engine doesn't ship.
       applyTransform({ t: "pseudonymize", kind: "city" as PseudonymizeKind }, "Berlin", SALT),
     ).toThrow(UnknownTransformError);
+  });
+
+  test("never returns the original even when the input IS a dictionary entry", () => {
+    // The leak class: if the input already equals a dictionary value and the
+    // HMAC lands on that same entry, a naive `dict[idx]` would echo the
+    // plaintext (e.g. salt-A maps "Viktor Novak" → "Viktor Novak"). Feed EVERY
+    // entry of each dict, across multiple salts, and assert the fake is never
+    // the input — the deterministic probe must step past a self-map.
+    const DICTS = [
+      ["email", PSEUDONYM_EMAILS],
+      ["name", PSEUDONYM_NAMES],
+      ["phone", PSEUDONYM_PHONES],
+    ] as const;
+    for (const ctx of [SALT, SALT_B, { salt: "salt-A" }]) {
+      for (const [kind, dict] of DICTS) {
+        for (const entry of dict) {
+          const out = applyTransform({ t: "pseudonymize", kind }, entry, ctx);
+          expect(out).not.toBe(entry);
+        }
+      }
+    }
   });
 });
 

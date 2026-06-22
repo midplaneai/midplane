@@ -267,10 +267,21 @@ function pseudonymize(
   if (!dict || dict.length === 0) {
     throw new UnknownTransformError(`pseudonymize:${String(rule.kind)}`);
   }
-  const hex = createHmac("sha256", ctx.salt).update(stringify(value)).digest("hex");
+  const text = stringify(value);
+  const hex = createHmac("sha256", ctx.salt).update(text).digest("hex");
   // Full-width reduction (BigInt over the whole 256-bit digest) for an even
   // spread across the dictionary regardless of its length.
-  const idx = Number(BigInt(`0x${hex}`) % BigInt(dict.length));
+  let idx = Number(BigInt(`0x${hex}`) % BigInt(dict.length));
+  // NEVER emit the real value: if the chosen fake equals the input — which
+  // happens when the input is itself a dictionary entry (a name column already
+  // holding "Avery Bennett" whose HMAC lands on that same entry) — advance
+  // deterministically to the next distinct entry. Still a pure function of
+  // (salt, value), so the same input maps to the same fake and joins hold.
+  // Bounded by dict.length so it always terminates; entries are unique, so this
+  // steps at most once in practice (the bound only guards a degenerate dict).
+  for (let step = 0; dict[idx] === text && step < dict.length; step++) {
+    idx = (idx + 1) % dict.length;
+  }
   return dict[idx]!;
 }
 
