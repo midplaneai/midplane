@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 // Create (or find) the Stripe TEST products + flat monthly prices the cloud
 // billing flow needs, and print the env lines to paste into .env.local.
-// Idempotent: prices are keyed by a stable lookup_key, so re-running reuses what
-// exists instead of duplicating.
+// Idempotent: a re-run reuses the existing price when its amount/currency/
+// interval still match. If the amount changed (Stripe prices are immutable), it
+// mints a corrected price and transfers the stable lookup_key onto it, so a
+// stale price from an earlier run never silently pins the old number.
 //
 // Usage (from repo root):
 //   STRIPE_SECRET_KEY=sk_test_... bun run scripts/stripe-setup.ts
@@ -63,28 +65,51 @@ const PLANS: PlanSpec[] = [
 ];
 
 async function ensurePrice(plan: PlanSpec): Promise<string> {
-  // Reuse an existing price with this lookup key if present (idempotent re-run).
+  // Find the current active price for this stable lookup key. Stripe prices are
+  // IMMUTABLE — unit_amount/currency/interval can't be edited after creation —
+  // so we may only REUSE one whose numbers already match the spec. Reusing by
+  // lookup key alone would silently pin a stale price (e.g. the old $20/$50
+  // per-seat amounts) and never apply a changed unit_amount.
   const existing = await stripe.prices.list({
     lookup_keys: [plan.lookupKey],
     active: true,
     limit: 1,
   });
-  if (existing.data[0]) {
+  const current = existing.data[0];
+  if (
+    current &&
+    current.unit_amount === plan.unitAmount &&
+    current.currency === "usd" &&
+    current.recurring?.interval === "month"
+  ) {
     console.error(
-      `· ${plan.tier}: reusing existing price ${existing.data[0].id} (lookup_key=${plan.lookupKey})`,
+      `· ${plan.tier}: reusing existing price ${current.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo, lookup_key=${plan.lookupKey})`,
     );
-    return existing.data[0].id;
+    return current.id;
   }
-  // Create the product + a flat monthly recurring price in one call.
-  const price = await stripe.prices.create({
+
+  // No price yet, or the existing one is stale. Mint a fresh one;
+  // transfer_lookup_key moves the stable key OFF the stale price onto this one
+  // (deactivating the old), so the next run's active-lookup query resolves to
+  // the corrected price and the env var below points at the right ID. Reuse the
+  // existing product when replacing, so re-runs don't pile up duplicate products.
+  const productRef =
+    current && typeof current.product === "string"
+      ? { product: current.product }
+      : { product_data: { name: plan.productName } };
+  const params: Stripe.PriceCreateParams = {
     currency: "usd",
     unit_amount: plan.unitAmount,
     recurring: { interval: "month" },
     lookup_key: plan.lookupKey,
-    product_data: { name: plan.productName },
-  });
+    transfer_lookup_key: Boolean(current),
+    ...productRef,
+  };
+  const price = await stripe.prices.create(params);
   console.error(
-    `· ${plan.tier}: created price ${price.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo)`,
+    current
+      ? `· ${plan.tier}: replaced stale price → ${price.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo); transferred lookup_key=${plan.lookupKey}`
+      : `· ${plan.tier}: created price ${price.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo)`,
   );
   return price.id;
 }
