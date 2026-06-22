@@ -18,6 +18,7 @@ import { z } from "zod";
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
 import { currentCustomer } from "@/lib/customer";
+import { requireManagerRest } from "@/lib/org-auth";
 import { PlanLimitError, planLimitBody, resolvePlan } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 import { tokenEnvFromConfig } from "@/lib/token-env";
@@ -68,6 +69,11 @@ export async function GET(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  // Owner/admin only — the dashboard hides the whole token surface (including
+  // the list) from members, so the API mirrors that: a member must not enumerate
+  // a project's tokens (names, last-used IP/UA) by calling the route directly.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
   const { id } = await params;
   const rows = await listTokens(customer, id);
   if (rows === null) {
@@ -86,6 +92,13 @@ export async function POST(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  // Owner/admin only — minting a token issues a long-lived DB credential. A
+  // member intentionally blocked from this surface must not reach it by calling
+  // the route directly (the dashboard's createTokenAction gates on the same
+  // role). Gate BEFORE any pepper load or token mint, same posture as the
+  // preview/scan routes.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
   const { userId } = await getOrgContext();
   if (!userId) {
     return Response.json({ error: "not signed in" }, { status: 401 });
