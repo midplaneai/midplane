@@ -28,6 +28,10 @@ let getOrgContextMock = vi.fn(
       orgId: string | null;
     },
 );
+// Default: a manager passes the gate (returns an ActiveRole, not a Response).
+let requireManagerRestMock = vi.fn(
+  async () => ({ userId: "user_1", orgId: "org_1", role: "owner" }) as unknown,
+);
 let createTokenMock = vi.fn();
 let listTokensMock = vi.fn();
 let revokeTokenMock = vi.fn();
@@ -35,6 +39,15 @@ let revokeTokenMock = vi.fn();
 vi.mock("@/lib/customer", () => ({
   get currentCustomer() {
     return currentCustomerMock;
+  },
+}));
+
+// The role gate is the boundary under test here — mock the seam (DB-backed in
+// real code) so these unit tests don't need a database. A member is simulated
+// by returning the 403 Response the real gate would.
+vi.mock("@/lib/org-auth", () => ({
+  get requireManagerRest() {
+    return requireManagerRestMock;
   },
 }));
 
@@ -67,6 +80,11 @@ vi.mock("@/lib/tokens", async () => {
 beforeEach(() => {
   currentCustomerMock = vi.fn(async () => customer as typeof customer | null);
   getOrgContextMock = vi.fn(async () => ({ userId: "user_1", orgId: "org_1" }));
+  requireManagerRestMock = vi.fn(async () => ({
+    userId: "user_1",
+    orgId: "org_1",
+    role: "owner",
+  }));
   createTokenMock = vi.fn();
   listTokensMock = vi.fn();
   revokeTokenMock = vi.fn();
@@ -122,6 +140,19 @@ describe("GET /api/projects/[id]/tokens", () => {
     expect(res.status).toBe(401);
   });
 
+  it("403 for a member, before any token enumeration", async () => {
+    requireManagerRestMock = vi.fn(async () =>
+      Response.json({ error: "forbidden" }, { status: 403 }),
+    );
+    const { GET } = await loadCollectionRoute();
+    const res = await GET(jsonRequest("GET"), {
+      params: makeParams({ id: "conn-1" }),
+    });
+    expect(res.status).toBe(403);
+    // Gate fires before the lib is touched — no token list leaks to a member.
+    expect(listTokensMock).not.toHaveBeenCalled();
+  });
+
   it("404 when listTokens returns null (unknown OR foreign — same leakage shape)", async () => {
     listTokensMock = vi.fn(async () => null);
     const { GET } = await loadCollectionRoute();
@@ -169,6 +200,22 @@ describe("GET /api/projects/[id]/tokens", () => {
 });
 
 describe("POST /api/projects/[id]/tokens", () => {
+  it("403 for a member, BEFORE any pepper load or token mint", async () => {
+    // The dashboard's createTokenAction gates minting on the same role; a member
+    // must not mint a long-lived DB credential by calling the route directly.
+    requireManagerRestMock = vi.fn(async () =>
+      Response.json({ error: "forbidden" }, { status: 403 }),
+    );
+    const { POST } = await loadCollectionRoute();
+    const res = await POST(
+      jsonRequest("POST", { name: "laptop", expiresInDays: 90 }),
+      { params: makeParams({ id: "conn-1" }) },
+    );
+    expect(res.status).toBe(403);
+    // No token is minted for a blocked member.
+    expect(createTokenMock).not.toHaveBeenCalled();
+  });
+
   it("400 on missing name", async () => {
     const { POST } = await loadCollectionRoute();
     const res = await POST(
@@ -291,6 +338,20 @@ describe("POST /api/projects/[id]/tokens", () => {
 });
 
 describe("DELETE /api/projects/[id]/tokens/[tokenId]", () => {
+  it("403 for a member, BEFORE any revoke", async () => {
+    // A member must not revoke another agent's token by calling the route
+    // directly — the dashboard's revokeTokenAction gates on the same role.
+    requireManagerRestMock = vi.fn(async () =>
+      Response.json({ error: "forbidden" }, { status: 403 }),
+    );
+    const { DELETE } = await loadItemRoute();
+    const res = await DELETE(jsonRequest("DELETE"), {
+      params: makeParams({ id: "conn-1", tokenId: "tok-1" }),
+    });
+    expect(res.status).toBe(403);
+    expect(revokeTokenMock).not.toHaveBeenCalled();
+  });
+
   it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { DELETE } = await loadItemRoute();

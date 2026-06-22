@@ -14,6 +14,7 @@ import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
 import { currentCustomer } from "@/lib/customer";
+import { requireManagerRest } from "@/lib/org-auth";
 import { getPostHog } from "@/lib/posthog";
 import { revokeToken } from "@/lib/tokens";
 
@@ -33,6 +34,12 @@ export async function DELETE(
   if (!customer) {
     return Response.json({ error: "not signed in" }, { status: 401 });
   }
+  // Owner/admin only — revoking a token kills another agent's DB credential. A
+  // member intentionally blocked from this surface must not reach it by calling
+  // the route directly. Gate BEFORE any revoke work, same posture as the
+  // preview/scan routes and the mint route.
+  const gate = await requireManagerRest();
+  if (gate instanceof Response) return gate;
   const { userId } = await getOrgContext();
   if (!userId) {
     return Response.json({ error: "not signed in" }, { status: 401 });
