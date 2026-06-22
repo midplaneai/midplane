@@ -85,8 +85,9 @@ export function getStripeClient(): Stripe {
 
 /** The self-serve, subscription-billed tiers, in display order. `free` is the
  *  absence of a subscription (no Stripe price), so it isn't here — a downgrade
- *  flips customers.plan back to 'free'. Both tiers are per-seat: the price is
- *  per seat and the seat count is the checkout quantity. */
+ *  flips customers.plan back to 'free'. Both tiers are flat: one fixed monthly
+ *  price per org (quantity 1), independent of member count. Per-plan member caps
+ *  are enforced separately via organization.membershipLimit (lib/seats.ts). */
 export interface BillingPlan {
   /** Matches the lib/plan.ts Plan tier and the plugin's plan `name`. */
   tier: Exclude<Plan, "free">;
@@ -196,16 +197,16 @@ export async function reconcileOrgPlan(orgId: string): Promise<Plan> {
 /** The configured @better-auth/stripe plugin, or [] when billing is off. Spread
  *  into the plugins array in lib/auth.ts AFTER organization() and BEFORE
  *  nextCookies(). Customer-per-org (organization mode), referenceId = orgId,
- *  per-seat with AUTO-MANAGED seats.
+ *  flat per-org pricing.
  *
- *  Each plan is registered as a "seat-only" plan — priceId === seatPriceId, the
- *  per-seat recurring price. With organization mode + customerType
- *  "organization" that turns on the plugin's seat auto-management: it sets the
- *  Stripe quantity = member count at checkout AND re-syncs it (prorated) on
- *  every member add / remove / invitation accept via the organization hooks the
- *  plugin installs. So we do NOT pass `seats` from the client — a one-time
- *  checkout quantity would go stale the moment the team grew (an org could add
- *  members while still paying for the original count).
+ *  Each plan is registered with a plain `priceId` and NO `seatPriceId`, so the
+ *  plugin bills a flat, fixed-quantity (1) subscription per org — one monthly
+ *  price regardless of how many members the org has. (Setting seatPriceId is what
+ *  turns on the plugin's per-seat mode, where the Stripe quantity tracks the
+ *  member count; we deliberately don't.) So we never pass `seats` from the client
+ *  either. Per-plan MEMBER CAPS are a separate concern, enforced on the invite
+ *  path via organization.membershipLimit (lib/seats.ts) with no Stripe coupling —
+ *  the price is flat; the cap just bounds head count per tier.
  *
  *  Self-host / keyless dev: returns [] so the plugin never loads and no Stripe
  *  env is required to boot. */
@@ -224,12 +225,12 @@ export function buildStripePlugins(): ReturnType<typeof stripePlugin>[] {
       organization: { enabled: true },
       subscription: {
         enabled: true,
-        // seatPriceId === priceId ⇒ seat-only plan: quantity is the member count,
-        // auto-synced by the plugin on member changes (see the doc comment above).
+        // Flat plans: a plain priceId with no seatPriceId bills a fixed-quantity
+        // (1) subscription per org — one monthly price, member-count-independent
+        // (see the doc comment above). Member caps live in lib/seats.ts.
         plans: plans.map((p) => ({
           name: p.tier,
           priceId: p.priceId,
-          seatPriceId: p.priceId,
         })),
         // Only the org's OWNER may manage its billing — admins manage the
         // workspace but not the money. referenceId is the orgId; verify the

@@ -145,8 +145,8 @@ fly secrets set --app midplane-web \
   MIDPLANE_REGION='eu' \
   DATABASE_URL_EU='postgres://...eu-central-1.aws.neon.tech/midplane?sslmode=require' \
   MIDDLEWARE_ENFORCE='false' \
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...' \
-  CLERK_SECRET_KEY='sk_live_...' \
+  BETTER_AUTH_SECRET="$(openssl rand -base64 32)" \
+  BETTER_AUTH_URL='https://eu.app.midplane.ai' \
   MIDPLANE_KMS_MODE='env' \
   MIDPLANE_KMS_DEV_KEY_EU="$(openssl rand -hex 32)" \
   FLY_API_TOKEN='fly_...' \
@@ -163,8 +163,8 @@ fly secrets set --app midplane-web-us \
   MIDPLANE_REGION='us' \
   DATABASE_URL_US='postgres://...us-east-2.aws.neon.tech/midplane?sslmode=require' \
   MIDDLEWARE_ENFORCE='false' \
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...' \
-  CLERK_SECRET_KEY='sk_live_...' \
+  BETTER_AUTH_SECRET="$(openssl rand -base64 32)" \
+  BETTER_AUTH_URL='https://us.app.midplane.ai' \
   MIDPLANE_KMS_MODE='env' \
   MIDPLANE_KMS_DEV_KEY_US="$(openssl rand -hex 32)" \
   FLY_API_TOKEN='fly_...' \
@@ -344,14 +344,12 @@ in funnels.
 Per-deploy:
 
 ```bash
-# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is baked into the client bundle at
-# build time — pass it as a Docker build arg (the same value you set as
-# a runtime secret above). Run both deploys when shipping (same image,
-# different region pin).
-fly deploy --config fly-web-eu.toml \
-  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...'
-fly deploy --config fly-web-us.toml \
-  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY='pk_live_...'
+# No NEXT_PUBLIC_* build args needed: the Better Auth client is same-origin,
+# so nothing auth-related is baked into the client bundle — BETTER_AUTH_SECRET
+# and the rest are runtime Fly secrets. Run both deploys when shipping (same
+# image, different region pin).
+fly deploy --config fly-web-eu.toml
+fly deploy --config fly-web-us.toml
 
 # After the deploy has been stable for ~24h (no region.null_metadata or
 # region.cross_region anomalies), flip MIDDLEWARE_ENFORCE to "true" so
@@ -368,8 +366,7 @@ not take down the proxy.
 Local Docker smoke test (no fly required):
 
 ```bash
-docker build -t midplane-web -f apps/web/Dockerfile \
-  --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_local .
+docker build -t midplane-web -f apps/web/Dockerfile .
 ```
 
 ## Testing
@@ -381,9 +378,9 @@ bun run test:e2e:live                          # all live suites
 bun run test:e2e:live --grep signup            # critical-path #1 only
 ```
 
-The signup suite (`e2e/signup.live.e2e.ts`) drives the conversion path end to end: real Clerk session → region pick → paste DSN → MCP endpoint → first MCP query → audit row in container SQLite (and `audit_events_index` if `INDEXER_TOKEN` is set).
+The signup suite (`e2e/signup.live.e2e.ts`) drives the conversion path end to end: real Better Auth session → region pick → paste DSN → MCP endpoint → first MCP query → audit row in container SQLite (and `audit_events_index` if `INDEXER_TOKEN` is set).
 
-It uses [Clerk testing tokens](https://clerk.com/docs/testing/overview) to bypass bot detection on the dev Clerk instance. No extra credentials are needed beyond `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY` (already in `.env.local`); `e2e/_clerk-globalsetup.ts` mints a fresh testing token at suite start. Each run creates a brand-new test user via Clerk's Backend API (`+clerk_test@…` reserved subaddress, auto-verified) and deletes it in `afterAll` to keep the dev instance under its user-count cap.
+Auth runs through Better Auth, so there are no testing tokens or bot-detection to bypass: each run creates a brand-new test user directly via the sign-up API (`POST /api/auth/sign-up/email`, email/password — no verification gate in dev) and tears it down in `afterAll` with a direct delete against the regional Postgres (FK cascades clear the session/account/member rows). The helpers live in `e2e/_auth-helpers.ts`; no Clerk credentials or global-setup token mint are involved.
 
 ## What's in scope here
 

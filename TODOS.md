@@ -163,8 +163,9 @@ Deferred work captured during reviews. Each item has enough context to pick up c
   query clamp lives in `apps/web/src/lib/audit.ts` + `lib/connections.ts`
   (`lastQueryByDatabase`). The pruner is a separate surface: a scheduled job that runs
   per-region, deletes by `(customer_id, region, ts < now() - retention)`, and must read
-  each customer's plan (via Clerk `has()` is request-context only — the job needs a
-  plan source, which is the first reason a `customers.plan` column might earn its place).
+  each customer's plan from the `customers.plan` column. (A background job can't use a
+  request-scoped plan lookup — needing an out-of-request plan source was the original
+  argument for that column, which now exists and serves exactly this.)
 - **Depends on:** the pricing PR landing first (defines the windows + plan resolution).
 
 ### Fair-use soft query-rate cap (Free tier)

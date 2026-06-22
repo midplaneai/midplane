@@ -103,8 +103,8 @@ export default async function BillingPage() {
               ) : actions ? (
                 <>
                   <p>
-                    Pro and Team are billed per seat. Checkout and billing
-                    management open securely on Stripe.
+                    Pro and Team are billed at a flat monthly price. Checkout and
+                    billing management open securely on Stripe.
                   </p>
                   {actions}
                 </>
