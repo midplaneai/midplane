@@ -611,6 +611,7 @@ function emitTenantScope(
 
 export const MASK_TRANSFORMS = [
   "full-redact",
+  "null-out",
   "consistent-hash",
   "keep-last-4",
 ] as const;

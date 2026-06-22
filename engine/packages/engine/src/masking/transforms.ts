@@ -18,17 +18,22 @@
 //     the defense against cloud↔engine version skew (decision A3): a stale
 //     engine that does not know a transform name MUST deny, never leak.
 //
-// v1 catalog (decision E2): full-redact, consistent-hash, keep-last-4 (the
-// last is text-only and type-gated in the cloud UI). format-preserving-fake is
-// deferred (a per-type family of generators).
+// Catalog (decision E2): full-redact, null-out, consistent-hash, keep-last-4
+// (the last is text-only and type-gated in the cloud UI). null-out is the only
+// TYPE-PRESERVING transform — it masks to SQL NULL, so a masked column keeps its
+// declared Postgres type; the others collapse to a text token.
+// format-preserving-fake is deferred (a per-type family of generators).
 //
 // NULL handling (design "v1 masking semantics"): a NULL cell stays NULL. This
 // leaks "this row has no value" and is an accepted, documented v1 limitation.
+// (null-out makes NULL a transform TARGET — every value becomes NULL — which is
+// distinct from this passthrough of an already-NULL input.)
 
 import { createHmac } from "node:crypto";
 
 export const TRANSFORM_NAMES = [
   "full-redact",
+  "null-out",
   "consistent-hash",
   "keep-last-4",
 ] as const;
@@ -71,6 +76,14 @@ const KEEP = 4;
  *  masker only routes scalar columns here (jsonb/array are rejected upstream). */
 function fullRedact(): string {
   return FULL_REDACT_TOKEN;
+}
+
+/** null-out: replace any value with SQL NULL. The only TYPE-PRESERVING
+ *  transform — a masked column keeps its declared Postgres type (an int column
+ *  stays an int-typed NULL) instead of collapsing to the text token full-redact
+ *  emits. Carries zero information about the original. */
+function nullOut(): null {
+  return null;
 }
 
 /** consistent-hash: deterministic pseudonym. HMAC-SHA256(salt, text(value))
@@ -121,6 +134,8 @@ export function applyTransform(
   switch (name) {
     case "full-redact":
       return fullRedact();
+    case "null-out":
+      return nullOut();
     case "consistent-hash":
       return consistentHash(value, ctx);
     case "keep-last-4":

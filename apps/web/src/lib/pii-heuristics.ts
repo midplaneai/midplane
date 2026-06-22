@@ -33,9 +33,10 @@ export interface PiiMatch {
 
 // Ordered most-specific → least-specific; the first match wins so "ssn" beats a
 // generic "name" substring and "email" beats nothing. Each rule carries the
-// confidence and a default transform. keep-last-4 is text-only (the engine +
-// the picker gate it by type), so a keep-last-4 default downgrades to
-// full-redact for a non-text column (see classifyColumn).
+// confidence and a default transform. A text-token transform (keep-last-4 or
+// full-redact) on a NON-text column would silently change the column's type, so
+// on such a column the suggestion downgrades to null-out (type-preserving — see
+// classifyColumn).
 interface Rule {
   category: PiiCategory;
   test: RegExp;
@@ -58,9 +59,10 @@ const RULES: Rule[] = [
   { category: "name", test: /(^|_)name($|_)/, confidence: "low", transform: "full-redact" },
 ];
 
-// Postgres data types keep-last-4 can operate on (text-like). Anything else
-// downgrades a keep-last-4 default to full-redact, mirroring the picker's
-// type-gate and the engine's text-only keep-last-4.
+// Postgres data types the text-token transforms can operate on (text-like). On
+// anything else, a keep-last-4 / full-redact suggestion downgrades to null-out
+// (type-preserving), mirroring the picker's type-gate and the engine's text-only
+// keep-last-4.
 const TEXT_TYPES = new Set([
   "text",
   "character varying",
@@ -80,16 +82,21 @@ function isTextType(dataType: string): boolean {
 /**
  * Classify a column as likely PII from its name + Postgres data type, or null.
  * The match is the first (most-specific) rule whose pattern hits the normalized
- * column name. A keep-last-4 suggestion on a non-text column downgrades to
- * full-redact so the suggestion is always valid for the picker.
+ * column name. A text-token suggestion (keep-last-4 / full-redact) on a non-text
+ * column downgrades to null-out, so the suggestion is always type-valid.
  */
 export function classifyColumn(name: string, dataType: string): PiiMatch | null {
   const normalized = name.toLowerCase();
   for (const rule of RULES) {
     if (rule.test.test(normalized)) {
       let transform = rule.transform;
-      if (transform === "keep-last-4" && !isTextType(dataType)) {
-        transform = "full-redact";
+      // A text-token transform on a non-text column would change the column's
+      // type; null-out is type-preserving for any type, so prefer it there.
+      if (
+        !isTextType(dataType) &&
+        (transform === "keep-last-4" || transform === "full-redact")
+      ) {
+        transform = "null-out";
       }
       return {
         category: rule.category,
