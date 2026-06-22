@@ -25,7 +25,7 @@
 // alternative — deriving relevance only from resolved fields — would PASS
 // `to_jsonb(users)` (tableOid=0, no resolved field) and silently leak. Safety wins.
 
-import { applyTransform, type TransformName } from "./transforms.ts";
+import { applyTransform, ruleKind, type MaskRule } from "./transforms.ts";
 
 /** Catalog facts about one relation, resolved from pg_class / pg_attribute /
  *  pg_inherits by the caller (cached per connection). */
@@ -39,11 +39,18 @@ export interface RelInfo {
   topParentOid: number;
   /** attnum -> column name, for the relation identified by THIS oid. */
   columns: Map<number, string>;
+  /** attnum -> pg_type.typcategory (resolved from atttypid), for the relation
+   *  identified by THIS oid. Lets the masker enforce a parametric rule's input-
+   *  type DOMAIN fail-closed: `partial` needs a string column (category 'S'),
+   *  date-`generalize` a date/time column ('D'), numeric-`generalize` a numeric
+   *  column ('N'). Optional so hand-built catalogs (tests) opt in; an absent
+   *  entry means "type unproven" and a parametric rule rejects (fail-closed). */
+  columnTypes?: Map<number, string>;
 }
 
 export type Catalog = Map<number, RelInfo>;
-/** "schema.table" -> (column name -> transform). */
-export type ColumnMasks = Map<string, Map<string, TransformName>>;
+/** "schema.table" -> (column name -> mask rule). */
+export type ColumnMasks = Map<string, Map<string, MaskRule>>;
 
 export type MaskOutcome =
   | { ok: true; rows: unknown[]; maskedColumns: string[] }
@@ -93,7 +100,7 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
   // instead of its base table, so a touched-table heuristic both over-rejects
   // and, worse, lets computed outputs over views / non-public schemas leak.
   const canon = (t: string) => (t.includes(".") ? t : `public.${t}`);
-  const normMasks = new Map<string, Map<string, TransformName>>();
+  const normMasks = new Map<string, Map<string, MaskRule>>();
   for (const [k, v] of columnMasks) normMasks.set(canon(k), v);
 
   // A masked-project query with no field metadata = unresolved provenance =>
@@ -109,7 +116,7 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
 
   // Plan once per query (decision PERF1): decide each output field, collect the
   // transforms to apply, reject on the first unresolvable/leaky field.
-  const toMask: { outputName: string; transform: TransformName; ref: string }[] = [];
+  const toMask: { outputName: string; rule: MaskRule; ref: string }[] = [];
 
   for (const f of fields) {
     if (f.tableOid === 0) {
@@ -174,9 +181,18 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
     }
     const parent = rel.topParentOid !== f.tableOid ? catalog.get(rel.topParentOid) : rel;
     const tableKey = parent ? key(parent.schema, parent.relname) : key(rel.schema, rel.relname);
-    const transform = normMasks.get(tableKey)?.get(colName);
-    if (transform) {
-      toMask.push({ outputName: f.name, transform, ref: `${tableKey}.${colName}` });
+    const rule = normMasks.get(tableKey)?.get(colName);
+    if (rule) {
+      // Enforce a parametric rule's input-type DOMAIN fail-closed: a `partial`
+      // on a non-text column, or a `generalize` whose granularity doesn't match
+      // the column's type family, REJECTS the whole result set rather than
+      // transforming an out-of-domain value. The pg type comes from the catalog
+      // (pg_attribute.atttypid → pg_type.typcategory), resolved on THIS rel's
+      // oid (child for partitions; column types are consistent parent↔child).
+      const ref = `${tableKey}.${colName}`;
+      const reject = checkInputDomain(rule, rel.columnTypes?.get(f.columnAttnum), ref, f.name);
+      if (reject) return reject;
+      toMask.push({ outputName: f.name, rule, ref });
     }
   }
 
@@ -192,7 +208,7 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
     const out: Record<string, unknown> = { ...(row as Record<string, unknown>) };
     for (const m of toMask) {
       if (m.outputName in out) {
-        out[m.outputName] = applyTransform(m.transform, out[m.outputName], ctx);
+        out[m.outputName] = applyTransform(m.rule, out[m.outputName], ctx);
       }
     }
     return out;
@@ -202,6 +218,60 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
     ok: true,
     rows: maskedRows,
     maskedColumns: [...new Set(toMask.map((m) => m.ref))],
+  };
+}
+
+// pg_type.typcategory codes the parametric rules' input domains key on. These
+// are stable category letters (not OIDs), so they cover builtin types AND
+// extension/domain types (citext is 'S', every date/time type 'D', every
+// numeric 'N') without hard-coding a per-OID allowlist.
+const CATEGORY_STRING = "S"; // text, varchar, bpchar, char, name, citext, ...
+const CATEGORY_DATETIME = "D"; // date, timestamp, timestamptz, time, ...
+const CATEGORY_NUMERIC = "N"; // int2/4/8, numeric, float4/8, ...
+
+// Enforce a parametric rule's input-type domain. Returns a fail-closed reject
+// MaskOutcome when the column's pg type category doesn't match the rule, or null
+// when the rule is in-domain (or a param-free preset, which applies to any
+// type). An UNKNOWN category (catalog didn't resolve the type) rejects too — a
+// parametric transform must never run against an unproven type.
+function checkInputDomain(
+  rule: MaskRule,
+  category: string | undefined,
+  ref: string,
+  outputName: string,
+): MaskOutcome | null {
+  const kind = ruleKind(rule);
+  if (kind === "partial") {
+    if (category === CATEGORY_STRING) return null;
+    return rejectDomain(outputName, ref, "the `partial` transform is text-only");
+  }
+  if (kind === "generalize") {
+    const g = (rule as { granularity: string | number }).granularity;
+    const wantsDate = g === "year" || g === "month" || g === "day";
+    if (wantsDate) {
+      if (category === CATEGORY_DATETIME) return null;
+      return rejectDomain(
+        outputName,
+        ref,
+        `\`generalize: ${String(g)}\` needs a date/timestamp column`,
+      );
+    }
+    if (category === CATEGORY_NUMERIC) return null;
+    return rejectDomain(
+      outputName,
+      ref,
+      "a numeric `generalize` bucket needs a numeric column",
+    );
+  }
+  // Param-free preset (full-redact / null-out / consistent-hash): no domain.
+  return null;
+}
+
+function rejectDomain(outputName: string, ref: string, why: string): MaskOutcome {
+  return {
+    ok: false,
+    reason: `query rejected: column "${outputName}" (${ref}) cannot be masked — ${why}; fix the column's mask transform to one valid for its type`,
+    offendingColumns: [outputName],
   };
 }
 

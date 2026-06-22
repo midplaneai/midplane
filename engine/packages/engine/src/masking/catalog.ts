@@ -97,19 +97,32 @@ export async function buildCatalog(
       WHERE c.oid = ANY($1::oid[])`,
     [allArr],
   );
+  // Join pg_type so each column carries its typcategory (e.g. 'S' string,
+  // 'D' date/time, 'N' numeric) — the masker keys the parametric transforms'
+  // input-type domains on it (atttypid → typcategory). Category letters cover
+  // extension/domain types (citext, custom domains) without a per-OID allowlist.
   const attRows = await queryFn(
-    `SELECT attrelid::int8 AS oid, attnum::int4 AS attnum, attname
-       FROM pg_attribute
-      WHERE attrelid = ANY($1::oid[]) AND attnum > 0 AND NOT attisdropped`,
+    `SELECT a.attrelid::int8 AS oid, a.attnum::int4 AS attnum, a.attname,
+            t.typcategory
+       FROM pg_attribute a
+       JOIN pg_type t ON t.oid = a.atttypid
+      WHERE a.attrelid = ANY($1::oid[]) AND a.attnum > 0 AND NOT a.attisdropped`,
     [allArr],
   );
 
   const colsByOid = new Map<number, Map<number, string>>();
+  const typesByOid = new Map<number, Map<number, string>>();
   for (const r of attRows) {
     const oid = Number(r.oid);
+    const attnum = Number(r.attnum);
     let m = colsByOid.get(oid);
     if (!m) colsByOid.set(oid, (m = new Map()));
-    m.set(Number(r.attnum), String(r.attname));
+    m.set(attnum, String(r.attname));
+    if (r.typcategory != null) {
+      let tm = typesByOid.get(oid);
+      if (!tm) typesByOid.set(oid, (tm = new Map()));
+      tm.set(attnum, String(r.typcategory));
+    }
   }
 
   const catalog: Catalog = new Map();
@@ -121,6 +134,7 @@ export async function buildCatalog(
       relkind: String(r.relkind),
       topParentOid: topAncestor(oid),
       columns: colsByOid.get(oid) ?? new Map(),
+      columnTypes: typesByOid.get(oid) ?? new Map(),
     };
     catalog.set(oid, info);
   }

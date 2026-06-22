@@ -24,7 +24,9 @@ const d = DSN ? describe : describe.skip;
 
 const MASKS: ColumnMasks = new Map([
   ["public.users", new Map([["email", "full-redact"], ["ssn", "consistent-hash"]] as const)],
-  ["public.events", new Map([["tenant", "keep-last-4"]] as const)],
+  // partial{keepEnd:4} — the catalog's typcategory for events.tenant ('S')
+  // must let it through (text-only domain enforced fail-closed).
+  ["public.events", new Map([["tenant", { t: "partial", keepEnd: 4 }]] as const)],
   // Non-public schema — proves the masker keys on resolved schema.table, not on
   // the IR's schema-stripped touched-table names.
   ["private.users", new Map([["email", "full-redact"]] as const)],
@@ -123,7 +125,7 @@ d("masking: live-PG provenance", () => {
   test("partition parent masks", async () => {
     const out = await maskQuery("SELECT tenant FROM events");
     expect(out.ok).toBe(true);
-    if (out.ok) expect((out.rows[0] as any).tenant).toBe("•"); // keep-last-4 on "a"
+    if (out.ok) expect((out.rows[0] as any).tenant).toBe("•"); // partial keepEnd:4 on "a"
   });
 
   test("partition child queried directly masks via the parent", async () => {

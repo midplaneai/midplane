@@ -7,19 +7,22 @@ import { describe, expect, it } from "vitest";
 
 import {
   MASK_TRANSFORMS,
+  maskRuleKind,
+  maskRuleLabel,
+  normalizeMaskRule,
   parseColumnMasksOrThrow,
   serializeMultiDbPolicyToYaml,
   validateColumnMasks,
   type DatabaseEntry,
 } from "../src/policy.ts";
 
-describe("validateColumnMasks", () => {
+describe("validateColumnMasks: presets", () => {
   it("treats null/undefined as an empty config", () => {
     expect(validateColumnMasks(null)).toEqual({ ok: true, value: {} });
     expect(validateColumnMasks(undefined)).toEqual({ ok: true, value: {} });
   });
 
-  it("accepts a valid table -> column -> transform map", () => {
+  it("accepts a valid table -> column -> preset map", () => {
     expect(
       validateColumnMasks({
         "public.users": { email: "full-redact", ssn: "consistent-hash" },
@@ -27,6 +30,15 @@ describe("validateColumnMasks", () => {
     ).toEqual({
       ok: true,
       value: { "public.users": { email: "full-redact", ssn: "consistent-hash" } },
+    });
+  });
+
+  it("accepts null-out for any column", () => {
+    expect(
+      validateColumnMasks({ "public.events": { created_at: "null-out" } }),
+    ).toEqual({
+      ok: true,
+      value: { "public.events": { created_at: "null-out" } },
     });
   });
 
@@ -48,22 +60,109 @@ describe("validateColumnMasks", () => {
     expect(validateColumnMasks({ "public.users": {} })).toEqual({ ok: true, value: {} });
   });
 
-  it("exposes the transform set", () => {
+  it("exposes the transform KIND set (drift-checked against the engine)", () => {
     expect([...MASK_TRANSFORMS]).toEqual([
       "full-redact",
       "null-out",
       "consistent-hash",
-      "keep-last-4",
+      "partial",
+      "generalize",
     ]);
   });
+});
 
-  it("accepts null-out for any column", () => {
+describe("validateColumnMasks: partial", () => {
+  it("accepts keepStart / keepEnd / glyph and keeps a minimal canonical form", () => {
     expect(
-      validateColumnMasks({ "public.events": { created_at: "null-out" } }),
+      validateColumnMasks({ "public.users": { ssn: { t: "partial", keepEnd: 4 } } }),
+    ).toEqual({ ok: true, value: { "public.users": { ssn: { t: "partial", keepEnd: 4 } } } });
+
+    expect(
+      validateColumnMasks({
+        "public.users": { card: { t: "partial", keepStart: 2, keepEnd: 4, glyph: "#" } },
+      }),
     ).toEqual({
       ok: true,
-      value: { "public.events": { created_at: "null-out" } },
+      value: { "public.users": { card: { t: "partial", keepStart: 2, keepEnd: 4, glyph: "#" } } },
     });
+  });
+
+  it("drops zero keeps + a default glyph from the canonical form", () => {
+    const r = validateColumnMasks({
+      "public.users": { ssn: { t: "partial", keepStart: 0, keepEnd: 4 } },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value["public.users"]!.ssn).toEqual({ t: "partial", keepEnd: 4 });
+  });
+
+  it("rejects non-integer / negative keeps and over-cap sums", () => {
+    expect(validateColumnMasks({ "public.users": { ssn: { t: "partial", keepEnd: -1 } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.users": { ssn: { t: "partial", keepEnd: 1.5 } } }).ok).toBe(false);
+    expect(
+      validateColumnMasks({ "public.users": { ssn: { t: "partial", keepStart: 40, keepEnd: 40 } } }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects a multi-character glyph", () => {
+    const r = validateColumnMasks({ "public.users": { ssn: { t: "partial", keepEnd: 4, glyph: "ab" } } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]!.message).toContain("single character");
+  });
+});
+
+describe("validateColumnMasks: generalize", () => {
+  it("accepts a date unit and a numeric bucket width", () => {
+    expect(
+      validateColumnMasks({
+        "public.people": {
+          dob: { t: "generalize", granularity: "year" },
+          salary: { t: "generalize", granularity: 1000 },
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        "public.people": {
+          dob: { t: "generalize", granularity: "year" },
+          salary: { t: "generalize", granularity: 1000 },
+        },
+      },
+    });
+  });
+
+  it("rejects an unknown unit or a non-positive / non-integer width", () => {
+    expect(validateColumnMasks({ "public.people": { dob: { t: "generalize", granularity: "decade" } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.people": { salary: { t: "generalize", granularity: 0 } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.people": { salary: { t: "generalize", granularity: -100 } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.people": { salary: { t: "generalize", granularity: 10.5 } } }).ok).toBe(false);
+  });
+});
+
+describe("validateColumnMasks: back-compat reader (keep-last-4)", () => {
+  it("normalizes the retired keep-last-4 bare string to partial{keepEnd:4}", () => {
+    const r = validateColumnMasks({ "public.users": { ssn: "keep-last-4" } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value["public.users"]!.ssn).toEqual({ t: "partial", keepEnd: 4 });
+  });
+
+  it("normalizeMaskRule maps keep-last-4 and rejects junk", () => {
+    expect(normalizeMaskRule("keep-last-4")).toEqual({ ok: true, value: { t: "partial", keepEnd: 4 } });
+    expect(normalizeMaskRule("full-redact")).toEqual({ ok: true, value: "full-redact" });
+    expect(normalizeMaskRule("nope").ok).toBe(false);
+    expect(normalizeMaskRule({ t: "pseudonymize" }).ok).toBe(false);
+  });
+});
+
+describe("maskRuleKind / maskRuleLabel", () => {
+  it("kind is the preset string or the discriminant", () => {
+    expect(maskRuleKind("full-redact")).toBe("full-redact");
+    expect(maskRuleKind({ t: "partial", keepEnd: 4 })).toBe("partial");
+    expect(maskRuleKind({ t: "generalize", granularity: "year" })).toBe("generalize");
+  });
+  it("label is human-readable", () => {
+    expect(maskRuleLabel("consistent-hash")).toBe("consistent-hash");
+    expect(maskRuleLabel({ t: "partial", keepStart: 2, keepEnd: 4 })).toBe("partial · first 2, last 4");
+    expect(maskRuleLabel({ t: "generalize", granularity: 1000 })).toBe("generalize · 1000");
   });
 });
 
@@ -72,6 +171,12 @@ describe("parseColumnMasksOrThrow", () => {
     expect(() =>
       parseColumnMasksOrThrow({ "public.users": { email: "nope" } }),
     ).toThrow(/invalid column_masks/);
+  });
+
+  it("normalizes legacy rows (keep-last-4) without throwing", () => {
+    expect(parseColumnMasksOrThrow({ "public.users": { ssn: "keep-last-4" } })).toEqual({
+      "public.users": { ssn: { t: "partial", keepEnd: 4 } },
+    });
   });
 });
 
@@ -93,7 +198,7 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
     expect(yaml).not.toContain("requires_features");
   });
 
-  it("emits requires_features + sorted column_masks when present", () => {
+  it("emits requires_features + sorted preset column_masks when present", () => {
     const yaml = serializeMultiDbPolicyToYaml([
       entry({
         columnMasks: {
@@ -110,6 +215,50 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
         "        email: full-redact", // sorted: email before ssn
         "        ssn: consistent-hash",
       ].join("\n"),
+    );
+  });
+
+  it("emits parametric rules as nested block maps (deterministic key order)", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        columnMasks: {
+          "public.people": {
+            ssn: { t: "partial", keepEnd: 4 },
+            salary: { t: "generalize", granularity: 1000 },
+            dob: { t: "generalize", granularity: "year" },
+            card: { t: "partial", keepStart: 2, keepEnd: 4, glyph: "#" },
+          },
+        },
+      }),
+    ]);
+    expect(yaml).toContain(
+      [
+        "      public.people:",
+        // columns sorted: card, dob, salary, ssn
+        "        card:",
+        "          t: partial",
+        "          keepStart: 2",
+        "          keepEnd: 4",
+        '          glyph: "#"',
+        "        dob:",
+        "          t: generalize",
+        "          granularity: year",
+        "        salary:",
+        "          t: generalize",
+        "          granularity: 1000",
+        "        ssn:",
+        "          t: partial",
+        "          keepEnd: 4",
+      ].join("\n"),
+    );
+  });
+
+  it("serializes a legacy keep-last-4 value as a partial block (codemod-equivalent)", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({ columnMasks: { "public.users": { ssn: "keep-last-4" } as never } }),
+    ]);
+    expect(yaml).toContain(
+      ["        ssn:", "          t: partial", "          keepEnd: 4"].join("\n"),
     );
   });
 

@@ -17,7 +17,7 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import yaml from "js-yaml";
-import { TRANSFORM_NAMES } from "@midplane/engine";
+import type { MaskRule } from "@midplane/engine";
 
 export const TransportSchema = z.enum(["stdio", "http"]);
 export type Transport = z.infer<typeof TransportSchema>;
@@ -90,18 +90,36 @@ const GuardrailsSchema = z.object({
 });
 
 // Column masking (decision A2). A sibling of table_access: "schema.table" ->
-// (column name -> transform). The transform enum is sourced from the engine's
-// own catalog (TRANSFORM_NAMES) so the cloud-authored config and the engine's
-// enforcement can never name a transform the other doesn't know — an unknown
-// transform fails zod here at parse, and the engine fails closed at runtime
-// (decision A3). A masked column must also have read access (enforced by the
-// access policy independently; masking presupposes the read).
-const TransformNameSchema = z.enum(
-  TRANSFORM_NAMES as unknown as [string, ...string[]],
-);
+// (column name -> mask rule). A rule is a param-free PRESET (a bare string) or a
+// PARAMETRIC transform (a tagged object) — mirroring the engine's MaskRule union
+// (transforms.ts) and the cloud's authoring shape. The cloud and engine catalogs
+// can never name a transform KIND the other doesn't know: an unknown kind fails
+// zod here at parse, and the engine fails closed at runtime (decision A3). The
+// two catalogs are kept in lockstep by scripts/check-mask-transforms.ts. A
+// masked column must also have read access (enforced by the access policy
+// independently; masking presupposes the read).
+const PresetRuleSchema = z.enum(["full-redact", "null-out", "consistent-hash"]);
+const PartialRuleSchema = z.object({
+  t: z.literal("partial"),
+  keepStart: z.number().int().nonnegative().optional(),
+  keepEnd: z.number().int().nonnegative().optional(),
+  glyph: z.string().min(1).max(8).optional(),
+});
+const GeneralizeRuleSchema = z.object({
+  t: z.literal("generalize"),
+  granularity: z.union([
+    z.enum(["year", "month", "day"]),
+    z.number().int().positive(),
+  ]),
+});
+const MaskRuleSchema = z.union([
+  PresetRuleSchema,
+  PartialRuleSchema,
+  GeneralizeRuleSchema,
+]);
 const ColumnMasksSchema = z.record(
   z.string().min(1),
-  z.record(z.string().min(1), TransformNameSchema),
+  z.record(z.string().min(1), MaskRuleSchema),
 );
 
 // Enforcement features THIS engine version implements. A policy may declare
@@ -230,8 +248,8 @@ export interface DatabaseSpec {
   hasColumnMasks: boolean;
 }
 
-// Resolved column-mask config: "schema.table" -> (column name -> transform).
-export type ColumnMasksSpec = Record<string, Record<string, string>>;
+// Resolved column-mask config: "schema.table" -> (column name -> mask rule).
+export type ColumnMasksSpec = Record<string, Record<string, MaskRule>>;
 
 export const EMPTY_TENANT_SCOPE: TenantScopeSpec = {
   defaultColumn: null,
@@ -445,7 +463,7 @@ export function parsePolicyYaml(
   // Forward-compat refuse (T3): a policy declaring a feature this engine can't
   // enforce is rejected, not silently stripped.
   assertFeaturesSupported(parsed.data.requires_features, source, "requires_features");
-  const columnMasks = parsed.data.column_masks ?? null;
+  const columnMasks = (parsed.data.column_masks ?? null) as ColumnMasksSpec | null;
   const hasColumnMasks = Object.prototype.hasOwnProperty.call(rawDoc, "column_masks");
 
   return {
@@ -561,7 +579,7 @@ function resolveDatabaseEntry(
     source,
     `databases[${idx}].requires_features`,
   );
-  const columnMasks = entry.column_masks ?? null;
+  const columnMasks = (entry.column_masks ?? null) as ColumnMasksSpec | null;
   const hasColumnMasks = Object.prototype.hasOwnProperty.call(rawEntry, "column_masks");
 
   return {
