@@ -97,3 +97,29 @@ describe("classifyColumn: non-PII columns are not flagged", () => {
     }
   });
 });
+
+describe("classifyColumn: never suggests the non-deterministic `noise` transform", () => {
+  // `noise` breaks joins/grouping by design, so the assistive scanner must NEVER
+  // nudge a user toward it — it's strictly opt-in via the picker. Sweep every
+  // category across text / numeric / date types and assert no suggestion is noise.
+  it("noise is not a suggested default for any category or type", () => {
+    const names = [
+      "email", "ssn", "tax_id", "phone", "mobile_number", "credit_card", "card_number",
+      "date_of_birth", "dob", "first_name", "last_name", "name", "street_address",
+      "zip_code", "ip_address",
+    ];
+    const types = [
+      "text", "varchar", "character varying", "citext", "bigint", "integer", "numeric",
+      "double precision", "date", "timestamp with time zone", "inet",
+    ];
+    for (const n of names) {
+      for (const t of types) {
+        const m = classifyColumn(n, t);
+        if (!m) continue;
+        const transform = m.suggestedTransform;
+        const kind = typeof transform === "string" ? transform : transform.t;
+        expect(kind).not.toBe("noise");
+      }
+    }
+  });
+});

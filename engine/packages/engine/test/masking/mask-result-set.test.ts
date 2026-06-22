@@ -179,6 +179,41 @@ describe("maskResultSet: parametric rules apply with the column's type", () => {
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.rows[0]).toEqual({ salary: 73000 });
   });
+
+  test("pseudonymize replaces a TEXT column ('S') with a realistic fake", () => {
+    const out = run(
+      [f("name", PEOPLE, 4)],
+      [{ name: "Ada Lovelace" }],
+      new Map<string, Map<string, MaskRule>>([
+        ["public.people", new Map<string, MaskRule>([["name", { t: "pseudonymize", kind: "name" }]])],
+      ]),
+    );
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      const masked = (out.rows[0] as { name: string }).name;
+      expect(typeof masked).toBe("string");
+      expect(masked).not.toBe("Ada Lovelace"); // never the original
+      expect(masked.length).toBeGreaterThan(0);
+      expect(out.maskedColumns).toEqual(["public.people.name"]);
+    }
+  });
+
+  test("noise randomizes a NUMERIC column ('N'), staying numeric and bounded", () => {
+    const out = run(
+      [f("salary", PEOPLE, 3)],
+      [{ salary: 50000 }],
+      new Map<string, Map<string, MaskRule>>([
+        ["public.people", new Map<string, MaskRule>([["salary", { t: "noise", ratio: 0.1 }]])],
+      ]),
+    );
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      const masked = (out.rows[0] as { salary: number }).salary;
+      expect(typeof masked).toBe("number");
+      expect(masked).toBeGreaterThanOrEqual(50000 * 0.9 - 1e-6);
+      expect(masked).toBeLessThanOrEqual(50000 * 1.1 + 1e-6);
+    }
+  });
 });
 
 describe("maskResultSet: fail-closed on out-of-domain parametric rules", () => {
@@ -212,6 +247,30 @@ describe("maskResultSet: fail-closed on out-of-domain parametric rules", () => {
       [{ dob: new Date("1994-07-23T00:00:00Z") }],
       new Map<string, Map<string, MaskRule>>([
         ["public.people", new Map<string, MaskRule>([["dob", { t: "generalize", granularity: 1000 }]])],
+      ]),
+    );
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toContain("numeric");
+  });
+
+  test("pseudonymize on a NON-text column rejects (text-only)", () => {
+    const out = run(
+      [f("salary", PEOPLE, 3)], // 'N'
+      [{ salary: 73500 }],
+      new Map<string, Map<string, MaskRule>>([
+        ["public.people", new Map<string, MaskRule>([["salary", { t: "pseudonymize", kind: "name" }]])],
+      ]),
+    );
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toContain("text-only");
+  });
+
+  test("noise on a NON-numeric column rejects (numeric-only)", () => {
+    const out = run(
+      [f("name", PEOPLE, 4)], // 'S'
+      [{ name: "Ada Lovelace" }],
+      new Map<string, Map<string, MaskRule>>([
+        ["public.people", new Map<string, MaskRule>([["name", { t: "noise", ratio: 0.1 }]])],
       ]),
     );
     expect(out.ok).toBe(false);

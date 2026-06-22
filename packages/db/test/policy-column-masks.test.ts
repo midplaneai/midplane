@@ -11,6 +11,7 @@ import {
   maskRuleLabel,
   normalizeMaskRule,
   parseColumnMasksOrThrow,
+  PSEUDONYMIZE_KINDS,
   serializeMultiDbPolicyToYaml,
   validateColumnMasks,
   type DatabaseEntry,
@@ -67,7 +68,13 @@ describe("validateColumnMasks: presets", () => {
       "consistent-hash",
       "partial",
       "generalize",
+      "pseudonymize",
+      "noise",
     ]);
+  });
+
+  it("exposes the closed pseudonymize-kind set (drift-checked against the engine)", () => {
+    expect([...PSEUDONYMIZE_KINDS]).toEqual(["email", "name", "phone"]);
   });
 });
 
@@ -138,6 +145,49 @@ describe("validateColumnMasks: generalize", () => {
   });
 });
 
+describe("validateColumnMasks: pseudonymize", () => {
+  it("accepts each closed kind and round-trips it", () => {
+    for (const kind of PSEUDONYMIZE_KINDS) {
+      expect(
+        validateColumnMasks({ "public.users": { contact: { t: "pseudonymize", kind } } }),
+      ).toEqual({
+        ok: true,
+        value: { "public.users": { contact: { t: "pseudonymize", kind } } },
+      });
+    }
+  });
+
+  it("rejects a kind outside the closed set (no engine dictionary)", () => {
+    const r = validateColumnMasks({ "public.users": { city: { t: "pseudonymize", kind: "city" } } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]!.message).toContain("pseudonymize.kind must be one of");
+  });
+
+  it("rejects a missing / non-string kind", () => {
+    expect(validateColumnMasks({ "public.users": { email: { t: "pseudonymize" } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.users": { email: { t: "pseudonymize", kind: 42 } } }).ok).toBe(false);
+  });
+});
+
+describe("validateColumnMasks: noise", () => {
+  it("accepts a ratio in (0, 1]", () => {
+    expect(validateColumnMasks({ "public.people": { salary: { t: "noise", ratio: 0.1 } } })).toEqual({
+      ok: true,
+      value: { "public.people": { salary: { t: "noise", ratio: 0.1 } } },
+    });
+    // The closed upper bound is inclusive.
+    expect(validateColumnMasks({ "public.people": { salary: { t: "noise", ratio: 1 } } }).ok).toBe(true);
+  });
+
+  it("rejects ratio <= 0, > 1, or non-finite", () => {
+    expect(validateColumnMasks({ "public.people": { salary: { t: "noise", ratio: 0 } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.people": { salary: { t: "noise", ratio: -0.5 } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.people": { salary: { t: "noise", ratio: 1.5 } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.people": { salary: { t: "noise", ratio: Number.NaN } } }).ok).toBe(false);
+    expect(validateColumnMasks({ "public.people": { salary: { t: "noise" } } }).ok).toBe(false);
+  });
+});
+
 describe("validateColumnMasks: back-compat reader (keep-last-4)", () => {
   it("normalizes the retired keep-last-4 bare string to partial{keepEnd:4}", () => {
     const r = validateColumnMasks({ "public.users": { ssn: "keep-last-4" } });
@@ -158,11 +208,15 @@ describe("maskRuleKind / maskRuleLabel", () => {
     expect(maskRuleKind("full-redact")).toBe("full-redact");
     expect(maskRuleKind({ t: "partial", keepEnd: 4 })).toBe("partial");
     expect(maskRuleKind({ t: "generalize", granularity: "year" })).toBe("generalize");
+    expect(maskRuleKind({ t: "pseudonymize", kind: "email" })).toBe("pseudonymize");
+    expect(maskRuleKind({ t: "noise", ratio: 0.1 })).toBe("noise");
   });
   it("label is human-readable", () => {
     expect(maskRuleLabel("consistent-hash")).toBe("consistent-hash");
     expect(maskRuleLabel({ t: "partial", keepStart: 2, keepEnd: 4 })).toBe("partial · first 2, last 4");
     expect(maskRuleLabel({ t: "generalize", granularity: 1000 })).toBe("generalize · 1000");
+    expect(maskRuleLabel({ t: "pseudonymize", kind: "email" })).toBe("pseudonymize · email");
+    expect(maskRuleLabel({ t: "noise", ratio: 0.1 })).toBe("noise · ±10%");
   });
 });
 
@@ -249,6 +303,31 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
         "        ssn:",
         "          t: partial",
         "          keepEnd: 4",
+      ].join("\n"),
+    );
+  });
+
+  it("emits pseudonymize (kind) and noise (ratio) as nested block maps", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        columnMasks: {
+          "public.people": {
+            email: { t: "pseudonymize", kind: "email" },
+            salary: { t: "noise", ratio: 0.1 },
+          },
+        },
+      }),
+    ]);
+    expect(yaml).toContain(
+      [
+        "      public.people:",
+        // columns sorted: email, salary
+        "        email:",
+        "          t: pseudonymize",
+        "          kind: email",
+        "        salary:",
+        "          t: noise",
+        "          ratio: 0.1",
       ].join("\n"),
     );
   });

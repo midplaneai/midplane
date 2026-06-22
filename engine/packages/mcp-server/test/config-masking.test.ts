@@ -64,10 +64,59 @@ describe("config: column_masks parsing", () => {
     });
   });
 
+  test("parses the spike object forms (pseudonymize + noise)", () => {
+    const p = parsePolicyYaml(
+      [
+        "column_masks:",
+        "  public.people:",
+        "    email:",
+        "      t: pseudonymize",
+        "      kind: email",
+        "    salary:",
+        "      t: noise",
+        "      ratio: 0.1",
+        "",
+      ].join("\n"),
+      "test",
+    );
+    expect(p.databases[0]!.columnMasks).toEqual({
+      "public.people": {
+        email: { t: "pseudonymize", kind: "email" },
+        salary: { t: "noise", ratio: 0.1 },
+      },
+    });
+  });
+
   test("an unknown transform kind is rejected at parse (engine-sourced union)", () => {
     expect(() =>
       parsePolicyYaml(
         "column_masks:\n  public.users:\n    email: format-preserving-fake\n",
+        "test",
+      ),
+    ).toThrow();
+  });
+
+  test("an unknown pseudonymize kind is rejected at parse (no engine dictionary)", () => {
+    // The kind enum is the engine's PSEUDONYMIZE_KINDS — a kind with no shipped
+    // dictionary fails closed at BOOT, never reaching the result-set masker.
+    expect(() =>
+      parsePolicyYaml(
+        "column_masks:\n  public.users:\n    city:\n      t: pseudonymize\n      kind: city\n",
+        "test",
+      ),
+    ).toThrow();
+  });
+
+  test("a noise ratio outside (0, 1] is rejected at parse", () => {
+    expect(() =>
+      parsePolicyYaml(
+        "column_masks:\n  public.people:\n    salary:\n      t: noise\n      ratio: 1.5\n",
+        "test",
+      ),
+    ).toThrow();
+    expect(() =>
+      parsePolicyYaml(
+        "column_masks:\n  public.people:\n    salary:\n      t: noise\n      ratio: 0\n",
         "test",
       ),
     ).toThrow();

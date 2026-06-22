@@ -17,7 +17,7 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import yaml from "js-yaml";
-import type { MaskRule } from "@midplane/engine";
+import { PSEUDONYMIZE_KINDS, type MaskRule } from "@midplane/engine";
 
 export const TransportSchema = z.enum(["stdio", "http"]);
 export type Transport = z.infer<typeof TransportSchema>;
@@ -112,10 +112,26 @@ const GeneralizeRuleSchema = z.object({
     z.number().int().positive(),
   ]),
 });
+// `kind` is constrained to the dictionaries this engine ships (PSEUDONYMIZE_KINDS
+// from @midplane/engine — the SSOT). A cloud naming a kind this engine doesn't
+// know is rejected HERE at boot (fail-closed), so an unknown pseudonym kind can
+// never reach the result-set masker. scripts/check-mask-transforms.ts keeps the
+// cloud's accepted kinds and this set in lockstep.
+const PseudonymizeRuleSchema = z.object({
+  t: z.literal("pseudonymize"),
+  kind: z.enum(PSEUDONYMIZE_KINDS),
+});
+// ratio in (0, 1] — the proportional-noise magnitude (±ratio of the value).
+const NoiseRuleSchema = z.object({
+  t: z.literal("noise"),
+  ratio: z.number().positive().max(1),
+});
 const MaskRuleSchema = z.union([
   PresetRuleSchema,
   PartialRuleSchema,
   GeneralizeRuleSchema,
+  PseudonymizeRuleSchema,
+  NoiseRuleSchema,
 ]);
 const ColumnMasksSchema = z.record(
   z.string().min(1),

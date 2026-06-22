@@ -18,8 +18,10 @@ import {
   MASK_TRANSFORMS,
   maskRuleKind,
   maskRuleLabel,
+  PSEUDONYMIZE_KINDS,
   type MaskRule,
   type MaskTransformKind,
+  type PseudonymizeKind,
 } from "@midplane-cloud/db/policy";
 
 import { Badge } from "@/components/ui/badge";
@@ -319,6 +321,11 @@ function defaultRuleForKind(kind: MaskTransformKind, dataType: string): MaskRule
       return isNumericType(dataType) && !isDateType(dataType)
         ? { t: "generalize", granularity: 1000 }
         : { t: "generalize", granularity: "year" };
+    case "pseudonymize":
+      return { t: "pseudonymize", kind: "name" };
+    case "noise":
+      // A modest ±10% default; non-deterministic, so the editor flags it.
+      return { t: "noise", ratio: 0.1 };
   }
 }
 
@@ -350,12 +357,15 @@ function TransformEditor({
   }
 
   const gateNote = (k: MaskTransformKind): string => {
-    if (k === "partial" && !textOk) return " (text only)";
+    if ((k === "partial" || k === "pseudonymize") && !textOk) return " (text only)";
     if (k === "generalize" && !generalizeOk) return " (date / numeric only)";
+    if (k === "noise" && !numericOk) return " (numeric only)";
     return "";
   };
   const gateDisabled = (k: MaskTransformKind): boolean =>
-    (k === "partial" && !textOk) || (k === "generalize" && !generalizeOk);
+    ((k === "partial" || k === "pseudonymize") && !textOk) ||
+    (k === "generalize" && !generalizeOk) ||
+    (k === "noise" && !numericOk);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -386,6 +396,14 @@ function TransformEditor({
           disabled={disabled}
           onChange={onChange}
         />
+      ) : null}
+
+      {kind === "pseudonymize" && typeof value !== "string" && value.t === "pseudonymize" ? (
+        <PseudonymizeParams value={value} disabled={disabled} onChange={onChange} />
+      ) : null}
+
+      {kind === "noise" && typeof value !== "string" && value.t === "noise" ? (
+        <NoiseParams value={value} disabled={disabled} onChange={onChange} />
       ) : null}
     </div>
   );
@@ -531,6 +549,83 @@ function GeneralizeParams({
       <option value="month">month</option>
       <option value="day">day</option>
     </select>
+  );
+}
+
+// pseudonymize: a kind dropdown (email / name / phone). Each kind maps to a
+// compiled-in engine dictionary; the rule emits a realistic, deterministic fake.
+// Text-only (gated in the kind picker). Commits on change — no draft state.
+function PseudonymizeParams({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: { t: "pseudonymize"; kind: PseudonymizeKind };
+  disabled: boolean;
+  onChange: (rule: MaskRule) => void;
+}) {
+  return (
+    <select
+      className={selectClass}
+      value={value.kind}
+      disabled={disabled}
+      aria-label="pseudonym kind"
+      onChange={(e) => onChange({ t: "pseudonymize", kind: e.target.value as PseudonymizeKind })}
+    >
+      {PSEUDONYMIZE_KINDS.map((k) => (
+        <option key={k} value={k}>
+          {k}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// noise: a ±ratio input (0 < ratio ≤ 1) gated to numeric columns, plus a
+// persistent `warn` badge — noise is the only NON-deterministic transform, so it
+// breaks joins / grouping by design. Commits on blur (each save respawns the
+// engine), like the partial inputs. Local draft re-syncs on an optimistic revert.
+function NoiseParams({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: { t: "noise"; ratio: number };
+  disabled: boolean;
+  onChange: (rule: MaskRule) => void;
+}) {
+  const [ratio, setRatio] = useState(String(value.ratio));
+  useEffect(() => {
+    setRatio(String(value.ratio));
+  }, [value.ratio]);
+
+  function commit() {
+    let r = Number(ratio);
+    if (!Number.isFinite(r) || r <= 0) r = 0.1;
+    if (r > 1) r = 1;
+    onChange({ t: "noise", ratio: r });
+  }
+
+  return (
+    <span className="flex items-center gap-2 font-mono text-[11px] text-subtle">
+      <label className="flex items-center gap-1">
+        ±ratio
+        <input
+          type="number"
+          min={0.01}
+          max={1}
+          step={0.05}
+          inputMode="decimal"
+          className={`${numInputClass} w-14`}
+          value={ratio}
+          disabled={disabled}
+          aria-label="noise ratio"
+          onChange={(e) => setRatio(e.target.value)}
+          onBlur={commit}
+        />
+      </label>
+      <Badge variant="warn">breaks joins / grouping</Badge>
+    </span>
   );
 }
 

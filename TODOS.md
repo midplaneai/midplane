@@ -125,6 +125,31 @@ Deferred work captured during reviews. Each item has enough context to pick up c
   Roadmap for 2.2 (`pseudonymize`/`noise`) is in
   `docs/designs/masking-transform-catalog.md`.
 
+### Publish engine image + bump pin for phase 2.2 (`pseudonymize` + `noise`) (P0 — BLOCKING, the NEXT bump after 2.1)
+- **What:** Phase 2.2 adds two transforms to the `MaskRule` union on both sides —
+  `{ t: "pseudonymize", kind }` (realistic deterministic fakes from compiled-in
+  dictionaries) and `{ t: "noise", ratio }` (the lone non-deterministic, join-
+  breaking transform). The source is in the tree on both sides, but the deployed
+  engine (`0.12.0`, and even the 2.1 bump above) does NOT know these kinds.
+- **Sequencing (a two-step queue):** the 2.1 bump above MUST land first (it
+  carries the value-shape union the `0.12.0` engine rejects at boot). 2.2 is the
+  NEXT engine release ON TOP of that: cut a new `engine-vX.Y.Z` carrying the
+  `pseudonymize`/`noise` `applyTransform` cases + the widened zod union + the
+  dictionaries, bump `OSS_ENGINE_IMAGE` in `packages/router/src/oss-image.ts`, run
+  `bun scripts/check-image-pin.ts` and update every drift site until green — **then**
+  the cloud may offer `pseudonymize`/`noise`. Until the bump, a saved 2.2 rule
+  makes the engine fail **CLOSED**: an unknown transform KIND or an unknown
+  pseudonymize `kind` is rejected by the engine's zod at boot (whole DB won't
+  spawn) — never a silent passthrough.
+- **Two lockstep surfaces, both CI-guarded** (`bun scripts/check-mask-transforms.ts`):
+  the transform-KIND list (now 7) AND the `pseudonymize`-kind set (`email`,
+  `name`, `phone`) must match across cloud + engine. No DB migration for 2.2
+  (new object kinds in an existing union; the jsonb column already holds them).
+- **Binary-size impact:** the three compiled-in dictionaries (`~6.4 KB` of source,
+  `~4 KB` of string data) added **0 bytes** to the `bun build --compile` binary
+  (62,984,720 bytes with and without — the data falls within bundle-section
+  alignment). Negligible; no action needed.
+
 ## Billing / pricing follow-ups
 
 ### Audit storage-pruning job (real retention, not just query-time hiding)
