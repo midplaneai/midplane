@@ -48,12 +48,22 @@ describe("validateColumnMasks", () => {
     expect(validateColumnMasks({ "public.users": {} })).toEqual({ ok: true, value: {} });
   });
 
-  it("exposes the v1 transform set", () => {
+  it("exposes the transform set", () => {
     expect([...MASK_TRANSFORMS]).toEqual([
       "full-redact",
+      "null-out",
       "consistent-hash",
       "keep-last-4",
     ]);
+  });
+
+  it("accepts null-out for any column", () => {
+    expect(
+      validateColumnMasks({ "public.events": { created_at: "null-out" } }),
+    ).toEqual({
+      ok: true,
+      value: { "public.events": { created_at: "null-out" } },
+    });
   });
 });
 

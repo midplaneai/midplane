@@ -90,6 +90,26 @@ Deferred work captured during reviews. Each item has enough context to pick up c
 - **Context:** Affects all three editors equally (pre-existing pattern); flagged by the
   red-team pass on 2026-06-12. A 10-minute manual check on a prod build settles it.
 
+## Masking follow-ups
+
+### Publish engine image + bump pin for the `null-out` transform (P1 — engine-first sequencing)
+- **What:** The `null-out` masking transform (phase 2.0) is in the source on both
+  sides of the deployable boundary, but the deployed engine image is pinned at
+  `0.12.0`, which predates it. Cut `engine-v0.13.0` (CI builds + publishes
+  `midplane/midplane:0.13.0` + digest), then bump `OSS_ENGINE_IMAGE` in
+  `packages/router/src/oss-image.ts`, run `bun scripts/check-image-pin.ts`, and
+  update every drift site until green.
+- **Why:** Until the published engine knows `null-out`, the cloud picker will
+  offer it and serialize it into the policy YAML, but a spawned `0.12.0` engine
+  fails CLOSED on the unknown transform (rejects the result set — safe, never
+  leaks — but the picked mask breaks the agent's query). Engine-first ordering
+  closes that window.
+- **Context:** Same sequencing as the original masking launch (engine code →
+  image publish → pin bump → cloud offering). Pin SSOT + drift sites are
+  documented in AGENTS.md ("OSS image version pin sites"). Roadmap for the rest
+  of the catalog (2.1 `partial`/`generalize`, 2.2 `pseudonymize`/`noise`) is in
+  `docs/designs/masking-transform-catalog.md`.
+
 ## Billing / pricing follow-ups
 
 ### Audit storage-pruning job (real retention, not just query-time hiding)

@@ -25,6 +25,20 @@ describe("masking/transforms: full-redact", () => {
   });
 });
 
+describe("masking/transforms: null-out", () => {
+  test("replaces any value with SQL NULL (type-preserving redaction)", () => {
+    expect(applyTransform("null-out", "ada@acme.io", SALT)).toBeNull();
+    expect(applyTransform("null-out", 12345, SALT)).toBeNull();
+    expect(applyTransform("null-out", true, SALT)).toBeNull();
+    expect(applyTransform("null-out", new Date("2020-01-01"), SALT)).toBeNull();
+  });
+
+  test("an already-NULL value stays NULL; undefined stays undefined", () => {
+    expect(applyTransform("null-out", null, SALT)).toBeNull();
+    expect(applyTransform("null-out", undefined, SALT)).toBeUndefined();
+  });
+});
+
 describe("masking/transforms: consistent-hash", () => {
   test("is deterministic — same (salt, value) yields the same token (joins survive)", () => {
     const a = applyTransform("consistent-hash", "ada@acme.io", SALT);
@@ -94,6 +108,7 @@ describe("masking/transforms: fail-closed on unknown transform", () => {
 
   test("isTransformName accepts catalog names and rejects others", () => {
     expect(isTransformName("full-redact")).toBe(true);
+    expect(isTransformName("null-out")).toBe(true);
     expect(isTransformName("consistent-hash")).toBe(true);
     expect(isTransformName("keep-last-4")).toBe(true);
     expect(isTransformName("format-preserving-fake")).toBe(false);

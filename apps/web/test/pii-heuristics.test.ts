@@ -36,11 +36,13 @@ describe("classifyColumn: high-confidence categories", () => {
     }
   });
 
-  it("flags date of birth → full-redact", () => {
+  it("flags date of birth → null-out on date columns (type-preserving)", () => {
     for (const n of ["dob", "date_of_birth", "birth_date", "birthday"]) {
       const m = classifyColumn(n, "date");
-      expect(m).toMatchObject({ category: "dob", suggestedTransform: "full-redact" });
+      expect(m).toMatchObject({ category: "dob", suggestedTransform: "null-out" });
     }
+    // A dob stored as text keeps full-redact (the text token is type-valid).
+    expect(classifyColumn("dob", "text")?.suggestedTransform).toBe("full-redact");
   });
 });
 
@@ -60,14 +62,17 @@ describe("classifyColumn: confidence tiers + ambiguity", () => {
   });
 });
 
-describe("classifyColumn: keep-last-4 type-gate", () => {
-  it("downgrades keep-last-4 → full-redact for a non-text column", () => {
-    // An ssn stored as a bigint can't keep-last-4 (text-only); suggest full-redact.
+describe("classifyColumn: type-gate for text-token transforms", () => {
+  it("downgrades a text-token suggestion → null-out for a non-text column", () => {
+    // An ssn stored as a bigint can't keep-last-4 (text-only); a text token would
+    // change the column's type, so suggest null-out (type-preserving).
     expect(classifyColumn("ssn", "bigint")).toMatchObject({
       category: "ssn",
-      suggestedTransform: "full-redact",
+      suggestedTransform: "null-out",
     });
-    expect(classifyColumn("phone", "integer")?.suggestedTransform).toBe("full-redact");
+    expect(classifyColumn("phone", "integer")?.suggestedTransform).toBe("null-out");
+    // A full-redact category on a non-text column also downgrades to null-out.
+    expect(classifyColumn("ip_address", "inet")?.suggestedTransform).toBe("null-out");
   });
 
   it("keeps keep-last-4 for text-like types", () => {
