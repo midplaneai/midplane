@@ -38,6 +38,7 @@ export {
   isPresetName,
   isTransformKind,
   isTransformName,
+  PSEUDONYMIZE_KINDS,
   ruleKind,
   TRANSFORM_KINDS,
   TRANSFORM_NAMES,
@@ -46,6 +47,7 @@ export {
 export type {
   Granularity,
   MaskRule,
+  PseudonymizeKind,
   TransformContext,
   TransformKind,
   TransformName,

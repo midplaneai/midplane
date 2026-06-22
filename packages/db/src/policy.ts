@@ -613,6 +613,15 @@ function emitTenantScope(
  *  band). Mirrors the engine's Granularity. */
 export type Granularity = "year" | "month" | "day" | number;
 
+/** The `pseudonymize` kinds — a CLOSED subset of the scanner's PiiCategory the
+ *  engine ships a dictionary for. MUST equal the engine's PSEUDONYMIZE_KINDS
+ *  (transforms.ts): a second lockstep beyond the transform-KIND drift check, so
+ *  the cloud can never emit `kind: city` when the engine has no city dictionary
+ *  (which the engine would reject fail-closed). scripts/check-mask-transforms.ts
+ *  compares both sets; order is significant for that comparison. */
+export const PSEUDONYMIZE_KINDS = ["email", "name", "phone"] as const;
+export type PseudonymizeKind = (typeof PSEUDONYMIZE_KINDS)[number];
+
 /** A declared mask rule: a param-free PRESET (a bare string) or a PARAMETRIC
  *  transform tagged by its `t` discriminant. Mirrors the engine's MaskRule
  *  (engine/packages/engine/src/masking/transforms.ts); the two are kept in
@@ -624,7 +633,9 @@ export type MaskRule =
   | "null-out"
   | "consistent-hash"
   | { t: "partial"; keepStart?: number; keepEnd?: number; glyph?: string }
-  | { t: "generalize"; granularity: Granularity };
+  | { t: "generalize"; granularity: Granularity }
+  | { t: "pseudonymize"; kind: PseudonymizeKind }
+  | { t: "noise"; ratio: number };
 
 /** "schema.table" -> (column name -> mask rule). */
 export type ColumnMasksConfig = Record<string, Record<string, MaskRule>>;
@@ -647,6 +658,8 @@ export const MASK_TRANSFORMS = [
   "consistent-hash",
   "partial",
   "generalize",
+  "pseudonymize",
+  "noise",
 ] as const;
 export type MaskTransformKind = (typeof MASK_TRANSFORMS)[number];
 
@@ -658,13 +671,20 @@ export function maskRuleKind(rule: MaskRule): MaskTransformKind {
 /** A compact human label for a rule — UI chips + context lines (not YAML). */
 export function maskRuleLabel(rule: MaskRule): string {
   if (typeof rule === "string") return rule;
-  if (rule.t === "partial") {
-    const parts: string[] = [];
-    if (rule.keepStart) parts.push(`first ${rule.keepStart}`);
-    if (rule.keepEnd) parts.push(`last ${rule.keepEnd}`);
-    return parts.length > 0 ? `partial · ${parts.join(", ")}` : "partial";
+  switch (rule.t) {
+    case "partial": {
+      const parts: string[] = [];
+      if (rule.keepStart) parts.push(`first ${rule.keepStart}`);
+      if (rule.keepEnd) parts.push(`last ${rule.keepEnd}`);
+      return parts.length > 0 ? `partial · ${parts.join(", ")}` : "partial";
+    }
+    case "generalize":
+      return `generalize · ${rule.granularity}`;
+    case "pseudonymize":
+      return `pseudonymize · ${rule.kind}`;
+    case "noise":
+      return `noise · ±${Math.round(rule.ratio * 100)}%`;
   }
-  return `generalize · ${rule.granularity}`;
 }
 
 /** Zero-value config — no masked columns. Default for new project rows. */
@@ -757,6 +777,23 @@ export function normalizeMaskRule(
       ok: false,
       message: "generalize.granularity must be year, month, day, or a positive integer",
     };
+  }
+  if (o.t === "pseudonymize") {
+    const kind = o.kind;
+    if (typeof kind === "string" && (PSEUDONYMIZE_KINDS as readonly string[]).includes(kind)) {
+      return { ok: true, value: { t: "pseudonymize", kind: kind as PseudonymizeKind } };
+    }
+    return {
+      ok: false,
+      message: `pseudonymize.kind must be one of ${PSEUDONYMIZE_KINDS.join(", ")}`,
+    };
+  }
+  if (o.t === "noise") {
+    const ratio = o.ratio;
+    if (typeof ratio === "number" && Number.isFinite(ratio) && ratio > 0 && ratio <= 1) {
+      return { ok: true, value: { t: "noise", ratio } };
+    }
+    return { ok: false, message: "noise.ratio must be a number in (0, 1]" };
   }
   return { ok: false, message: maskRuleMessage };
 }
@@ -893,9 +930,15 @@ function emitMaskRule(lines: string[], col: string, rule: MaskRule): void {
     // The glyph can be any single char (•, #, *, :) — double-quote it so a
     // YAML-special glyph round-trips through js-yaml as a plain string.
     if (rule.glyph !== undefined) lines.push(`          glyph: ${yamlDoubleQuote(rule.glyph)}`);
-  } else {
+  } else if (rule.t === "generalize") {
     // year/month/day are safe plain scalars; a bucket width is a plain number.
     lines.push(`          granularity: ${rule.granularity}`);
+  } else if (rule.t === "pseudonymize") {
+    // kind ∈ {email,name,phone} — safe plain scalars (the validator pins them).
+    lines.push(`          kind: ${rule.kind}`);
+  } else {
+    // noise: ratio is a plain number in (0, 1].
+    lines.push(`          ratio: ${rule.ratio}`);
   }
 }
 

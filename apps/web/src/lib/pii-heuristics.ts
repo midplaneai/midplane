@@ -98,6 +98,12 @@ function isDateType(dataType: string): boolean {
 // birth YEAR (identifier dies, age-cohort analytics survive). Anything without a
 // type-valid suggestion falls back to null-out (type-preserving for every type),
 // so a suggested mask NEVER silently changes a column's type or rejects.
+//
+// The floor stays on the deterministic, redaction-flavored transforms. We do
+// NOT auto-suggest `pseudonymize` (realistic fakes are a deliberate product
+// choice for demo/staging DBs — the user opts in via the picker), and we NEVER
+// suggest `noise`: it's the lone non-deterministic transform (breaks joins /
+// grouping by design), so it must never be a default a scan nudges toward.
 function suggestTransform(category: PiiCategory, dataType: string): MaskRule {
   const text = isTextType(dataType);
   switch (category) {

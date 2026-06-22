@@ -10,13 +10,18 @@ import {
   applyTransform,
   isTransformKind,
   isTransformName,
+  PSEUDONYMIZE_KINDS,
   ruleKind,
   TRANSFORM_KINDS,
   TRANSFORM_NAMES,
   UnknownTransformError,
   type MaskRule,
+  type PseudonymizeKind,
   type TransformContext,
 } from "../../src/masking/transforms.ts";
+import { PSEUDONYM_EMAILS } from "../../src/masking/dictionaries/emails.ts";
+import { PSEUDONYM_NAMES } from "../../src/masking/dictionaries/names.ts";
+import { PSEUDONYM_PHONES } from "../../src/masking/dictionaries/phones.ts";
 
 const SALT: TransformContext = { salt: "project-salt-A" };
 const SALT_B: TransformContext = { salt: "project-salt-B" };
@@ -150,6 +155,127 @@ describe("masking/transforms: generalize — numeric bucketing", () => {
   });
 });
 
+describe("masking/transforms: pseudonymize (realistic deterministic fakes)", () => {
+  const EMAIL = { t: "pseudonymize", kind: "email" } as const;
+
+  test("is deterministic — same (salt, value) yields the same fake (joins survive)", () => {
+    const a = applyTransform(EMAIL, "ada@acme.io", SALT);
+    const b = applyTransform(EMAIL, "ada@acme.io", SALT);
+    expect(a).toBe(b);
+  });
+
+  test("different values yield different fakes (no collision for these inputs)", () => {
+    const a = applyTransform(EMAIL, "ada@acme.io", SALT);
+    const b = applyTransform(EMAIL, "bob@acme.io", SALT);
+    expect(a).not.toBe(b);
+  });
+
+  test("different salt yields a different fake for the same value (uncorrelated)", () => {
+    const a = applyTransform(EMAIL, "ada@acme.io", SALT);
+    const b = applyTransform(EMAIL, "ada@acme.io", SALT_B);
+    expect(a).not.toBe(b);
+  });
+
+  test("never returns the original value", () => {
+    const out = applyTransform(EMAIL, "ada@acme.io", SALT);
+    expect(out).not.toBe("ada@acme.io");
+    expect(String(out)).not.toContain("ada@acme.io");
+  });
+
+  test("each kind returns a non-empty fake of the right shape", () => {
+    const email = applyTransform({ t: "pseudonymize", kind: "email" }, "x@y.z", SALT) as string;
+    expect(email.length).toBeGreaterThan(0);
+    expect(email).toContain("@");
+
+    const name = applyTransform({ t: "pseudonymize", kind: "name" }, "Ada Lovelace", SALT) as string;
+    expect(name.length).toBeGreaterThan(0);
+    expect(name).toContain(" "); // first + last
+
+    const phone = applyTransform({ t: "pseudonymize", kind: "phone" }, "555-0000", SALT) as string;
+    expect(phone.length).toBeGreaterThan(0);
+    expect(phone.startsWith("+")).toBe(true);
+  });
+
+  test("a value-derived fake is drawn from every kind's dictionary (no throw, no empty)", () => {
+    // Probe a spread of inputs per kind to exercise the HMAC→index reduction.
+    for (const kind of PSEUDONYMIZE_KINDS) {
+      for (let i = 0; i < 50; i++) {
+        const out = applyTransform({ t: "pseudonymize", kind }, `value-${i}`, SALT);
+        expect(typeof out).toBe("string");
+        expect((out as string).length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("fail-closed on an unknown pseudonymize kind (no dictionary → reject)", () => {
+    expect(() =>
+      // A newer cloud naming a dictionary this engine doesn't ship.
+      applyTransform({ t: "pseudonymize", kind: "city" as PseudonymizeKind }, "Berlin", SALT),
+    ).toThrow(UnknownTransformError);
+  });
+
+  test("never returns the original even when the input IS a dictionary entry", () => {
+    // The leak class: if the input already equals a dictionary value and the
+    // HMAC lands on that same entry, a naive `dict[idx]` would echo the
+    // plaintext (e.g. salt-A maps "Viktor Novak" → "Viktor Novak"). Feed EVERY
+    // entry of each dict, across multiple salts, and assert the fake is never
+    // the input — the deterministic probe must step past a self-map.
+    const DICTS = [
+      ["email", PSEUDONYM_EMAILS],
+      ["name", PSEUDONYM_NAMES],
+      ["phone", PSEUDONYM_PHONES],
+    ] as const;
+    for (const ctx of [SALT, SALT_B, { salt: "salt-A" }]) {
+      for (const [kind, dict] of DICTS) {
+        for (const entry of dict) {
+          const out = applyTransform({ t: "pseudonymize", kind }, entry, ctx);
+          expect(out).not.toBe(entry);
+        }
+      }
+    }
+  });
+});
+
+describe("masking/transforms: noise (analytics-preserving, join-breaking)", () => {
+  test("stays numeric and is bounded by ±ratio of the value", () => {
+    const ratio = 0.1;
+    for (let i = 0; i < 200; i++) {
+      const out = applyTransform({ t: "noise", ratio }, 50000, SALT) as number;
+      expect(typeof out).toBe("number");
+      expect(Number.isFinite(out)).toBe(true);
+      // out ∈ [value*(1-ratio), value*(1+ratio)]
+      expect(out).toBeGreaterThanOrEqual(50000 * (1 - ratio) - 1e-6);
+      expect(out).toBeLessThanOrEqual(50000 * (1 + ratio) + 1e-6);
+    }
+  });
+
+  test("is NON-deterministic by design — repeated calls differ (breaks joins)", () => {
+    // Assert the SHAPE (numeric, varies), not a fixed value: noise uses
+    // Math.random(). With ratio 1 on a large value, a collision across 50 draws
+    // is astronomically unlikely.
+    const outs = new Set<number>();
+    for (let i = 0; i < 50; i++) {
+      outs.add(applyTransform({ t: "noise", ratio: 1 }, 1_000_000, SALT) as number);
+    }
+    expect(outs.size).toBeGreaterThan(1);
+  });
+
+  test("parses a numeric delivered as a string", () => {
+    const out = applyTransform({ t: "noise", ratio: 0.1 }, "50000", SALT) as number;
+    expect(typeof out).toBe("number");
+    expect(out).toBeGreaterThanOrEqual(50000 * 0.9 - 1e-6);
+    expect(out).toBeLessThanOrEqual(50000 * 1.1 + 1e-6);
+  });
+
+  test("zero stays zero (proportional noise of 0 is 0)", () => {
+    expect(applyTransform({ t: "noise", ratio: 0.5 }, 0, SALT)).toBe(0);
+  });
+
+  test("non-finite input → null (never leak)", () => {
+    expect(applyTransform({ t: "noise", ratio: 0.1 }, "not-a-number", SALT)).toBeNull();
+  });
+});
+
 describe("masking/transforms: NULL handling", () => {
   test("NULL passes through as NULL for every rule kind", () => {
     const RULES: MaskRule[] = [
@@ -159,6 +285,8 @@ describe("masking/transforms: NULL handling", () => {
       { t: "partial", keepEnd: 4 },
       { t: "generalize", granularity: "year" },
       { t: "generalize", granularity: 1000 },
+      { t: "pseudonymize", kind: "email" },
+      { t: "noise", ratio: 0.1 },
     ];
     for (const rule of RULES) {
       expect(applyTransform(rule, null, SALT)).toBeNull();
@@ -174,13 +302,25 @@ describe("masking/transforms: fail-closed on unknown rule kind", () => {
       // from a newer cloud that this engine version does not know.
       applyTransform("format-preserving-fake" as never, "ada@acme.io", SALT),
     ).toThrow(UnknownTransformError);
+    // A pseudonymize rule with no (or unknown) kind has no dictionary → reject.
     expect(() =>
       applyTransform({ t: "pseudonymize" } as never, "ada@acme.io", SALT),
+    ).toThrow(UnknownTransformError);
+    expect(() =>
+      applyTransform({ t: "fake_company" } as never, "Acme", SALT),
     ).toThrow(UnknownTransformError);
   });
 
   test("isTransformKind accepts catalog KINDS and rejects others", () => {
-    for (const k of ["full-redact", "null-out", "consistent-hash", "partial", "generalize"]) {
+    for (const k of [
+      "full-redact",
+      "null-out",
+      "consistent-hash",
+      "partial",
+      "generalize",
+      "pseudonymize",
+      "noise",
+    ]) {
       expect(isTransformKind(k)).toBe(true);
     }
     // keep-last-4 is retired — absorbed by partial{keepEnd:4}.
@@ -195,16 +335,21 @@ describe("masking/transforms: fail-closed on unknown rule kind", () => {
     expect(ruleKind("full-redact")).toBe("full-redact");
     expect(ruleKind({ t: "partial", keepEnd: 4 })).toBe("partial");
     expect(ruleKind({ t: "generalize", granularity: "year" })).toBe("generalize");
+    expect(ruleKind({ t: "pseudonymize", kind: "email" })).toBe("pseudonymize");
+    expect(ruleKind({ t: "noise", ratio: 0.1 })).toBe("noise");
   });
 
-  test("TRANSFORM_KINDS / TRANSFORM_NAMES enumerate the five kinds", () => {
+  test("TRANSFORM_KINDS / TRANSFORM_NAMES enumerate the seven kinds", () => {
     expect([...TRANSFORM_KINDS]).toEqual([
       "full-redact",
       "null-out",
       "consistent-hash",
       "partial",
       "generalize",
+      "pseudonymize",
+      "noise",
     ]);
     expect(TRANSFORM_NAMES).toBe(TRANSFORM_KINDS); // back-compat alias
+    expect([...PSEUDONYMIZE_KINDS]).toEqual(["email", "name", "phone"]);
   });
 });

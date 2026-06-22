@@ -2,17 +2,25 @@
 // cell when its source column is declared masked.
 //
 // Design (see column-policies-masking design doc + masking-transform-catalog):
-//   - DETERMINISTIC: a value-dependent transform MUST map the same input to
-//     the same output every time (a join over a consistent-hashed key has to
-//     still group; `partial`/`generalize` are pure functions of the value).
-//     Determinism is a requirement, not a nicety.
+//   - DETERMINISTIC (with ONE opt-in exception): a value-dependent transform
+//     maps the same input to the same output every time, so a join over a
+//     masked key still groups. `partial`/`generalize` are pure functions of the
+//     value; `consistent-hash`/`pseudonymize` are pure functions of (salt,
+//     value). The SOLE exception is `noise`, which is explicitly
+//     NON-DETERMINISTIC by design — it randomizes a numeric so exact values
+//     can't survive, breaking joins/grouping on that column. `noise` is never a
+//     default, the UI flags it ("breaks joins"), and the scanner never suggests
+//     it; every other transform here is deterministic, which is the masking
+//     floor, not a nicety.
 //   - SALT-INJECTED: the salt is passed in, never read from global state, so
 //     determinism is unit-testable and the salt-scope decision is a wiring
 //     change, not a code change.
 //   - NO RUNTIME FILE READS: everything here is pure code + node:crypto (a
-//     static import). A `bun build --compile` binary does NOT embed assets read
-//     at runtime via readFileSync (see learning bun-compile-readfilesync-not-
-//     embedded), so a wordlist on disk would ENOENT in the shipped engine.
+//     static import) + the `pseudonymize` dictionaries, which ship as STATIC TS
+//     modules (./dictionaries/*.ts) imported at the top — so they're embedded in
+//     the compiled binary. A `bun build --compile` binary does NOT embed assets
+//     read at runtime via readFileSync (see learning bun-compile-readfilesync-
+//     not-embedded), so a wordlist on disk would ENOENT in the shipped engine.
 //   - FAIL-CLOSED: `applyTransform` is exhaustive over the MaskRule union; an
 //     unrecognized rule throws (UnknownTransformError) so the masker rejects the
 //     column rather than passing the real value through. This is the defense
@@ -25,8 +33,12 @@
 // input-type DOMAIN the masker enforces fail-closed (the type check lives in
 // mask-result-set.ts, which has the column's pg type; an out-of-domain
 // application rejects the whole result set):
-//   - `partial`     text → text       (reveal a few chars, mask the rest)
-//   - `generalize`  date|num → date|num (truncate a date / bucket a number)
+//   - `partial`       text → text       (reveal a few chars, mask the rest)
+//   - `generalize`    date|num → date|num (truncate a date / bucket a number)
+//   - `pseudonymize`  text → text       (a realistic, deterministic fake from a
+//                                         compiled-in dictionary keyed by `kind`)
+//   - `noise`         num → num         (randomized within ±ratio — the lone
+//                                         non-deterministic transform)
 //
 // null-out is the only TYPE-PRESERVING transform — it masks to SQL NULL so a
 // masked column keeps its declared Postgres type; full-redact / consistent-hash
@@ -39,11 +51,23 @@
 // distinct from this passthrough of an already-NULL input.)
 
 import { createHmac } from "node:crypto";
+import { PSEUDONYM_EMAILS } from "./dictionaries/emails.ts";
+import { PSEUDONYM_NAMES } from "./dictionaries/names.ts";
+import { PSEUDONYM_PHONES } from "./dictionaries/phones.ts";
 
 /** Date-truncation unit, or a positive numeric bucket width. `year`/`month`/
  *  `day` truncate a date/timestamp; a number rounds a numeric down to a multiple
  *  of that width (e.g. 1000 → salary band). */
 export type Granularity = "year" | "month" | "day" | number;
+
+/** The `pseudonymize` kinds — a CLOSED subset of the scanner's PII categories
+ *  that the engine actually ships a dictionary for. The cloud's accepted kinds
+ *  MUST equal this set (a second lockstep beyond the transform-KIND drift check;
+ *  scripts/check-mask-transforms.ts compares both). An unknown kind fails CLOSED
+ *  at runtime (pseudonymize throws → reject) and at boot (config zod rejects it).
+ *  Order is significant for the drift comparison. */
+export const PSEUDONYMIZE_KINDS = ["email", "name", "phone"] as const;
+export type PseudonymizeKind = (typeof PSEUDONYMIZE_KINDS)[number];
 
 /** A declared mask rule: a param-free preset name, or a parametric transform
  *  tagged by its `t` discriminant. The cloud authors these; the engine applies
@@ -54,7 +78,9 @@ export type MaskRule =
   | "null-out"
   | "consistent-hash"
   | { t: "partial"; keepStart?: number; keepEnd?: number; glyph?: string }
-  | { t: "generalize"; granularity: Granularity };
+  | { t: "generalize"; granularity: Granularity }
+  | { t: "pseudonymize"; kind: PseudonymizeKind }
+  | { t: "noise"; ratio: number };
 
 /** The closed set of transform KINDS — the param-free preset names plus the
  *  parametric `t` discriminants. This is the unit the drift check compares
@@ -66,6 +92,8 @@ export const TRANSFORM_KINDS = [
   "consistent-hash",
   "partial",
   "generalize",
+  "pseudonymize",
+  "noise",
 ] as const;
 
 export type TransformKind = (typeof TRANSFORM_KINDS)[number];
@@ -119,6 +147,16 @@ const FULL_REDACT_TOKEN = "***";
 // Default mask glyph for `partial`. A masked value, not real data, so the exact
 // glyph is cosmetic; "•" matches the exposure-scan wireframe.
 const DEFAULT_GLYPH = "•";
+
+// Compiled-in pseudonym dictionaries, one per kind. Static imports (above) so a
+// `bun build --compile` binary embeds them. The set of keys here IS the engine's
+// PSEUDONYMIZE_KINDS — a `kind` with no dictionary fails closed (pseudonymize
+// throws). The cloud is drift-checked to never offer a kind missing here.
+const PSEUDONYM_DICTS: Record<PseudonymizeKind, readonly string[]> = {
+  email: PSEUDONYM_EMAILS,
+  name: PSEUDONYM_NAMES,
+  phone: PSEUDONYM_PHONES,
+};
 
 /** full-redact: collapse any value to a constant token. Type-agnostic; the
  *  masker only routes scalar columns here (jsonb/array are rejected upstream). */
@@ -206,6 +244,64 @@ function bucketNumber(value: unknown, width: number): number | null {
   return Math.floor(n / width) * width;
 }
 
+/** pseudonymize: a realistic, DETERMINISTIC fake drawn from a compiled-in
+ *  dictionary keyed by `kind` (email / name / phone). Index =
+ *  HMAC-SHA256(salt, text(value)) reduced mod the dictionary length — so the
+ *  same (salt, value) always maps to the same fake (the agent can still
+ *  join/group on the masked column), and a different project salt yields an
+ *  uncorrelated mapping (identical guarantee to consistent-hash, but the output
+ *  keeps the real value's SHAPE instead of emitting hex). Output type: text.
+ *  Text-only (the masker fail-closes on non-text).
+ *
+ *  FAIL-CLOSED on an unknown kind: a `kind` with no dictionary (e.g. a newer
+ *  cloud naming a dictionary this engine version doesn't ship) throws
+ *  UnknownTransformError → the masker rejects, never passing the real value
+ *  through. In production the config zod also rejects an unknown kind at boot;
+ *  this is the runtime backstop. */
+function pseudonymize(
+  rule: { kind: PseudonymizeKind },
+  value: unknown,
+  ctx: TransformContext,
+): string {
+  const dict = PSEUDONYM_DICTS[rule.kind];
+  if (!dict || dict.length === 0) {
+    throw new UnknownTransformError(`pseudonymize:${String(rule.kind)}`);
+  }
+  const text = stringify(value);
+  const hex = createHmac("sha256", ctx.salt).update(text).digest("hex");
+  // Full-width reduction (BigInt over the whole 256-bit digest) for an even
+  // spread across the dictionary regardless of its length.
+  let idx = Number(BigInt(`0x${hex}`) % BigInt(dict.length));
+  // NEVER emit the real value: if the chosen fake equals the input — which
+  // happens when the input is itself a dictionary entry (a name column already
+  // holding "Avery Bennett" whose HMAC lands on that same entry) — advance
+  // deterministically to the next distinct entry. Still a pure function of
+  // (salt, value), so the same input maps to the same fake and joins hold.
+  // Bounded by dict.length so it always terminates; entries are unique, so this
+  // steps at most once in practice (the bound only guards a degenerate dict).
+  for (let step = 0; dict[idx] === text && step < dict.length; step++) {
+    idx = (idx + 1) % dict.length;
+  }
+  return dict[idx]!;
+}
+
+/** noise: additive proportional noise on a numeric value — multiply by a random
+ *  factor in [1 - ratio, 1 + ratio]. The ONLY non-deterministic transform: it
+ *  uses Math.random(), so repeated reads of the same row return different values
+ *  and joins/grouping on the column break BY DESIGN (the UI flags this; the
+ *  scanner never suggests it). Useful where only the aggregate distribution
+ *  matters and exact values must not survive. Output stays numeric; a non-finite
+ *  input or result drops to null (never leak), mirroring bucketNumber. Numeric-
+ *  only (the masker fail-closes on non-numeric). */
+function noise(rule: { ratio: number }, value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  const ratio = rule.ratio;
+  if (!Number.isFinite(n) || !(ratio > 0)) return null;
+  const factor = 1 + (Math.random() * 2 - 1) * ratio;
+  const out = n * factor;
+  return Number.isFinite(out) ? out : null;
+}
+
 // Stable text form of a scalar cell for the value-dependent transforms. The
 // masker guarantees we never see jsonb/array here (those columns are rejected),
 // so this only handles scalar types pg hands back: string | number | bigint |
@@ -250,6 +346,10 @@ export function applyTransform(
       return partial(rule, value);
     case "generalize":
       return generalize(rule, value);
+    case "pseudonymize":
+      return pseudonymize(rule, value, ctx);
+    case "noise":
+      return noise(rule, value);
     default: {
       const _exhaustive: never = rule;
       throw new UnknownTransformError(JSON.stringify(_exhaustive));

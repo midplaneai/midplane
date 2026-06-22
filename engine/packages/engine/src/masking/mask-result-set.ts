@@ -263,6 +263,18 @@ function checkInputDomain(
       "a numeric `generalize` bucket needs a numeric column",
     );
   }
+  if (kind === "pseudonymize") {
+    // Text-only (like `partial`) — the dictionaries emit text, so a fake on a
+    // numeric/date column would change its type. (An unknown `kind` is caught
+    // later, fail-closed, when applyTransform finds no dictionary.)
+    if (category === CATEGORY_STRING) return null;
+    return rejectDomain(outputName, ref, "the `pseudonymize` transform is text-only");
+  }
+  if (kind === "noise") {
+    // Numeric-only — noise randomizes a number; on any other type it's undefined.
+    if (category === CATEGORY_NUMERIC) return null;
+    return rejectDomain(outputName, ref, "the `noise` transform needs a numeric column");
+  }
   // Param-free preset (full-redact / null-out / consistent-hash): no domain.
   return null;
 }
