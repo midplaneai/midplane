@@ -3,7 +3,10 @@ import { and, eq } from "drizzle-orm";
 import Stripe from "stripe";
 
 import { customers, getDb } from "@midplane-cloud/db";
-import { member, subscription as subscriptionTable } from "@midplane-cloud/db/auth-schema";
+import {
+  member,
+  subscription as subscriptionTable,
+} from "@midplane-cloud/db/auth-schema";
 
 import { isOwnerRole } from "./org-roles.ts";
 import type { Plan } from "./plan.ts";
@@ -190,6 +193,34 @@ export async function reconcileOrgPlan(orgId: string): Promise<Plan> {
     : "free";
   await writeOrgPlan(orgId, plan);
   return plan;
+}
+
+// --- teardown ----------------------------------------------------------------
+
+/** True when the org has a subscription that is still live — any status other
+ *  than `canceled` / `incomplete_expired`. Account deletion is blocked while
+ *  this holds (lib/workspace.ts `handleBeforeUserDelete` + the account page):
+ *  the user cancels their plan through the normal billing flow first, so
+ *  deleting the workspace can never strand a paying Stripe subscription. That's
+ *  the deliberate trade — we don't programmatically cancel Stripe mid-deletion
+ *  (which risks a deleted account left paired with a live subscription); we
+ *  refuse the deletion until billing is already wound down.
+ *
+ *  Reads the local `subscription` table — the webhook-maintained bookkeeping
+ *  reconcileOrgPlan already trusts — so it's a cheap single-DB read with no
+ *  Stripe API call. Deliberately NOT gated on isBillingConfigured: a non-
+ *  terminal row means a real subscription regardless of the current process's
+ *  Stripe env, so a misconfigured cloud instance still fails safe (blocks)
+ *  rather than allowing a delete that strands billing. Self-host / keyless dev
+ *  simply have no rows, so it returns false. */
+export async function hasLiveSubscription(orgId: string): Promise<boolean> {
+  const rows = await getDb(bootRegion())
+    .select({ status: subscriptionTable.status })
+    .from(subscriptionTable)
+    .where(eq(subscriptionTable.referenceId, orgId));
+  return rows.some(
+    (r) => r.status !== "canceled" && r.status !== "incomplete_expired",
+  );
 }
 
 // --- the plugin --------------------------------------------------------------
