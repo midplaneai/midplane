@@ -5,7 +5,6 @@ import Stripe from "stripe";
 import { customers, getDb } from "@midplane-cloud/db";
 import {
   member,
-  organization,
   subscription as subscriptionTable,
 } from "@midplane-cloud/db/auth-schema";
 
@@ -198,54 +197,30 @@ export async function reconcileOrgPlan(orgId: string): Promise<Plan> {
 
 // --- teardown ----------------------------------------------------------------
 
-/** Cancel every live Stripe subscription for an org — called when the whole
- *  workspace is being deleted (lib/workspace.ts), so the customer stops being
- *  billed the moment their data goes away. Immediate cancellation (not
- *  cancel-at-period-end): the workspace and its data are destroyed now, so
- *  there's nothing left to keep paying for.
+/** True when the org has a subscription that is still live — any status other
+ *  than `canceled` / `incomplete_expired`. Account deletion is blocked while
+ *  this holds (lib/workspace.ts `handleBeforeUserDelete` + the account page):
+ *  the user cancels their plan through the normal billing flow first, so
+ *  deleting the workspace can never strand a paying Stripe subscription. That's
+ *  the deliberate trade — we don't programmatically cancel Stripe mid-deletion
+ *  (which risks a deleted account left paired with a live subscription); we
+ *  refuse the deletion until billing is already wound down.
  *
- *  Best-effort and self-contained: a no-op when billing is off (self-host /
- *  keyless dev) or the org never subscribed (no Stripe customer). Scoped to the
- *  org's OWN stripeCustomerId, so it can only ever touch that org's
- *  subscriptions. The local `subscription` rows are deleted by the workspace
- *  teardown alongside the org; we don't wait on the cancel webhook to round-trip
- *  (the rows are about to vanish regardless). */
-export async function cancelOrgSubscriptions(orgId: string): Promise<void> {
-  if (!isBillingConfigured()) return;
-  const orgRow = (
-    await getDb(bootRegion())
-      .select({ stripeCustomerId: organization.stripeCustomerId })
-      .from(organization)
-      .where(eq(organization.id, orgId))
-      .limit(1)
-  )[0];
-  if (!orgRow?.stripeCustomerId) return;
-
-  const stripe = getStripeClient();
-  const subs = await stripe.subscriptions.list({
-    customer: orgRow.stripeCustomerId,
-    status: "all",
-    limit: 100,
-  });
-  for (const sub of subs.data) {
-    // Already-dead subscriptions can't be cancelled again — skip to avoid a
-    // Stripe error. Everything still live (active/trialing/past_due/...) gets
-    // cancelled immediately.
-    if (sub.status === "canceled" || sub.status === "incomplete_expired") {
-      continue;
-    }
-    await stripe.subscriptions.cancel(sub.id).catch((err) => {
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "billing.cancel_on_teardown_failed",
-          orgId,
-          subscriptionId: sub.id,
-          message: err instanceof Error ? err.message : String(err),
-        }),
-      );
-    });
-  }
+ *  Reads the local `subscription` table — the webhook-maintained bookkeeping
+ *  reconcileOrgPlan already trusts — so it's a cheap single-DB read with no
+ *  Stripe API call. Deliberately NOT gated on isBillingConfigured: a non-
+ *  terminal row means a real subscription regardless of the current process's
+ *  Stripe env, so a misconfigured cloud instance still fails safe (blocks)
+ *  rather than allowing a delete that strands billing. Self-host / keyless dev
+ *  simply have no rows, so it returns false. */
+export async function hasLiveSubscription(orgId: string): Promise<boolean> {
+  const rows = await getDb(bootRegion())
+    .select({ status: subscriptionTable.status })
+    .from(subscriptionTable)
+    .where(eq(subscriptionTable.referenceId, orgId));
+  return rows.some(
+    (r) => r.status !== "canceled" && r.status !== "incomplete_expired",
+  );
 }
 
 // --- the plugin --------------------------------------------------------------

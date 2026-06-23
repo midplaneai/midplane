@@ -8,7 +8,7 @@ import {
   subscription as subscriptionTable,
 } from "@midplane-cloud/db/auth-schema";
 
-import { cancelOrgSubscriptions } from "./billing.ts";
+import { hasLiveSubscription } from "./billing.ts";
 import { classifyAccountDeletion, type OrgRole } from "./org-roles.ts";
 import { bootRegion } from "./region-context.ts";
 import { isSelfHost } from "./self-host.ts";
@@ -19,17 +19,21 @@ import { isSelfHost } from "./self-host.ts";
 // this is where the "what happens to the workspace" rule (lib/org-roles.ts
 // classifyAccountDeletion) is enforced and acted on.
 
-/** Tear a workspace down completely: cancel billing, stop its engine
- *  containers, and delete its data. Called when the SOLE member of a workspace
- *  deletes their account — there's no one left to own it.
+/** Tear a workspace down completely: stop its engine containers and delete its
+ *  data. Called when the SOLE member of a workspace deletes their account —
+ *  there's no one left to own it.
  *
- *  Order matters: cancel billing first (Stripe is irreversible, and cancelling
- *  is idempotent — a retry skips already-cancelled subs — so doing it first
- *  never double-charges), then stop containers (best-effort), then ONE atomic
- *  DB transaction. The projects→customers FK is RESTRICT, not CASCADE, so
- *  projects are deleted EXPLICITLY before the customer row; deleting a project
- *  DOES cascade to its project_databases + mcp_tokens (the KMS-encrypted DSNs
- *  live there, so the ciphertext goes with them). */
+ *  Billing is NOT touched here. Deletion is refused upstream while the org has a
+ *  live subscription (handleBeforeUserDelete + the account page), so by the time
+ *  we reach teardown the user has already cancelled their plan through the
+ *  normal billing flow — there's nothing left to bill, and we never risk a
+ *  deleted account paired with a live subscription.
+ *
+ *  Order: stop containers (best-effort), then ONE atomic DB transaction. The
+ *  projects→customers FK is RESTRICT, not CASCADE, so projects are deleted
+ *  EXPLICITLY before the customer row; deleting a project DOES cascade to its
+ *  project_databases + mcp_tokens (the KMS-encrypted DSNs live there, so the
+ *  ciphertext goes with them). */
 export async function tearDownWorkspace(orgId: string): Promise<void> {
   const db = getDb(bootRegion());
 
@@ -44,11 +48,7 @@ export async function tearDownWorkspace(orgId: string): Promise<void> {
       .limit(1)
   )[0];
 
-  // 1. Stop billing first. If this throws, deletion aborts before we've
-  //    destroyed anything — the user keeps their account and can retry.
-  await cancelOrgSubscriptions(orgId);
-
-  // 2. Stop any running engine containers for this customer's projects, keyed
+  // 1. Stop any running engine containers for this customer's projects, keyed
   //    on project id (best-effort, mirroring the project-delete route). Done
   //    BEFORE the DB delete while we still know the project ids. The proxy
   //    module is imported lazily so it isn't pulled into auth.ts's module graph
@@ -73,7 +73,7 @@ export async function tearDownWorkspace(orgId: string): Promise<void> {
     }
   }
 
-  // 3. Delete the workspace's data in ONE transaction so the DB teardown is
+  // 2. Delete the workspace's data in ONE transaction so the DB teardown is
   //    all-or-nothing. The projects→customers FK is RESTRICT, so projects must
   //    be deleted EXPLICITLY before the customer row (deleting a project
   //    cascades to its project_databases + mcp_tokens, and SET NULLs the
@@ -148,6 +148,16 @@ export async function handleBeforeUserDelete(userId: string): Promise<void> {
       });
     }
     if (plan === "delete-workspace") {
+      // Refuse while a subscription is live. The user cancels their plan through
+      // billing first, so deleting the workspace never strands a paying Stripe
+      // subscription on data that's about to vanish. (The account page shows the
+      // same block; this is the server backstop.)
+      if (await hasLiveSubscription(m.organizationId)) {
+        throw new APIError("BAD_REQUEST", {
+          message:
+            "Cancel your subscription in billing before deleting your account.",
+        });
+      }
       await tearDownWorkspace(m.organizationId);
     }
     // "leave": nothing to do — the member row cascades with the user delete.

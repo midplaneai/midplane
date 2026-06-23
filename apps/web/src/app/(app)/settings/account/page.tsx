@@ -11,6 +11,7 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { getAuth } from "@/lib/auth";
+import { hasLiveSubscription } from "@/lib/billing";
 import { currentCustomer } from "@/lib/customer";
 import {
   classifyAccountDeletion,
@@ -83,6 +84,12 @@ export default async function AccountPage() {
       });
     }
   }
+
+  // A sole owner can't delete while a subscription is live — they cancel their
+  // plan in billing first (the beforeDelete backstop enforces the same gate).
+  const subscriptionBlocked =
+    deletionPlan === "delete-workspace" &&
+    (await hasLiveSubscription(customer.orgId));
 
   return (
     <>
@@ -161,22 +168,39 @@ export default async function AccountPage() {
                     .
                   </p>
                 ) : deletionPlan === "delete-workspace" ? (
-                  <>
+                  subscriptionBlocked ? (
                     <p className="text-muted-foreground">
-                      You’re the only member of{" "}
                       <span className="font-medium text-foreground">
                         {workspaceName}
-                      </span>
-                      . Deleting your account permanently deletes the workspace
-                      and everything in it — projects, connected databases,
-                      tokens, and audit history. This can’t be undone.
+                      </span>{" "}
+                      has an active subscription. Cancel it in{" "}
+                      <Link
+                        href="/billing"
+                        className="font-medium text-foreground underline underline-offset-2"
+                      >
+                        billing
+                      </Link>{" "}
+                      before deleting your account.
                     </p>
-                    <DeleteAccountForm
-                      mode="delete-workspace"
-                      workspaceName={workspaceName}
-                      hasPassword={hasPassword}
-                    />
-                  </>
+                  ) : (
+                    <>
+                      <p className="text-muted-foreground">
+                        You’re the only member of{" "}
+                        <span className="font-medium text-foreground">
+                          {workspaceName}
+                        </span>
+                        . Deleting your account permanently deletes the
+                        workspace and everything in it — projects, connected
+                        databases, tokens, and audit history. This can’t be
+                        undone.
+                      </p>
+                      <DeleteAccountForm
+                        mode="delete-workspace"
+                        workspaceName={workspaceName}
+                        hasPassword={hasPassword}
+                      />
+                    </>
+                  )
                 ) : (
                   <>
                     <p className="text-muted-foreground">
