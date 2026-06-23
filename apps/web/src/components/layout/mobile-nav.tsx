@@ -1,14 +1,13 @@
 "use client";
 
-import { LogOut } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 import { LegalMenu } from "@/components/layout/legal-menu";
 import { navItemsFor } from "@/components/layout/nav-items";
+import { UserMenuButton } from "@/components/layout/user-menu-button";
 import { WorkspaceLabel } from "@/components/layout/workspace-label";
 import { RegionBadge } from "@/components/ui/region-badge";
-import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import type { Region } from "@midplane-cloud/kms";
 
@@ -22,31 +21,13 @@ export function MobileNav({
   role?: string | null;
 }) {
   const pathname = usePathname() ?? "";
-  const router = useRouter();
   return (
     <div className="flex flex-col border-b border-border bg-card md:hidden">
       <div className="flex h-12 items-center gap-3 px-4">
         <WorkspaceLabel />
         <div className="ml-auto flex items-center gap-3">
           {region && <RegionBadge region={region} />}
-          <button
-            type="button"
-            title="Sign out"
-            aria-label="Sign out"
-            onClick={() =>
-              authClient.signOut({
-                fetchOptions: {
-                  onSuccess: () => {
-                    router.push("/");
-                    router.refresh();
-                  },
-                },
-              })
-            }
-            className="text-subtle hover:text-foreground"
-          >
-            <LogOut aria-hidden className="h-4 w-4" strokeWidth={1.5} />
-          </button>
+          <UserMenuButton variant="compact" />
           <LegalMenu />
         </div>
       </div>
