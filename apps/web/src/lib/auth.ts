@@ -19,6 +19,7 @@ import {
   linkSelfHostOwnerMember,
 } from "./self-host-gate";
 import { isSelfHost, SELF_HOST_ORG_ID } from "./self-host";
+import { handleBeforeUserDelete } from "./workspace";
 
 // Better Auth instance for the CLOUD build.
 //
@@ -46,6 +47,21 @@ function createAuth() {
       schema: { ...authSchema },
     }),
     emailAndPassword: { enabled: true },
+    // Self-service account deletion (account page → danger zone). Better Auth
+    // verifies intent first — a password for credential users, or a fresh
+    // session otherwise — then calls beforeDelete BEFORE removing the user row.
+    // handleBeforeUserDelete is where the workspace-teardown rule is enforced
+    // (sole-owner → delete the workspace; owner-with-members → refuse; non-owner
+    // → just leave) and is the security backstop for the UI's pre-check. We send
+    // no verification email: the password / fresh-session check is the gate.
+    user: {
+      deleteUser: {
+        enabled: true,
+        beforeDelete: async (deletingUser) => {
+          await handleBeforeUserDelete(deletingUser.id);
+        },
+      },
+    },
     // Google sign-in. Conditional on creds being present (same hygiene as the
     // Stripe/ee plugins below): unset → {} → no provider, so keyless dev and
     // self-host boot without Google env. Self-host gets Google only by setting

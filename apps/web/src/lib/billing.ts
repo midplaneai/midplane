@@ -3,7 +3,11 @@ import { and, eq } from "drizzle-orm";
 import Stripe from "stripe";
 
 import { customers, getDb } from "@midplane-cloud/db";
-import { member, subscription as subscriptionTable } from "@midplane-cloud/db/auth-schema";
+import {
+  member,
+  organization,
+  subscription as subscriptionTable,
+} from "@midplane-cloud/db/auth-schema";
 
 import { isOwnerRole } from "./org-roles.ts";
 import type { Plan } from "./plan.ts";
@@ -190,6 +194,58 @@ export async function reconcileOrgPlan(orgId: string): Promise<Plan> {
     : "free";
   await writeOrgPlan(orgId, plan);
   return plan;
+}
+
+// --- teardown ----------------------------------------------------------------
+
+/** Cancel every live Stripe subscription for an org — called when the whole
+ *  workspace is being deleted (lib/workspace.ts), so the customer stops being
+ *  billed the moment their data goes away. Immediate cancellation (not
+ *  cancel-at-period-end): the workspace and its data are destroyed now, so
+ *  there's nothing left to keep paying for.
+ *
+ *  Best-effort and self-contained: a no-op when billing is off (self-host /
+ *  keyless dev) or the org never subscribed (no Stripe customer). Scoped to the
+ *  org's OWN stripeCustomerId, so it can only ever touch that org's
+ *  subscriptions. The local `subscription` rows are deleted by the workspace
+ *  teardown alongside the org; we don't wait on the cancel webhook to round-trip
+ *  (the rows are about to vanish regardless). */
+export async function cancelOrgSubscriptions(orgId: string): Promise<void> {
+  if (!isBillingConfigured()) return;
+  const orgRow = (
+    await getDb(bootRegion())
+      .select({ stripeCustomerId: organization.stripeCustomerId })
+      .from(organization)
+      .where(eq(organization.id, orgId))
+      .limit(1)
+  )[0];
+  if (!orgRow?.stripeCustomerId) return;
+
+  const stripe = getStripeClient();
+  const subs = await stripe.subscriptions.list({
+    customer: orgRow.stripeCustomerId,
+    status: "all",
+    limit: 100,
+  });
+  for (const sub of subs.data) {
+    // Already-dead subscriptions can't be cancelled again — skip to avoid a
+    // Stripe error. Everything still live (active/trialing/past_due/...) gets
+    // cancelled immediately.
+    if (sub.status === "canceled" || sub.status === "incomplete_expired") {
+      continue;
+    }
+    await stripe.subscriptions.cancel(sub.id).catch((err) => {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "billing.cancel_on_teardown_failed",
+          orgId,
+          subscriptionId: sub.id,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    });
+  }
 }
 
 // --- the plugin --------------------------------------------------------------

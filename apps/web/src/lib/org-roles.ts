@@ -38,3 +38,34 @@ export function isAssignableRole(role: unknown): role is AssignableRole {
 export function normalizeInviteRole(raw: unknown): AssignableRole {
   return isAssignableRole(raw) ? raw : "member";
 }
+
+/** What deleting your account does to the workspace, given your role in it and
+ *  how many OTHER members it has. The GitHub/Stripe convention:
+ *
+ *   - "blocked-owner": you own a workspace that still has other members. We
+ *     refuse — deleting you would orphan a workspace other people depend on.
+ *     Hand off ownership or remove the others first.
+ *   - "delete-workspace": you're the sole member (owner of an empty-but-for-you
+ *     workspace). Deleting your account also tears the workspace down — there's
+ *     no one left to own it.
+ *   - "leave": you're a non-owner (admin/member). Deletion just removes your
+ *     membership; the workspace and its data are untouched.
+ *
+ *  Pure so both the account page (to render the right danger zone) and the
+ *  beforeDelete backstop (to enforce it) read the same rule. Self-host is NOT a
+ *  case here — it has one implicit owner whose deletion would brick the
+ *  instance, so callers block it before reaching this. */
+export type AccountDeletionPlan =
+  | "blocked-owner"
+  | "delete-workspace"
+  | "leave";
+
+export function classifyAccountDeletion(args: {
+  role: OrgRole;
+  otherMemberCount: number;
+}): AccountDeletionPlan {
+  if (isOwnerRole(args.role)) {
+    return args.otherMemberCount > 0 ? "blocked-owner" : "delete-workspace";
+  }
+  return "leave";
+}
