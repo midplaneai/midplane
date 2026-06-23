@@ -11,9 +11,13 @@
 // listing all the missing ones, so a fresh `.env.local` problem
 // surfaces in the first server log line.
 //
-// Pure presence checks — we deliberately do not validate base64 length
-// or hex shape here. The downstream loaders own that and reporting it
-// twice would drift. The goal is: "did you remember to set the var?"
+// Mostly presence checks — we deliberately do not validate base64 length
+// or hex shape for the crypto material (peppers, KMS keys): the downstream
+// loaders own that and reporting it twice would drift. The lone exception is
+// the session / region-cookie SIGNING secrets, which get a length floor (see
+// secretIssue) because nothing downstream length-checks them and a too-short
+// value is a silent security footgun. Otherwise the goal is just: "did you
+// remember to set the var?"
 
 import { SELF_HOST_REGION } from "./self-host.ts";
 
@@ -108,6 +112,29 @@ export function assertBootEnv(env: EnvLike = process.env): void {
     });
   }
 
+  // Session + region-cookie signing secrets. Length-floored, not presence-only
+  // (see secretIssue): a missing BETTER_AUTH_SECRET makes Better Auth fall back
+  // to an insecure built-in default, and the region cookie HMAC must match
+  // across the apex + both regional web apps. REGION_COOKIE_SECRET is cloud-only
+  // — self-host short-circuits all region routing (middleware.ts), so it lives
+  // here and NOT in selfHostIssues().
+  pushIssue(
+    issues,
+    secretIssue(
+      env,
+      "BETTER_AUTH_SECRET",
+      "signs sessions; Better Auth uses an insecure built-in default if unset",
+    ),
+  );
+  pushIssue(
+    issues,
+    secretIssue(
+      env,
+      "MIDPLANE_REGION_COOKIE_SECRET",
+      "HMAC for the signed region cookie; must match across apex + both web apps",
+    ),
+  );
+
   // Hosted shape: FLY_API_TOKEN set means the indexer must be reachable.
   // Same check the mcp-proxy makes on first request — surfacing it earlier
   // so a missing INDEXER_TOKEN on a fresh Fly app doesn't wait for the
@@ -127,6 +154,40 @@ export function assertBootEnv(env: EnvLike = process.env): void {
   issues.push(...stripeIssues(env));
 
   throwIfIssues(issues);
+}
+
+// Signing secrets we length-floor rather than presence-check (the one
+// deliberate exception to this file's "presence only" rule — see the header).
+// An empty or trivially short value is a silent security footgun: Better Auth
+// falls back to a built-in DEFAULT secret when BETTER_AUTH_SECRET is unset, so
+// it would sign real sessions with publicly-known key material rather than
+// failing. No downstream loader length-checks these, so boot is the only place
+// to catch it. 32 chars is the documented floor (openssl rand -base64 32 → 44).
+const MIN_SECRET_LEN = 32;
+
+function secretIssue(
+  env: EnvLike,
+  varName: string,
+  purpose: string,
+): Issue | null {
+  const v = env[varName];
+  if (!v) {
+    return {
+      var: varName,
+      reason: `required (${purpose}); 32+ bytes — run: openssl rand -base64 32`,
+    };
+  }
+  if (v.length < MIN_SECRET_LEN) {
+    return {
+      var: varName,
+      reason: `too short (${v.length} chars) — ${purpose}; needs 32+ bytes (openssl rand -base64 32)`,
+    };
+  }
+  return null;
+}
+
+function pushIssue(issues: Issue[], issue: Issue | null): void {
+  if (issue) issues.push(issue);
 }
 
 // Cloud Stripe vars, validated all-or-nothing (see call site). Returns issues
@@ -172,6 +233,18 @@ function selfHostIssues(env: EnvLike): Issue[] {
         "required as the OAuth issuer for MCP discovery (this instance's origin)",
     });
   }
+
+  // Sessions are signed in self-host too — same Better Auth default-secret
+  // footgun as cloud. (No MIDPLANE_REGION_COOKIE_SECRET: self-host skips region
+  // routing entirely.)
+  pushIssue(
+    issues,
+    secretIssue(
+      env,
+      "BETTER_AUTH_SECRET",
+      "signs sessions; Better Auth uses an insecure built-in default if unset",
+    ),
+  );
 
   const upper = SELF_HOST_REGION.toUpperCase();
   const mode = env.MIDPLANE_KMS_MODE ?? "env";

@@ -5,6 +5,8 @@ import { assertBootEnv } from "../src/lib/assert-boot-env.ts";
 
 const PEPPER_B64 = randomBytes(32).toString("base64");
 const KEY_HEX = randomBytes(32).toString("hex");
+// 44-char base64 — clears the 32-char signing-secret floor.
+const SECRET = randomBytes(32).toString("base64");
 
 function envMode(region: "eu" | "us"): Record<string, string | undefined> {
   const upper = region.toUpperCase();
@@ -12,6 +14,8 @@ function envMode(region: "eu" | "us"): Record<string, string | undefined> {
     MIDPLANE_REGION: region,
     MIDPLANE_KMS_MODE: "env",
     BETTER_AUTH_URL: "http://localhost:3000",
+    BETTER_AUTH_SECRET: SECRET,
+    MIDPLANE_REGION_COOKIE_SECRET: SECRET,
     [`DATABASE_URL_${upper}`]: "postgres://localhost/x",
     [`MIDPLANE_KMS_DEV_KEY_${upper}`]: KEY_HEX,
     [`MIDPLANE_TOKEN_PEPPER_${upper}_V1`]: PEPPER_B64,
@@ -64,13 +68,47 @@ describe("assertBootEnv", () => {
     expect(err!.message).toMatch(/MIDPLANE_KMS_DEV_KEY_EU/);
     expect(err!.message).toMatch(/MIDPLANE_TOKEN_PEPPER_EU_V1/);
     expect(err!.message).toMatch(/BETTER_AUTH_URL/);
-    expect(err!.message).toMatch(/4 issues/);
+    expect(err!.message).toMatch(/BETTER_AUTH_SECRET/);
+    expect(err!.message).toMatch(/MIDPLANE_REGION_COOKIE_SECRET/);
+    expect(err!.message).toMatch(/6 issues/);
   });
 
   it("requires BETTER_AUTH_URL (the MCP OAuth issuer)", () => {
     const env = envMode("eu");
     delete env.BETTER_AUTH_URL;
     expect(() => assertBootEnv(env)).toThrow(/BETTER_AUTH_URL/);
+  });
+
+  describe("signing secrets (length-floored)", () => {
+    it("requires BETTER_AUTH_SECRET (session signing)", () => {
+      const env = envMode("eu");
+      delete env.BETTER_AUTH_SECRET;
+      expect(() => assertBootEnv(env)).toThrow(/BETTER_AUTH_SECRET/);
+    });
+
+    it("rejects a too-short BETTER_AUTH_SECRET", () => {
+      const env = envMode("eu");
+      env.BETTER_AUTH_SECRET = "short";
+      expect(() => assertBootEnv(env)).toThrow(
+        /BETTER_AUTH_SECRET.*too short/,
+      );
+    });
+
+    it("requires MIDPLANE_REGION_COOKIE_SECRET (cloud region cookie HMAC)", () => {
+      const env = envMode("eu");
+      delete env.MIDPLANE_REGION_COOKIE_SECRET;
+      expect(() => assertBootEnv(env)).toThrow(
+        /MIDPLANE_REGION_COOKIE_SECRET/,
+      );
+    });
+
+    it("rejects a too-short MIDPLANE_REGION_COOKIE_SECRET", () => {
+      const env = envMode("eu");
+      env.MIDPLANE_REGION_COOKIE_SECRET = "short";
+      expect(() => assertBootEnv(env)).toThrow(
+        /MIDPLANE_REGION_COOKIE_SECRET.*too short/,
+      );
+    });
   });
 
   it("skips derived-var checks when region itself is invalid", () => {
@@ -104,6 +142,8 @@ describe("assertBootEnv", () => {
       MIDPLANE_REGION: "eu",
       MIDPLANE_KMS_MODE: "kms",
       BETTER_AUTH_URL: "http://localhost:3000",
+      BETTER_AUTH_SECRET: SECRET,
+      MIDPLANE_REGION_COOKIE_SECRET: SECRET,
       DATABASE_URL_EU: "postgres://localhost/x",
       MIDPLANE_KMS_KEY_EU: "arn:aws:kms:eu-central-1:...:key/abc",
       MIDPLANE_TOKEN_PEPPER_CT_EU_V1: "base64ciphertext==",
@@ -158,6 +198,7 @@ describe("assertBootEnv", () => {
         DATABASE_URL: "postgres://localhost/x",
         MIDPLANE_KMS_MODE: "env",
         BETTER_AUTH_URL: "http://localhost:3000",
+        BETTER_AUTH_SECRET: SECRET,
         MIDPLANE_KMS_DEV_KEY_EU: KEY_HEX,
         MIDPLANE_TOKEN_PEPPER_EU_V1: PEPPER_B64,
         // A stray Stripe var must NOT pull in the all-or-nothing cloud check.
@@ -174,6 +215,7 @@ describe("assertBootEnv", () => {
         DATABASE_URL: "postgres://localhost/x",
         MIDPLANE_KMS_MODE: "env",
         BETTER_AUTH_URL: "http://localhost:3000",
+        BETTER_AUTH_SECRET: SECRET,
         MIDPLANE_KMS_DEV_KEY_EU: KEY_HEX,
         MIDPLANE_TOKEN_PEPPER_EU_V1: PEPPER_B64,
       };
@@ -215,6 +257,20 @@ describe("assertBootEnv", () => {
       const env = selfHostEnv();
       delete env.BETTER_AUTH_URL;
       expect(() => assertBootEnv(env)).toThrow(/BETTER_AUTH_URL/);
+    });
+
+    it("requires BETTER_AUTH_SECRET (sessions are signed in self-host too)", () => {
+      const env = selfHostEnv();
+      delete env.BETTER_AUTH_SECRET;
+      expect(() => assertBootEnv(env)).toThrow(/BETTER_AUTH_SECRET/);
+    });
+
+    it("does NOT require MIDPLANE_REGION_COOKIE_SECRET (no region routing)", () => {
+      // Self-host short-circuits region logic in middleware, so the region
+      // cookie HMAC secret is never read.
+      const env = selfHostEnv();
+      expect(env.MIDPLANE_REGION_COOKIE_SECRET).toBeUndefined();
+      expect(() => assertBootEnv(env)).not.toThrow();
     });
   });
 });
