@@ -16,6 +16,7 @@ import {
   type TransformContext,
   UnknownTransformError,
 } from "../../src/masking/transforms.ts";
+import { FIRST_NAMES, LAST_NAMES } from "../../src/masking/dictionaries.ts";
 
 const SALT: TransformContext = { salt: "project-salt-A" };
 const SALT_B: TransformContext = { salt: "project-salt-B" };
@@ -162,6 +163,37 @@ describe("masking/transforms: pseudonymize", () => {
   test("never returns the original value", () => {
     const out = applyTransform({ t: "pseudonymize", kind: "email" }, "ada@acme.io", SALT);
     expect(String(out)).not.toContain("ada@acme.io");
+  });
+
+  test("never echoes the input, even for dictionary-shaped values at any salt", () => {
+    // Regression: the HMAC index can map a value already shaped like the embedded
+    // dictionary data back to itself for some salts (e.g. "Frankie" → "Frankie",
+    // "cameron.fletcher@example.com" → itself). A masking transform must never
+    // emit the original — the collision fallback (+1 index) must engage. The old
+    // code (no collision check) fails this sweep.
+    for (let i = 0; i < 64; i++) {
+      const ctx: TransformContext = { salt: `salt-${i}` };
+      for (let j = 0; j < FIRST_NAMES.length; j++) {
+        const fn = FIRST_NAMES[j]!;
+        const ln = LAST_NAMES[j % LAST_NAMES.length]!;
+        const full = `${fn} ${ln}`;
+        const email = `${fn}.${ln}@example.com`.toLowerCase();
+        expect((applyTransform({ t: "pseudonymize", kind: "first_name" }, fn, ctx) as string).toLowerCase()).not.toBe(fn.toLowerCase());
+        expect((applyTransform({ t: "pseudonymize", kind: "last_name" }, ln, ctx) as string).toLowerCase()).not.toBe(ln.toLowerCase());
+        expect(applyTransform({ t: "pseudonymize", kind: "name" }, full, ctx)).not.toBe(full);
+        expect(applyTransform({ t: "pseudonymize", kind: "email" }, email, ctx)).not.toBe(email);
+      }
+    }
+  });
+
+  test("the collision fallback stays deterministic (same salt+value → same fake)", () => {
+    // Whatever the collision outcome, repeated calls must agree so joins survive.
+    for (const name of FIRST_NAMES.slice(0, 8)) {
+      const ctx: TransformContext = { salt: "salt-1" };
+      const a = applyTransform({ t: "pseudonymize", kind: "first_name" }, name, ctx);
+      const b = applyTransform({ t: "pseudonymize", kind: "first_name" }, name, ctx);
+      expect(a).toBe(b);
+    }
   });
 });
 

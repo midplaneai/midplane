@@ -236,7 +236,15 @@ function generalize(value: unknown, granularity: GeneralizeGranularity): unknown
 /** pseudonymize: a realistic, deterministic fake of the same SHAPE as the input.
  *  Same (salt, value, kind) → same fake (join-safe); a different project salt →
  *  uncorrelated, same guarantee as consistent-hash. Picks from the embedded
- *  dictionaries by HMAC index. Output is always text (a fake name/email/phone). */
+ *  dictionaries by HMAC index. Output is always text (a fake name/email/phone).
+ *
+ *  A masking transform must NEVER emit the original value. Because the index is
+ *  HMAC-derived, an input already shaped like the embedded dictionary data can
+ *  hash back to itself for some salts (e.g. "Frankie" → "Frankie"). When the
+ *  generated fake equals the (normalized) input we advance every index by one and
+ *  recompose — dictionary entries are distinct and each synthetic component
+ *  changes, so the bumped fake can never equal the input — keeping the result
+ *  deterministic. */
 function pseudonymize(
   value: unknown,
   kind: PseudonymizeKind,
@@ -246,31 +254,43 @@ function pseudonymize(
   // Two independent indices from one digest so name/email don't lock first and
   // last together (every "Avery" would otherwise always be "Avery Adler").
   const digest = createHmac("sha256", ctx.salt).update(`${kind}:${text}`).digest();
-  const first = FIRST_NAMES[digest.readUInt32BE(0) % FIRST_NAMES.length]!;
-  const last = LAST_NAMES[digest.readUInt32BE(4) % LAST_NAMES.length]!;
-  switch (kind) {
-    case "first_name":
-      return first;
-    case "last_name":
-      return last;
-    case "name":
-      return `${first} ${last}`;
-    case "email": {
-      const domain = EMAIL_DOMAINS[digest.readUInt32BE(8) % EMAIL_DOMAINS.length]!;
-      return `${first}.${last}@${domain}`.toLowerCase();
+
+  // Compose the fake from the digest with `bump` added to every index. bump=0 is
+  // the normal draw (identical to the un-bumped output); bump=1 is the collision
+  // fallback — a distinct draw, used only when bump=0 would echo the input.
+  const compose = (bump: number): string => {
+    const first = FIRST_NAMES[(digest.readUInt32BE(0) + bump) % FIRST_NAMES.length]!;
+    const last = LAST_NAMES[(digest.readUInt32BE(4) + bump) % LAST_NAMES.length]!;
+    switch (kind) {
+      case "first_name":
+        return first;
+      case "last_name":
+        return last;
+      case "name":
+        return `${first} ${last}`;
+      case "email": {
+        const domain = EMAIL_DOMAINS[(digest.readUInt32BE(8) + bump) % EMAIL_DOMAINS.length]!;
+        return `${first}.${last}@${domain}`.toLowerCase();
+      }
+      case "phone": {
+        // North-American fictional range: area + 555-01xx (555-01NN reserved for
+        // fiction). Deterministic digits from the digest.
+        const area = 200 + ((digest.readUInt32BE(12) + bump) % 800); // 200–999
+        const line = (digest.readUInt32BE(16) + bump) % 100; // 00–99
+        return `+1-${area}-555-01${String(line).padStart(2, "0")}`;
+      }
+      default: {
+        const _exhaustive: never = kind;
+        throw new UnknownTransformError(`pseudonymize:${String(_exhaustive)}`);
+      }
     }
-    case "phone": {
-      // North-American fictional range: area + 555-01xx (555-01NN reserved for
-      // fiction). Deterministic digits from the digest.
-      const area = 200 + (digest.readUInt32BE(12) % 800); // 200–999
-      const line = digest.readUInt32BE(16) % 100; // 00–99
-      return `+1-${area}-555-01${String(line).padStart(2, "0")}`;
-    }
-    default: {
-      const _exhaustive: never = kind;
-      throw new UnknownTransformError(`pseudonymize:${String(_exhaustive)}`);
-    }
-  }
+  };
+
+  const candidate = compose(0);
+  // Compare case-insensitively (email is emitted lowercased) so a same-value /
+  // different-case fake is also treated as a leak. On collision, the +1 draw is
+  // guaranteed distinct from the input.
+  return candidate.toLowerCase() === text.trim().toLowerCase() ? compose(1) : candidate;
 }
 
 /** noise: the one NON-deterministic transform. Adds proportional jitter of up to
