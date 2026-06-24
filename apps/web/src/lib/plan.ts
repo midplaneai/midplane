@@ -66,6 +66,20 @@ export const CAPS: Record<Plan, PlanCaps> = {
   },
 };
 
+/** Display-only monthly price per tier, for the /billing comparison table.
+ *  NOT read by Stripe and NOT an entitlement — the authoritative price is the
+ *  Stripe Price object referenced by STRIPE_{PRO,TEAM}_PRICE_ID (created by
+ *  scripts/stripe-setup.ts). Keep in sync with PRICING.md and the Stripe
+ *  dashboard; a mismatch here only mis-labels the table, it never changes the
+ *  charge. Static (not fetched live) because the prices are flat and rarely
+ *  change — avoids a Stripe round-trip on every billing page view. `period` is
+ *  the trailing unit ("/mo"), empty for Free. */
+export const PLAN_PRICING: Record<Plan, { amount: string; period: string }> = {
+  free: { amount: "$0", period: "" },
+  pro: { amount: "$49", period: "/mo" },
+  team: { amount: "$399", period: "/mo" },
+};
+
 /** Uncapped self-host caps: it's your DB, your infra (the metering levers are a
  *  cloud-billing construct). Unlimited projects / tokens / seats and full
  *  audit history — auditRetentionDays = Infinity makes retentionSince() return

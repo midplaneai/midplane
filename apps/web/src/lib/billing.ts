@@ -223,6 +223,56 @@ export async function hasLiveSubscription(orgId: string): Promise<boolean> {
   );
 }
 
+// --- billing summary (read) --------------------------------------------------
+
+/** The entitled subscription's at-a-glance billing facts for the /billing page:
+ *  what renews/cancels and when. Returns null when the org has no entitled
+ *  (active/trialing) subscription — Free, self-host, or a lapsed plan — so the
+ *  page can omit the renewal line entirely.
+ *
+ *  Reads the local webhook-maintained `subscription` table (same source as
+ *  reconcileOrgPlan / hasLiveSubscription), NOT the Stripe API — invoices,
+ *  receipts, and payment methods deliberately stay in the Stripe Customer Portal
+ *  (the "Manage billing" button), so this surfaces only the renewal/cancel date
+ *  inline and leaves the money management to Stripe. */
+export interface SubscriptionSummary {
+  plan: Plan;
+  status: string;
+  /** End of the current paid period — the renewal date, or the effective
+   *  cancellation date when cancelAtPeriodEnd is set. Null if Stripe hasn't
+   *  reported a period yet (briefly, right after checkout). */
+  currentPeriodEnd: Date | null;
+  /** Subscription is set to cancel at period end (won't renew). */
+  cancelAtPeriodEnd: boolean;
+  /** Trial end, when the entitled status is `trialing`. */
+  trialEnd: Date | null;
+}
+
+export async function getSubscriptionSummary(
+  orgId: string,
+): Promise<SubscriptionSummary | null> {
+  const rows = await getDb(bootRegion())
+    .select({
+      plan: subscriptionTable.plan,
+      status: subscriptionTable.status,
+      periodEnd: subscriptionTable.periodEnd,
+      cancelAtPeriodEnd: subscriptionTable.cancelAtPeriodEnd,
+      trialEnd: subscriptionTable.trialEnd,
+    })
+    .from(subscriptionTable)
+    .where(eq(subscriptionTable.referenceId, orgId));
+  // The plugin keeps at most one active/trialing row per org; pick it.
+  const entitled = rows.find((r) => ENTITLED_STATUSES.has(r.status));
+  if (!entitled) return null;
+  return {
+    plan: planFromSubscription(entitled.status, entitled.plan),
+    status: entitled.status,
+    currentPeriodEnd: entitled.periodEnd ?? null,
+    cancelAtPeriodEnd: Boolean(entitled.cancelAtPeriodEnd),
+    trialEnd: entitled.trialEnd ?? null,
+  };
+}
+
 // --- the plugin --------------------------------------------------------------
 
 /** The configured @better-auth/stripe plugin, or [] when billing is off. Spread

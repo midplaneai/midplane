@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 
 import { customers, getDb } from "@midplane-cloud/db";
+import { invitation, member } from "@midplane-cloud/db/auth-schema";
 
 import { CAPS, SELF_HOST_CAPS, type Plan } from "./plan.ts";
 import { bootRegion } from "./region-context.ts";
@@ -32,4 +33,35 @@ export async function seatCapForOrg(orgId: string): Promise<number> {
   const row = rows[0];
   const plan: Plan = row?.planOverride ?? row?.plan ?? "free";
   return CAPS[plan].seats;
+}
+
+/** Current seat consumption for an org: accepted members plus still-valid
+ *  pending invitations — the same sum {@link seatInviteBlock} weighs against the
+ *  cap, so a usage meter on /billing agrees with whether the invite form is
+ *  blocked. Reads the auth tables in the boot region (org membership is central,
+ *  not region-resident). Owner-gated surfaces only. */
+export async function countOrgSeats(
+  orgId: string,
+): Promise<{ members: number; pending: number }> {
+  const db = getDb(bootRegion());
+  const [memberRows, pendingRows] = await Promise.all([
+    db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(member)
+      .where(eq(member.organizationId, orgId)),
+    db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(invitation)
+      .where(
+        and(
+          eq(invitation.organizationId, orgId),
+          eq(invitation.status, "pending"),
+          gt(invitation.expiresAt, new Date()),
+        ),
+      ),
+  ]);
+  return {
+    members: Number(memberRows[0]?.c ?? 0),
+    pending: Number(pendingRows[0]?.c ?? 0),
+  };
 }
