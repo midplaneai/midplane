@@ -13,6 +13,7 @@ import type { Customer } from "@midplane-cloud/db";
 
 import {
   CAPS,
+  PLAN_PRICING,
   PlanLimitError,
   SELF_HOST_CAPS,
   projectCreateBlock,
@@ -78,6 +79,18 @@ describe("CAPS", () => {
   it("models unlimited tiers as Infinity so `count >= cap` is never true", () => {
     expect(999_999 >= CAPS.team.projects).toBe(false);
     expect(999_999 >= CAPS.team.tokens).toBe(false);
+  });
+});
+
+describe("PLAN_PRICING", () => {
+  it("matches the PRICING.md display prices ($0 / $49 / $399)", () => {
+    expect(PLAN_PRICING.free).toEqual({ amount: "$0", period: "" });
+    expect(PLAN_PRICING.pro).toEqual({ amount: "$49", period: "/mo" });
+    expect(PLAN_PRICING.team).toEqual({ amount: "$399", period: "/mo" });
+  });
+
+  it("covers every plan tier in CAPS (no missing/extra keys)", () => {
+    expect(Object.keys(PLAN_PRICING).sort()).toEqual(Object.keys(CAPS).sort());
   });
 });
 
