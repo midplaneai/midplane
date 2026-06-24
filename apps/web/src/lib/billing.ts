@@ -238,6 +238,13 @@ export async function hasLiveSubscription(orgId: string): Promise<boolean> {
 export interface SubscriptionSummary {
   plan: Plan;
   status: string;
+  /** The Stripe subscription id (sub_…) of the entitled subscription. Required
+   *  to SWITCH an existing subscription to another tier: the @better-auth/stripe
+   *  contract is that `subscription.upgrade` must be passed this id for an org
+   *  that already subscribes, else it may open a second subscription and
+   *  double-bill. The /billing page threads it into the higher-tier upgrade
+   *  button. Null only briefly right after checkout, before the webhook lands. */
+  stripeSubscriptionId: string | null;
   /** End of the current paid period — the renewal date, or the effective
    *  cancellation date when cancelAtPeriodEnd is set. Null if Stripe hasn't
    *  reported a period yet (briefly, right after checkout). */
@@ -255,6 +262,7 @@ export async function getSubscriptionSummary(
     .select({
       plan: subscriptionTable.plan,
       status: subscriptionTable.status,
+      stripeSubscriptionId: subscriptionTable.stripeSubscriptionId,
       periodEnd: subscriptionTable.periodEnd,
       cancelAtPeriodEnd: subscriptionTable.cancelAtPeriodEnd,
       trialEnd: subscriptionTable.trialEnd,
@@ -267,6 +275,7 @@ export async function getSubscriptionSummary(
   return {
     plan: planFromSubscription(entitled.status, entitled.plan),
     status: entitled.status,
+    stripeSubscriptionId: entitled.stripeSubscriptionId ?? null,
     currentPeriodEnd: entitled.periodEnd ?? null,
     cancelAtPeriodEnd: Boolean(entitled.cancelAtPeriodEnd),
     trialEnd: entitled.trialEnd ?? null,

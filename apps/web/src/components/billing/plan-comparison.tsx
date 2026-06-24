@@ -9,9 +9,7 @@ import { cn } from "@/lib/utils";
 //
 // The numeric cells are DERIVED from the CAPS map (lib/plan.ts), not retyped,
 // so the table can't drift from what's actually enforced — bump a cap and the
-// table follows. Price comes from PLAN_PRICING (same module). Support is the one
-// row with no cap behind it: it's a service-level promise, not an entitlement,
-// so it lives here as display copy. Keep it aligned with PRICING.md.
+// table follows. Price comes from PLAN_PRICING (same module).
 
 const PLAN_ORDER: readonly Plan[] = ["free", "pro", "team"];
 
@@ -19,13 +17,6 @@ const PLAN_LABEL: Record<Plan, string> = {
   free: "Free",
   pro: "Pro",
   team: "Team",
-};
-
-// Service level per tier — display copy, not a code-enforced cap (see header).
-const SUPPORT: Record<Plan, string> = {
-  free: "Community",
-  pro: "Email",
-  team: "Priority email",
 };
 
 /** Infinity → "Unlimited", else the number. */
@@ -64,7 +55,6 @@ const ROWS: readonly Row[] = [
     cell: (p) => `${CAPS[p].auditRetentionDays} days`,
   },
   { label: "sso / saml", cell: (p) => (CAPS[p].sso ? <Yes /> : <No />) },
-  { label: "support", cell: (p) => SUPPORT[p] },
 ];
 
 export function PlanComparison({
@@ -96,11 +86,18 @@ export function PlanComparison({
                   <span className="text-[13px] font-medium text-foreground">
                     {PLAN_LABEL[p]}
                   </span>
-                  {current && (
-                    <Badge variant="accent" withDot={false}>
-                      current
-                    </Badge>
-                  )}
+                  {/* The badge row is rendered in EVERY column (just hidden when
+                      not current) so it reserves the same height everywhere and
+                      the plan labels stay on one baseline — otherwise the badge
+                      pushes the current column's label up. */}
+                  <Badge
+                    variant="accent"
+                    withDot={false}
+                    aria-hidden={!current}
+                    className={cn(!current && "invisible")}
+                  >
+                    current
+                  </Badge>
                 </div>
               </th>
             );
