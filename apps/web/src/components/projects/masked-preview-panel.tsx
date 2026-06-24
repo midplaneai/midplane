@@ -89,7 +89,10 @@ export function MaskedPreviewPanel({
     for (const [table, cols] of Object.entries(columnMasks)) {
       for (const [col, transform] of Object.entries(cols)) {
         names.add(col.toLowerCase());
-        refs.push(`${table}.${col} · ${transform}`);
+        // transform is a MaskRule: a preset string, or a parametric { t, … }
+        // object whose discriminant names the transform.
+        const label = typeof transform === "string" ? transform : transform.t;
+        refs.push(`${table}.${col} · ${label}`);
       }
     }
     return { maskedNames: names, maskedRefs: refs.sort() };

@@ -17,7 +17,14 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import yaml from "js-yaml";
-import { TRANSFORM_NAMES } from "@midplane/engine";
+import {
+  MASK_PRESETS,
+  GENERALIZE_DATE_GRANULARITIES,
+  PSEUDONYMIZE_KINDS,
+  PARTIAL_MAX_KEEP,
+  NOISE_MAX_RATIO,
+  type MaskRule,
+} from "@midplane/engine";
 
 export const TransportSchema = z.enum(["stdio", "http"]);
 export type Transport = z.infer<typeof TransportSchema>;
@@ -90,18 +97,64 @@ const GuardrailsSchema = z.object({
 });
 
 // Column masking (decision A2). A sibling of table_access: "schema.table" ->
-// (column name -> transform). The transform enum is sourced from the engine's
-// own catalog (TRANSFORM_NAMES) so the cloud-authored config and the engine's
-// enforcement can never name a transform the other doesn't know — an unknown
-// transform fails zod here at parse, and the engine fails closed at runtime
-// (decision A3). A masked column must also have read access (enforced by the
-// access policy independently; masking presupposes the read).
-const TransformNameSchema = z.enum(
-  TRANSFORM_NAMES as unknown as [string, ...string[]],
+// (column name -> mask rule). The rule shape is a discriminated union sourced
+// from the engine's own catalog (presets + parametric kinds + parameter bounds)
+// so the cloud-authored config and the engine's enforcement can never name a
+// transform — or a parameter out of bounds — the other doesn't know: an unknown
+// transform / bad param fails zod here at parse, and the engine fails closed at
+// runtime (decision A3). A masked column must also have read access (enforced by
+// the access policy independently; masking presupposes the read).
+//
+// Param-free presets stay bare strings; parametric transforms are objects tagged
+// by `t`. The param bounds (PARTIAL_MAX_KEEP, NOISE_MAX_RATIO, the granularity /
+// kind enums) come from the engine catalog so this gate and applyTransform agree.
+const PresetRuleSchema = z.enum(
+  MASK_PRESETS as unknown as [string, ...string[]],
 );
+const PartialRuleSchema = z
+  .object({
+    t: z.literal("partial"),
+    keepStart: z.number().int().min(0).optional(),
+    keepEnd: z.number().int().min(0).optional(),
+    glyph: z.string().refine((g) => [...g].length === 1, {
+      message: "glyph must be a single character",
+    }).optional(),
+  })
+  .strict()
+  .refine((r) => (r.keepStart ?? 0) + (r.keepEnd ?? 0) <= PARTIAL_MAX_KEEP, {
+    message: `keepStart + keepEnd must be <= ${PARTIAL_MAX_KEEP}`,
+  });
+const GeneralizeRuleSchema = z
+  .object({
+    t: z.literal("generalize"),
+    granularity: z.union([
+      z.enum(GENERALIZE_DATE_GRANULARITIES as unknown as [string, ...string[]]),
+      z.number().positive(),
+    ]),
+  })
+  .strict();
+const PseudonymizeRuleSchema = z
+  .object({
+    t: z.literal("pseudonymize"),
+    kind: z.enum(PSEUDONYMIZE_KINDS as unknown as [string, ...string[]]),
+  })
+  .strict();
+const NoiseRuleSchema = z
+  .object({
+    t: z.literal("noise"),
+    ratio: z.number().positive().max(NOISE_MAX_RATIO),
+  })
+  .strict();
+const MaskRuleSchema = z.union([
+  PresetRuleSchema,
+  PartialRuleSchema,
+  GeneralizeRuleSchema,
+  PseudonymizeRuleSchema,
+  NoiseRuleSchema,
+]);
 const ColumnMasksSchema = z.record(
   z.string().min(1),
-  z.record(z.string().min(1), TransformNameSchema),
+  z.record(z.string().min(1), MaskRuleSchema),
 );
 
 // Enforcement features THIS engine version implements. A policy may declare
@@ -230,8 +283,8 @@ export interface DatabaseSpec {
   hasColumnMasks: boolean;
 }
 
-// Resolved column-mask config: "schema.table" -> (column name -> transform).
-export type ColumnMasksSpec = Record<string, Record<string, string>>;
+// Resolved column-mask config: "schema.table" -> (column name -> mask rule).
+export type ColumnMasksSpec = Record<string, Record<string, MaskRule>>;
 
 export const EMPTY_TENANT_SCOPE: TenantScopeSpec = {
   defaultColumn: null,
@@ -445,7 +498,9 @@ export function parsePolicyYaml(
   // Forward-compat refuse (T3): a policy declaring a feature this engine can't
   // enforce is rejected, not silently stripped.
   assertFeaturesSupported(parsed.data.requires_features, source, "requires_features");
-  const columnMasks = parsed.data.column_masks ?? null;
+  // zod widens the preset enum to `string`; the validated shape IS a
+  // ColumnMasksSpec (the MaskRule union schema enforced it), so assert it.
+  const columnMasks = (parsed.data.column_masks ?? null) as ColumnMasksSpec | null;
   const hasColumnMasks = Object.prototype.hasOwnProperty.call(rawDoc, "column_masks");
 
   return {
@@ -561,7 +616,7 @@ function resolveDatabaseEntry(
     source,
     `databases[${idx}].requires_features`,
   );
-  const columnMasks = entry.column_masks ?? null;
+  const columnMasks = (entry.column_masks ?? null) as ColumnMasksSpec | null;
   const hasColumnMasks = Object.prototype.hasOwnProperty.call(rawEntry, "column_masks");
 
   return {

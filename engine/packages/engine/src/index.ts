@@ -35,11 +35,27 @@ export type {
 
 export {
   applyTransform,
-  isTransformName,
-  TRANSFORM_NAMES,
+  isMaskRule,
+  MASK_PRESETS,
+  MASK_PARAMETRIC_KINDS,
+  TRANSFORM_KINDS,
+  GENERALIZE_DATE_GRANULARITIES,
+  PSEUDONYMIZE_KINDS,
+  PARTIAL_MAX_KEEP,
+  DEFAULT_PARTIAL_GLYPH,
+  NOISE_MAX_RATIO,
   UnknownTransformError,
 } from "./masking/transforms.ts";
-export type { TransformName, TransformContext } from "./masking/transforms.ts";
+export type {
+  MaskRule,
+  MaskPreset,
+  MaskParametricKind,
+  PseudonymizeKind,
+  GeneralizeGranularity,
+  GeneralizeDateGranularity,
+  TransformName,
+  TransformContext,
+} from "./masking/transforms.ts";
 export { maskResultSet } from "./masking/mask-result-set.ts";
 export type {
   Catalog,

@@ -8,12 +8,18 @@
 //
 // Calibrated to DESIGN.md: table-first, lowercase-mono headers, semantic `warn`
 // for an exposed column and `allow` for a masked one (no fourth color), hairlines
-// not shadows, and a persistent result-redaction note. keep-last-4 is gated to
-// text columns (matching the engine's text-only keep-last-4).
+// not shadows, and a persistent result-redaction note. Each transform is gated to
+// the column types it's valid for (partial/pseudonymize → text, generalize → date
+// or numeric, noise → numeric), matching the engine's input domains.
 
 import { useEffect, useState, useTransition } from "react";
 
-import { MASK_TRANSFORMS, type MaskTransform } from "@midplane-cloud/db/policy";
+import {
+  MASK_TRANSFORM_KINDS,
+  GENERALIZE_DATE_GRANULARITIES,
+  PSEUDONYMIZE_KINDS,
+  type MaskRule,
+} from "@midplane-cloud/db/policy";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +27,7 @@ import { Button } from "@/components/ui/button";
 interface PiiMatch {
   category: string;
   confidence: "high" | "medium" | "low";
-  suggestedTransform: MaskTransform;
+  suggestedTransform: MaskRule;
 }
 interface ScannedColumn {
   table: string;
@@ -29,7 +35,7 @@ interface ScannedColumn {
   dataType: string;
   match: PiiMatch;
 }
-type ColumnMasks = Record<string, Record<string, MaskTransform>>;
+type ColumnMasks = Record<string, Record<string, MaskRule>>;
 
 type SaveResult = { ok: true } | { ok: false; error: string };
 
@@ -44,9 +50,12 @@ interface Row {
   dataType: string;
   category: string | null;
   confidence: PiiMatch["confidence"] | null;
-  masked: MaskTransform | null;
-  suggested: MaskTransform | null;
+  masked: MaskRule | null;
+  suggested: MaskRule | null;
 }
+
+// The transform kinds the picker dropdown offers (the full catalog).
+type Kind = (typeof MASK_TRANSFORM_KINDS)[number];
 
 const TEXT_TYPES = new Set([
   "text",
@@ -59,6 +68,88 @@ const TEXT_TYPES = new Set([
 ]);
 const isTextType = (t: string) =>
   TEXT_TYPES.has(t.toLowerCase().trim()) || t.toLowerCase().startsWith("character");
+
+const DATE_TYPES = new Set([
+  "date",
+  "timestamp",
+  "timestamp with time zone",
+  "timestamp without time zone",
+  "timestamptz",
+]);
+const isDateType = (t: string) => {
+  const x = t.toLowerCase().trim();
+  return DATE_TYPES.has(x) || x.startsWith("timestamp") || x === "date";
+};
+
+const NUMERIC_TYPES = new Set([
+  "smallint", "integer", "int", "int2", "int4", "int8", "bigint",
+  "numeric", "decimal", "real", "double precision", "float4", "float8", "money",
+]);
+const isNumericType = (t: string) => NUMERIC_TYPES.has(t.toLowerCase().trim());
+
+// Shared mono input styling (matches the picker select).
+const FIELD_CLS =
+  "rounded-none border border-input bg-background px-2 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]";
+
+// Which transform kinds make sense for a column of this type. Presets are valid
+// for every type (null-out preserves the type; full-redact/consistent-hash are
+// destroy/pseudonymize rungs whose type-change is expected). The parametric
+// transforms carry input domains. An unknown type ("" — a masked column not in
+// the current scan) is permissive so the user is never blocked.
+function offeredKindsFor(dataType: string): Kind[] {
+  const unknown = dataType === "";
+  const text = unknown || isTextType(dataType);
+  const date = unknown || isDateType(dataType);
+  const numeric = unknown || isNumericType(dataType);
+  return MASK_TRANSFORM_KINDS.filter((k) => {
+    if (k === "partial" || k === "pseudonymize") return text;
+    if (k === "generalize") return date || numeric;
+    if (k === "noise") return numeric;
+    return true; // full-redact / null-out / consistent-hash
+  });
+}
+
+// The kind identifier of a stored rule.
+function ruleToKind(rule: MaskRule): Kind {
+  return typeof rule === "string" ? rule : rule.t;
+}
+
+// A sensible default rule when the user picks a kind from the dropdown.
+function defaultRuleForKind(kind: Kind, dataType: string): MaskRule {
+  switch (kind) {
+    case "partial":
+      return { t: "partial", keepEnd: 4 };
+    case "generalize":
+      return isNumericType(dataType) && !isDateType(dataType)
+        ? { t: "generalize", granularity: 1000 }
+        : { t: "generalize", granularity: "year" };
+    case "pseudonymize":
+      return { t: "pseudonymize", kind: "name" };
+    case "noise":
+      return { t: "noise", ratio: 0.1 };
+    default:
+      return kind; // full-redact / null-out / consistent-hash
+  }
+}
+
+// Compact human label for a rule (display-only).
+function formatRule(rule: MaskRule): string {
+  if (typeof rule === "string") return rule;
+  switch (rule.t) {
+    case "partial": {
+      const bits: string[] = [];
+      if (rule.keepStart) bits.push(`first ${rule.keepStart}`);
+      if (rule.keepEnd) bits.push(`last ${rule.keepEnd}`);
+      return bits.length ? `partial · keep ${bits.join(" + ")}` : "partial";
+    }
+    case "generalize":
+      return `generalize · ${rule.granularity}`;
+    case "pseudonymize":
+      return `pseudonymize · ${rule.kind}`;
+    case "noise":
+      return `noise · ±${rule.ratio}`;
+  }
+}
 
 const Th = ({ children }: { children: React.ReactNode }) => (
   <th className="px-3.5 py-2.5 text-left font-mono text-[11.5px] font-normal lowercase tracking-[0.04em] text-subtle">
@@ -122,7 +213,7 @@ export function ExposureScan({
     });
   }
 
-  function setMask(table: string, column: string, transform: MaskTransform) {
+  function setMask(table: string, column: string, transform: MaskRule) {
     commit({ ...masks, [table]: { ...(masks[table] ?? {}), [column]: transform } });
   }
   function unmask(table: string, column: string) {
@@ -222,7 +313,7 @@ export function ExposureScan({
                       />
                     ) : (
                       <span className="font-mono text-[11px] text-subtle">
-                        {r.suggested ? `${r.suggested}` : "—"}
+                        {r.suggested ? formatRule(r.suggested) : "—"}
                       </span>
                     )}
                   </td>
@@ -269,28 +360,179 @@ function TransformSelect({
   disabled,
   onChange,
 }: {
-  value: MaskTransform;
+  value: MaskRule;
   dataType: string;
   disabled: boolean;
-  onChange: (t: MaskTransform) => void;
+  onChange: (t: MaskRule) => void;
 }) {
-  const textOk = dataType === "" || isTextType(dataType);
+  const kind = ruleToKind(value);
+  const offered = offeredKindsFor(dataType);
+  // The stored kind may be out-of-domain for the column type (e.g. a rule saved
+  // before the type was known); keep it visible so the user can see + change it.
+  const options = offered.includes(kind) ? offered : [kind, ...offered];
+
   return (
-    <select
-      className="rounded-none border border-input bg-background px-2 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]"
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value as MaskTransform)}
-    >
-      {MASK_TRANSFORMS.map((t) => (
-        // keep-last-4 is text-only (engine + form gate); disable it on non-text.
-        <option key={t} value={t} disabled={t === "keep-last-4" && !textOk}>
-          {t}
-          {t === "keep-last-4" && !textOk ? " (text only)" : ""}
-        </option>
-      ))}
-    </select>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <select
+        className={FIELD_CLS}
+        value={kind}
+        disabled={disabled}
+        onChange={(e) => onChange(defaultRuleForKind(e.target.value as Kind, dataType))}
+      >
+        {options.map((k) => (
+          <option key={k} value={k}>
+            {k}
+          </option>
+        ))}
+      </select>
+      <RuleParams value={value} dataType={dataType} disabled={disabled} onChange={onChange} />
+    </div>
   );
+}
+
+// The per-transform parameter controls, rendered beside the kind dropdown when
+// the selected transform is parametric. Each control edits ONE field and emits a
+// fresh rule; zero/empty optional fields are omitted so the stored jsonb stays
+// canonical.
+function RuleParams({
+  value,
+  dataType,
+  disabled,
+  onChange,
+}: {
+  value: MaskRule;
+  dataType: string;
+  disabled: boolean;
+  onChange: (t: MaskRule) => void;
+}) {
+  const rule = value;
+  if (typeof rule === "string") return null;
+
+  const numberField = (
+    label: string,
+    val: number | undefined,
+    on: (n: number | undefined) => void,
+    opts: { min?: number; step?: number; placeholder?: string } = {},
+  ) => (
+    <label className="flex items-center gap-1 font-mono text-[10px] lowercase text-subtle">
+      {label}
+      <input
+        type="number"
+        className={`${FIELD_CLS} w-14`}
+        value={val ?? ""}
+        min={opts.min ?? 0}
+        step={opts.step ?? 1}
+        placeholder={opts.placeholder}
+        disabled={disabled}
+        onChange={(e) => {
+          const n = e.target.value === "" ? undefined : Number(e.target.value);
+          on(Number.isFinite(n as number) ? (n as number) : undefined);
+        }}
+      />
+    </label>
+  );
+
+  switch (rule.t) {
+    case "partial":
+      return (
+        <>
+          {numberField("first", rule.keepStart, (n) =>
+            onChange(prunePartial({ ...rule, keepStart: n })),
+          )}
+          {numberField("last", rule.keepEnd, (n) =>
+            onChange(prunePartial({ ...rule, keepEnd: n })),
+          )}
+          <label className="flex items-center gap-1 font-mono text-[10px] lowercase text-subtle">
+            glyph
+            <input
+              type="text"
+              maxLength={2}
+              className={`${FIELD_CLS} w-10`}
+              value={rule.glyph ?? ""}
+              placeholder="•"
+              disabled={disabled}
+              onChange={(e) => {
+                const g = [...e.target.value].slice(0, 1).join("");
+                onChange(prunePartial({ ...rule, glyph: g === "" ? undefined : g }));
+              }}
+            />
+          </label>
+        </>
+      );
+    case "generalize": {
+      const numericCol = isNumericType(dataType) && !isDateType(dataType);
+      if (numericCol) {
+        return numberField(
+          "bucket",
+          typeof rule.granularity === "number" ? rule.granularity : 1000,
+          (n) => onChange({ t: "generalize", granularity: n && n > 0 ? n : 1 }),
+          { min: 1, placeholder: "1000" },
+        );
+      }
+      return (
+        <select
+          className={FIELD_CLS}
+          value={typeof rule.granularity === "string" ? rule.granularity : "year"}
+          disabled={disabled}
+          onChange={(e) =>
+            onChange({ t: "generalize", granularity: e.target.value as "year" })
+          }
+        >
+          {GENERALIZE_DATE_GRANULARITIES.map((g) => (
+            <option key={g} value={g}>
+              {g}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    case "pseudonymize":
+      return (
+        <select
+          className={FIELD_CLS}
+          value={rule.kind}
+          disabled={disabled}
+          onChange={(e) =>
+            onChange({ t: "pseudonymize", kind: e.target.value as "name" })
+          }
+        >
+          {PSEUDONYMIZE_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {k}
+            </option>
+          ))}
+        </select>
+      );
+    case "noise":
+      return (
+        <>
+          {numberField(
+            "±ratio",
+            rule.ratio,
+            (n) => onChange({ t: "noise", ratio: n && n > 0 ? n : 0.1 }),
+            { min: 0, step: 0.05, placeholder: "0.1" },
+          )}
+          <span className="font-mono text-[10px] lowercase text-[hsl(var(--warn))]">
+            breaks joins
+          </span>
+        </>
+      );
+  }
+}
+
+// Drop zeroed/empty optional fields from a partial rule so { t:"partial" } is the
+// canonical "mask everything" form rather than carrying keepStart:0 etc.
+function prunePartial(rule: {
+  t: "partial";
+  keepStart?: number;
+  keepEnd?: number;
+  glyph?: string;
+}): MaskRule {
+  const out: MaskRule = { t: "partial" };
+  if (rule.keepStart) out.keepStart = rule.keepStart;
+  if (rule.keepEnd) out.keepEnd = rule.keepEnd;
+  if (rule.glyph) out.glyph = rule.glyph;
+  return out;
 }
 
 // Unify the heuristic scan with the persisted masks: every flagged column plus

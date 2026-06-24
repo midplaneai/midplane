@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MASK_TRANSFORMS,
+  MASK_TRANSFORM_KINDS,
   parseColumnMasksOrThrow,
   serializeMultiDbPolicyToYaml,
   validateColumnMasks,
@@ -33,7 +33,7 @@ describe("validateColumnMasks", () => {
   it("rejects an unknown transform", () => {
     const r = validateColumnMasks({ "public.users": { email: "format-preserving-fake" } });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors[0]!.message).toContain("transform must be one of");
+    if (!r.ok) expect(r.errors[0]!.message).toContain("transform must be");
   });
 
   it("rejects a malformed column name", () => {
@@ -48,12 +48,15 @@ describe("validateColumnMasks", () => {
     expect(validateColumnMasks({ "public.users": {} })).toEqual({ ok: true, value: {} });
   });
 
-  it("exposes the transform set", () => {
-    expect([...MASK_TRANSFORMS]).toEqual([
+  it("exposes the full catalog (presets then parametric kinds)", () => {
+    expect([...MASK_TRANSFORM_KINDS]).toEqual([
       "full-redact",
       "null-out",
       "consistent-hash",
-      "keep-last-4",
+      "partial",
+      "generalize",
+      "pseudonymize",
+      "noise",
     ]);
   });
 
@@ -64,6 +67,81 @@ describe("validateColumnMasks", () => {
       ok: true,
       value: { "public.events": { created_at: "null-out" } },
     });
+  });
+
+  it("rejects the retired keep-last-4 preset", () => {
+    expect(validateColumnMasks({ "public.users": { ssn: "keep-last-4" } }).ok).toBe(false);
+  });
+});
+
+describe("validateColumnMasks: parametric transforms", () => {
+  it("accepts partial with bounds and normalizes to known keys only", () => {
+    const r = validateColumnMasks({
+      "public.users": { ssn: { t: "partial", keepEnd: 4, junk: 9 } },
+    });
+    expect(r).toEqual({
+      ok: true,
+      value: { "public.users": { ssn: { t: "partial", keepEnd: 4 } } },
+    });
+  });
+
+  it("rejects partial whose kept span exceeds the cap", () => {
+    const r = validateColumnMasks({
+      "public.users": { ssn: { t: "partial", keepStart: 40, keepEnd: 40 } },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]!.message).toContain("keepStart + keepEnd");
+  });
+
+  it("rejects a multi-character glyph", () => {
+    expect(
+      validateColumnMasks({ "public.users": { ssn: { t: "partial", glyph: "xx" } } }).ok,
+    ).toBe(false);
+  });
+
+  it("accepts generalize with a date granularity or a positive numeric width", () => {
+    expect(
+      validateColumnMasks({ "public.u": { dob: { t: "generalize", granularity: "year" } } }),
+    ).toEqual({
+      ok: true,
+      value: { "public.u": { dob: { t: "generalize", granularity: "year" } } },
+    });
+    expect(
+      validateColumnMasks({ "public.u": { salary: { t: "generalize", granularity: 1000 } } }).ok,
+    ).toBe(true);
+    expect(
+      validateColumnMasks({ "public.u": { dob: { t: "generalize", granularity: "decade" } } }).ok,
+    ).toBe(false);
+    expect(
+      validateColumnMasks({ "public.u": { x: { t: "generalize", granularity: 0 } } }).ok,
+    ).toBe(false);
+  });
+
+  it("accepts pseudonymize with a known kind, rejects an unknown one", () => {
+    expect(
+      validateColumnMasks({ "public.u": { email: { t: "pseudonymize", kind: "email" } } }).ok,
+    ).toBe(true);
+    expect(
+      validateColumnMasks({ "public.u": { ssn: { t: "pseudonymize", kind: "ssn" } } }).ok,
+    ).toBe(false);
+  });
+
+  it("accepts noise in-range, rejects out-of-range or non-positive", () => {
+    expect(
+      validateColumnMasks({ "public.u": { salary: { t: "noise", ratio: 0.1 } } }).ok,
+    ).toBe(true);
+    expect(
+      validateColumnMasks({ "public.u": { salary: { t: "noise", ratio: 999 } } }).ok,
+    ).toBe(false);
+    expect(
+      validateColumnMasks({ "public.u": { salary: { t: "noise", ratio: 0 } } }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown parametric `t`", () => {
+    expect(
+      validateColumnMasks({ "public.u": { x: { t: "redact-future" } } }).ok,
+    ).toBe(false);
   });
 });
 
@@ -116,5 +194,37 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
   it("an empty columnMasks object emits nothing", () => {
     const yaml = serializeMultiDbPolicyToYaml([entry({ columnMasks: {} })]);
     expect(yaml).not.toContain("column_masks");
+  });
+
+  it("emits parametric rules as nested blocks, presets inline, columns sorted", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        columnMasks: {
+          "public.users": {
+            ssn: { t: "partial", keepEnd: 4 },
+            dob: { t: "generalize", granularity: "year" },
+            email: "full-redact",
+            handle: { t: "partial", keepStart: 2, glyph: "#" },
+          },
+        },
+      }),
+    ]);
+    expect(yaml).toContain(
+      [
+        "    column_masks:",
+        "      public.users:",
+        "        dob:", // sorted: dob, email, handle, ssn
+        "          t: generalize",
+        "          granularity: year",
+        "        email: full-redact",
+        "        handle:",
+        "          t: partial",
+        "          keepStart: 2",
+        '          glyph: "#"',
+        "        ssn:",
+        "          t: partial",
+        "          keepEnd: 4",
+      ].join("\n"),
+    );
   });
 });

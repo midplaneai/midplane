@@ -10,6 +10,7 @@ import {
   type ColumnMasks,
   type RelInfo,
 } from "../../src/masking/mask-result-set.ts";
+import type { MaskRule } from "../../src/masking/transforms.ts";
 import type { ResultField } from "../../src/executor.ts";
 
 // OIDs mirror the provenance-probe schema shape.
@@ -44,7 +45,7 @@ const CATALOG: Catalog = new Map([
 
 const MASKS: ColumnMasks = new Map([
   ["public.users", new Map([["email", "full-redact"], ["ssn", "consistent-hash"]] as const)],
-  ["public.events", new Map([["tenant", "keep-last-4"]] as const)],
+  ["public.events", new Map<string, MaskRule>([["tenant", { t: "partial", keepEnd: 4 }]])],
 ]);
 
 const f = (name: string, tableOid: number, columnAttnum: number): ResultField => ({
@@ -116,7 +117,7 @@ describe("maskResultSet: masks resolvable base-table columns", () => {
     const out = run([f("tenant", EVENTS_A, 2)], [{ tenant: "a" }]);
     expect(out.ok).toBe(true);
     if (out.ok) {
-      expect(out.rows[0]).toEqual({ tenant: "•" }); // keep-last-4 on len-1 -> fully masked
+      expect(out.rows[0]).toEqual({ tenant: "•" }); // partial{keepEnd:4} on len-1 -> fully masked
       expect(out.maskedColumns).toEqual(["public.events.tenant"]);
     }
   });

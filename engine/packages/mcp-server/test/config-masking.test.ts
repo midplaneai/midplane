@@ -30,17 +30,69 @@ describe("config: column_masks parsing", () => {
 
   test("multi-DB shape resolves per-entry column_masks", () => {
     const p = parsePolicyYaml(
-      "databases:\n  - name: prod\n    url: postgres://x\n    column_masks:\n      public.users:\n        email: keep-last-4\n",
+      "databases:\n  - name: prod\n    url: postgres://x\n    column_masks:\n      public.users:\n        email: consistent-hash\n",
       "test",
     );
     const db = p.databases.find((d) => d.name === "prod")!;
-    expect(db.columnMasks).toEqual({ "public.users": { email: "keep-last-4" } });
+    expect(db.columnMasks).toEqual({ "public.users": { email: "consistent-hash" } });
   });
 
   test("an unknown transform name is rejected at parse (engine-sourced enum)", () => {
     expect(() =>
       parsePolicyYaml(
         "column_masks:\n  public.users:\n    email: format-preserving-fake\n",
+        "test",
+      ),
+    ).toThrow();
+  });
+
+  test("parametric rules (the cloud's nested-block emission) parse into objects", () => {
+    const p = parsePolicyYaml(
+      [
+        "table_access:",
+        "  default: read",
+        "column_masks:",
+        "  public.users:",
+        "    ssn:",
+        "      t: partial",
+        "      keepEnd: 4",
+        "    handle:",
+        "      t: partial",
+        "      keepStart: 2",
+        '      glyph: "#"',
+        "    dob:",
+        "      t: generalize",
+        "      granularity: year",
+        "    salary:",
+        "      t: noise",
+        "      ratio: 0.1",
+        "    alias:",
+        "      t: pseudonymize",
+        "      kind: name",
+      ].join("\n"),
+      "test",
+    );
+    expect(p.databases[0]!.columnMasks).toEqual({
+      "public.users": {
+        ssn: { t: "partial", keepEnd: 4 },
+        handle: { t: "partial", keepStart: 2, glyph: "#" },
+        dob: { t: "generalize", granularity: "year" },
+        salary: { t: "noise", ratio: 0.1 },
+        alias: { t: "pseudonymize", kind: "name" },
+      },
+    });
+  });
+
+  test("an out-of-bounds parametric param is rejected at parse (fail-closed)", () => {
+    expect(() =>
+      parsePolicyYaml(
+        "column_masks:\n  public.users:\n    x:\n      t: noise\n      ratio: 999\n",
+        "test",
+      ),
+    ).toThrow();
+    expect(() =>
+      parsePolicyYaml(
+        "column_masks:\n  public.users:\n    x:\n      t: generalize\n      granularity: decade\n",
         "test",
       ),
     ).toThrow();

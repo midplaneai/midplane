@@ -36,9 +36,9 @@ import {
   type EngineContext,
   type Executor,
   type MaskingConfig,
+  type MaskRule,
   type TableAccessConfig,
   type TenantScopeConfig,
-  type TransformName,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
 import {
@@ -527,9 +527,7 @@ function buildMaskingConfig(
   const columnMasks: ColumnMasks = new Map(
     Object.entries(spec.columnMasks).map(([table, cols]) => [
       table,
-      new Map(
-        Object.entries(cols).map(([col, t]) => [col, t as TransformName]),
-      ),
+      new Map(Object.entries(cols).map(([col, rule]) => [col, rule as MaskRule])),
     ]),
   );
 

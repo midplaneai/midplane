@@ -25,7 +25,7 @@
 // alternative — deriving relevance only from resolved fields — would PASS
 // `to_jsonb(users)` (tableOid=0, no resolved field) and silently leak. Safety wins.
 
-import { applyTransform, type TransformName } from "./transforms.ts";
+import { applyTransform, type MaskRule } from "./transforms.ts";
 
 /** Catalog facts about one relation, resolved from pg_class / pg_attribute /
  *  pg_inherits by the caller (cached per connection). */
@@ -42,8 +42,8 @@ export interface RelInfo {
 }
 
 export type Catalog = Map<number, RelInfo>;
-/** "schema.table" -> (column name -> transform). */
-export type ColumnMasks = Map<string, Map<string, TransformName>>;
+/** "schema.table" -> (column name -> mask rule). */
+export type ColumnMasks = Map<string, Map<string, MaskRule>>;
 
 export type MaskOutcome =
   | { ok: true; rows: unknown[]; maskedColumns: string[] }
@@ -93,7 +93,7 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
   // instead of its base table, so a touched-table heuristic both over-rejects
   // and, worse, lets computed outputs over views / non-public schemas leak.
   const canon = (t: string) => (t.includes(".") ? t : `public.${t}`);
-  const normMasks = new Map<string, Map<string, TransformName>>();
+  const normMasks = new Map<string, Map<string, MaskRule>>();
   for (const [k, v] of columnMasks) normMasks.set(canon(k), v);
 
   // A masked-project query with no field metadata = unresolved provenance =>
@@ -109,7 +109,7 @@ export function maskResultSet(input: MaskResultSetInput): MaskOutcome {
 
   // Plan once per query (decision PERF1): decide each output field, collect the
   // transforms to apply, reject on the first unresolvable/leaky field.
-  const toMask: { outputName: string; transform: TransformName; ref: string }[] = [];
+  const toMask: { outputName: string; transform: MaskRule; ref: string }[] = [];
 
   for (const f of fields) {
     if (f.tableOid === 0) {

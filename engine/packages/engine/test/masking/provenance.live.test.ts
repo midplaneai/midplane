@@ -17,6 +17,7 @@ import {
   type ColumnMasks,
   type MaskOutcome,
 } from "../../src/masking/mask-result-set.ts";
+import type { MaskRule } from "../../src/masking/transforms.ts";
 import type { ResultField } from "../../src/executor.ts";
 
 const DSN = process.env.MASKING_LIVE_PG_DSN;
@@ -24,7 +25,7 @@ const d = DSN ? describe : describe.skip;
 
 const MASKS: ColumnMasks = new Map([
   ["public.users", new Map([["email", "full-redact"], ["ssn", "consistent-hash"]] as const)],
-  ["public.events", new Map([["tenant", "keep-last-4"]] as const)],
+  ["public.events", new Map<string, MaskRule>([["tenant", { t: "partial", keepEnd: 4 }]])],
   // Non-public schema — proves the masker keys on resolved schema.table, not on
   // the IR's schema-stripped touched-table names.
   ["private.users", new Map([["email", "full-redact"]] as const)],
@@ -123,7 +124,7 @@ d("masking: live-PG provenance", () => {
   test("partition parent masks", async () => {
     const out = await maskQuery("SELECT tenant FROM events");
     expect(out.ok).toBe(true);
-    if (out.ok) expect((out.rows[0] as any).tenant).toBe("•"); // keep-last-4 on "a"
+    if (out.ok) expect((out.rows[0] as any).tenant).toBe("•"); // partial{keepEnd:4} on "a"
   });
 
   test("partition child queried directly masks via the parent", async () => {
