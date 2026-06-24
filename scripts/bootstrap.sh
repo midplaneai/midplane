@@ -7,7 +7,7 @@
 #   1. Generate KMS dev keys (one per region) if .env.local is missing them.
 #   2. Create / reuse a Neon project + dev branch in eu-central-1.
 #   3. Run drizzle migrations against the dev branch (handwritten 0001_constraints.sql included).
-#   4. Build midplane/midplane:0.12.0 from the local OSS clone if the tag
+#   4. Build midplane/midplane:0.13.0 from the local OSS clone if the tag
 #      isn't published yet (set OSS_REPO=/path/to/midplaneai/midplane).
 #   5. Boot localhost:3000.
 #
@@ -24,7 +24,7 @@ cd "$ROOT"
 
 ENV_FILE="$ROOT/.env.local"
 OSS_REPO="${OSS_REPO:-/Users/dustinlange/dev/midplane}"
-IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.12.0}"
+IMAGE_TAG="${MIDPLANE_OSS_IMAGE:-midplane/midplane:0.13.0}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "creating $ENV_FILE from .env.example"

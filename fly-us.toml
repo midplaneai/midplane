@@ -17,12 +17,13 @@ primary_region = "iad"
 
 [build]
   # Prod is normally pinned by immutable digest (the multi-arch manifest-list
-  # sha256) so a re-pushed tag can't silently change what runs here. 0.11.0 adds
-  # the X-Midplane-Scope per-agent enforcement; its image is not published yet,
-  # so the digest is intentionally dropped until release. RELEASE STEP: publish
-  # 0.11.0 (engine-v0.11.0 tag), then re-pin the @sha256 digest here + in
-  # fly-eu.toml and re-run scripts/check-image-pin.ts (it validates the tag part).
-  image = "midplane/midplane:0.12.0"
+  # sha256) so a re-pushed tag can't silently change what runs here. 0.13.0 adds
+  # the column-masking transforms (null-out / partial / generalize /
+  # pseudonymize / noise) + the SELECT…INTO read-only fix; the digest is
+  # intentionally dropped until release. RELEASE STEP: publish 0.13.0
+  # (engine-v0.13.0 tag), then re-pin the @sha256 digest here + in fly-eu.toml
+  # and re-run scripts/check-image-pin.ts (it validates the tag part).
+  image = "midplane/midplane:0.13.0"
 
 [env]
   PORT = "8080"
