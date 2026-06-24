@@ -64,7 +64,14 @@ const PLANS: PlanSpec[] = [
   },
 ];
 
-async function ensurePrice(plan: PlanSpec): Promise<string> {
+interface EnsuredPrice {
+  priceId: string;
+  /** The product the price hangs off — needed to allow this plan as a switch
+   *  target in the Customer Portal configuration (see ensurePortalConfig). */
+  productId: string;
+}
+
+async function ensurePrice(plan: PlanSpec): Promise<EnsuredPrice> {
   // Find the current active price for this stable lookup key. Stripe prices are
   // IMMUTABLE — unit_amount/currency/interval can't be edited after creation —
   // so we may only REUSE one whose numbers already match the spec. Reusing by
@@ -85,7 +92,7 @@ async function ensurePrice(plan: PlanSpec): Promise<string> {
     console.error(
       `· ${plan.tier}: reusing existing price ${current.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo, lookup_key=${plan.lookupKey})`,
     );
-    return current.id;
+    return { priceId: current.id, productId: productIdOf(current.product) };
   }
 
   // No price yet, or the existing one is stale. Mint a fresh one;
@@ -111,14 +118,89 @@ async function ensurePrice(plan: PlanSpec): Promise<string> {
       ? `· ${plan.tier}: replaced stale price → ${price.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo); transferred lookup_key=${plan.lookupKey}`
       : `· ${plan.tier}: created price ${price.id} ($${(plan.unitAmount / 100).toFixed(2)}/mo)`,
   );
-  return price.id;
+  return { priceId: price.id, productId: productIdOf(price.product) };
+}
+
+/** A price's `product` is a string id unless expanded; we never expand, so this
+ *  just narrows the union (and fails loud if Stripe ever hands back something
+ *  unexpected). */
+function productIdOf(product: string | Stripe.Product | Stripe.DeletedProduct): string {
+  if (typeof product === "string") return product;
+  return product.id;
+}
+
+/** Allow customers to switch between the flat tiers from the Customer Portal.
+ *
+ *  The @better-auth/stripe plugin switches a FLAT plan (one plain priceId, no
+ *  seatPriceId / lineItems) by opening a Customer Portal `subscription_update_
+ *  confirm` flow, NOT a direct subscription update. That flow runs against the
+ *  account's DEFAULT portal configuration, which must list each tier's product
+ *  as a switch target — otherwise Stripe rejects the change with "...does not
+ *  include the price in features[subscription_update][products]". We configure
+ *  that here so the in-app "Upgrade to Team" button works without a manual
+ *  dashboard step, and re-runs keep it in sync. One Stripe account backs all
+ *  regions (shared price ids), so a single default config covers prod too. */
+async function ensurePortalConfig(entries: EnsuredPrice[]): Promise<void> {
+  const products = entries.map((e) => ({
+    product: e.productId,
+    prices: [e.priceId],
+  }));
+
+  const configs = await stripe.billingPortal.configurations.list({ limit: 100 });
+  const def =
+    configs.data.find((c) => c.is_default) ??
+    configs.data.find((c) => c.active) ??
+    null;
+
+  if (def) {
+    await stripe.billingPortal.configurations.update(def.id, {
+      features: {
+        subscription_update: {
+          enabled: true,
+          default_allowed_updates: ["price"],
+          proration_behavior: "create_prorations",
+          products,
+        },
+      },
+    });
+    console.error(
+      `· portal: enabled plan switching on default configuration ${def.id}`,
+    );
+    return;
+  }
+
+  // No configuration exists yet (the portal was never opened on this account).
+  // The first configuration created via the API becomes the account default —
+  // which is the one the plugin uses when it opens a portal session.
+  const created = await stripe.billingPortal.configurations.create({
+    business_profile: { headline: "Midplane" },
+    features: {
+      subscription_update: {
+        enabled: true,
+        default_allowed_updates: ["price"],
+        proration_behavior: "create_prorations",
+        products,
+      },
+      subscription_cancel: { enabled: true },
+      payment_method_update: { enabled: true },
+    },
+  });
+  console.error(
+    `· portal: created default configuration ${created.id} with plan switching enabled`,
+  );
 }
 
 const lines: string[] = [];
+const ensured: EnsuredPrice[] = [];
 for (const plan of PLANS) {
-  const priceId = await ensurePrice(plan);
-  lines.push(`${plan.envVar}=${priceId}`);
+  const price = await ensurePrice(plan);
+  ensured.push(price);
+  lines.push(`${plan.envVar}=${price.priceId}`);
 }
+
+// Allow Pro<->Team switching from the Customer Portal — the path the in-app
+// upgrade button drives for flat plans (see ensurePortalConfig).
+await ensurePortalConfig(ensured);
 
 console.error("\nPaste these into .env.local (and set them as Fly secrets in prod):\n");
 // The env lines go to stdout so `... > /tmp/stripe.env` works; logs go to stderr.

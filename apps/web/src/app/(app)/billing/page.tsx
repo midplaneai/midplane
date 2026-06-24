@@ -10,15 +10,17 @@ import { UsageMeter } from "@/components/billing/usage-meter";
 import { PageContainer, Topbar } from "@/components/layout/app-shell";
 import { RestrictedNotice } from "@/components/restricted-notice";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { getSubscriptionSummary, isBillingConfigured } from "@/lib/billing";
 import { currentCustomer } from "@/lib/customer";
 import { isOwner } from "@/lib/org-auth";
-import { hasEntitlement, resolvePlan, type Plan } from "@/lib/plan";
+import { resolvePlan, type Plan } from "@/lib/plan";
 import { getPlanUsage } from "@/lib/projects";
 import { countOrgSeats } from "@/lib/seats";
 import { isSelfHost } from "@/lib/self-host";
+import { cn } from "@/lib/utils";
 
 // Plans & billing surface. Self-serve checkout + management run through Stripe's
 // hosted Checkout / Customer Portal via the @better-auth/stripe plugin (see
@@ -28,19 +30,29 @@ import { isSelfHost } from "@/lib/self-host";
 //
 // Layout (cloud): a usage card (this org's consumption vs its caps) → a plans
 // card (Free/Pro/Team comparison with the current tier highlighted + the
-// action area) → SSO + custom cards. Invoices, receipts, and payment methods
+// action area) → an Enterprise card. Invoices, receipts, and payment methods
 // stay in Stripe's Customer Portal (the "Manage billing" button), so we render
-// the renewal date inline but build no money-management UI of our own.
+// the renewal date inline but build no money-management UI of our own. SSO/SAML
+// is shown as a row in the comparison table and configured at /settings/sso —
+// no separate card here.
 //
 // Three states for the action area inside the plans card:
-//   - billing on + no manual override: Upgrade buttons (on free) OR a renewal
-//                       line + Manage billing (subscribed).
+//   - billing on + no manual override: an Upgrade button on every tier ABOVE the
+//                       current plan (a free org starts hosted Checkout; a
+//                       subscribed org SWITCHES via its Stripe subscription id),
+//                       plus Manage billing + a renewal line once subscribed.
 //   - plan_override set: plan is managed directly → "talk to us" (no self-serve,
 //                       which would be overridden / confusing).
 //   - billing not configured: keyless dev / unconfigured cloud → "talk to us".
 // Self-host is uncapped with no billing, so it gets its own minimal surface.
 
 const SALES_EMAIL = "sales@midplane.ai";
+
+// Display + comparison order, and a rank so the CTA loop can tell "above the
+// current plan" (offer an upgrade) from "below" (no CTA — downgrade via Manage
+// billing). Keep aligned with the comparison table's own PLAN_ORDER.
+const PLAN_ORDER = ["free", "pro", "team"] as const;
+const PLAN_RANK: Record<Plan, number> = { free: 0, pro: 1, team: 2 };
 
 function formatDate(d: Date): string {
   return d.toLocaleDateString("en-US", {
@@ -61,10 +73,6 @@ export default async function BillingPage() {
   if (!(await isOwner())) return <RestrictedNotice label="Plans & billing" />;
 
   const { plan, caps } = await resolvePlan();
-  // Single feature-gating seam in lib/plan.ts: hasEntitlement("sso") is the
-  // only SSO gate, so wiring SSO entitlement later touches that module, not
-  // this page.
-  const hasSso = await hasEntitlement("sso");
 
   // Self-host: uncapped, no billing, no plans. Keep this surface minimal — the
   // comparison table / usage meters are a cloud-billing construct.
@@ -88,8 +96,7 @@ export default async function BillingPage() {
                 </p>
               </CardContent>
             </Card>
-            {ssoCard(hasSso)}
-            {customCard()}
+            {enterpriseCard()}
           </div>
         </PageContainer>
       </>
@@ -116,16 +123,24 @@ export default async function BillingPage() {
       : Promise.resolve(null),
   ]);
 
-  // Self-serve upgrade (hosted Checkout) is offered only to a free org with
-  // billing configured; subscribers change/cancel through the Customer Portal
-  // ("Manage billing"), and manually-managed / billing-off orgs go through sales.
-  const canUpgrade = billingOn && !managedManually && !hasActiveSub;
-  const canManage = billingOn && !managedManually && hasActiveSub;
+  // Self-serve billing is available when billing is configured and the plan
+  // isn't manually overridden; manually-managed / billing-off orgs go through
+  // sales. A free org checks out (canCheckout); a subscribed org manages /
+  // cancels / downgrades through the Customer Portal (canManage) and switches
+  // UP to a higher tier in-app (the upgrade button, passed its subscription id).
+  const canTransact = billingOn && !managedManually;
+  const canManage = canTransact && hasActiveSub;
+  const canCheckout = canTransact && !hasActiveSub;
+  // The id needed to SWITCH (vs open a parallel) subscription; null for a free
+  // org, in which case the upgrade button starts a fresh Checkout.
+  const subscriptionId = summary?.stripeSubscriptionId ?? null;
 
   // One CTA per plan column: "Manage billing" / "current plan" on the active
-  // tier, an upgrade button on the tiers above a free org, nothing otherwise.
+  // tier, and an upgrade button on every tier ABOVE the current plan (so a Pro
+  // org can move to Team in-app, not only a free org). Lower tiers carry no CTA
+  // — downgrades go through Manage billing.
   const ctas: Partial<Record<Plan, React.ReactNode>> = {};
-  for (const p of ["free", "pro", "team"] as const) {
+  for (const p of PLAN_ORDER) {
     if (p === plan) {
       ctas[p] = canManage ? (
         <ManageBillingButton orgId={customer.orgId} />
@@ -134,12 +149,13 @@ export default async function BillingPage() {
           current plan
         </span>
       );
-    } else if (canUpgrade && p !== "free") {
+    } else if (canTransact && p !== "free" && PLAN_RANK[p] > PLAN_RANK[plan]) {
       ctas[p] = (
         <UpgradeButton
           orgId={customer.orgId}
           tier={p}
           label={p === "pro" ? "Pro" : "Team"}
+          subscriptionId={subscriptionId ?? undefined}
         />
       );
     }
@@ -199,7 +215,7 @@ export default async function BillingPage() {
               </BillingActionsProvider>
 
               <div className="border-t border-card pt-5 text-sm text-muted-foreground">
-                {canUpgrade ? (
+                {canCheckout ? (
                   <p>
                     Pro and Team are billed at a flat monthly price; checkout and
                     billing management open securely on Stripe.
@@ -221,8 +237,7 @@ export default async function BillingPage() {
             </CardContent>
           </Card>
 
-          {ssoCard(hasSso)}
-          {customCard()}
+          {enterpriseCard()}
         </div>
       </PageContainer>
     </>
@@ -266,41 +281,26 @@ function TalkToUs() {
   );
 }
 
-function ssoCard(hasSso: boolean) {
+function enterpriseCard() {
   return (
     <Card className="mt-8">
       <CardHeader>
-        <CardTitle>single sign-on (saml)</CardTitle>
+        <CardTitle>enterprise</CardTitle>
       </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        {hasSso ? (
-          <p>
-            SSO/SAML is included on your plan. Configure your identity provider
-            from your organization&apos;s security settings.
-          </p>
-        ) : (
-          <p>
-            SSO/SAML is available on the{" "}
-            <strong className="font-medium text-foreground">Team</strong> plan.
-            Upgrade to enable SAML projects for your organization.
-          </p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function customCard() {
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>need something custom?</CardTitle>
-      </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
+      <CardContent className="space-y-4 text-sm text-muted-foreground">
         <p>
-          BYOK, a dedicated region, custom retention, or SOC 2 / HIPAA artifacts
-          — <TalkToUs />.
+          Advanced security, compliance, and deployment options for larger
+          organizations — including SOC&nbsp;2 and HIPAA support.
         </p>
+        <a
+          href={`mailto:${SALES_EMAIL}`}
+          className={cn(
+            buttonVariants({ variant: "outline", size: "sm" }),
+            "text-foreground",
+          )}
+        >
+          Contact sales
+        </a>
       </CardContent>
     </Card>
   );
