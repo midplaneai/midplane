@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import {
+  BillingActionsProvider,
   ManageBillingButton,
   UpgradeButton,
 } from "@/components/billing/billing-actions";
@@ -189,7 +190,13 @@ export default async function BillingPage() {
               <CardTitle>plans</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <PlanComparison currentPlan={plan} ctas={ctas} />
+              {/* One shared in-flight state across the per-column buttons, so
+                  starting any checkout/portal action disables the rest (a
+                  Context.Provider renders no DOM node, so it doesn't disturb the
+                  card's spacing). */}
+              <BillingActionsProvider>
+                <PlanComparison currentPlan={plan} ctas={ctas} />
+              </BillingActionsProvider>
 
               <div className="border-t border-card pt-5 text-sm text-muted-foreground">
                 {canUpgrade ? (

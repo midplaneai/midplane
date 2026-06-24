@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { createContext, useContext, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
@@ -15,33 +15,91 @@ import { authClient } from "@/lib/auth-client";
 // renders (upgrade on the tiers above a free org; manage on the current paid
 // tier) so we never open a second checkout for an org that already subscribes.
 //
+// The buttons SHARE one in-flight state through BillingActionsProvider: starting
+// any action disables ALL of them (and the runner ignores a second start), so a
+// user can't click Pro then Team before the first redirect lands and create two
+// competing checkout sessions. Each button is a separate component, so the shared
+// state has to live in context, not local useState.
+//
 // customerType "organization" + referenceId = orgId: we bill the org, not the
 // user. successUrl/cancelUrl/returnUrl point back at /billing. We pass no seat
 // count — the plans are flat (a fixed monthly price per org, no seatPriceId), so
 // there's no quantity to set; per-plan member caps are enforced separately (see
 // lib/seats.ts), not through Stripe.
 
-function useStripeAction() {
-  const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+interface BillingActionState {
+  /** The action key currently redirecting to Stripe, or null when idle. While
+   *  non-null EVERY billing button is disabled. */
+  busy: string | null;
+  /** Inline error from the last failed action, tagged with the button it
+   *  belongs to so only that cell renders it. */
+  error: { key: string; message: string } | null;
+  run: (
+    key: string,
+    fn: () => Promise<{ error?: { message?: string } | null }>,
+  ) => void;
+}
 
-  function run(fn: () => Promise<{ error?: { message?: string } | null }>) {
+const BillingActionContext = createContext<BillingActionState | null>(null);
+
+export function BillingActionsProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const [, startTransition] = useTransition();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<{ key: string; message: string } | null>(
+    null,
+  );
+
+  function run(
+    key: string,
+    fn: () => Promise<{ error?: { message?: string } | null }>,
+  ) {
+    // Guard: one billing action at a time. `disabled` already blocks the UI, but
+    // this closes the click-before-rerender race so two checkout sessions can
+    // never start.
+    if (busy) return;
     setError(null);
+    setBusy(key);
     startTransition(async () => {
       try {
         const { error } = await fn();
         if (error) {
-          setError(error.message ?? "Something went wrong. Please try again.");
+          setError({
+            key,
+            message: error.message ?? "Something went wrong. Please try again.",
+          });
+          setBusy(null);
         }
         // On success the Stripe client redirects the browser to Checkout/Portal;
-        // this component unmounts, so there's nothing to reset.
+        // these components unmount, so there's nothing to reset.
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Something went wrong.");
+        setError({
+          key,
+          message: e instanceof Error ? e.message : "Something went wrong.",
+        });
+        setBusy(null);
       }
     });
   }
 
-  return { pending, error, run };
+  return (
+    <BillingActionContext.Provider value={{ busy, error, run }}>
+      {children}
+    </BillingActionContext.Provider>
+  );
+}
+
+function useBillingActions(): BillingActionState {
+  const ctx = useContext(BillingActionContext);
+  if (!ctx) {
+    throw new Error(
+      "billing buttons must be rendered inside <BillingActionsProvider>",
+    );
+  }
+  return ctx;
 }
 
 function ActionError({ message }: { message: string }) {
@@ -57,15 +115,16 @@ export function UpgradeButton({
   tier: "pro" | "team";
   label: string;
 }) {
-  const { pending, error, run } = useStripeAction();
+  const { busy, error, run } = useBillingActions();
+  const key = `upgrade:${tier}`;
   return (
     <div className="flex flex-col items-center gap-1.5">
       <Button
         size="sm"
         className="w-full"
-        disabled={pending}
+        disabled={busy !== null}
         onClick={() =>
-          run(() =>
+          run(key, () =>
             authClient.subscription.upgrade({
               plan: tier,
               referenceId: orgId,
@@ -76,24 +135,25 @@ export function UpgradeButton({
           )
         }
       >
-        {pending ? "Redirecting…" : `Upgrade to ${label}`}
+        {busy === key ? "Redirecting…" : `Upgrade to ${label}`}
       </Button>
-      {error ? <ActionError message={error} /> : null}
+      {error?.key === key ? <ActionError message={error.message} /> : null}
     </div>
   );
 }
 
 export function ManageBillingButton({ orgId }: { orgId: string }) {
-  const { pending, error, run } = useStripeAction();
+  const { busy, error, run } = useBillingActions();
+  const key = "manage";
   return (
     <div className="flex flex-col items-center gap-1.5">
       <Button
         size="sm"
         variant="secondary"
         className="w-full"
-        disabled={pending}
+        disabled={busy !== null}
         onClick={() =>
-          run(() =>
+          run(key, () =>
             authClient.subscription.billingPortal({
               referenceId: orgId,
               customerType: "organization",
@@ -102,9 +162,9 @@ export function ManageBillingButton({ orgId }: { orgId: string }) {
           )
         }
       >
-        {pending ? "Opening…" : "Manage billing"}
+        {busy === key ? "Opening…" : "Manage billing"}
       </Button>
-      {error ? <ActionError message={error} /> : null}
+      {error?.key === key ? <ActionError message={error.message} /> : null}
     </div>
   );
 }
