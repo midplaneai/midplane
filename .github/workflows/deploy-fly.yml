@@ -132,7 +132,7 @@ jobs:
       DRAIN: ${{ inputs.drain_engines }}
     steps:
       - name: Checkout (fly-*.toml configs + apps/web Dockerfile build context)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Preconditions
         run: |
