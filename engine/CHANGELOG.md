@@ -2,6 +2,45 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-06-24
+
+### Security
+
+- **`SELECT … INTO` is denied under a read-only policy.** `SELECT id, email INTO snapshot FROM users` is the legacy spelling of `CREATE TABLE snapshot AS SELECT …`, but libpg parses it as a `SelectStmt` with a non-null `intoClause` (not a `CreateTableAsStmt`). The normalize adapter only handled the `CreateTableAsStmt` spelling, so the creation target was walked as a plain `read` `RangeVar` and a `default: read` policy **allowed it** — a read-only MCP agent could materialize a table (snapshot a table it can read, or fill disk). A `SelectStmt` with a non-null `intoClause` now emits a `write` `AccessCheck` on `intoClause.rel`, governed exactly like `CreateTableAsStmt`'s `into.rel`: denied under `default: read`, denied by a read-only `scope_max_access` ceiling, allowed only when the target is `read_write`. The two spellings are now indistinguishable to policy. `block_ddl` is left unchanged (`CREATE` / `CREATE TABLE AS` is intentionally excluded in v1, so `table_access` is the control surface). Added to the `table_access` + `dangerous_statement` adversarial corpora; verdict baseline regenerated (purely additive).
+
+### Added
+
+- **Column-masking transform catalog — `null-out`, `partial`, `generalize`, `pseudonymize`, `noise`.** Builds on the declared per-column masking shipped in 0.12.0. The transform is now a discriminated union (`MaskRule`) rather than a bare string enum, so parametric transforms are possible:
+
+  ```
+  "full-redact" | "null-out" | "consistent-hash"             (param-free presets)
+  | { t: "partial";     keepStart?, keepEnd?, glyph? }        (text → text)
+  | { t: "generalize";  granularity: year|month|day|number }  (date · numeric)
+  | { t: "pseudonymize"; kind: email|name|phone }             (text → text)
+  | { t: "noise";       ratio }                               (numeric → numeric)
+  ```
+
+  - **`null-out`** replaces a value with SQL `NULL` while keeping the column's declared Postgres type — so numeric, date, and other non-text PII can be masked without changing the column's wire type (unlike `full-redact`, which collapses to the text token `***`).
+  - **`partial`** (absorbs the retired `keep-last-4`) keeps a configurable prefix/suffix and masks the middle; text-only, inherits the short-value guard.
+  - **`generalize`** truncates dates (UTC, to year/month/day) or buckets numerics — deterministic.
+  - **`pseudonymize`** emits realistic, **deterministic** fakes via `dict[kind][HMAC(salt, value) mod len]`: same `(salt, value)` → same fake (join-safe), different per-project salt → uncorrelated (same guarantee as `consistent-hash` but preserving the value's shape — a fake email/name/phone instead of hex). `kind` is a closed set (`email` | `name` | `phone`), each backed by a compiled-in TS dictionary (no runtime file reads — a `bun build --compile` binary embeds static imports, not `readFileSync` wordlists).
+  - **`noise`** applies proportional `±ratio` randomization to a numeric — the first and only **non-deterministic** transform; it breaks joins/grouping by design. Non-finite input or result → `null` (never leak).
+
+- **Per-rule input-type domain, enforced fail-closed.** Each parametric rule declares the Postgres type family it accepts (`partial`/`pseudonymize` text-only; `generalize`/`noise` numeric, with `generalize` also accepting dates). A transform applied to an out-of-domain column — or a `generalize`/type mismatch — **rejects the whole result set** (same path as `UnknownTransformError`), never a silent passthrough. The type comes from the catalog (`pg_attribute.atttypid` → `pg_type.typcategory`), so `citext` and the date/numeric families resolve without an OID allowlist.
+
+### Changed
+
+- **`keep-last-4` retired into `partial`.** Existing stored `"keep-last-4"` values continue to read via a back-compat normalizer (`normalizeMaskRule`); the engine zod rejects the bare string at parse so new policies use `{ t: "partial", keepEnd: 4 }`.
+
+## [0.12.0] — 2026-06-19
+
+### Added
+
+- **Column-level dynamic masking — declared, deterministic, fail-closed end to end.** A policy can mark a column masked; the engine maps each result column back to its source via node-postgres `RowDescription` provenance (alias / join / `SELECT *` all resolve to the base column) and applies the transform after execution, before the rows leave the engine. Initial transforms: `full-redact` (→ `***`), `consistent-hash` (deterministic, salt-injected), and `keep-last-4`. Masked columns are recorded in the audit log.
+  - **Fails closed.** Views, computed expressions, whole-row serialization, and stale-catalog cases are **rejected** rather than risk emitting an unmasked value — provenance the engine can't prove maps to a known base column denies the whole result set. `information_schema` / `pg_catalog` are exempt (no maskable customer row values), mirroring the `table_access` / `tenant_scope` carve-outs, so `list_tables` / `describe_table` keep working.
+  - **Salt is required when masking is configured.** `consistent-hash` and other deterministic transforms are keyed by a per-deployment salt (`MIDPLANE_MASK_SALT`); the engine refuses to apply masking without it rather than fall back to an unsalted (correlatable) hash.
+  - **`requires_features` guard.** A policy may declare `requires_features: ["column_masks"]`; an engine that does not implement a named feature **refuses the policy at boot** (fail-closed) rather than silently not enforcing it — the forward half of the version-skew defense, so a future enforcement section can't be quietly stripped by an older engine.
+
 ## [0.11.0] — 2026-06-18
 
 ### Added
