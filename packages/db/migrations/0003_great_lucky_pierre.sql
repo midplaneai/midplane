@@ -1,0 +1,1 @@
+ALTER TABLE "project_databases" ADD COLUMN "ignored_columns" jsonb DEFAULT '{}'::jsonb NOT NULL;

@@ -59,7 +59,7 @@ beforeEach(() => {
   requireManagerRestMock = vi.fn(async () => ({ userId: "u1", orgId: "o1", role: "owner" }));
   getProjectMock = vi.fn(async () => ({
     project: PROJECT,
-    database: { id: "cdb-main", name: "main", columnMasks: {} },
+    database: { id: "cdb-main", name: "main", columnMasks: {}, ignoredColumns: {} },
   }));
   resolveMock = vi.fn(async () => ({ ok: true, plaintext: "postgres://decrypted" }));
   scanMock = vi.fn(async () => ({ columns: [], scannedColumns: 0 }));
@@ -99,7 +99,15 @@ describe("GET /api/projects/[id]/scan — auth", () => {
     const res = await GET(req(), params);
     expect(res.status).toBe(200);
     expect(resolveMock).toHaveBeenCalled();
+    // Must NOT be cacheable: the body carries mutable columnMasks/ignoredColumns
+    // the user changes via separate writes; a cached replay on rescan would
+    // resurrect a just-masked/dismissed column. Pin no-store against regression.
+    expect(res.headers.get("cache-control")).toBe("no-store");
     const body = await res.json();
     expect(body.columns).toEqual([]);
+    // The page needs the DB's masks + dismissals to render flagged-vs-masked
+    // and to hide dismissed columns.
+    expect(body.columnMasks).toEqual({});
+    expect(body.ignoredColumns).toEqual({});
   });
 });

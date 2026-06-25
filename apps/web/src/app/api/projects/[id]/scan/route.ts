@@ -12,7 +12,9 @@
 
 import {
   parseColumnMasksOrThrow,
+  parseIgnoredColumnsOrThrow,
   type ColumnMasksConfig,
+  type IgnoredColumnsConfig,
 } from "@midplane-cloud/db";
 
 import { currentCustomer } from "@/lib/customer";
@@ -30,12 +32,16 @@ interface OkBody {
   scannedColumns: number;
   /** The DB's current masks, so the page marks already-masked columns. */
   columnMasks: ColumnMasksConfig;
+  /** Columns the user dismissed as not-PII, so the scan view hides them from
+   *  the exposed list (and offers an un-ignore). */
+  ignoredColumns: IgnoredColumnsConfig;
 }
 
 interface SoftErrorBody {
   columns: [];
   scannedColumns: 0;
   columnMasks: ColumnMasksConfig;
+  ignoredColumns: IgnoredColumnsConfig;
   error: "credential_unavailable" | "introspection_failed";
   message?: string;
 }
@@ -72,6 +78,8 @@ export async function GET(
   // The persisted policy is the source of truth for "already masked", validated
   // the same way the spawner reads it (so a malformed row can't crash the page).
   const columnMasks = parseColumnMasksOrThrow(database.columnMasks);
+  // Scan-view dismissals — same validate-on-read posture.
+  const ignoredColumns = parseIgnoredColumnsOrThrow(database.ignoredColumns);
 
   const ctx = getMcpProxyContext();
   const decrypt = await ctx.resolver.resolve({
@@ -84,6 +92,7 @@ export async function GET(
       columns: [],
       scannedColumns: 0,
       columnMasks,
+      ignoredColumns,
       error: "credential_unavailable",
     };
     return Response.json(body, { status: 200 });
@@ -95,10 +104,17 @@ export async function GET(
       columns: scan.columns,
       scannedColumns: scan.scannedColumns,
       columnMasks,
+      ignoredColumns,
     };
+    // no-store: the body carries the DB's CURRENT column_masks + ignored_columns,
+    // which the user mutates via separate write paths (setColumnMasks /
+    // setIgnoredColumns). Advertising a max-age let the browser replay a
+    // pre-mutation response on rescan and resurrect a just-masked/dismissed
+    // column until the cache expired. The scan is on-demand now, so there is no
+    // re-introspection storm to debounce — fresh on every explicit scan.
     return Response.json(body, {
       status: 200,
-      headers: { "cache-control": "private, max-age=10" },
+      headers: { "cache-control": "no-store" },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
@@ -107,6 +123,7 @@ export async function GET(
       columns: [],
       scannedColumns: 0,
       columnMasks,
+      ignoredColumns,
       error: "introspection_failed",
       message,
     };

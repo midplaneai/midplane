@@ -248,13 +248,6 @@ export function MaskedPreviewPanel({
           masked in this database: {maskedRefs.join(" · ")}
         </p>
       ) : null}
-
-      <p className="rounded-lg border border-border border-l-2 border-l-[hsl(var(--warn))] bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
-        <strong className="font-medium text-foreground">Heads up:</strong> masking
-        changes what the agent <em>reads back</em>. It can&apos;t hide a value the
-        agent filters or sorts on (<span className="font-mono">where email = …</span>
-        ). This is result redaction, not a hard guarantee.
-      </p>
     </section>
   );
 }

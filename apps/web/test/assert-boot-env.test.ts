@@ -111,6 +111,42 @@ describe("assertBootEnv", () => {
     });
   });
 
+  describe("masking salt master (validate-if-set)", () => {
+    it("passes when unset — masking is opt-in", () => {
+      const env = envMode("eu");
+      expect(env.MIDPLANE_MASK_SALT_MASTER).toBeUndefined();
+      expect(() => assertBootEnv(env)).not.toThrow();
+    });
+
+    it("passes with a strong master set", () => {
+      const env = { ...envMode("eu"), MIDPLANE_MASK_SALT_MASTER: KEY_HEX };
+      expect(() => assertBootEnv(env)).not.toThrow();
+    });
+
+    it("rejects a too-short master when set (silent-footgun guard)", () => {
+      const env = { ...envMode("eu"), MIDPLANE_MASK_SALT_MASTER: "short" };
+      expect(() => assertBootEnv(env)).toThrow(
+        /MIDPLANE_MASK_SALT_MASTER.*too short/,
+      );
+    });
+
+    it("validates the master in self-host too", () => {
+      const env: Record<string, string | undefined> = {
+        MIDPLANE_SELF_HOST: "1",
+        DATABASE_URL: "postgres://localhost/x",
+        MIDPLANE_KMS_MODE: "env",
+        BETTER_AUTH_URL: "http://localhost:3000",
+        BETTER_AUTH_SECRET: SECRET,
+        MIDPLANE_KMS_DEV_KEY_EU: KEY_HEX,
+        MIDPLANE_TOKEN_PEPPER_EU_V1: PEPPER_B64,
+        MIDPLANE_MASK_SALT_MASTER: "short",
+      };
+      expect(() => assertBootEnv(env)).toThrow(
+        /MIDPLANE_MASK_SALT_MASTER.*too short/,
+      );
+    });
+  });
+
   it("skips derived-var checks when region itself is invalid", () => {
     let err: Error | null = null;
     try {

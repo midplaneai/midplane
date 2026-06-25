@@ -20,6 +20,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ColumnMasksConfig } from "@midplane-cloud/db";
+
 interface DbCall {
   op: "delete" | "update" | "select" | "insert" | "execute";
   table?: unknown;
@@ -133,7 +135,8 @@ function makeFakeDb(): FakeDbHandle {
             ("encryptedDsn" in set ||
               "tableAccess" in set ||
               "tenantScope" in set ||
-              "guardrails" in set)
+              "guardrails" in set ||
+              "ignoredColumns" in set)
           ) {
             return Promise.resolve(childUpdate);
           }
@@ -1712,6 +1715,101 @@ describe("setGuardrails", () => {
     expect(row?.tenantId).toBe("conn-1");
     expect(row?.actorUserId).toBe(ACTOR);
     expect(row?.payload.guardrails).toEqual(optOut);
+  });
+});
+
+describe("setIgnoredColumns", () => {
+  const dismissals = { "public.users": ["display_name", "ip_version"] };
+
+  it("happy path: writes ignored_columns to the named child and returns the project id", async () => {
+    handle.queueSelect([{ id: "conn-1" }]); // parent ownership check
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const { setIgnoredColumns } = await import("../src/lib/projects.ts");
+
+    const result = await setIgnoredColumns(customer, "conn-1", dismissals);
+
+    expect(result).toMatchObject({ id: "conn-1" });
+    const childUpdate = handle.calls.find(
+      (c) => c.op === "update" && c.table === projectDatabases,
+    );
+    const set = childUpdate?.set as { ignoredColumns: typeof dismissals } | undefined;
+    expect(set?.ignoredColumns).toEqual(dismissals);
+  });
+
+  it("is scan-view state, not policy: writes NO audit row (and there's no engine push to make)", async () => {
+    handle.queueSelect([{ id: "conn-1" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    const { auditEventsIndex } = await import("@midplane-cloud/db");
+    const { setIgnoredColumns } = await import("../src/lib/projects.ts");
+
+    await setIgnoredColumns(customer, "conn-1", dismissals);
+
+    const audit = handle.calls.find(
+      (c) => c.op === "insert" && c.table === auditEventsIndex,
+    );
+    expect(audit, "a dismissal is not a policy change — no audit row").toBeUndefined();
+  });
+
+  it("404 path: returns null when ownership mismatches (parent check empty)", async () => {
+    handle.queueSelect([]); // no owned project
+    const { setIgnoredColumns } = await import("../src/lib/projects.ts");
+
+    const result = await setIgnoredColumns(customer, "conn-other", dismissals);
+    expect(result).toBeNull();
+  });
+
+  it("dbName not found: returns null when no child row matched", async () => {
+    handle.queueSelect([{ id: "conn-1" }]);
+    handle.setChildUpdateResult([]); // 0 rows matched the dbName
+    const { setIgnoredColumns } = await import("../src/lib/projects.ts");
+
+    const result = await setIgnoredColumns(customer, "conn-1", dismissals, "ghost-db");
+    expect(result).toBeNull();
+  });
+
+  it("rejects a malformed identifier before touching Postgres", async () => {
+    const { setIgnoredColumns } = await import("../src/lib/projects.ts");
+
+    await expect(
+      setIgnoredColumns(customer, "conn-1", { "public.users": ["ema il"] } as never),
+    ).rejects.toThrow(/invalid ignored_columns/);
+    expect(handle.calls).toHaveLength(0);
+  });
+});
+
+describe("maskConfigAddsMasking", () => {
+  const redactEmail: ColumnMasksConfig = { "public.users": { email: "full-redact" } };
+
+  it("false for an identical config (no-op save)", async () => {
+    const { maskConfigAddsMasking } = await import("../src/lib/projects.ts");
+    expect(maskConfigAddsMasking(redactEmail, redactEmail)).toBe(false);
+  });
+
+  it("true when a new masked column is added", async () => {
+    const { maskConfigAddsMasking } = await import("../src/lib/projects.ts");
+    expect(maskConfigAddsMasking({}, redactEmail)).toBe(true);
+  });
+
+  it("true when an existing column's rule changes", async () => {
+    const { maskConfigAddsMasking } = await import("../src/lib/projects.ts");
+    const before: ColumnMasksConfig = { "public.users": { ssn: "full-redact" } };
+    const after: ColumnMasksConfig = { "public.users": { ssn: "null-out" } };
+    expect(maskConfigAddsMasking(before, after)).toBe(true);
+  });
+
+  it("false for a pure removal — the recovery path stays open", async () => {
+    const { maskConfigAddsMasking } = await import("../src/lib/projects.ts");
+    const before: ColumnMasksConfig = {
+      "public.users": { ssn: "full-redact", email: "full-redact" },
+    };
+    const after: ColumnMasksConfig = { "public.users": { email: "full-redact" } };
+    expect(maskConfigAddsMasking(before, after)).toBe(false);
+  });
+
+  it("false when clearing the last masked column (→ empty)", async () => {
+    const { maskConfigAddsMasking } = await import("../src/lib/projects.ts");
+    expect(maskConfigAddsMasking(redactEmail, {})).toBe(false);
   });
 });
 

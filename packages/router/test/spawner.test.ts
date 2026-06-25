@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { ColumnMasksConfig } from "@midplane-cloud/db";
+
 import {
+  bootFingerprint,
   ContainerRegistry,
   type SpawnedContainer,
   type Spawner,
@@ -27,7 +30,10 @@ class StubSpawner implements Spawner {
   }
 }
 
-const opts = (projectId = "01HXYZCONN000000000000000A"): SpawnOptions => ({
+const opts = (
+  projectId = "01HXYZCONN000000000000000A",
+  mask?: { columnMasks?: ColumnMasksConfig; maskSalt?: string },
+): SpawnOptions => ({
   projectId,
   region: "eu",
   databases: [
@@ -38,8 +44,10 @@ const opts = (projectId = "01HXYZCONN000000000000000A"): SpawnOptions => ({
       tableAccess: { default: "deny", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
       guardrails: { block_unqualified_dml: true, block_ddl: true },
+      ...(mask?.columnMasks ? { columnMasks: mask.columnMasks } : {}),
     },
   ],
+  ...(mask?.maskSalt ? { maskSalt: mask.maskSalt } : {}),
 });
 
 describe("ContainerRegistry", () => {
@@ -50,6 +58,65 @@ describe("ContainerRegistry", () => {
     const b = await reg.acquire(opts());
     expect(stub.calls).toBe(1);
     expect(b.port).toBe(a.port);
+  });
+
+  it("reuses the warm container when masks + salt are unchanged", async () => {
+    const stub = new StubSpawner();
+    const reg = new ContainerRegistry(stub);
+    const masked = {
+      columnMasks: { "public.users": { email: "full-redact" } } as ColumnMasksConfig,
+      maskSalt: "salt-1",
+    };
+    const a = await reg.acquire(opts("01HXYZCONN000000000000000A", masked));
+    const b = await reg.acquire(opts("01HXYZCONN000000000000000A", masked));
+    expect(stub.calls).toBe(1);
+    expect(b.port).toBe(a.port);
+  });
+
+  it("does NOT reuse a mask-less warm container for a masked request — respawns (bypass guard)", async () => {
+    const stub = new StubSpawner();
+    const reg = new ContainerRegistry(stub);
+    // A mask-less container boots first (e.g. a dry-run before masks were
+    // carried). A later masked request must NOT be served by it.
+    const cold = await reg.acquire(opts("01HXYZCONN000000000000000A"));
+    const coldStop = cold.stop as ReturnType<typeof vi.fn>;
+    const masked = await reg.acquire(
+      opts("01HXYZCONN000000000000000A", {
+        columnMasks: { "public.users": { email: "full-redact" } },
+        maskSalt: "salt-1",
+      }),
+    );
+    expect(stub.calls).toBe(2); // respawned, not reused
+    expect(coldStop).toHaveBeenCalled(); // stale container evicted
+    expect(masked.port).not.toBe(cold.port);
+    expect(reg.size()).toBe(1);
+  });
+
+  it("respawns when the mask salt rotates", async () => {
+    const stub = new StubSpawner();
+    const reg = new ContainerRegistry(stub);
+    const masks = { "public.users": { email: "full-redact" } } as ColumnMasksConfig;
+    await reg.acquire(opts("01HXYZCONN000000000000000A", { columnMasks: masks, maskSalt: "s1" }));
+    await reg.acquire(opts("01HXYZCONN000000000000000A", { columnMasks: masks, maskSalt: "s2" }));
+    expect(stub.calls).toBe(2);
+  });
+
+  it("bootFingerprint is canonical — column order doesn't matter (no spurious respawn)", () => {
+    const a = opts("01HXYZCONN000000000000000A", {
+      columnMasks: { "public.users": { email: "full-redact", ssn: "null-out" } },
+      maskSalt: "s",
+    });
+    const b = opts("01HXYZCONN000000000000000A", {
+      columnMasks: { "public.users": { ssn: "null-out", email: "full-redact" } },
+      maskSalt: "s",
+    });
+    expect(bootFingerprint(a)).toBe(bootFingerprint(b));
+    // ...but a different rule IS a different fingerprint.
+    const c = opts("01HXYZCONN000000000000000A", {
+      columnMasks: { "public.users": { email: "null-out" } },
+      maskSalt: "s",
+    });
+    expect(bootFingerprint(a)).not.toBe(bootFingerprint(c));
   });
 
   it("dedupes concurrent first-spawns via inflight mutex", async () => {

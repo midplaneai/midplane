@@ -27,6 +27,7 @@ import {
 import {
   type ColumnMasksConfig,
   type GuardrailsConfig,
+  type IgnoredColumnsConfig,
   type TableAccessPolicy,
   type TenantScopeConfig,
 } from "./policy.ts";
@@ -202,6 +203,14 @@ export const projectDatabases = pgTable(
     // spawn. The engine fails closed if a masked column can't be safely masked.
     columnMasks: jsonb("column_masks")
       .$type<ColumnMasksConfig>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    // PII-scan dismissals (design D1): "schema.table" -> [column…] the user
+    // reviewed and marked NOT personal data, so the heuristic scan stops
+    // re-flagging them. Scan-view state only — NEVER serialized into the engine
+    // YAML and no respawn on change (the engine masks off column_masks alone).
+    ignoredColumns: jsonb("ignored_columns")
+      .$type<IgnoredColumnsConfig>()
       .notNull()
       .default(sql`'{}'::jsonb`),
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),

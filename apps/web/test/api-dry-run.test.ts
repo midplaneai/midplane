@@ -36,13 +36,14 @@ const CONN = {
   name: "acme-prod",
 };
 
-function makeDb(name: string, tableAccess?: unknown) {
+function makeDb(name: string, tableAccess?: unknown, columnMasks: unknown = {}) {
   return {
     id: `cdb-${name}`,
     projectId: CONN.id,
     name,
     tableAccess: tableAccess ?? { default: "read", tables: {} },
     tenantScope: { column: null, overrides: {}, exempt: [] },
+    columnMasks,
     encryptedDsn: new Uint8Array([1]),
     kmsKeyId: "key-1",
   };
@@ -244,6 +245,50 @@ describe("POST /api/projects/[id]/dry-run", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]!.database).toBe("main");
     expect(requests[0]!.tenant_context).toEqual({ value: PROBE_TENANT_VALUE });
+  });
+
+  it("carries column_masks + a derived mask salt into the spawn (warm pool stays consistent with proxy/preview)", async () => {
+    const prevMaster = process.env.MIDPLANE_MASK_SALT_MASTER;
+    process.env.MIDPLANE_MASK_SALT_MASTER = "m".repeat(40);
+    try {
+      getConnMock = vi.fn(async () => ({
+        project: CONN,
+        databases: [makeDb("main", undefined, { "public.users": { email: "full-redact" } })],
+      }));
+      const { POST } = await loadRoute();
+      const res = await POST(jsonRequest(PROBES_BODY), params);
+      expect(res.status).toBe(200);
+      const [spawn] = dryRunMock.mock.calls[0] as unknown as [
+        { databases: Array<{ columnMasks?: unknown }>; maskSalt?: string },
+      ];
+      expect(spawn.databases[0]!.columnMasks).toEqual({
+        "public.users": { email: "full-redact" },
+      });
+      expect(typeof spawn.maskSalt).toBe("string");
+      expect(spawn.maskSalt!.length).toBeGreaterThan(0);
+    } finally {
+      if (prevMaster === undefined) delete process.env.MIDPLANE_MASK_SALT_MASTER;
+      else process.env.MIDPLANE_MASK_SALT_MASTER = prevMaster;
+    }
+  });
+
+  it("503 when a db declares column_masks but MIDPLANE_MASK_SALT_MASTER is unset — never boots a mask-less container", async () => {
+    const prevMaster = process.env.MIDPLANE_MASK_SALT_MASTER;
+    delete process.env.MIDPLANE_MASK_SALT_MASTER;
+    try {
+      getConnMock = vi.fn(async () => ({
+        project: CONN,
+        databases: [makeDb("main", undefined, { "public.users": { email: "full-redact" } })],
+      }));
+      const { POST } = await loadRoute();
+      const res = await POST(jsonRequest(PROBES_BODY), params);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ detail: "masking misconfigured" });
+      expect(dryRunMock).not.toHaveBeenCalled();
+    } finally {
+      if (prevMaster === undefined) delete process.env.MIDPLANE_MASK_SALT_MASTER;
+      else process.env.MIDPLANE_MASK_SALT_MASTER = prevMaster;
+    }
   });
 
   it("fans guardrail_sqls out as single-statement sql requests after the probe matrix", async () => {

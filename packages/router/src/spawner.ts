@@ -89,6 +89,40 @@ interface RegistryEntry {
   region: Region;
   idleTimer: ReturnType<typeof setTimeout>;
   lastTouchedAt: number;
+  /** Fingerprint of the BOOT-TIME-ONLY config this container was spawned with
+   *  (see {@link bootFingerprint}). A warm container can't hot-reload masking,
+   *  so a later request with a different fingerprint must respawn, not reuse. */
+  bootFingerprint: string;
+}
+
+// Fingerprint of the engine config a warm container CANNOT hot-reload:
+// column_masks (per DB) and the mask salt. The engine reads these once at
+// construction, so reusing a container booted with a different fingerprint would
+// serve a wrong — possibly UNMASKED — result set (a masking bypass). table_access
+// / tenant_scope / guardrails are deliberately EXCLUDED: those are pushed to a
+// live container via /admin/policy, so an edit keeps a warm container current
+// without a respawn, and folding them in here would respawn on every policy
+// tweak. Canonical (sorted) so identical config always yields the same string.
+export function bootFingerprint(opts: SpawnOptions): string {
+  const dbs = [...opts.databases]
+    .map((d) => {
+      const cols = d.columnMasks ?? {};
+      const body = Object.keys(cols)
+        .sort()
+        .map((t) => {
+          const inner = cols[t]!;
+          const rules = Object.keys(inner)
+            .sort()
+            .map((c) => `${c}=${JSON.stringify(inner[c])}`)
+            .join(",");
+          return `${t}{${rules}}`;
+        })
+        .join(",");
+      return `${d.name}[${body}]`;
+    })
+    .sort()
+    .join("|");
+  return `salt:${opts.maskSalt ?? ""}#masks:${dbs}`;
 }
 
 export interface ActiveContainer {
@@ -120,10 +154,19 @@ export class ContainerRegistry {
 
   async acquire(opts: SpawnOptions): Promise<SpawnedContainer> {
     const key = opts.projectId;
+    const fingerprint = bootFingerprint(opts);
     const existing = this.entries.get(key);
     if (existing) {
-      this.touch(key, existing);
-      return existing.container;
+      if (existing.bootFingerprint === fingerprint) {
+        this.touch(key, existing);
+        return existing.container;
+      }
+      // Boot-time-only config (column_masks / mask salt) differs from how this
+      // warm container booted — it can't hot-reload masking, so reusing it would
+      // serve a wrong (possibly UNMASKED) result set. Evict + spawn fresh. This
+      // is the safety net behind the save-time forceRespawn: it also catches a
+      // failed invalidate, or a spawn path that booted a mask-less container.
+      await this.invalidate(key);
     }
     const pending = this.inflight.get(key);
     if (pending) return pending;
@@ -136,6 +179,7 @@ export class ContainerRegistry {
           region: opts.region,
           idleTimer: this.scheduleStop(key),
           lastTouchedAt: this.now(),
+          bootFingerprint: fingerprint,
         };
         this.entries.set(key, entry);
         return container;

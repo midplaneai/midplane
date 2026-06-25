@@ -11,9 +11,11 @@ import {
   maskRuleLabel,
   normalizeMaskRule,
   parseColumnMasksOrThrow,
+  parseIgnoredColumnsOrThrow,
   PSEUDONYMIZE_KINDS,
   serializeMultiDbPolicyToYaml,
   validateColumnMasks,
+  validateIgnoredColumns,
   type DatabaseEntry,
 } from "../src/policy.ts";
 
@@ -344,5 +346,60 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
   it("an empty columnMasks object emits nothing", () => {
     const yaml = serializeMultiDbPolicyToYaml([entry({ columnMasks: {} })]);
     expect(yaml).not.toContain("column_masks");
+  });
+});
+
+// ignored_columns — scan-view dismissals. Same identifier shapes as
+// column_masks but one level shallower (table -> [column…]); never serialized
+// into the engine YAML, so there's no emitter to test.
+describe("validateIgnoredColumns", () => {
+  it("treats null / undefined as the empty set", () => {
+    expect(validateIgnoredColumns(null)).toEqual({ ok: true, value: {} });
+    expect(validateIgnoredColumns(undefined)).toEqual({ ok: true, value: {} });
+  });
+
+  it("accepts a schema-qualified table mapped to a list of column identifiers", () => {
+    expect(
+      validateIgnoredColumns({ "public.users": ["display_name", "ip_version"] }),
+    ).toEqual({ ok: true, value: { "public.users": ["display_name", "ip_version"] } });
+  });
+
+  it("dedupes repeated columns, order-preserving", () => {
+    expect(
+      validateIgnoredColumns({ "public.users": ["name", "name", "email"] }),
+    ).toEqual({ ok: true, value: { "public.users": ["name", "email"] } });
+  });
+
+  it("drops a table whose column list is empty", () => {
+    expect(validateIgnoredColumns({ "public.users": [] })).toEqual({
+      ok: true,
+      value: {},
+    });
+  });
+
+  it("rejects a non-array value", () => {
+    expect(validateIgnoredColumns({ "public.users": "email" }).ok).toBe(false);
+  });
+
+  it("rejects a non-object top level", () => {
+    expect(validateIgnoredColumns(["public.users"]).ok).toBe(false);
+    expect(validateIgnoredColumns("nope").ok).toBe(false);
+  });
+
+  it("rejects a malformed table identifier", () => {
+    expect(validateIgnoredColumns({ "we;ird": ["email"] }).ok).toBe(false);
+  });
+
+  it("rejects a malformed column identifier", () => {
+    expect(validateIgnoredColumns({ "public.users": ["ema il"] }).ok).toBe(false);
+  });
+
+  it("parseIgnoredColumnsOrThrow returns the value on success and throws on garbage", () => {
+    expect(parseIgnoredColumnsOrThrow({ "public.users": ["email"] })).toEqual({
+      "public.users": ["email"],
+    });
+    expect(() => parseIgnoredColumnsOrThrow({ "we;ird": ["email"] })).toThrow(
+      /invalid ignored_columns/,
+    );
   });
 });
