@@ -9,14 +9,14 @@ import { cn } from "@/lib/utils";
 // The canonical "connect an agent" card (OAuth). One component, one place the
 // connect instructions live — shown on the project Connect pane.
 //
-// Shows this project's MCP endpoint URL — /mcp/<projectId> — plus the per-client
-// config to paste. The path pins the project so the credential binds HERE at
-// consent (the region-wide /mcp would derive the project from the grant set,
-// which can bind a multi-project user to the wrong project). The URL is NOT a
-// secret: the agent authenticates with an OAuth sign-in, and at consent the user
-// grants it access to this project's databases. So it's persistent and copyable,
-// no show-once. Works with any MCP client (Cursor, Claude Code, Claude Desktop,
-// ChatGPT, …).
+// Shows the region-wide MCP endpoint URL — /mcp — plus the per-client config to
+// paste. One URL per account; at sign-in the user chooses which project +
+// databases the agent gets (the consent screen forces an explicit project
+// choice for multi-project users, so it can't silently bind to the wrong one).
+// We name this project in the copy so the user knows which to pick. The URL is
+// NOT a secret: the agent authenticates with an OAuth sign-in, so it's
+// persistent and copyable, no show-once. Works with any MCP client (Cursor,
+// Claude Code, Claude Desktop, ChatGPT, …).
 //
 // For headless agents (CI, workflows) that can't do a browser sign-in, the
 // machine-token list sits below this card — those carry a stored bearer secret.
@@ -53,6 +53,9 @@ export function OAuthConnectGuide({
   const tablistId = useId();
 
   const serverKey = slugify(projectName);
+  // Named in the copy so the user picks the right project at the consent screen
+  // (the URL is account-wide, not project-specific).
+  const projectLabel = projectName?.trim() || "this project";
 
   const cursorJson = `{
   "mcpServers": {
@@ -71,10 +74,11 @@ export function OAuthConnectGuide({
           Connect an agent
         </h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Paste this URL into any MCP client and sign in. The URL is an address,
-          not a secret — at sign-in you grant the agent access to this
-          project&apos;s databases. Works with Cursor, Claude Code, Claude
-          Desktop, ChatGPT, and any other MCP client.
+          Paste this URL into any MCP client and sign in. It&apos;s an address,
+          not a secret. At sign-in, choose{" "}
+          <span className="font-medium text-foreground">{projectLabel}</span> and
+          the databases this agent should reach. Works with Cursor, Claude Code,
+          Claude Desktop, ChatGPT, and any other MCP client.
         </p>
       </div>
 

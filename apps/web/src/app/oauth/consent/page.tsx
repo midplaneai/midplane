@@ -76,15 +76,17 @@ export default async function OAuthConsentPage({
       ? Object.fromEntries(await getOAuthGrantMap(customer, clientId, userId))
       : {};
 
-  // Pre-select the project this credential is already bound to (the project that
-  // owns any prior grant) on a re-consent; otherwise the first project. One
-  // OAuth credential → one project, so the picker binds to exactly one.
+  // Pre-select ONLY the project this credential is already bound to (the project
+  // that owns a prior grant) on a re-consent. Deliberately NO first-project
+  // fallback: the URL is account-wide, so silently defaulting a fresh multi-
+  // project consent to projects[0] is how an agent gets bound to the wrong
+  // project. The form auto-selects when there's exactly one project and
+  // otherwise forces an explicit pick. One OAuth credential → one project.
   const existingCdbIds = new Set(Object.keys(existing));
   const boundProject = projects.find((p) =>
     p.databases.some((d) => existingCdbIds.has(d.projectDatabaseId)),
   );
-  const defaultProjectId =
-    boundProject?.projectId ?? projects[0]?.projectId ?? null;
+  const defaultProjectId = boundProject?.projectId ?? null;
 
   return (
     <main className="flex min-h-screen flex-col">

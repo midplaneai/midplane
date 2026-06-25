@@ -7,7 +7,7 @@ import {
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
 } from "@midplane-cloud/db";
-import { mcpProjectUrl } from "@midplane-cloud/router";
+import { mcpGenericUrl } from "@midplane-cloud/router";
 
 import { ProjectRail } from "@/components/projects/project-rail";
 import { OAuthConnectGuide } from "@/components/projects/oauth-connect-guide";
@@ -190,13 +190,13 @@ export default async function ProjectWorkspace({
       ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
       : undefined;
 
-  // This project's OAuth MCP endpoint — /mcp/<projectId>. Non-secret (auth is
-  // the OAuth sign-in), shown openly with a copy button. The path pins the
-  // project so the credential binds HERE: the region-wide /mcp would derive the
-  // project from the consent grant set instead, which for a multi-project user
-  // can silently bind the agent to the wrong project. Per-project fails closed.
+  // The region-wide OAuth MCP endpoint — /mcp (no id, no token). Non-secret
+  // (auth is the OAuth sign-in), shown openly with a copy button. One URL per
+  // account; the user chooses which project + databases the agent gets at the
+  // consent screen (which forces an explicit project choice for multi-project
+  // users — see consent-form.tsx — so it can't silently bind to the wrong one).
   // Computed server-side so it uses this deployment's real MCP host.
-  const mcpUrl = mcpProjectUrl(conn.region, conn.id, process.env);
+  const mcpUrl = mcpGenericUrl(conn.region, process.env);
 
   // ---- server actions ----------------------------------------------------
 

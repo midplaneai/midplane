@@ -13,9 +13,10 @@ import { writeConsentGrants } from "@/app/oauth/consent/actions";
 // Allow / Deny + project + per-database scope picker for the OAuth consent
 // screen.
 //
-// One OAuth credential is bound to ONE project. The user picks a project (the
-// default project is pre-selected) and then which of that project's databases
-// the agent may reach, at what access.
+// One OAuth credential is bound to ONE project. The user picks a project — auto-
+// selected only when unambiguous (a re-consent's existing binding, or the sole
+// project), otherwise an explicit choice is required — and then which of that
+// project's databases the agent may reach, at what access.
 //
 // On Allow: write the chosen project + per-DB grant set FIRST (server action →
 // mcp_scope_grants, keyed by this OAuth client + the signed-in user), THEN post
@@ -48,8 +49,10 @@ export interface ConsentFormProps {
   consentCode: string;
   clientId: string;
   projects: ConsentProject[];
-  /** Project to pre-select: the credential's current binding on a re-consent,
-   *  else the default project. The form falls back to the first project. */
+  /** Project to pre-select: the credential's current binding on a re-consent, or
+   *  null. No first-project fallback — the form auto-selects only a sole project
+   *  and otherwise forces an explicit pick (account-wide URL, so a silent
+   *  default would bind to the wrong project). */
   defaultProjectId: string | null;
   /** Prior grant (cdbId → access) so a re-consent pre-selects the last choice. */
   existing: Record<string, Access>;
@@ -65,14 +68,21 @@ export function ConsentForm({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // The one project this credential will be bound to. Pre-select the default
-  // (re-consent binding, else the default project), falling back to the first.
+  // The one project this credential will be bound to. Auto-select ONLY when the
+  // choice is unambiguous: a re-consent's existing binding, or the sole project.
+  // With multiple projects and no prior binding we leave it unselected and force
+  // an explicit pick — the URL is account-wide, so a silent default to the first
+  // project is exactly how an agent binds to the wrong one.
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    () =>
-      (defaultProjectId &&
-      projects.some((p) => p.projectId === defaultProjectId)
-        ? defaultProjectId
-        : projects[0]?.projectId) ?? null,
+    () => {
+      if (
+        defaultProjectId &&
+        projects.some((p) => p.projectId === defaultProjectId)
+      ) {
+        return defaultProjectId;
+      }
+      return projects.length === 1 ? (projects[0]?.projectId ?? null) : null;
+    },
   );
   const selectedProject = useMemo(
     () => projects.find((p) => p.projectId === selectedProjectId) ?? null,
@@ -97,6 +107,10 @@ export function ConsentForm({
   const selectedCount = selectedDbs.filter(
     (db) => (state[db.projectDatabaseId] ?? "none") !== "none",
   ).length;
+
+  // Multiple projects and none chosen yet → block Allow until the user picks
+  // one, so a credential is never bound by a silent default.
+  const mustPickProject = projects.length > 1 && !selectedProjectId;
 
   function setDb(cdbId: string, value: DbState) {
     setState((s) => ({ ...s, [cdbId]: value }));
@@ -179,9 +193,14 @@ export function ConsentForm({
                 id="consent-project"
                 value={selectedProjectId ?? ""}
                 disabled={pending}
-                onChange={(e) => setSelectedProjectId(e.target.value)}
+                onChange={(e) =>
+                  setSelectedProjectId(e.target.value || null)
+                }
                 className="w-full border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[hsl(var(--brand))] focus:outline-none disabled:opacity-50"
               >
+                <option value="" disabled>
+                  Choose a project…
+                </option>
                 {projects.map((p) => (
                   <option key={p.projectId} value={p.projectId}>
                     {p.projectName || p.projectId}
@@ -189,7 +208,8 @@ export function ConsentForm({
                 ))}
               </select>
               <p className="text-xs text-subtle">
-                This agent connects to one project. Pick its databases below.
+                This agent connects to one project. Pick it, then choose its
+                databases below.
               </p>
             </div>
           ) : (
@@ -202,50 +222,58 @@ export function ConsentForm({
             </p>
           )}
 
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-foreground">
-              Choose which databases this agent can use
-            </p>
-            <div className="flex gap-3 text-xs">
-              <button
-                type="button"
-                className="text-muted-foreground underline-offset-2 hover:underline"
-                onClick={() => setAll("read")}
-              >
-                All read
-              </button>
-              <button
-                type="button"
-                className="text-subtle underline-offset-2 hover:underline"
-                onClick={() => setAll("none")}
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {selectedDbs.map((db) => (
-              <div
-                key={db.projectDatabaseId}
-                className="flex items-center justify-between gap-3"
-              >
-                <span className="font-mono text-sm text-foreground">
-                  {db.name}
-                </span>
-                <DbAccessControl
-                  value={state[db.projectDatabaseId] ?? "none"}
-                  disabled={pending}
-                  onChange={(v) => setDb(db.projectDatabaseId, v)}
-                />
+          {selectedProject ? (
+            <>
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-foreground">
+                  Choose which databases this agent can use
+                </p>
+                <div className="flex gap-3 text-xs">
+                  <button
+                    type="button"
+                    className="text-muted-foreground underline-offset-2 hover:underline"
+                    onClick={() => setAll("read")}
+                  >
+                    All read
+                  </button>
+                  <button
+                    type="button"
+                    className="text-subtle underline-offset-2 hover:underline"
+                    onClick={() => setAll("none")}
+                  >
+                    Clear
+                  </button>
+                </div>
               </div>
-            ))}
-          </div>
-          <p className="text-xs text-subtle">
-            The agent can only reach the databases you select, at the access you
-            grant. Each database&apos;s own policy and guardrails still apply on
-            top.
-          </p>
+
+              <div className="space-y-2">
+                {selectedDbs.map((db) => (
+                  <div
+                    key={db.projectDatabaseId}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <span className="font-mono text-sm text-foreground">
+                      {db.name}
+                    </span>
+                    <DbAccessControl
+                      value={state[db.projectDatabaseId] ?? "none"}
+                      disabled={pending}
+                      onChange={(v) => setDb(db.projectDatabaseId, v)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-subtle">
+                The agent can only reach the databases you select, at the access
+                you grant. Each database&apos;s own policy and guardrails still
+                apply on top.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Choose a project above to pick the databases this agent can use.
+            </p>
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
@@ -269,12 +297,19 @@ export function ConsentForm({
         >
           Deny
         </Button>
-        <Button type="button" disabled={pending} onClick={() => decide(true)} arrow>
+        <Button
+          type="button"
+          disabled={pending || mustPickProject}
+          onClick={() => decide(true)}
+          arrow
+        >
           {pending
             ? "Authorizing…"
-            : hasDbs
-              ? `Allow access${selectedCount > 0 ? ` to ${selectedCount}` : ""}`
-              : "Allow access"}
+            : mustPickProject
+              ? "Choose a project"
+              : hasDbs
+                ? `Allow access${selectedCount > 0 ? ` to ${selectedCount}` : ""}`
+                : "Allow access"}
         </Button>
       </div>
     </div>
