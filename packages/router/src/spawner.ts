@@ -140,7 +140,12 @@ export interface ContainerRegistryOptions {
 
 export class ContainerRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
-  private readonly inflight = new Map<string, Promise<SpawnedContainer>>();
+  // The fingerprint rides with the in-flight promise so a concurrent request
+  // with a DIFFERENT boot config doesn't get handed a spawn it didn't ask for.
+  private readonly inflight = new Map<
+    string,
+    { promise: Promise<SpawnedContainer>; fingerprint: string }
+  >();
   private readonly idleMs: number;
   private readonly now: () => number;
 
@@ -169,7 +174,17 @@ export class ContainerRegistry {
       await this.invalidate(key);
     }
     const pending = this.inflight.get(key);
-    if (pending) return pending;
+    if (pending) {
+      if (pending.fingerprint === fingerprint) return pending.promise;
+      // A spawn with a DIFFERENT boot config is already in flight (e.g. a
+      // mask-less dry-run spawn racing a masked proxy/preview request). Handing
+      // it back would bypass the fingerprint guard, so wait for it to settle,
+      // then re-acquire: the now-completed (mismatched) entry is evicted and
+      // respawned with THIS request's config. Per-project container names are
+      // unique, so two spawns can't run at once anyway — we have to serialize.
+      await pending.promise.catch(() => undefined);
+      return this.acquire(opts);
+    }
 
     const promise = (async () => {
       try {
@@ -187,7 +202,7 @@ export class ContainerRegistry {
         this.inflight.delete(key);
       }
     })();
-    this.inflight.set(key, promise);
+    this.inflight.set(key, { promise, fingerprint });
     return promise;
   }
 
@@ -234,7 +249,7 @@ export class ContainerRegistry {
     // settle (success or failure), then evict whatever ended up there.
     const pending = this.inflight.get(projectId);
     if (pending) {
-      await pending.catch(() => undefined);
+      await pending.promise.catch(() => undefined);
     }
     const entry = this.entries.get(projectId);
     if (!entry) return;

@@ -101,6 +101,27 @@ describe("ContainerRegistry", () => {
     expect(stub.calls).toBe(2);
   });
 
+  it("does NOT hand an in-flight mask-less spawn to a concurrent masked request", async () => {
+    const stub = new StubSpawner();
+    stub.delayMs = 40; // keep the first spawn in flight while the second arrives
+    const reg = new ContainerRegistry(stub);
+    // A mask-less spawn is mid-flight (e.g. a dry-run)…
+    const coldP = reg.acquire(opts("01HXYZCONN000000000000000A"));
+    // …when a masked request for the SAME project arrives before it lands.
+    const maskedP = reg.acquire(
+      opts("01HXYZCONN000000000000000A", {
+        columnMasks: { "public.users": { email: "full-redact" } },
+        maskSalt: "salt-1",
+      }),
+    );
+    const [cold, masked] = await Promise.all([coldP, maskedP]);
+    // The masked request must NOT be served the in-flight mask-less container —
+    // it waits, then respawns with masking. (Was the bypass at spawner.ts:172.)
+    expect(stub.calls).toBe(2);
+    expect(masked.port).not.toBe(cold.port);
+    expect(reg.size()).toBe(1); // only the masked container survives
+  });
+
   it("bootFingerprint is canonical — column order doesn't matter (no spurious respawn)", () => {
     const a = opts("01HXYZCONN000000000000000A", {
       columnMasks: { "public.users": { email: "full-redact", ssn: "null-out" } },
