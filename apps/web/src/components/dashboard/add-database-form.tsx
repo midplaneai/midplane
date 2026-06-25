@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 //
 // State model: form fields are uncontrolled inputs — we read values
 // out via FormData in the submit handler. The pre-submit
-// [Test project] button is the one place we have to peek into the
+// [Test connection] button is the one place we have to peek into the
 // inputs early, so we keep refs into the form for that probe.
 //
 // Submit flow: client-side validates the name regex (matches OSS

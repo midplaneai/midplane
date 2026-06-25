@@ -4,7 +4,6 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Plus, X } from "lucide-react";
 import { useId, useState, useTransition } from "react";
 
-import { ConnectAgentGuide } from "@/components/projects/connect-agent-guide";
 import {
   DbAccessControl,
   type ScopeDbState,
@@ -61,11 +60,6 @@ interface CreateTokenModalProps {
   /** This project's databases, for the per-DB scope picker (P6.1). The
    *  token is granted access only to the ones selected, at the chosen access. */
   databases?: Array<{ projectDatabaseId: string; name: string }>;
-  /** Used to label the MCP server key in the setup snippets. */
-  projectName?: string | null;
-  /** The region-wide OAuth endpoint (mcpGenericUrl) for the setup snippets,
-   *  computed server-side so it uses the deployment's real MCP host. */
-  oauthUrl: string;
   /** Override the trigger button label (e.g. "Connect your first agent"). */
   triggerLabel?: string;
   /** When the org is already at its token cap, the modal opens to a limit
@@ -103,8 +97,6 @@ export function CreateTokenModal({
   projectId,
   action,
   databases = [],
-  projectName,
-  oauthUrl,
   triggerLabel = "Connect an agent",
   limitReached,
 }: CreateTokenModalProps) {
@@ -273,8 +265,6 @@ export function CreateTokenModal({
           ) : mcpUrl ? (
             <SuccessPanel
               mcpUrl={mcpUrl}
-              projectName={projectName}
-              oauthUrl={oauthUrl}
               locked={locked}
               remaining={remaining}
               onClose={() => handleOpenChange(false)}
@@ -409,15 +399,11 @@ export function CreateTokenModal({
 
 function SuccessPanel({
   mcpUrl,
-  projectName,
-  oauthUrl,
   locked,
   remaining,
   onClose,
 }: {
   mcpUrl: string;
-  projectName?: string | null;
-  oauthUrl: string;
   /** True while the dismiss countdown is still running. */
   locked: boolean;
   /** Seconds left on that countdown (for the button label). */
@@ -436,12 +422,6 @@ function SuccessPanel({
         </DialogPrimitive.Description>
       </div>
       <ShowOnceUrl mcpUrl={mcpUrl} />
-      <ConnectAgentGuide
-        projectName={projectName}
-        oauthUrl={oauthUrl}
-        tokenUrl={mcpUrl}
-        primary="token"
-      />
       <div className="flex items-center justify-end pt-2">
         <Button
           size="sm"

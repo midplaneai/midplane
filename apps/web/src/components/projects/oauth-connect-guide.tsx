@@ -3,17 +3,23 @@
 import { useId, useState } from "react";
 
 import { CopyButton } from "@/components/copy-button";
+import { DOCS_CONNECT_AGENT_URL } from "@/lib/docs";
 import { cn } from "@/lib/utils";
 
-// The interactive-agent connect card (OAuth).
+// The canonical "connect an agent" card (OAuth). One component, one place the
+// connect instructions live — shown on the project Connect pane.
 //
-// Shows this project's MCP endpoint URL — /mcp/<projectId> — plus the
-// per-client config to paste. Unlike the old token URL, the project id is
-// NOT a secret: the agent authenticates with an OAuth sign-in, not the URL. So
-// the URL is persistent and copyable, no show-once, no "treat as a password".
+// Shows the region-wide MCP endpoint URL — /mcp — plus the per-client config to
+// paste. One URL per account; at sign-in the user chooses which project +
+// databases the agent gets (the consent screen forces an explicit project
+// choice for multi-project users, so it can't silently bind to the wrong one).
+// We name this project in the copy so the user knows which to pick. The URL is
+// NOT a secret: the agent authenticates with an OAuth sign-in, so it's
+// persistent and copyable, no show-once. Works with any MCP client (Cursor,
+// Claude Code, Claude Desktop, ChatGPT, …).
 //
 // For headless agents (CI, workflows) that can't do a browser sign-in, the
-// API-token list sits below this card — those carry a stored bearer secret.
+// machine-token list sits below this card — those carry a stored bearer secret.
 //
 // "use client" + no `@midplane-cloud/db` import keeps this off the Node-only
 // driver path (see CLAUDE.md). CopyButton is already a client island.
@@ -23,7 +29,7 @@ type Client = "cursor" | "claude" | "desktop";
 const TABS: { id: Client; label: string }[] = [
   { id: "cursor", label: "cursor" },
   { id: "claude", label: "claude code" },
-  { id: "desktop", label: "claude desktop" },
+  { id: "desktop", label: "claude desktop / chatgpt" },
 ];
 
 function slugify(name: string | null | undefined): string {
@@ -47,6 +53,9 @@ export function OAuthConnectGuide({
   const tablistId = useId();
 
   const serverKey = slugify(projectName);
+  // Named in the copy so the user picks the right project at the consent screen
+  // (the URL is account-wide, not project-specific).
+  const projectLabel = projectName?.trim() || "this project";
 
   const cursorJson = `{
   "mcpServers": {
@@ -62,19 +71,21 @@ export function OAuthConnectGuide({
     <div className={cn("border border-border bg-card", className)}>
       <div className="px-4 pt-4">
         <h3 className="text-sm font-medium text-foreground">
-          Connect an interactive agent
+          Connect an agent
         </h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Paste this project&apos;s endpoint into your client. On first
-          connect a browser opens — sign in to Midplane and approve. The URL is
-          an address, not a secret; the sign-in is what grants access.
+          Paste this URL into any MCP client and sign in. It&apos;s an address,
+          not a secret. At sign-in, choose{" "}
+          <span className="font-medium text-foreground">{projectLabel}</span> and
+          the databases this agent should reach. Works with Cursor, Claude Code,
+          Claude Desktop, ChatGPT, and any other MCP client.
         </p>
       </div>
 
       {/* The endpoint URL itself — always visible + copyable (not a secret). */}
       <div className="mt-3 px-4">
         <div className="mb-1.5 font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
-          mcp endpoint
+          mcp server url
         </div>
         <div className="flex items-center gap-2">
           <code className="flex-1 overflow-x-auto border border-border bg-secondary px-3 py-2 font-mono text-[12px] text-muted-foreground">
@@ -122,15 +133,25 @@ export function OAuthConnectGuide({
         {active === "desktop" && (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              Settings → Connectors → <span className="font-medium">Add custom connector</span>,
-              then paste the endpoint URL above.
+              In Claude Desktop or ChatGPT: Settings → Connectors →{" "}
+              <span className="font-medium">Add custom connector</span>, then
+              paste the URL above.
             </p>
           </div>
         )}
 
         <p className="text-[11px] text-subtle">
           No token to copy — your client registers itself and you sign in once.
-          Revoke access any time by pausing or deleting the project.
+          Revoke access any time from the agent list below, or by pausing the
+          project.{" "}
+          <a
+            href={DOCS_CONNECT_AGENT_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[hsl(var(--brand))] underline underline-offset-2"
+          >
+            Read the docs →
+          </a>
         </p>
       </div>
     </div>

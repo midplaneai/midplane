@@ -1,9 +1,8 @@
-// Live UX E2E for the token-management surface (PR3 of
-// mcp_url_auth_security). Drives the dashboard pages a real customer
-// sees: create project → success page renders the URL → project
-// detail page lists the default token → open the create-token modal
-// → fill the form → see the show-once URL → close modal → list shows
-// the new row → revoke the original token → list shows Revoked.
+// Live UX E2E for the agent-management surface. Drives the dashboard pages a
+// real customer sees: create project → land on the Connect tab (OAuth-first,
+// so no auto-minted token) → the agent list is empty → open the create-token
+// modal → fill the form → see the show-once URL → save it → list shows the new
+// machine-token agent → revoke it → list shows Revoked.
 //
 // Does NOT exercise the MCP runtime (that's mcp-proxy.live.e2e.ts and
 // tokens.live.e2e.ts). Does NOT need Docker — the only Server Action
@@ -70,7 +69,7 @@ test.afterAll(async () => {
   await cleanup({ userId, orgId });
 });
 
-test("create project → mint second token → revoke default → list reflects state", async ({
+test("create project → mint machine token → revoke → list reflects state", async ({
   page,
 }) => {
   testEmail = freshTestEmail();
@@ -82,62 +81,34 @@ test("create project → mint second token → revoke default → list reflects 
   // auto-create one) and lands on /dashboard.
   ({ orgId } = await onboard(page));
 
-  // A throwaway DSN; we never dial it. createProject encrypts at
-  // rest and auto-mints the default token — that's the only behavior
-  // this test exercises before navigating to the UX surface.
+  // A throwaway DSN; we never dial it. createProject encrypts at rest. The web
+  // flow is OAuth-first, so NO token is auto-minted — the create lands on the
+  // Connect tab with an empty agent list.
   await page.goto("/projects/new");
   await page.getByLabel(/name/i).fill("e2e-ux");
   await page
     .getByLabel(/database_url/i)
     .fill("postgres://user:pass@nowhere.local:5432/db?sslmode=disable");
   await page.getByRole("button", { name: /^connect$/i }).click();
-  await page.waitForURL(/\/projects\/[A-Z0-9]+\/created/i, {
+  await page.waitForURL(/\/projects\/[0-9A-HJKMNP-TV-Z]{26}(\?|$)/i, {
     timeout: 15_000,
   });
 
   const urlPath = new URL(page.url()).pathname;
-  const match = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
-    urlPath,
-  );
+  const match = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})/i.exec(urlPath);
   if (!match?.[1]) throw new Error(`could not parse conn id from ${urlPath}`);
   projectId = match[1];
 
-  // Success page shows the default token URL exactly once. Format gate
-  // matches the lib's prefix + 32 hex + 6-char checksum.
-  const defaultUrl = await page
-    .getByTestId("show-once-url")
-    .first()
-    .inputValue();
-  expect(defaultUrl).toMatch(
-    /^https?:\/\/.+\/mcp\/mp_(live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6}$/,
-  );
-
-  // Navigate to the project detail page. The "I've saved it" button is
-  // gated by a short countdown (it stays disabled for a few seconds);
-  // Playwright's click auto-waits for it to become enabled. The default
-  // token (named "default" by createProject) must appear in the list.
-  await page.getByTestId("saved-it").click();
-  await page.waitForURL(`**/projects/${projectId}`, { timeout: 10_000 });
-  // The project page defaults to the Database section; tokens live under the
-  // Agents section. Go there directly.
-  await page.goto(`/projects/${projectId}?section=agents`);
-  const list = page.getByTestId("token-list");
+  // On the Connect tab the agent list starts empty — no auto-minted token.
+  await page.goto(`/projects/${projectId}?section=connect`);
+  const list = page.getByTestId("agent-list");
   await expect(list).toBeVisible();
-  const defaultRow = list.locator('[data-testid="token-row"]', {
-    hasText: "default",
-  });
-  await expect(defaultRow).toBeVisible();
-  // data-status is on the token-row <li> itself, not a descendant.
-  await expect(defaultRow).toHaveAttribute(
-    "data-status",
-    /active|expiring|stale/,
-  );
+  await expect(list).toHaveAttribute("data-state", "empty");
 
-  // Open the connect-an-agent modal, fill it, submit. The show-once URL
-  // surface should replace the form. Anchor the trigger name so it
-  // doesn't also match the "how to connect an agent" disclosure summary
-  // rendered on the same (populated) page.
-  await page.getByRole("button", { name: /^connect an agent$/i }).click();
+  // Open the create-token modal, fill it, submit. The show-once URL surface
+  // replaces the form. The project's single DB defaults to read scope, so the
+  // form submits as-is.
+  await page.getByRole("button", { name: /^create machine token$/i }).click();
   await page.getByLabel(/name/i).fill("ci-bot");
   await page.getByLabel(/expiry/i).selectOption("30");
   await page.getByRole("button", { name: /^connect agent$/i }).click();
@@ -146,31 +117,30 @@ test("create project → mint second token → revoke default → list reflects 
   expect(modalUrl).toMatch(
     /^https?:\/\/.+\/mcp\/mp_(live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6}$/,
   );
-  // Two different tokens — the modal shouldn't echo the default token.
-  expect(modalUrl).not.toBe(defaultUrl);
 
   await page.getByTestId("ive-saved-it").click();
 
-  // Both tokens now visible.
-  await expect(
-    list.locator('[data-testid="token-row"]', { hasText: "ci-bot" }),
-  ).toBeVisible();
-  await expect(defaultRow).toBeVisible();
+  // The new machine-token agent now shows in the list.
+  const botRow = list.locator('[data-testid="agent-row"]', {
+    hasText: "ci-bot",
+  });
+  await expect(botRow).toBeVisible();
+  await expect(botRow).toHaveAttribute("data-status", /active|expiring|stale/);
+  await expect(botRow).toHaveAttribute("data-agent-kind", "url");
 
-  // Revoke the default token. Confirm dialog opens, click Revoke, the
-  // row's status should flip to Revoked on the refreshed list.
-  await defaultRow.getByTestId("revoke-token").click();
-  await page.getByRole("alertdialog").getByRole("button", { name: /^revoke$/i }).click();
+  // Revoke it. Confirm dialog opens, click Revoke, the row's status flips to
+  // Revoked on the refreshed list (revalidatePath re-renders the tree).
+  await botRow.getByTestId("revoke-token").click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: /^revoke$/i })
+    .click();
 
-  // Wait for the row to re-render with the revoked status. Server
-  // Action calls revalidatePath; Next refreshes the Server Component
-  // tree. The row stays in the list (history is preserved) — only the
-  // badge / actions change.
-  await expect(defaultRow).toHaveAttribute("data-status", "revoked", {
+  await expect(botRow).toHaveAttribute("data-status", "revoked", {
     timeout: 10_000,
   });
   // Revoked rows lose the per-row revoke button.
-  await expect(defaultRow.getByTestId("revoke-token")).toHaveCount(0);
+  await expect(botRow.getByTestId("revoke-token")).toHaveCount(0);
 });
 
 void testEmail;

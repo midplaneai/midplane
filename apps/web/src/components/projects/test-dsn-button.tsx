@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 
-// Pre-submit [Test project] button shared by the new-project form
+// Pre-submit [Test connection] button shared by the new-project form
 // and the add-database form. Reads the `dsn` field from its enclosing
 // <form> (both forms name the input "dsn"), POSTs it to the given
 // endpoint, and renders the result inline. Parents reset the status on
@@ -77,7 +77,7 @@ export function TestDsnButton({
           if (form) void run(form);
         }}
       >
-        {test.kind === "pending" ? "Testing…" : "Test project"}
+        {test.kind === "pending" ? "Testing…" : "Test connection"}
       </Button>
       <TestStatus state={test} />
     </>

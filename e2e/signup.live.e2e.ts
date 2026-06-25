@@ -139,27 +139,35 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   await page.getByLabel(/database_url/i).fill(customerDsn);
   await page.getByRole("button", { name: /^connect$/i }).click();
-  // PR2 of mcp_url_auth_security: the create flow redirects to a
-  // per-project success page at /projects/<id>/created where the
-  // plaintext URL is shown exactly once.
-  await page.waitForURL(/\/projects\/[A-Z0-9]+\/created/i, {
+  // OAuth-first: the create flow lands on the project's Connect tab (no
+  // show-once token on the happy path — interactive agents connect over OAuth).
+  // Parse the project id from the URL.
+  await page.waitForURL(/\/projects\/[0-9A-HJKMNP-TV-Z]{26}(\?|$)/i, {
     timeout: 15_000,
   });
   const urlPath = new URL(page.url()).pathname;
-  const connIdMatch = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
-    urlPath,
-  );
+  const connIdMatch = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})/i.exec(urlPath);
   if (!connIdMatch?.[1]) {
     throw new Error(`could not parse project id from ${urlPath}`);
   }
   projectId = connIdMatch[1];
+  // Container naming is project-id keyed. The slice matches the spawner's
+  // `midplane-${projectId.slice(0, 16).toLowerCase()}`.
+  proxiedContainerName = `midplane-${projectId.slice(0, 16).toLowerCase()}`;
 
-  // 4. MCP URL is rendered on the success page; reading it from the DOM
-  // proves the dashboard surfaces what an actual user would copy into
-  // Cursor. PR2 of mcp_url_auth_security: the token format is now
-  // `mp_(live|test)_<32 hex>_<6 base32>` (47 chars) — the regex below
-  // matches both env families.
-  const mcpUrl = await page.locator("input[readonly]").first().inputValue();
+  // 4. An automated test can't do the interactive OAuth sign-in, so mint a
+  // machine token explicitly from the Connect tab and read its show-once URL —
+  // the same URL a user copies into CI. Token format is
+  // `mp_(live|test)_<32 hex>_<6 base32>`; the regex matches both env families.
+  await page.goto(`/projects/${projectId}?section=connect`);
+  await page
+    .getByRole("button", { name: /^create machine token$/i })
+    .click();
+  await page.getByLabel(/name/i).fill("e2e-bot");
+  await page.getByLabel(/expiry/i).selectOption("30");
+  // The single DB defaults to read scope, so the form submits as-is.
+  await page.getByRole("button", { name: /^connect agent$/i }).click();
+  const mcpUrl = await page.getByTestId("show-once-url").inputValue();
   expect(mcpUrl).toMatch(
     /^https?:\/\/.+\/mcp\/mp_(live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6}$/,
   );
@@ -168,9 +176,6 @@ test("signup → paste DSN → MCP query → audit row visible within 15s", asyn
   );
   if (!tokenMatch?.[1]) throw new Error(`could not parse mcp token from ${mcpUrl}`);
   mcpToken = tokenMatch[1];
-  // Container naming switched to project-id keying (PR2). The slice
-  // matches the spawner's `midplane-${projectId.slice(0, 16).toLowerCase()}`.
-  proxiedContainerName = `midplane-${projectId.slice(0, 16).toLowerCase()}`;
 
   // 5. Hit the MCP URL exactly the way Cursor would: initialize, ack,
   // tools/call. baseURL is rewritten in case the rendered MIDPLANE_PUBLIC_HOST
