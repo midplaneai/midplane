@@ -334,7 +334,7 @@ function RowsResult({
         role="status"
       >
         <span className="text-sm font-medium text-[hsl(var(--allow))]">
-          ✓ this is what your agent receives
+          ✓ This is what your agent receives
         </span>
         <span className="text-xs text-muted-foreground">
           {rows.length === 0
