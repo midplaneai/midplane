@@ -1,9 +1,7 @@
 import { getOrgContext } from "@/lib/org-context";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { ACCESS_LEVELS, type AccessLevel } from "@midplane-cloud/db/policy";
-import { mintMcpUrl } from "@midplane-cloud/router";
 
 import {
   NewProjectForm,
@@ -32,17 +30,6 @@ import {
   UPGRADE_URL,
 } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
-import { SHOW_ONCE_COOKIE } from "@/lib/show-once-cookie";
-
-// PR2 of mcp_url_auth_security: a fresh project mints a default token
-// whose plaintext is delivered ONCE via an httpOnly cookie set in the
-// server action and consumed by the post-create success page's
-// ShowOnceUrl client island (which fires a Server Action to delete the
-// cookie). The cookie has a 5-minute TTL so a long-tail browser-back
-// doesn't keep the URL retrievable. PR3 replaces this with a proper
-// token management surface; this is the minimal stub specified by the
-// design doc.
-const SHOW_ONCE_TTL_SECONDS = 5 * 60;
 
 export default async function NewProject() {
   const customer = await currentCustomer();
@@ -210,15 +197,19 @@ async function createAction(
 
   const entitlement = await resolvePlan();
   let id: string;
-  let defaultTokenPlaintext: string;
   try {
-    ({ id, defaultTokenPlaintext } = await createProject(
+    // OAuth-first: no auto-minted token. The user lands on the project's
+    // Connect tab and points an agent at the OAuth URL (or mints a machine
+    // token explicitly). mintDefaultToken=false also keeps the create from
+    // consuming a token slot on a credential nobody would ever see.
+    ({ id } = await createProject(
       customer,
       dsn,
       name,
       defaultAccess,
       userId,
       entitlement,
+      false,
     ));
   } catch (err) {
     if (err instanceof PlanLimitError) {
@@ -232,7 +223,6 @@ async function createAction(
     }
     throw err;
   }
-  const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
 
   getPostHog()?.capture({
     distinctId: userId,
@@ -245,19 +235,8 @@ async function createAction(
     },
   });
 
-  // Stash the plaintext URL in an httpOnly cookie. The success page
-  // reads + deletes it; a reload of the success page shows the
-  // "already consumed" state so the plaintext never appears twice in
-  // the user's view. 5-minute TTL bounds the leakage window if the user
-  // walks away from the browser between create and success-page-read.
-  const c = await cookies();
-  c.set(SHOW_ONCE_COOKIE, mcpUrl, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: SHOW_ONCE_TTL_SECONDS,
-    path: "/",
-  });
-
-  redirect(`/projects/${id}/created`);
+  // Land on the project's Connect tab with a one-time "created" flag so the
+  // pane can flash a success banner. No show-once secret to carry across the
+  // redirect — the connect URL is non-secret and lives on the page itself.
+  redirect(`/projects/${id}?section=connect&created=1`);
 }

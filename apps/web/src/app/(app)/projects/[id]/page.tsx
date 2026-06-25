@@ -7,7 +7,7 @@ import {
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
 } from "@midplane-cloud/db";
-import { mcpGenericUrl, mcpProjectUrl } from "@midplane-cloud/router";
+import { mcpGenericUrl } from "@midplane-cloud/router";
 
 import { ProjectRail } from "@/components/projects/project-rail";
 import { OAuthConnectGuide } from "@/components/projects/oauth-connect-guide";
@@ -30,7 +30,7 @@ import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/projects/rename-database-control";
 import { RotateCredentialSheet } from "@/components/projects/rotate-credential-sheet";
-import { TokenList } from "@/components/tokens/token-list";
+import { AgentList } from "@/components/tokens/agent-list";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
@@ -73,7 +73,7 @@ import {
   pingTestKey,
 } from "@/lib/rate-limit";
 import { REGION_LABELS } from "@/lib/region";
-import { listTokens } from "@/lib/tokens";
+import { listProjectAgents } from "@/lib/tokens";
 
 import { createTokenAction, revokeTokenAction } from "./token-actions";
 
@@ -100,7 +100,7 @@ export default async function ProjectWorkspace({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ section?: string; db?: string }>;
+  searchParams: Promise<{ section?: string; db?: string; created?: string }>;
 }) {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
@@ -111,26 +111,29 @@ export default async function ProjectWorkspace({
   const canManage = await isManager();
 
   const { id } = await params;
-  const { section, db } = await searchParams;
+  const { section, db, created } = await searchParams;
+  // Set by the create flow's redirect (?created=1) so the Connect pane can flash
+  // a one-time "project created" banner. Purely cosmetic.
+  const justCreated = created === "1";
   const initialSection: ProjectSection = SECTION_VALUES.includes(
     section as ProjectSection,
   )
     ? (section as ProjectSection)
     : // A member's useful landing is their connect URL, not the (hidden)
-      // table-permissions editor — default them to the Agents pane.
+      // table-permissions editor — default them to the Connect pane.
       canManage
       ? "database"
-      : "agents";
+      : "connect";
 
   const { plan, caps } = await resolvePlan();
-  const [home, tokens, usage] = await Promise.all([
+  const [home, agents, usage] = await Promise.all([
     getProjectHomeData(customer, id, caps.auditRetentionDays),
-    listTokens(customer, id),
+    listProjectAgents(customer, id),
     getPlanUsage(customer),
   ]);
   if (!home) notFound();
   const { project: conn, databases, cursor } = home;
-  if (tokens === null) notFound();
+  if (agents === null) notFound();
 
   const label = projectLabel(conn);
 
@@ -187,11 +190,9 @@ export default async function ProjectWorkspace({
       ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
       : undefined;
 
-  // This project's OAuth MCP endpoint — /mcp/<projectId>. Non-secret
-  // (auth is the OAuth sign-in), so it's shown openly with a copy button.
-  const mcpUrl = mcpProjectUrl(conn.region, conn.id, process.env);
-  // The region-wide OAuth endpoint — /mcp (no id, no token), the default the
-  // connect snippets lead with. Computed here (server) so it uses this
+  // The region-wide OAuth MCP endpoint — /mcp (no id, no token). Non-secret
+  // (auth is the OAuth sign-in), shown openly with a copy button; it's the URL
+  // the connect card leads with. Computed here (server) so it uses this
   // deployment's real MCP host, not a hardcoded *.midplane.ai.
   const oauthMcpUrl = mcpGenericUrl(conn.region, process.env);
 
@@ -755,45 +756,38 @@ export default async function ProjectWorkspace({
     </>
   );
 
-  const agentsPane = (
-    <div className="space-y-8">
-      {/* Interactive agents (Claude Code, Cursor, Claude Desktop) — OAuth. The
-          human signs in once; the endpoint URL isn't a secret. */}
-      <section className="space-y-3">
-        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-          Interactive agents
-        </span>
-        <OAuthConnectGuide projectName={conn.name} mcpUrl={mcpUrl} />
-      </section>
+  const connectPane = (
+    <div className="space-y-6">
+      {justCreated ? (
+        <div
+          role="status"
+          className="rounded-md border border-[hsl(var(--allow)/0.4)] bg-[hsl(var(--allow)/0.08)] px-3 py-2 text-xs text-[hsl(var(--allow))]"
+        >
+          Project created. Connect your first agent below — point it at the URL
+          and sign in.
+        </div>
+      ) : null}
 
-      {/* Headless agents (CI, scheduled jobs, unattended workflows) — a stored
-          API-token secret, since there's no browser to sign in. Minting and
-          revoking tokens is owner/admin only, so the whole surface is hidden
-          from members (who connect via the OAuth guide above). */}
+      {/* The connect card owns the "how to connect" instructions (OAuth URL +
+          per-client config). One card, shown once. The agent it grants is bound
+          to this project's databases at sign-in; the URL itself isn't a secret. */}
+      <OAuthConnectGuide projectName={conn.name} mcpUrl={oauthMcpUrl} />
+
+      {/* The connected-agents list (OAuth clients + machine tokens, each with
+          its DB scope + revoke). Management is owner/admin only, so members see
+          the connect card above but not this list — they connect via OAuth. */}
       {canManage && (
-        <section className="space-y-3">
-          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-            Headless agents
-          </span>
-          <p className="text-xs text-muted-foreground">
-            For CI, scheduled jobs, or unattended workflows that can&apos;t do a
-            browser sign-in. Mint a token, store it as a secret, and revoke it
-            the moment a laptop or runner is compromised.
-          </p>
-          <TokenList
-            projectId={conn.id}
-            projectName={conn.name}
-            oauthUrl={oauthMcpUrl}
-            databases={databases.map((d) => ({
-              projectDatabaseId: d.id,
-              name: d.name,
-            }))}
-            tokens={tokens}
-            createAction={createTokenAction}
-            revokeAction={revokeTokenAction}
-            tokenLimit={tokenLimit}
-          />
-        </section>
+        <AgentList
+          projectId={conn.id}
+          agents={agents}
+          databases={databases.map((d) => ({
+            projectDatabaseId: d.id,
+            name: d.name,
+          }))}
+          createAction={createTokenAction}
+          revokeAction={revokeTokenAction}
+          tokenLimit={tokenLimit}
+        />
       )}
     </div>
   );
@@ -947,7 +941,7 @@ export default async function ProjectWorkspace({
             panes={{
               database: databasePane,
               exposure: exposurePane,
-              agents: agentsPane,
+              connect: connectPane,
               settings: settingsPane,
             }}
           />

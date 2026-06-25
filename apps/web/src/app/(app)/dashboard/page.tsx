@@ -48,10 +48,9 @@ export default async function Dashboard({
   const customer = await currentCustomer();
   if (!customer) redirect("/signup/region");
 
-  // PR1's create flow redirected to /dashboard?setup=<id> to auto-open
-  // the agent setup sheet. PR2 routes new projects through the
-  // dedicated /projects/<id>/created success page instead. Strip
-  // the stale param if a bookmarked URL still carries it.
+  // An older create flow redirected to /dashboard?setup=<id> to auto-open
+  // the agent setup sheet. New projects now land on the project's Connect
+  // tab instead. Strip the stale param if a bookmarked URL still carries it.
   void searchParams;
 
   // Owner/admin can add, pause, and delete projects; a member operates them
@@ -293,7 +292,7 @@ function ProjectCard({
           </Link>
 
           <Link
-            href={`/projects/${c.id}?section=agents`}
+            href={`/projects/${c.id}?section=connect`}
             className={statTile}
           >
             <div

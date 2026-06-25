@@ -541,6 +541,35 @@ describe("createProject plan caps", () => {
     expect(tokenIdx, "default token must be inserted").toBeGreaterThan(connIdx);
   });
 
+  it("does NOT mint a default token when mintDefaultToken=false (OAuth-first web flow)", async () => {
+    const { createProject } = await import("../src/lib/projects.ts");
+    const { CAPS } = await import("../src/lib/plan.ts");
+    const { mcpTokens, projectDatabases, projects: projectsTable } =
+      await import("@midplane-cloud/db");
+    // Under cap. With no token to mint, the token-cap check is skipped — so NO
+    // countUsableTokens selects are staged. The project + first DB still insert.
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([]); // empty-project detection → none → create-new path
+    handle.queueSelect([]); // project count → 0 < 1 ✓
+    const result = await createProject(
+      customer,
+      DSN,
+      null,
+      "read",
+      ACTOR,
+      { plan: "free", caps: CAPS.free },
+      false,
+    );
+    expect(result.defaultTokenPlaintext).toBeNull();
+    const inserts = handle.calls.filter((c) => c.op === "insert");
+    expect(inserts.some((c) => c.table === projectsTable)).toBe(true);
+    expect(inserts.some((c) => c.table === projectDatabases)).toBe(true);
+    expect(
+      inserts.some((c) => c.table === mcpTokens),
+      "no default token row when mintDefaultToken=false",
+    ).toBe(false);
+  });
+
   it("reuses the customer's empty project instead of creating a second one (D7-A)", async () => {
     const { createProject } = await import("../src/lib/projects.ts");
     const { CAPS } = await import("../src/lib/plan.ts");

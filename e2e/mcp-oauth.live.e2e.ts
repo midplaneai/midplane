@@ -124,10 +124,11 @@ test("OAuth: discovery → DCR → consent picker → token → query → audit 
   const dsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   await page.getByLabel(/database_url/i).fill(dsn);
   await page.getByRole("button", { name: /^connect$/i }).click();
-  await page.waitForURL(/\/projects\/[0-9A-HJKMNP-TV-Z]{26}\/created/i, {
+  // OAuth-first: the create flow lands on the project's Connect tab.
+  await page.waitForURL(/\/projects\/[0-9A-HJKMNP-TV-Z]{26}(\?|$)/i, {
     timeout: 15_000,
   });
-  projectId = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})\/created/i.exec(
+  projectId = /\/projects\/([0-9A-HJKMNP-TV-Z]{26})/i.exec(
     new URL(page.url()).pathname,
   )![1]!;
   proxiedContainerName = `midplane-${projectId.slice(0, 16).toLowerCase()}`;

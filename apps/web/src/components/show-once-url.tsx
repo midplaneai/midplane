@@ -3,19 +3,12 @@
 import { CopyButton } from "@/components/copy-button";
 import { Input } from "@/components/ui/input";
 
-// Shared surface for displaying a freshly-minted MCP URL with a copy
-// affordance. Used by:
-//   - /projects/[id]/created — the post-create page, where the plaintext
-//     arrives via an httpOnly cookie (it has to cross the create → success
-//     redirect boundary). The page's "I've saved it" button clears that
-//     cookie explicitly; until then a reload keeps showing the URL so it
-//     can't be lost by an accidental navigation.
-//   - The create-token modal — the plaintext is in React state from the
-//     create-API response; no cookie dance needed.
-//
-// Both call sites gate their dismiss/close affordance behind a short
-// countdown (useUnlockCountdown) so the URL can't be fat-fingered away
-// before it has registered.
+// Shared surface for displaying a freshly-minted, show-once MCP token URL with
+// a copy affordance. Used by the create-token modal: the plaintext is in React
+// state from the create-action response (never round-tripped through a cookie),
+// shown once. The modal gates its dismiss/close affordance behind a short
+// countdown (useUnlockCountdown) so the URL can't be fat-fingered away before
+// it has registered.
 export function ShowOnceUrl({ mcpUrl }: { mcpUrl: string }) {
   return (
     <div className="space-y-3">

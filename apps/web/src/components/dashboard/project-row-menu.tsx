@@ -56,8 +56,8 @@ export function ProjectRowMenu({
         <DropdownMenuContent align="end">
           <DropdownMenuItem asChild>
             {/* Deep-links straight to the project workspace's tabs —
-                the Agents tab holds the credentialed URLs. */}
-            <Link href={`/projects/${id}?section=agents`}>
+                the Connect tab holds the endpoint + connected agents. */}
+            <Link href={`/projects/${id}?section=connect`}>
               Connect an agent
             </Link>
           </DropdownMenuItem>

@@ -76,7 +76,7 @@ export async function POST(req: Request) {
 
   const entitlement = await resolvePlan();
   let id: string;
-  let defaultTokenPlaintext: string;
+  let defaultTokenPlaintext: string | null;
   try {
     ({ id, defaultTokenPlaintext } = await createProject(
       customer,
@@ -85,12 +85,20 @@ export async function POST(req: Request) {
       parsed.data.default_access ?? "read",
       userId,
       entitlement,
+      // Programmatic callers have no browser for OAuth — mint a token so the
+      // response carries a usable credential (the one-and-only chance to see it).
+      true,
     ));
   } catch (err) {
     if (err instanceof PlanLimitError) {
       return Response.json(planLimitBody(err), { status: 402 });
     }
     throw err;
+  }
+  if (defaultTokenPlaintext === null) {
+    // Unreachable (mintDefaultToken=true above) — guard for the nullable type.
+    console.error("[api/projects] createProject returned no default token");
+    return Response.json({ error: "internal" }, { status: 500 });
   }
   const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
 

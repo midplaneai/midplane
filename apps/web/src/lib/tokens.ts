@@ -24,16 +24,20 @@ import { ulid } from "ulid";
 import {
   auditEventsIndex,
   projects,
+  projectDatabases,
   customers,
   generateToken,
   getDb,
+  mcpScopeGrants,
   mcpTokens,
   parseToken,
   validateChecksum,
   type Customer,
+  type McpScopeAccess,
   type McpTokenStatus,
   type Region,
 } from "@midplane-cloud/db";
+import { oauthApplication } from "@midplane-cloud/db/auth-schema";
 import { hashToken } from "@midplane-cloud/kms/pepper";
 
 import { PlanLimitError, type Plan } from "./plan.ts";
@@ -84,15 +88,19 @@ export async function countUsableTokens(
   return Number(rows[0]?.count ?? 0);
 }
 
-/** Active token count per project, for the dashboard list's "agents"
- *  stat. "Active" matches countUsableTokens / the runtime resolver:
- *  status='active' AND (expires_at IS NULL OR expires_at > NOW()) — so an
- *  expired-but-unswept row (still 'active' in the table) is NOT counted,
- *  keeping the dashboard number aligned with what an agent could actually
- *  use. Projects with zero active tokens are absent from the map; the
- *  caller defaults to 0. The projectIds are assumed already
- *  ownership-scoped by the caller (listDashboardProjects derives them
- *  from the customer's own projects). */
+/** Active agent count per project, for the dashboard list's "agents"
+ *  stat. Counts BOTH connected interactive OAuth agents (kind='oauth') and
+ *  active machine tokens (kind='url') — the same two things the project's
+ *  Connect pane lists — so an OAuth-first project (no machine token) still
+ *  reads its real agent count instead of "0 → connect an agent".
+ *
+ *  "Active" matches countUsableTokens / the runtime resolver: status='active'
+ *  AND (expires_at IS NULL OR expires_at > NOW()) — so an expired-but-unswept
+ *  row (still 'active' in the table) is NOT counted, keeping the dashboard
+ *  number aligned with what an agent could actually use. Projects with zero
+ *  active agents are absent from the map; the caller defaults to 0. The
+ *  projectIds are assumed already ownership-scoped by the caller
+ *  (listDashboardProjects derives them from the customer's own projects). */
 export async function countActiveTokensByProject(
   customer: Customer,
   projectIds: string[],
@@ -108,9 +116,9 @@ export async function countActiveTokensByProject(
     .where(
       and(
         inArray(mcpTokens.projectId, projectIds),
-        // Dashboard "agents" stat counts plaintext URL tokens only; OAuth
-        // attribution rows are internal to the audit pipeline.
-        eq(mcpTokens.kind, "url"),
+        // Both credential kinds — OAuth clients and machine tokens — are
+        // "connected agents" on the Connect pane, so both count here.
+        inArray(mcpTokens.kind, ["url", "oauth"]),
         eq(mcpTokens.status, "active"),
         sql`(${mcpTokens.expiresAt} IS NULL OR ${mcpTokens.expiresAt} > NOW())`,
       ),
@@ -420,6 +428,160 @@ export async function listTokens(
     )
     .orderBy(desc(mcpTokens.createdAt));
   return rows;
+}
+
+/** One database an agent may reach, with the access it was granted. */
+export interface AgentScopeEntry {
+  database: string;
+  access: McpScopeAccess;
+}
+
+/** A connected agent — either a headless URL/PAT token (`kind: "url"`) or an
+ *  interactive OAuth client (`kind: "oauth"`). Unifies the two so the dashboard
+ *  renders one list. Dashboard-safe: no token_hash / plaintext / pepper kid. */
+export interface AgentSummary {
+  kind: "url" | "oauth";
+  id: string;
+  /** Token name (url) or the OAuth client's display name (oauth). */
+  name: string;
+  /** Env prefix (mp_live / mp_test) for url tokens; null for OAuth agents. */
+  prefix: string | null;
+  /** Last 4 of the token entropy (url) or of the OAuth client id (oauth). */
+  last4: string;
+  createdByUserId: string;
+  createdAt: Date;
+  expiresAt: Date | null;
+  lastUsedAt: Date | null;
+  lastUsedIp: string | null;
+  lastUsedUa: string | null;
+  status: McpTokenStatus;
+  revokedAt: Date | null;
+  revokedReason: string | null;
+  /** Databases (of THIS project) the agent may reach + at what access. Empty =
+   *  unscoped (full project access — the legacy/API-token default). */
+  scope: AgentScopeEntry[];
+}
+
+/** Every connected agent on a project — OAuth clients AND headless URL tokens —
+ *  each with its per-database scope. The dashboard Connect pane renders this;
+ *  the REST `/api/projects/:id/tokens` surface still uses listTokens (URL
+ *  tokens only). Returns null when the project is unknown or foreign. */
+export async function listProjectAgents(
+  customer: Customer,
+  projectId: string,
+): Promise<AgentSummary[] | null> {
+  const db = getDb(customer.region);
+  const parent = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(eq(projects.id, projectId), eq(projects.customerId, customer.id)),
+    )
+    .limit(1);
+  if (parent.length === 0) return null;
+
+  // Both credential kinds in one list. kind='oauth' rows are the per-(project,
+  // client) attribution rows the OAuth path mints; kind='url' are PAT tokens.
+  const rows = await db
+    .select({
+      id: mcpTokens.id,
+      name: mcpTokens.name,
+      prefix: mcpTokens.prefix,
+      last4: mcpTokens.last4,
+      kind: mcpTokens.kind,
+      clientId: mcpTokens.clientId,
+      createdByUserId: mcpTokens.createdByUserId,
+      createdAt: mcpTokens.createdAt,
+      expiresAt: mcpTokens.expiresAt,
+      lastUsedAt: mcpTokens.lastUsedAt,
+      lastUsedIp: mcpTokens.lastUsedIp,
+      lastUsedUa: mcpTokens.lastUsedUa,
+      status: mcpTokens.status,
+      revokedAt: mcpTokens.revokedAt,
+      revokedReason: mcpTokens.revokedReason,
+    })
+    .from(mcpTokens)
+    .where(
+      and(
+        eq(mcpTokens.projectId, projectId),
+        inArray(mcpTokens.kind, ["url", "oauth"]),
+      ),
+    )
+    .orderBy(desc(mcpTokens.createdAt));
+  if (rows.length === 0) return [];
+
+  // All scope grants whose database belongs to THIS project, with the DB name.
+  // The DB join scopes the result to this project (a grant's subject — token or
+  // client — may also hold grants on other projects).
+  const grantRows = await db
+    .select({
+      database: projectDatabases.name,
+      access: mcpScopeGrants.access,
+      mcpTokenId: mcpScopeGrants.mcpTokenId,
+      clientId: mcpScopeGrants.clientId,
+    })
+    .from(mcpScopeGrants)
+    .innerJoin(
+      projectDatabases,
+      eq(projectDatabases.id, mcpScopeGrants.projectDatabaseId),
+    )
+    .where(eq(projectDatabases.projectId, projectId));
+
+  const byToken = new Map<string, AgentScopeEntry[]>();
+  const byClient = new Map<string, AgentScopeEntry[]>();
+  for (const g of grantRows) {
+    const entry: AgentScopeEntry = { database: g.database, access: g.access };
+    if (g.mcpTokenId) {
+      const arr = byToken.get(g.mcpTokenId);
+      if (arr) arr.push(entry);
+      else byToken.set(g.mcpTokenId, [entry]);
+    } else if (g.clientId) {
+      const arr = byClient.get(g.clientId);
+      if (arr) arr.push(entry);
+      else byClient.set(g.clientId, [entry]);
+    }
+  }
+
+  // Resolve OAuth client → human display name (DCR client_name). Absent for
+  // clients that didn't send one; we fall back to a generic label.
+  const clientIds = rows
+    .filter((r) => r.kind === "oauth" && r.clientId)
+    .map((r) => r.clientId!);
+  const clientNames = new Map<string, string | null>();
+  if (clientIds.length > 0) {
+    const apps = await db
+      .select({ clientId: oauthApplication.clientId, name: oauthApplication.name })
+      .from(oauthApplication)
+      .where(inArray(oauthApplication.clientId, clientIds));
+    for (const a of apps) clientNames.set(a.clientId, a.name);
+  }
+
+  return rows.map((r): AgentSummary => {
+    const isOauth = r.kind === "oauth";
+    const scope = (
+      isOauth ? byClient.get(r.clientId ?? "") : byToken.get(r.id)
+    )?.slice() ?? [];
+    scope.sort((a, b) => a.database.localeCompare(b.database));
+    return {
+      kind: isOauth ? "oauth" : "url",
+      id: r.id,
+      name: isOauth
+        ? (clientNames.get(r.clientId ?? "") || "OAuth agent")
+        : r.name,
+      prefix: isOauth ? null : r.prefix,
+      last4: r.last4,
+      createdByUserId: r.createdByUserId,
+      createdAt: r.createdAt,
+      expiresAt: r.expiresAt,
+      lastUsedAt: r.lastUsedAt,
+      lastUsedIp: r.lastUsedIp,
+      lastUsedUa: r.lastUsedUa,
+      status: r.status,
+      revokedAt: r.revokedAt,
+      revokedReason: r.revokedReason,
+      scope,
+    };
+  });
 }
 
 /** Revoke a token. Idempotent — revoking an already-revoked (or expired)

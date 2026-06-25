@@ -193,14 +193,14 @@ const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 // valid DB alias) or, failing that, derived from the DSN's database name.
 // That same alias labels the project, so a one-database project reads
 // coherently and the container recedes until a second DB is added (the
-// project is renamable later via renameProject). Auto-mints a default
-// mcp_tokens row (PR2 of mcp_url_auth_security — D3: first-token UX).
+// project is renamable later via renameProject). Optionally auto-mints a
+// default mcp_tokens row (mintDefaultToken — on for the programmatic API,
+// off for the OAuth-first web flow).
 //
-// Returns the new parent id and the default token's PLAINTEXT — the
-// caller renders the plaintext URL ONCE on the post-create success page
-// and never sees it again. The plaintext is not retrievable from the DB
-// (only the HMAC-SHA256(pepper) digest is stored), which is the
-// show-once property.
+// Returns the new parent id and, when a default token was minted, its
+// PLAINTEXT — the caller renders the plaintext URL ONCE and never sees it
+// again (only the HMAC-SHA256(pepper) digest is stored, the show-once
+// property). defaultTokenPlaintext is null when mintDefaultToken is false.
 export async function createProject(
   customer: Customer,
   dsn: string,
@@ -209,10 +209,17 @@ export async function createProject(
   actorUserId: string,
   // Resolved plan + caps for the org (from resolvePlan() at the call site).
   // Enforced under a customers-row lock before the project is inserted;
-  // throws PlanLimitError when the project cap is reached OR there is no
-  // room for the default token this project will auto-mint (decision D8).
+  // throws PlanLimitError when the project cap is reached OR (when minting a
+  // default token) there is no room for it (decision D8).
   entitlement: ResolvedPlan,
-): Promise<{ id: string; defaultTokenPlaintext: string }> {
+  // Whether to auto-mint a default URL token. The programmatic API
+  // (POST /api/projects) wants one — the caller has no browser for OAuth, so a
+  // token returned in the response is its only credential. The web flow passes
+  // false: it's OAuth-first, so an auto-minted token would be a hidden,
+  // unusable row burning a plan token slot. When false, `defaultTokenPlaintext`
+  // is null and no token slot is consumed.
+  mintDefaultToken: boolean = true,
+): Promise<{ id: string; defaultTokenPlaintext: string | null }> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
     kms,
@@ -320,10 +327,10 @@ export async function createProject(
         throw new PlanLimitError("projects", caps.projects, plan);
       }
     }
-    if (Number.isFinite(caps.tokens)) {
+    if (mintDefaultToken && Number.isFinite(caps.tokens)) {
       // The default token inserted below consumes a token slot. Count usable
       // tokens under the lock and block if there's no room, so total usable
-      // tokens can never exceed the cap.
+      // tokens can never exceed the cap. Skipped when we're not minting one.
       const usedTokens = await countUsableTokens(tx, customer.id);
       if (usedTokens >= caps.tokens) {
         throw new PlanLimitError("tokens", caps.tokens, plan);
@@ -345,6 +352,9 @@ export async function createProject(
       kmsKeyId,
       tableAccess,
     });
+    // OAuth-first (web) flow: no auto-minted token — the user connects an agent
+    // over OAuth, or mints a machine token explicitly later.
+    if (!mintDefaultToken) return null;
     // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
     // race). This is the project's FIRST token — an empty (reused or new)
     // project has none, so the "default" name can't collide; ownership is
@@ -366,21 +376,24 @@ export async function createProject(
 
   // Best-effort TOKEN_CREATED audit, post-commit (matches createToken's
   // fail-soft posture — an audit hiccup must not undo the durable mint).
-  try {
-    await emitTokenAuditRow(customer, {
-      projectId: resolvedProjectId,
-      mcpTokenId: defaultTokenId,
-      eventType: "TOKEN_CREATED",
-      payload: {
-        project_id: resolvedProjectId,
-        token_id: defaultTokenId,
-        token_name: "default",
-        expires_at: expiresAt.toISOString(),
-      },
-      actorUserId,
-    });
-  } catch (err) {
-    console.error("[createProject] default TOKEN_CREATED audit failed", err);
+  // Only when we actually minted a default token.
+  if (mintDefaultToken) {
+    try {
+      await emitTokenAuditRow(customer, {
+        projectId: resolvedProjectId,
+        mcpTokenId: defaultTokenId,
+        eventType: "TOKEN_CREATED",
+        payload: {
+          project_id: resolvedProjectId,
+          token_id: defaultTokenId,
+          token_name: "default",
+          expires_at: expiresAt.toISOString(),
+        },
+        actorUserId,
+      });
+    } catch (err) {
+      console.error("[createProject] default TOKEN_CREATED audit failed", err);
+    }
   }
 
   return { id: resolvedProjectId, defaultTokenPlaintext };
