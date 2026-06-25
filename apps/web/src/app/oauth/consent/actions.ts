@@ -14,6 +14,7 @@
 import { currentCustomer } from "@/lib/customer";
 import { getOrgContext } from "@/lib/org-context";
 import { setOAuthGrants } from "@/lib/scope-grants";
+import { reactivateOAuthAttributionToken } from "@/lib/tokens";
 
 export type ConsentGrantResult =
   | { ok: true; granted: number }
@@ -51,6 +52,10 @@ export async function writeConsentGrants(
       projectId,
       selections,
     });
+    // Re-approving a previously-revoked agent must restore its access: clear the
+    // revoked state on the (project, client) attribution row the proxy gates on.
+    // No-op the common first-consent case (no row yet / already active).
+    await reactivateOAuthAttributionToken(customer, projectId, clientId);
     return { ok: true, granted };
   } catch (err) {
     console.error("[writeConsentGrants] failed", err);

@@ -7,14 +7,16 @@ import { DOCS_CONNECT_AGENT_URL } from "@/lib/docs";
 import { cn } from "@/lib/utils";
 
 // The canonical "connect an agent" card (OAuth). One component, one place the
-// connect instructions live — shown on the project Connect pane and the
-// post-create landing.
+// connect instructions live — shown on the project Connect pane.
 //
-// Shows the region-wide MCP endpoint URL — /mcp — plus the per-client config to
-// paste. The URL is NOT a secret: the agent authenticates with an OAuth sign-in,
-// and at consent the user grants it access to specific databases. So the URL is
-// persistent and copyable, no show-once, no "treat as a password". It works with
-// any MCP client (Cursor, Claude Code, Claude Desktop, ChatGPT, …).
+// Shows this project's MCP endpoint URL — /mcp/<projectId> — plus the per-client
+// config to paste. The path pins the project so the credential binds HERE at
+// consent (the region-wide /mcp would derive the project from the grant set,
+// which can bind a multi-project user to the wrong project). The URL is NOT a
+// secret: the agent authenticates with an OAuth sign-in, and at consent the user
+// grants it access to this project's databases. So it's persistent and copyable,
+// no show-once. Works with any MCP client (Cursor, Claude Code, Claude Desktop,
+// ChatGPT, …).
 //
 // For headless agents (CI, workflows) that can't do a browser sign-in, the
 // machine-token list sits below this card — those carry a stored bearer secret.

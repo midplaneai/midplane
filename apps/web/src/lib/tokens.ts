@@ -740,10 +740,10 @@ export async function lookupByPlaintext(
 export async function ensureOAuthAttributionToken(
   db: ReturnType<typeof getDb>,
   args: { projectId: string; clientId: string; userId: string },
-): Promise<string> {
+): Promise<{ id: string; status: McpTokenStatus }> {
   const findExisting = () =>
     db
-      .select({ id: mcpTokens.id })
+      .select({ id: mcpTokens.id, status: mcpTokens.status })
       .from(mcpTokens)
       .where(
         and(
@@ -754,8 +754,11 @@ export async function ensureOAuthAttributionToken(
       )
       .limit(1);
 
+  // The row's status is returned so the proxy can gate on it — a revoked OAuth
+  // agent must be denied even though its grants still resolve. Mint-or-GET does
+  // NOT reactivate a revoked row; re-consent does that (reactivateOAuthAttributionToken).
   const existing = await findExisting();
-  if (existing[0]) return existing[0].id;
+  if (existing[0]) return { id: existing[0].id, status: existing[0].status };
 
   const id = ulid();
   try {
@@ -776,12 +779,46 @@ export async function ensureOAuthAttributionToken(
       createdByUserId: args.userId,
       // token_hash / pepper_kid omitted → NULL (no HMAC secret for OAuth rows).
     });
-    return id;
+    return { id, status: "active" };
   } catch (err) {
     const raced = await findExisting();
-    if (raced[0]) return raced[0].id;
+    if (raced[0]) return { id: raced[0].id, status: raced[0].status };
     throw err;
   }
+}
+
+/** Reactivate a revoked OAuth attribution row on re-consent. When a user
+ *  revokes an interactive agent we flip its (project, client) attribution row to
+ *  status='revoked', and the proxy denies it (ensureOAuthAttributionToken returns
+ *  the revoked status). Re-approving the same client through the consent flow
+ *  must restore access — so the consent action calls this to clear the revoked
+ *  state for the row it just re-granted. Ownership-scoped (only within a project
+ *  this customer owns) and a no-op when there's no revoked row to restore. */
+export async function reactivateOAuthAttributionToken(
+  customer: Customer,
+  projectId: string,
+  clientId: string,
+): Promise<void> {
+  const db = getDb(customer.region);
+  const owned = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(eq(projects.id, projectId), eq(projects.customerId, customer.id)),
+    )
+    .limit(1);
+  if (owned.length === 0) return;
+  await db
+    .update(mcpTokens)
+    .set({ status: "active", revokedAt: null, revokedReason: null })
+    .where(
+      and(
+        eq(mcpTokens.projectId, projectId),
+        eq(mcpTokens.clientId, clientId),
+        eq(mcpTokens.kind, "oauth"),
+        eq(mcpTokens.status, "revoked"),
+      ),
+    );
 }
 
 // --- internals --------------------------------------------------------------

@@ -338,11 +338,31 @@ async function forwardOAuthForProject(
   // Per-agent attribution: one mcp_tokens row per (project, OAuth client).
   // Its id is what the engine stamps as mcp_token_id — so the OAuth flow keeps
   // the SAME audit attribution shape the URL token had.
-  const tokenId = await ensureOAuthAttributionToken(db, {
-    projectId: resolved.project.id,
-    clientId,
-    userId,
-  });
+  const { id: tokenId, status: tokenStatus } = await ensureOAuthAttributionToken(
+    db,
+    {
+      projectId: resolved.project.id,
+      clientId,
+      userId,
+    },
+  );
+
+  // Revoking an interactive agent flips this attribution row to revoked. The
+  // grant rows may still resolve a scope, so the row status is the enforcement
+  // point — deny a revoked agent here, fail-closed, before any forward. The user
+  // restores access by re-connecting (consent reactivates the row).
+  if (tokenStatus !== "active") {
+    return Response.json(
+      { ok: false, error: "access_revoked" },
+      {
+        status: 403,
+        headers: {
+          "WWW-Authenticate":
+            'Bearer error="invalid_token", error_description="this agent\'s access was revoked; re-connect to restore it"',
+        },
+      },
+    );
+  }
 
   // Last-used surface, same debounce as the URL path (forensics + dashboard
   // parity for the attribution row).

@@ -613,14 +613,27 @@ describe("ensureOAuthAttributionToken", () => {
     userId: "user_oauth_1",
   };
 
-  it("returns the existing row id without inserting when one is present", async () => {
-    handle.queueSelect([{ id: "tok-existing" }]); // findExisting hit
+  it("returns the existing row id + status without inserting when one is present", async () => {
+    handle.queueSelect([{ id: "tok-existing", status: "active" }]); // findExisting hit
     const { ensureOAuthAttributionToken } = await import("../src/lib/tokens.ts");
-    const id = await ensureOAuthAttributionToken(
+    const result = await ensureOAuthAttributionToken(
       handle.db as unknown as Parameters<typeof ensureOAuthAttributionToken>[0],
       args,
     );
-    expect(id).toBe("tok-existing");
+    expect(result.id).toBe("tok-existing");
+    expect(result.status).toBe("active");
+    expect(handle.calls.some((c) => c.op === "insert")).toBe(false);
+  });
+
+  it("surfaces a revoked status for an existing revoked row (the proxy gate)", async () => {
+    handle.queueSelect([{ id: "tok-rev", status: "revoked" }]);
+    const { ensureOAuthAttributionToken } = await import("../src/lib/tokens.ts");
+    const result = await ensureOAuthAttributionToken(
+      handle.db as unknown as Parameters<typeof ensureOAuthAttributionToken>[0],
+      args,
+    );
+    expect(result.id).toBe("tok-rev");
+    expect(result.status).toBe("revoked");
     expect(handle.calls.some((c) => c.op === "insert")).toBe(false);
   });
 
@@ -628,19 +641,20 @@ describe("ensureOAuthAttributionToken", () => {
     handle.queueSelect([]); // findExisting miss
     const { mcpTokens } = await import("@midplane-cloud/db");
     const { ensureOAuthAttributionToken } = await import("../src/lib/tokens.ts");
-    const id = await ensureOAuthAttributionToken(
+    const result = await ensureOAuthAttributionToken(
       handle.db as unknown as Parameters<typeof ensureOAuthAttributionToken>[0],
       args,
     );
-    // A fresh ULID is returned + stamped on the row.
-    expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    // A fresh ULID is returned (active) + stamped on the row.
+    expect(result.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(result.status).toBe("active");
 
     const insert = handle.calls.find(
       (c) => c.op === "insert" && c.table === mcpTokens,
     );
     expect(insert).toBeDefined();
     const row = insert!.set as Record<string, unknown>;
-    expect(row.id).toBe(id);
+    expect(row.id).toBe(result.id);
     expect(row.kind).toBe("oauth");
     expect(row.clientId).toBe(args.clientId);
     expect(row.projectId).toBe(args.projectId);
@@ -656,12 +670,36 @@ describe("ensureOAuthAttributionToken", () => {
   it("re-reads the winner's id when a concurrent insert races (unique violation)", async () => {
     handle.queueSelect([]); // findExisting miss
     handle.failNextInsert({ code: "23505" }); // partial-unique rejected the race
-    handle.queueSelect([{ id: "tok-raced" }]); // re-read after the catch
+    handle.queueSelect([{ id: "tok-raced", status: "active" }]); // re-read after the catch
     const { ensureOAuthAttributionToken } = await import("../src/lib/tokens.ts");
-    const id = await ensureOAuthAttributionToken(
+    const result = await ensureOAuthAttributionToken(
       handle.db as unknown as Parameters<typeof ensureOAuthAttributionToken>[0],
       args,
     );
-    expect(id).toBe("tok-raced");
+    expect(result.id).toBe("tok-raced");
+  });
+});
+
+describe("reactivateOAuthAttributionToken", () => {
+  it("clears the revoked state when the project is owned (re-consent restore)", async () => {
+    handle.queueSelect([{ id: "conn-1" }]); // ownership hit
+    const { reactivateOAuthAttributionToken } = await import("../src/lib/tokens.ts");
+    const { mcpTokens } = await import("@midplane-cloud/db");
+    await reactivateOAuthAttributionToken(customer, "conn-1", "CLIENTABCDEFGH1234");
+    const upd = handle.calls.find(
+      (c) => c.op === "update" && c.table === mcpTokens,
+    );
+    expect(upd).toBeDefined();
+    const set = upd!.set as Record<string, unknown>;
+    expect(set.status).toBe("active");
+    expect(set.revokedAt).toBeNull();
+    expect(set.revokedReason).toBeNull();
+  });
+
+  it("is a no-op when the project is not owned (no update issued)", async () => {
+    handle.queueSelect([]); // ownership miss
+    const { reactivateOAuthAttributionToken } = await import("../src/lib/tokens.ts");
+    await reactivateOAuthAttributionToken(customer, "conn-foreign", "client");
+    expect(handle.calls.some((c) => c.op === "update")).toBe(false);
   });
 });

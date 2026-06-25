@@ -189,7 +189,7 @@ function AgentRow({
           <span aria-hidden>·</span>
           <span>{view.timingLine}</span>
         </div>
-        <ScopeLine scope={agent.scope} />
+        <ScopeLine kind={agent.kind} scope={agent.scope} />
         <div className="font-mono text-[11px] text-subtle">
           {view.lastUsedLine}
         </div>
@@ -212,11 +212,21 @@ function AgentRow({
   );
 }
 
-// The databases an agent may reach. Empty grant set = unscoped = full project
-// access (the legacy/API-token default and the self-host owner default).
-function ScopeLine({ scope }: { scope: AgentSummary["scope"] }) {
+// The databases an agent may reach. An empty grant set means different things by
+// kind: for an OAuth agent it was approved with no databases (cloud denies it,
+// 403); for a URL/PAT token it's unscoped = full project access (the legacy /
+// API-token default and the self-host owner default).
+function ScopeLine({
+  kind,
+  scope,
+}: {
+  kind: AgentSummary["kind"];
+  scope: AgentSummary["scope"];
+}) {
   if (scope.length === 0) {
-    return (
+    return kind === "oauth" ? (
+      <div className="text-[11px] text-subtle">no database access</div>
+    ) : (
       <div className="text-[11px] text-[hsl(var(--warn))]">
         full project access
       </div>

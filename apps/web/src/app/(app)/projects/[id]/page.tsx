@@ -7,7 +7,7 @@ import {
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
 } from "@midplane-cloud/db";
-import { mcpGenericUrl } from "@midplane-cloud/router";
+import { mcpProjectUrl } from "@midplane-cloud/router";
 
 import { ProjectRail } from "@/components/projects/project-rail";
 import { OAuthConnectGuide } from "@/components/projects/oauth-connect-guide";
@@ -190,11 +190,13 @@ export default async function ProjectWorkspace({
       ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
       : undefined;
 
-  // The region-wide OAuth MCP endpoint — /mcp (no id, no token). Non-secret
-  // (auth is the OAuth sign-in), shown openly with a copy button; it's the URL
-  // the connect card leads with. Computed here (server) so it uses this
-  // deployment's real MCP host, not a hardcoded *.midplane.ai.
-  const oauthMcpUrl = mcpGenericUrl(conn.region, process.env);
+  // This project's OAuth MCP endpoint — /mcp/<projectId>. Non-secret (auth is
+  // the OAuth sign-in), shown openly with a copy button. The path pins the
+  // project so the credential binds HERE: the region-wide /mcp would derive the
+  // project from the consent grant set instead, which for a multi-project user
+  // can silently bind the agent to the wrong project. Per-project fails closed.
+  // Computed server-side so it uses this deployment's real MCP host.
+  const mcpUrl = mcpProjectUrl(conn.region, conn.id, process.env);
 
   // ---- server actions ----------------------------------------------------
 
@@ -770,8 +772,8 @@ export default async function ProjectWorkspace({
 
       {/* The connect card owns the "how to connect" instructions (OAuth URL +
           per-client config). One card, shown once. The agent it grants is bound
-          to this project's databases at sign-in; the URL itself isn't a secret. */}
-      <OAuthConnectGuide projectName={conn.name} mcpUrl={oauthMcpUrl} />
+          to THIS project's databases at sign-in; the URL itself isn't a secret. */}
+      <OAuthConnectGuide projectName={conn.name} mcpUrl={mcpUrl} />
 
       {/* The connected-agents list (OAuth clients + machine tokens, each with
           its DB scope + revoke). Management is owner/admin only, so members see
