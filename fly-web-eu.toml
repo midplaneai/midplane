@@ -65,6 +65,7 @@ primary_region = "fra"
 #   MIDPLANE_KMS_KEY_EU                   # kms-mode only: CMK ARN/alias in eu-central-1
 #   MIDPLANE_TOKEN_PEPPER_EU_V1           # env-mode only: base64 of 32 random bytes (HMAC key for mcp_tokens.token_hash)
 #   MIDPLANE_TOKEN_PEPPER_CT_EU_V1        # kms-mode only: base64 CiphertextBlob from scripts/encrypt-token-pepper.sh
+#   MIDPLANE_MASK_SALT_MASTER             # only if any project uses column masking: 32+ bytes `openssl rand -hex 32`; STABLE (treat like a pepper); same value both regions
 #   FLY_API_TOKEN                         # for FlyMachineSpawner
 #   FLY_APP_EU="midplane-eu"
 #   FLY_REGION_EU="fra"

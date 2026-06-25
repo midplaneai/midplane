@@ -868,6 +868,86 @@ export function parseColumnMasksOrThrow(input: unknown): ColumnMasksConfig {
   throw new Error(`invalid column_masks: ${summary}`);
 }
 
+// ignored_columns — scan-view-only dismissals. The PII exposure scan flags
+// columns by NAME heuristic, which has false positives (a low-confidence bare
+// "name", an "ip_version"). A dismissal records "the user reviewed this column
+// and it is NOT personal data" so the scan stops re-flagging it. This is purely
+// scan-surface state: unlike column_masks it is NEVER serialized into the engine
+// YAML and changing it does NOT respawn the engine — the engine transforms
+// values based on column_masks alone and has no concept of an ignored column.
+// Shape mirrors column_masks one level shallower: "schema.table" -> [column…].
+
+/** "schema.table" -> list of column names the user dismissed as not-PII. */
+export type IgnoredColumnsConfig = Record<string, string[]>;
+
+/** Zero-value config — nothing dismissed. Default for new project rows. */
+export const EMPTY_IGNORED_COLUMNS: IgnoredColumnsConfig = {};
+
+export type IgnoredColumnsValidationResult =
+  | { ok: true; value: IgnoredColumnsConfig }
+  | { ok: false; errors: ColumnMasksValidationError[] };
+
+/** Validate untrusted input into a typed IgnoredColumnsConfig. Same identifier
+ *  shapes and table/column caps as column_masks; values are arrays of column
+ *  identifiers (deduped, order-preserving). A table whose columns all fail
+ *  validation is dropped; an empty list drops the table. */
+export function validateIgnoredColumns(input: unknown): IgnoredColumnsValidationResult {
+  if (input == null) return { ok: true, value: {} };
+  if (typeof input !== "object" || Array.isArray(input)) {
+    return {
+      ok: false,
+      errors: [{ path: "", message: "ignored_columns must be an object" }],
+    };
+  }
+  const obj = input as Record<string, unknown>;
+  const errors: ColumnMasksValidationError[] = [];
+  const value: IgnoredColumnsConfig = {};
+
+  const tableEntries = Object.entries(obj);
+  if (tableEntries.length > MAX_MASK_TABLES) {
+    errors.push({ path: "", message: `too many tables (max ${MAX_MASK_TABLES})` });
+  }
+  for (const [table, cols] of tableEntries) {
+    if (table.length > MAX_TABLE_NAME_LENGTH || !isTableIdent(table)) {
+      errors.push({ path: table, message: tableIdentMessage });
+      continue;
+    }
+    if (!Array.isArray(cols)) {
+      errors.push({ path: table, message: "must be an array of column names" });
+      continue;
+    }
+    if (cols.length > MAX_MASK_COLUMNS_PER_TABLE) {
+      errors.push({
+        path: table,
+        message: `too many columns (max ${MAX_MASK_COLUMNS_PER_TABLE})`,
+      });
+    }
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const col of cols) {
+      if (!isIdent(col)) {
+        errors.push({ path: `${table}.${String(col)}`, message: identMessage });
+        continue;
+      }
+      if (seen.has(col)) continue;
+      seen.add(col);
+      out.push(col);
+    }
+    if (out.length > 0) value[table] = out;
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value };
+}
+
+/** Strict variant — throws on invalid input (the scan route + server action). */
+export function parseIgnoredColumnsOrThrow(input: unknown): IgnoredColumnsConfig {
+  const r = validateIgnoredColumns(input);
+  if (r.ok) return r.value;
+  const summary = r.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+  throw new Error(`invalid ignored_columns: ${summary}`);
+}
+
 // Emit the column_masks block (sibling of table_access). Skipped entirely when
 // empty so the YAML reads like a pre-masking DB. When present, we also emit
 // `requires_features: [column_masks]` so a future engine that dropped masking

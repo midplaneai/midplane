@@ -134,6 +134,7 @@ export function assertBootEnv(env: EnvLike = process.env): void {
       "HMAC for the signed region cookie; must match across apex + both web apps",
     ),
   );
+  pushIssue(issues, maskSaltIssue(env));
 
   // Hosted shape: FLY_API_TOKEN set means the indexer must be reachable.
   // Same check the mcp-proxy makes on first request — surfacing it earlier
@@ -188,6 +189,26 @@ function secretIssue(
 
 function pushIssue(issues: Issue[], issue: Issue | null): void {
   if (issue) issues.push(issue);
+}
+
+// Masking salt master — validate-if-SET only. Masking is opt-in (a deploy with
+// no masked columns needs no salt), so an UNSET master is NOT a boot error: the
+// hard "a project declares column_masks but the salt is unset" gate is fail-
+// closed at spawn time (proxy / preview / engine), and the mask-config UI now
+// surfaces it at save time. But a SET-but-weak master is a silent footgun — the
+// deterministic transforms (consistent-hash, pseudonymize) become correlatable —
+// so length-floor it when present, same posture as the signing secrets above.
+// Applies to both cloud and self-host (both spawn engines with masks).
+function maskSaltIssue(env: EnvLike): Issue | null {
+  const v = env.MIDPLANE_MASK_SALT_MASTER;
+  if (!v) return null;
+  if (v.length < MIN_SECRET_LEN) {
+    return {
+      var: "MIDPLANE_MASK_SALT_MASTER",
+      reason: `too short (${v.length} chars) — keys deterministic masking transforms; needs 32+ bytes (openssl rand -hex 32)`,
+    };
+  }
+  return null;
 }
 
 // Cloud Stripe vars, validated all-or-nothing (see call site). Returns issues
@@ -245,6 +266,7 @@ function selfHostIssues(env: EnvLike): Issue[] {
       "signs sessions; Better Auth uses an insecure built-in default if unset",
     ),
   );
+  pushIssue(issues, maskSaltIssue(env));
 
   const upper = SELF_HOST_REGION.toUpperCase();
   const mode = env.MIDPLANE_KMS_MODE ?? "env";

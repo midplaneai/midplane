@@ -89,6 +89,40 @@ interface RegistryEntry {
   region: Region;
   idleTimer: ReturnType<typeof setTimeout>;
   lastTouchedAt: number;
+  /** Fingerprint of the BOOT-TIME-ONLY config this container was spawned with
+   *  (see {@link bootFingerprint}). A warm container can't hot-reload masking,
+   *  so a later request with a different fingerprint must respawn, not reuse. */
+  bootFingerprint: string;
+}
+
+// Fingerprint of the engine config a warm container CANNOT hot-reload:
+// column_masks (per DB) and the mask salt. The engine reads these once at
+// construction, so reusing a container booted with a different fingerprint would
+// serve a wrong — possibly UNMASKED — result set (a masking bypass). table_access
+// / tenant_scope / guardrails are deliberately EXCLUDED: those are pushed to a
+// live container via /admin/policy, so an edit keeps a warm container current
+// without a respawn, and folding them in here would respawn on every policy
+// tweak. Canonical (sorted) so identical config always yields the same string.
+export function bootFingerprint(opts: SpawnOptions): string {
+  const dbs = [...opts.databases]
+    .map((d) => {
+      const cols = d.columnMasks ?? {};
+      const body = Object.keys(cols)
+        .sort()
+        .map((t) => {
+          const inner = cols[t]!;
+          const rules = Object.keys(inner)
+            .sort()
+            .map((c) => `${c}=${JSON.stringify(inner[c])}`)
+            .join(",");
+          return `${t}{${rules}}`;
+        })
+        .join(",");
+      return `${d.name}[${body}]`;
+    })
+    .sort()
+    .join("|");
+  return `salt:${opts.maskSalt ?? ""}#masks:${dbs}`;
 }
 
 export interface ActiveContainer {
@@ -106,7 +140,12 @@ export interface ContainerRegistryOptions {
 
 export class ContainerRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
-  private readonly inflight = new Map<string, Promise<SpawnedContainer>>();
+  // The fingerprint rides with the in-flight promise so a concurrent request
+  // with a DIFFERENT boot config doesn't get handed a spawn it didn't ask for.
+  private readonly inflight = new Map<
+    string,
+    { promise: Promise<SpawnedContainer>; fingerprint: string }
+  >();
   private readonly idleMs: number;
   private readonly now: () => number;
 
@@ -120,13 +159,32 @@ export class ContainerRegistry {
 
   async acquire(opts: SpawnOptions): Promise<SpawnedContainer> {
     const key = opts.projectId;
+    const fingerprint = bootFingerprint(opts);
     const existing = this.entries.get(key);
     if (existing) {
-      this.touch(key, existing);
-      return existing.container;
+      if (existing.bootFingerprint === fingerprint) {
+        this.touch(key, existing);
+        return existing.container;
+      }
+      // Boot-time-only config (column_masks / mask salt) differs from how this
+      // warm container booted — it can't hot-reload masking, so reusing it would
+      // serve a wrong (possibly UNMASKED) result set. Evict + spawn fresh. This
+      // is the safety net behind the save-time forceRespawn: it also catches a
+      // failed invalidate, or a spawn path that booted a mask-less container.
+      await this.invalidate(key);
     }
     const pending = this.inflight.get(key);
-    if (pending) return pending;
+    if (pending) {
+      if (pending.fingerprint === fingerprint) return pending.promise;
+      // A spawn with a DIFFERENT boot config is already in flight (e.g. a
+      // mask-less dry-run spawn racing a masked proxy/preview request). Handing
+      // it back would bypass the fingerprint guard, so wait for it to settle,
+      // then re-acquire: the now-completed (mismatched) entry is evicted and
+      // respawned with THIS request's config. Per-project container names are
+      // unique, so two spawns can't run at once anyway — we have to serialize.
+      await pending.promise.catch(() => undefined);
+      return this.acquire(opts);
+    }
 
     const promise = (async () => {
       try {
@@ -136,6 +194,7 @@ export class ContainerRegistry {
           region: opts.region,
           idleTimer: this.scheduleStop(key),
           lastTouchedAt: this.now(),
+          bootFingerprint: fingerprint,
         };
         this.entries.set(key, entry);
         return container;
@@ -143,7 +202,7 @@ export class ContainerRegistry {
         this.inflight.delete(key);
       }
     })();
-    this.inflight.set(key, promise);
+    this.inflight.set(key, { promise, fingerprint });
     return promise;
   }
 
@@ -190,7 +249,7 @@ export class ContainerRegistry {
     // settle (success or failure), then evict whatever ended up there.
     const pending = this.inflight.get(projectId);
     if (pending) {
-      await pending.catch(() => undefined);
+      await pending.promise.catch(() => undefined);
     }
     const entry = this.entries.get(projectId);
     if (!entry) return;

@@ -43,6 +43,7 @@ const cdb: ProjectDatabase = {
   tenantScope: { column: null, overrides: {}, exempt: [] },
   guardrails: { block_unqualified_dml: true, block_ddl: true },
   columnMasks: {},
+  ignoredColumns: {},
   rotatedAt: null,
   lastKmsSuccessAt: null,
   createdAt: new Date(),

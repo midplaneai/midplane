@@ -19,6 +19,7 @@ import {
   maskRuleKind,
   maskRuleLabel,
   PSEUDONYMIZE_KINDS,
+  type IgnoredColumnsConfig,
   type MaskRule,
   type MaskTransformKind,
   type PseudonymizeKind,
@@ -26,6 +27,12 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface PiiMatch {
   category: string;
@@ -43,6 +50,9 @@ type ColumnMasks = Record<string, Record<string, MaskRule>>;
 type SaveResult = { ok: true } | { ok: false; error: string };
 
 type ScanState =
+  // `idle` is the pre-scan state: introspection hits the live DB, so we don't
+  // run it on mount — the user clicks "Scan" (design D1, on-demand).
+  | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "ok"; columns: ScannedColumn[]; scannedColumns: number };
@@ -54,6 +64,8 @@ interface Row {
   category: string | null;
   confidence: PiiMatch["confidence"] | null;
   masked: MaskRule | null;
+  /** User dismissed this column as not-PII (scan-view only). */
+  ignored: boolean;
   suggested: MaskRule | null;
 }
 
@@ -104,50 +116,119 @@ const Th = ({ children }: { children: React.ReactNode }) => (
   </th>
 );
 
+const addInputClass =
+  "w-44 rounded-none border border-input bg-background px-2 py-1 font-mono text-[11px] text-foreground placeholder:text-subtle focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]";
+
+// Plain-language meaning of a match's confidence — surfaced on hover so the
+// scan never makes the user guess what a level means. The chip itself drops the
+// inline level word (it lengthened the weakest matches and drew the eye to the
+// least-certain rows); confidence now recedes here instead.
+const CONFIDENCE_TOOLTIP: Record<PiiMatch["confidence"], string> = {
+  high: "Strong match — the column name clearly indicates personal data.",
+  medium: "Likely — the column name suggests personal data.",
+  low: "Weak match — based on the column name only; may not be personal data.",
+};
+
+// The "detected" chip. Every category renders at the SAME weight (the category
+// alone, no trailing level word), so a weak `name` no longer outshouts a strong
+// `email`. Confidence instead recedes: `high` keeps the solid dot, `medium`/`low`
+// go dot-less and dimmed. The level's meaning lives in the hover tooltip.
+function DetectedBadge({
+  category,
+  confidence,
+}: {
+  category: string;
+  confidence: PiiMatch["confidence"];
+}) {
+  const strong = confidence === "high";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-default">
+          <Badge
+            variant="warn"
+            withDot={strong}
+            className={strong ? undefined : "opacity-60"}
+          >
+            {category}
+          </Badge>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{CONFIDENCE_TOOLTIP[confidence]}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function ExposureScan({
   projectId,
   db,
+  maskingConfigured,
+  initialMasks,
+  initialIgnored,
   onSave,
+  onSaveIgnored,
 }: {
   projectId: string;
   db: string;
+  /** Whether MIDPLANE_MASK_SALT_MASTER is set on this deployment. When false the
+   *  engine refuses to spawn with any mask, so we surface it loudly + disable the
+   *  mask controls rather than let a save break the project's agent later. */
+  maskingConfigured: boolean;
+  initialMasks: ColumnMasks;
+  initialIgnored: IgnoredColumnsConfig;
   onSave: (masks: ColumnMasks) => Promise<SaveResult>;
+  onSaveIgnored: (ignored: IgnoredColumnsConfig) => Promise<SaveResult>;
 }) {
-  const [scan, setScan] = useState<ScanState>({ kind: "loading" });
-  const [masks, setMasks] = useState<ColumnMasks>({});
+  // Seed from persisted state so masked + dismissed columns render (and stay
+  // manageable) with NO scan run; the scan only adds the live "exposed" rows.
+  const [scan, setScan] = useState<ScanState>({ kind: "idle" });
+  const [masks, setMasks] = useState<ColumnMasks>(initialMasks);
+  const [ignored, setIgnored] = useState<IgnoredColumnsConfig>(initialIgnored);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [addTable, setAddTable] = useState("");
+  const [addColumn, setAddColumn] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
+  // On-demand: introspection hits the live DB, so we only run on an explicit
+  // click (initial state is `idle`). Switching DB remounts (parent `key`), so
+  // this resets cleanly without a stale auto-fetch.
+  function runScan() {
     setScan({ kind: "loading" });
-    fetch(`/api/projects/${projectId}/scan?db=${encodeURIComponent(db)}`)
+    setSaveError(null);
+    // no-store: the response bundles the DB's CURRENT masks + dismissals, which
+    // the user mutates via separate save actions. A cached replay (the endpoint
+    // used to advertise max-age) would clobber just-saved state on rescan and
+    // make a masked/dismissed column reappear. Each rescan wants live truth.
+    fetch(`/api/projects/${projectId}/scan?db=${encodeURIComponent(db)}`, {
+      cache: "no-store",
+    })
       .then((r) => r.json())
       .then((body) => {
-        if (cancelled) return;
         if (body?.error) {
           setScan({
             kind: "error",
             message:
               body.error === "credential_unavailable"
-                ? "Couldn't reach the database — its credential is unavailable. Rotate the connection string and retry."
+                ? "Couldn't reach the database — its credential is temporarily unavailable. Retry in a moment."
                 : "Couldn't read the schema. Check the database is reachable and retry.",
           });
           return;
         }
         setScan({ kind: "ok", columns: body.columns ?? [], scannedColumns: body.scannedColumns ?? 0 });
         setMasks(body.columnMasks ?? {});
+        setIgnored(body.ignoredColumns ?? {});
       })
       .catch(() => {
-        if (!cancelled) setScan({ kind: "error", message: "Scan request failed. Retry shortly." });
+        setScan({ kind: "error", message: "Scan request failed. Retry shortly." });
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, db]);
+  }
 
-  // Optimistically apply `next`, persist, and revert on failure.
-  function commit(next: ColumnMasks) {
+  // Optimistically apply `next`, persist, and revert on failure. Masks and
+  // dismissals are independent JSONB columns with independent save actions, so
+  // each has its own optimistic state + revert.
+  function commitMasks(next: ColumnMasks) {
     const prev = masks;
     setMasks(next);
     setSaveError(null);
@@ -159,9 +240,21 @@ export function ExposureScan({
       }
     });
   }
+  function commitIgnored(next: IgnoredColumnsConfig) {
+    const prev = ignored;
+    setIgnored(next);
+    setSaveError(null);
+    startTransition(async () => {
+      const res = await onSaveIgnored(next);
+      if (!res.ok) {
+        setIgnored(prev);
+        setSaveError(res.error);
+      }
+    });
+  }
 
   function setMask(table: string, column: string, rule: MaskRule) {
-    commit({ ...masks, [table]: { ...(masks[table] ?? {}), [column]: rule } });
+    commitMasks({ ...masks, [table]: { ...(masks[table] ?? {}), [column]: rule } });
   }
   function unmask(table: string, column: string) {
     const tableMasks = { ...(masks[table] ?? {}) };
@@ -169,135 +262,351 @@ export function ExposureScan({
     const next = { ...masks };
     if (Object.keys(tableMasks).length === 0) delete next[table];
     else next[table] = tableMasks;
-    commit(next);
+    commitMasks(next);
+  }
+  function ignore(table: string, column: string) {
+    const list = ignored[table] ?? [];
+    if (list.includes(column)) return;
+    commitIgnored({ ...ignored, [table]: [...list, column] });
+  }
+  function restore(table: string, column: string) {
+    const list = (ignored[table] ?? []).filter((c) => c !== column);
+    const next = { ...ignored };
+    if (list.length === 0) delete next[table];
+    else next[table] = list;
+    commitIgnored(next);
+  }
+  function addCustom() {
+    const t = addTable.trim();
+    const c = addColumn.trim();
+    if (!t || !c) return;
+    // Universal type-safe default; the user refines via the transform editor on
+    // the masked row that appears (an unknown-type column leaves every kind on).
+    setMask(t, c, "null-out");
+    setShowAdd(false);
+    setAddTable("");
+    setAddColumn("");
   }
 
-  if (scan.kind === "loading") {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Scanning <code className="font-mono">information_schema</code>…
-      </p>
-    );
-  }
-  if (scan.kind === "error") {
-    return (
-      <div className="rounded-lg border border-[hsl(var(--warn)/0.4)] bg-card p-4">
-        <p className="text-sm text-muted-foreground">{scan.message}</p>
-      </div>
-    );
-  }
-
-  const rows = mergeRows(scan.columns, masks);
-  const exposed = rows.filter((r) => r.category !== null && r.masked === null);
-  const maskedCount = rows.filter((r) => r.masked !== null).length;
+  // The masked + dismissed lists come from persisted state and need NO scan;
+  // only the EXPOSED (warn) rows require live introspection. So the scan is a
+  // control at the top, not a gate on the whole surface — masked columns stay
+  // visible and editable in every scan state (idle / loading / error).
+  const scanColumns = scan.kind === "ok" ? scan.columns : [];
+  const rows = mergeRows(scanColumns, masks, ignored);
+  const maskedRows = rows.filter((r) => r.masked !== null);
+  const exposedRows = rows.filter(
+    (r) => r.masked === null && !r.ignored && r.category !== null,
+  );
+  const dismissedRows = rows.filter((r) => r.masked === null && r.ignored);
+  // Masked-first, then the still-exposed action items (each group already sorted
+  // by table → column). The detected badge keeps the two visually distinct.
+  const tableRows = [...maskedRows, ...exposedRows];
+  const showMeta =
+    scan.kind === "ok" || maskedRows.length > 0 || dismissedRows.length > 0;
+  // Masking is unenforceable without the deployment salt — block ADDING masks
+  // (mask / add-column / change-transform) but keep removals (unmask) so a stuck
+  // project can recover. Dismiss/restore are scan-view state, unaffected.
+  const maskDisabled = pending || !maskingConfigured;
 
   return (
-    <div className="space-y-4">
-      <header className="space-y-1">
-        {exposed.length > 0 ? (
-          <p className="text-sm text-muted-foreground">
-            <strong className="font-medium text-foreground">
-              {exposed.length} column{exposed.length === 1 ? "" : "s"}
-            </strong>{" "}
-            your agent can read look like personal data.
-          </p>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            <strong className="font-medium text-foreground">No exposed personal data detected.</strong>{" "}
-            Nothing the scan recognizes as PII is readable unmasked.
-          </p>
-        )}
-        <p className="font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
-          scanned {scan.scannedColumns} columns · {maskedCount} masked
-          {pending ? " · saving…" : ""}
-        </p>
-        {saveError ? (
-          <p className="text-xs text-[hsl(var(--deny))]">Couldn&apos;t save: {saveError}</p>
+    <TooltipProvider delayDuration={150}>
+      <div className="space-y-4">
+        {!maskingConfigured ? (
+          <div
+            className={
+              maskedRows.length > 0
+                ? "rounded-lg border border-[hsl(var(--deny)/0.4)] bg-[hsl(var(--deny)/0.06)] px-3.5 py-2.5 text-xs text-[hsl(var(--deny))]"
+                : "rounded-lg border border-border border-l-2 border-l-[hsl(var(--warn))] bg-card px-3.5 py-2.5 text-xs text-muted-foreground"
+            }
+          >
+            <p>
+              <strong className="font-medium">
+                Masking isn&apos;t configured on this deployment.
+              </strong>{" "}
+              {maskedRows.length > 0 ? (
+                <>
+                  The {maskedRows.length} masked column
+                  {maskedRows.length === 1 ? "" : "s"} below won&apos;t be enforced
+                  — the engine refuses to start with masks set until{" "}
+                  <code className="font-mono">MIDPLANE_MASK_SALT_MASTER</code> is
+                  set. Set it, or unmask to restore the connection.
+                </>
+              ) : (
+                <>
+                  Set <code className="font-mono">MIDPLANE_MASK_SALT_MASTER</code>{" "}
+                  to turn on masking — deterministic transforms need a
+                  per-deployment salt, so masks can&apos;t be saved until it&apos;s
+                  configured.
+                </>
+              )}
+            </p>
+          </div>
         ) : null}
-      </header>
+        <header className="space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              {scan.kind === "error" ? (
+                <div className="rounded-lg border border-[hsl(var(--warn)/0.4)] bg-card px-3.5 py-2.5">
+                  <p className="text-sm text-muted-foreground">{scan.message}</p>
+                </div>
+              ) : scan.kind === "loading" ? (
+                <p className="text-sm text-muted-foreground">
+                  Scanning <code className="font-mono">information_schema</code>…
+                </p>
+              ) : scan.kind === "ok" ? (
+                exposedRows.length > 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    <strong className="font-medium text-foreground">
+                      {exposedRows.length} column{exposedRows.length === 1 ? "" : "s"}
+                    </strong>{" "}
+                    your agent can read look like personal data.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    <strong className="font-medium text-foreground">
+                      No exposed personal data detected.
+                    </strong>{" "}
+                    Nothing the scan recognizes as PII is readable unmasked.
+                  </p>
+                )
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Scan to find columns your agent can read that look like personal
+                  data. Reads <code className="font-mono">information_schema</code>{" "}
+                  only — never row values.
+                </p>
+              )}
+            </div>
+            <div className="shrink-0">
+              {scan.kind === "loading" ? (
+                <Button size="sm" disabled>
+                  Scanning…
+                </Button>
+              ) : scan.kind === "idle" ? (
+                <Button size="sm" disabled={pending} onClick={runScan}>
+                  Scan for exposed columns
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" disabled={pending} onClick={runScan}>
+                  {scan.kind === "error" ? "Retry scan" : "Rescan"}
+                </Button>
+              )}
+            </div>
+          </div>
+          {showMeta ? (
+            <p className="font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
+              {scan.kind === "ok" ? `scanned ${scan.scannedColumns} columns · ` : ""}
+              {maskedRows.length} masked
+              {dismissedRows.length > 0 ? ` · ${dismissedRows.length} dismissed` : ""}
+              {pending ? " · saving…" : ""}
+            </p>
+          ) : null}
+          {saveError ? (
+            <p className="text-xs text-[hsl(var(--deny))]">Couldn&apos;t save: {saveError}</p>
+          ) : null}
+        </header>
 
-      {rows.length > 0 ? (
-        <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b border-border">
-                <Th>column</Th>
-                <Th>type</Th>
-                <Th>detected</Th>
-                <Th>transform</Th>
-                <Th>{""}</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr
-                  key={`${r.table}.${r.column}`}
-                  className={`border-b border-card ${r.masked === null && r.category !== null ? "bg-[hsl(var(--warn)/0.05)]" : ""}`}
-                >
-                  <td className="px-3.5 py-2.5 font-mono text-xs text-foreground">
-                    {r.table}.{r.column}
-                  </td>
-                  <td className="px-3.5 py-2.5 font-mono text-xs text-subtle">{r.dataType || "—"}</td>
-                  <td className="px-3.5 py-2.5">
-                    {r.masked !== null ? (
-                      <Badge variant="allow" withDot>masked</Badge>
-                    ) : r.category !== null ? (
-                      <Badge variant="warn" withDot>
-                        {r.category}
-                        {r.confidence && r.confidence !== "high" ? ` · ${r.confidence}` : ""}
-                      </Badge>
-                    ) : (
-                      <span className="text-subtle">—</span>
-                    )}
-                  </td>
-                  <td className="px-3.5 py-2.5">
-                    {r.masked !== null ? (
-                      <TransformEditor
-                        value={r.masked}
-                        dataType={r.dataType}
-                        disabled={pending}
-                        onChange={(rule) => setMask(r.table, r.column, rule)}
-                      />
-                    ) : (
-                      <span className="font-mono text-[11px] text-subtle">
-                        {r.suggested ? maskRuleLabel(r.suggested) : "—"}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3.5 py-2.5 text-right">
-                    {r.masked !== null ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={pending}
-                        onClick={() => unmask(r.table, r.column)}
-                      >
-                        unmask
-                      </Button>
-                    ) : r.suggested ? (
-                      <Button
-                        size="sm"
-                        disabled={pending}
-                        onClick={() => setMask(r.table, r.column, r.suggested!)}
-                      >
-                        mask
-                      </Button>
-                    ) : null}
-                  </td>
+        {tableRows.length > 0 ? (
+          <div className="overflow-x-auto rounded-lg border border-border bg-card">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b border-border">
+                  <Th>column</Th>
+                  <Th>type</Th>
+                  <Th>detected</Th>
+                  <Th>transform</Th>
+                  <Th>{""}</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
+              </thead>
+              <tbody>
+                {tableRows.map((r) => (
+                  <tr
+                    key={`${r.table}.${r.column}`}
+                    className={`border-b border-card ${r.masked === null && r.category !== null ? "bg-[hsl(var(--warn)/0.05)]" : ""}`}
+                  >
+                    <td className="px-3.5 py-2.5 font-mono text-xs text-foreground">
+                      {r.table}.{r.column}
+                    </td>
+                    <td className="px-3.5 py-2.5 font-mono text-xs text-subtle">{r.dataType || "—"}</td>
+                    <td className="px-3.5 py-2.5">
+                      {r.masked !== null ? (
+                        <Badge variant="allow" withDot>masked</Badge>
+                      ) : r.category !== null ? (
+                        <DetectedBadge category={r.category} confidence={r.confidence ?? "high"} />
+                      ) : (
+                        <span className="text-subtle">—</span>
+                      )}
+                    </td>
+                    <td className="px-3.5 py-2.5">
+                      {r.masked !== null ? (
+                        <TransformEditor
+                          value={r.masked}
+                          dataType={r.dataType}
+                          disabled={maskDisabled}
+                          onChange={(rule) => setMask(r.table, r.column, rule)}
+                        />
+                      ) : (
+                        <span className="font-mono text-[11px] text-subtle">
+                          {r.suggested ? maskRuleLabel(r.suggested) : "—"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3.5 py-2.5 text-right">
+                      {r.masked !== null ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={pending}
+                          onClick={() => unmask(r.table, r.column)}
+                        >
+                          Unmask
+                        </Button>
+                      ) : r.category !== null ? (
+                        <div className="flex items-center justify-end gap-1.5">
+                          {r.suggested ? (
+                            <Button
+                              size="sm"
+                              disabled={maskDisabled}
+                              title={
+                                !maskingConfigured
+                                  ? "Masking isn’t configured (set MIDPLANE_MASK_SALT_MASTER)"
+                                  : undefined
+                              }
+                              onClick={() => setMask(r.table, r.column, r.suggested!)}
+                            >
+                              Mask
+                            </Button>
+                          ) : null}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={pending}
+                            title="Not personal data — stop flagging this column"
+                            onClick={() => ignore(r.table, r.column)}
+                          >
+                            Ignore
+                          </Button>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
 
-      <p className="rounded-lg border border-border border-l-2 border-l-[hsl(var(--warn))] bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
-        <strong className="font-medium text-foreground">Heads up:</strong> masking changes what the
-        agent <em>reads back</em>. It can&apos;t hide a value the agent filters or sorts on
-        (<span className="font-mono">where email = …</span>). This is result redaction, not a hard
-        guarantee. Saving respawns the engine so the change takes effect on the next agent request.
-      </p>
-    </div>
+        <div>
+          {showAdd ? (
+            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-card px-3.5 py-3">
+              <label className="flex flex-col gap-1 font-mono text-[11px] text-subtle">
+                table
+                <input
+                  className={addInputClass}
+                  placeholder="public.users"
+                  value={addTable}
+                  disabled={pending}
+                  aria-label="table to mask"
+                  onChange={(e) => setAddTable(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 font-mono text-[11px] text-subtle">
+                column
+                <input
+                  className={addInputClass}
+                  placeholder="email"
+                  value={addColumn}
+                  disabled={pending}
+                  aria-label="column to mask"
+                  onChange={(e) => setAddColumn(e.target.value)}
+                />
+              </label>
+              <Button
+                size="sm"
+                disabled={maskDisabled || !addTable.trim() || !addColumn.trim()}
+                onClick={addCustom}
+              >
+                Add
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pending}
+                onClick={() => {
+                  setShowAdd(false);
+                  setAddTable("");
+                  setAddColumn("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={maskDisabled}
+              title={
+                !maskingConfigured
+                  ? "Masking isn’t configured (set MIDPLANE_MASK_SALT_MASTER)"
+                  : undefined
+              }
+              onClick={() => setShowAdd(true)}
+            >
+              + Add a column to mask
+            </Button>
+          )}
+          <p className="mt-1.5 text-xs text-subtle">
+            Mask a column the scan didn&apos;t flag — an off-pattern name, or data
+            inside a JSON column.
+          </p>
+        </div>
+
+        {dismissedRows.length > 0 ? (
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowDismissed((v) => !v)}
+              className="font-mono text-[11px] lowercase tracking-[0.04em] text-subtle hover:text-foreground"
+            >
+              {showDismissed ? "▾" : "▸"} dismissed ({dismissedRows.length})
+            </button>
+            {showDismissed ? (
+              <div className="overflow-x-auto rounded-lg border border-border bg-card">
+                <table className="w-full border-collapse">
+                  <tbody>
+                    {dismissedRows.map((r) => (
+                      <tr key={`${r.table}.${r.column}`} className="border-b border-card last:border-0">
+                        <td className="px-3.5 py-2 font-mono text-xs text-subtle">
+                          {r.table}.{r.column}
+                        </td>
+                        <td className="px-3.5 py-2 text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={pending}
+                            onClick={() => restore(r.table, r.column)}
+                          >
+                            Restore
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <p className="rounded-lg border border-border border-l-2 border-l-[hsl(var(--warn))] bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
+          <strong className="font-medium text-foreground">Masking redacts results — it doesn&apos;t make the data secret.</strong>{" "}
+          A masked column is reliably replaced in what the agent reads back, but the agent can still
+          filter or sort on the real value (<span className="font-mono">where email = …</span>) to infer it.
+        </p>
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -629,18 +938,31 @@ function NoiseParams({
   );
 }
 
-// Unify the heuristic scan with the persisted masks: every flagged column plus
-// every masked column (even if not flagged), sorted by table then column.
-function mergeRows(columns: ScannedColumn[], masks: ColumnMasks): Row[] {
+// Unify the heuristic scan with the persisted masks + dismissals: every flagged
+// column, every masked column (even if not flagged), and every dismissed column
+// (so it can be restored), sorted by table then column. A masked column wins
+// over a dismissal — masking supersedes "not PII" — so `ignored` only sticks on
+// an unmasked row.
+function mergeRows(
+  columns: ScannedColumn[],
+  masks: ColumnMasks,
+  ignored: IgnoredColumnsConfig,
+): Row[] {
+  const ignoredSet = new Set<string>();
+  for (const [table, cols] of Object.entries(ignored)) {
+    for (const column of cols) ignoredSet.add(`${table}.${column}`);
+  }
   const byKey = new Map<string, Row>();
   for (const c of columns) {
-    byKey.set(`${c.table}.${c.column}`, {
+    const key = `${c.table}.${c.column}`;
+    byKey.set(key, {
       table: c.table,
       column: c.column,
       dataType: c.dataType,
       category: c.match.category,
       confidence: c.match.confidence,
       masked: masks[c.table]?.[c.column] ?? null,
+      ignored: ignoredSet.has(key),
       suggested: c.match.suggestedTransform,
     });
   }
@@ -657,6 +979,25 @@ function mergeRows(columns: ScannedColumn[], masks: ColumnMasks): Row[] {
           category: null,
           confidence: null,
           masked: rule,
+          ignored: ignoredSet.has(key),
+          suggested: null,
+        });
+    }
+  }
+  // Dismissed columns the scan no longer flags (and that aren't masked) still
+  // need a row so the user can restore them.
+  for (const [table, cols] of Object.entries(ignored)) {
+    for (const column of cols) {
+      const key = `${table}.${column}`;
+      if (!byKey.has(key))
+        byKey.set(key, {
+          table,
+          column,
+          dataType: "",
+          category: null,
+          confidence: null,
+          masked: null,
+          ignored: true,
           suggested: null,
         });
     }

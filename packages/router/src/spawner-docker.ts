@@ -93,6 +93,14 @@ export class DockerSpawner implements Spawner {
       { mode: 0o644 },
     );
 
+    // Best-effort: clear a leaked container with this deterministic name before
+    // spawning. A hard-killed dev server (SIGKILL) skips the registry's graceful
+    // stop(), so its `--rm` container survives and the next spawn collides on
+    // `--name` ("container name already in use"). Force-removing any stale
+    // same-name container first makes a restart just work; a no-op (and harmless
+    // non-zero exit) when nothing is there.
+    await this.exec("docker", ["rm", "-f", name]).catch(() => undefined);
+
     // -p 0:8080 asks Docker for a random host port; -d --rm so the container
     // self-removes on stop. DSNs are injected as MIDPLANE_DSN_<id> env vars
     // (one per DB) — they live in the container's env, never on disk. The

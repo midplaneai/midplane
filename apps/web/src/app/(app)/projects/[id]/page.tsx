@@ -5,6 +5,7 @@ import { notFound, redirect } from "next/navigation";
 import {
   parseColumnMasksOrThrow,
   parseGuardrailsOrThrow,
+  parseIgnoredColumnsOrThrow,
   parsePolicyOrThrow,
 } from "@midplane-cloud/db";
 import { mcpGenericUrl } from "@midplane-cloud/router";
@@ -46,6 +47,7 @@ import {
   getProjectWithDatabase,
   getProjectWithDatabaseAndCredential,
   getPlanUsage,
+  maskConfigAddsMasking,
   isValidDatabaseName,
   isValidDsn,
   LastDatabaseProtected,
@@ -57,6 +59,7 @@ import {
   rotateProject,
   setColumnMasks,
   setGuardrails,
+  setIgnoredColumns,
   setTableAccess,
 } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
@@ -402,8 +405,51 @@ export default async function ProjectWorkspace({
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : "invalid masks" };
     }
+    // Don't let masking fail silently. If this deployment has no
+    // MIDPLANE_MASK_SALT_MASTER, the engine refuses to spawn with any mask set
+    // (masking would be unenforceable) — so a saved mask would break the
+    // project's agent connection later, not now. Refuse the write at save time
+    // with a clear error instead. Pure REMOVALS still go through, so a project
+    // already stuck on a missing salt can be recovered by unmasking. (The UI
+    // also disables the mask controls + shows a banner; this is the backstop for
+    // a stale page / direct call.)
+    if (!process.env.MIDPLANE_MASK_SALT_MASTER && Object.keys(config).length > 0) {
+      const current = await getProjectWithDatabase(customer, id, selectedName);
+      const prev = current ? parseColumnMasksOrThrow(current.database.columnMasks) : {};
+      if (maskConfigAddsMasking(prev, config)) {
+        return {
+          ok: false,
+          error:
+            "Masking isn’t configured on this deployment — set MIDPLANE_MASK_SALT_MASTER. The engine refuses to start with masks until it’s set, so this can’t be saved yet.",
+        };
+      }
+    }
     const ctx = getMcpProxyContext();
     const result = await setColumnMasks(customer, id, config, ctx, userId, selectedName);
+    if (!result) return { ok: false, error: "not found" };
+    revalidatePath(`/projects/${id}`);
+    return { ok: true };
+  }
+
+  // PII-scan dismissals (design D1). Typed action like columnMasksAction so the
+  // Exposure scan can persist the full next ignored-column set on a dismiss /
+  // restore. Manager-only. Unlike masks this is scan-view state, not policy:
+  // setIgnoredColumns does no engine respawn and writes no audit row.
+  async function ignoredColumnsAction(
+    next: unknown,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) return { ok: false, error: "not signed in" };
+    await assertManager();
+    if (!selectedName) return { ok: false, error: "no database selected" };
+    let config;
+    try {
+      config = parseIgnoredColumnsOrThrow(next);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "invalid dismissals" };
+    }
+    const result = await setIgnoredColumns(customer, id, config, selectedName);
     if (!result) return { ok: false, error: "not found" };
     revalidatePath(`/projects/${id}`);
     return { ok: true };
@@ -731,7 +777,11 @@ export default async function ProjectWorkspace({
               key={selDb.name}
               projectId={conn.id}
               db={selDb.name}
+              maskingConfigured={!!process.env.MIDPLANE_MASK_SALT_MASTER}
+              initialMasks={parseColumnMasksOrThrow(selDb.columnMasks)}
+              initialIgnored={parseIgnoredColumnsOrThrow(selDb.ignoredColumns)}
               onSave={columnMasksAction}
+              onSaveIgnored={ignoredColumnsAction}
             />
           </div>
 

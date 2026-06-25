@@ -11,6 +11,7 @@ import {
   indexerCursors,
   validateColumnMasks,
   validateGuardrails,
+  validateIgnoredColumns,
   validatePolicy,
   validateTenantScope,
   type AccessLevel,
@@ -18,6 +19,7 @@ import {
   type Customer,
   type DatabaseEntry,
   type GuardrailsConfig,
+  type IgnoredColumnsConfig,
   type TableAccessPolicy,
   type TenantScopeConfig,
 } from "@midplane-cloud/db";
@@ -74,6 +76,9 @@ const SAFE_DATABASE_COLUMNS = {
   // Non-secret policy config (same class as tableAccess/guardrails) — the
   // masked-preview panel reads it to prefill a query + label masked columns.
   columnMasks: projectDatabases.columnMasks,
+  // Scan-view dismissals — the exposure scan seeds these so masked/dismissed
+  // columns render (and stay manageable) before any live scan is run.
+  ignoredColumns: projectDatabases.ignoredColumns,
   rotatedAt: projectDatabases.rotatedAt,
   lastKmsSuccessAt: projectDatabases.lastKmsSuccessAt,
   createdAt: projectDatabases.createdAt,
@@ -88,6 +93,7 @@ export type SafeProjectDatabase = Pick<
   | "tenantScope"
   | "guardrails"
   | "columnMasks"
+  | "ignoredColumns"
   | "rotatedAt"
   | "lastKmsSuccessAt"
   | "createdAt"
@@ -973,6 +979,73 @@ export async function setColumnMasks(
     payload: { column_masks: validation.value },
     logPrefix: "[setColumnMasks]",
     forceRespawn: true,
+  });
+}
+
+/** True if `next` turns masking ON or strengthens it vs `prev` — adds a masked
+ *  column, or changes an existing column's rule. Pure removals (and no-ops)
+ *  return false. The save path uses this to fail LOUD when masking is configured
+ *  on a deployment without MIDPLANE_MASK_SALT_MASTER (the engine would refuse to
+ *  spawn), while still letting the user REMOVE masks to recover a project whose
+ *  engine is already stuck. Both args must be normalized
+ *  (parseColumnMasksOrThrow) so rule equality is a stable JSON compare. */
+export function maskConfigAddsMasking(
+  prev: ColumnMasksConfig,
+  next: ColumnMasksConfig,
+): boolean {
+  for (const [table, cols] of Object.entries(next)) {
+    for (const [col, rule] of Object.entries(cols)) {
+      const before = prev[table]?.[col];
+      if (before === undefined) return true;
+      if (JSON.stringify(before) !== JSON.stringify(rule)) return true;
+    }
+  }
+  return false;
+}
+
+// PII-scan dismissals (design D1). Deliberately NOT routed through
+// applyPolicyConfigChange: ignored_columns is scan-view state, not policy.
+// It never reaches the engine, so there is no respawn, no policy push, and no
+// sibling re-statement; and it is not a security-relevant change, so it skips
+// the POLICY_CHANGED audit row. Just a validated, ownership-gated JSONB write
+// on the named child. Returns null with the same leakage-avoidance shape as the
+// policy setters (unknown id / foreign customer / unknown child are
+// indistinguishable to the caller).
+export async function setIgnoredColumns(
+  customer: Customer,
+  id: string,
+  config: IgnoredColumnsConfig,
+  dbName: string = DEFAULT_DATABASE_NAME,
+): Promise<{ id: string } | null> {
+  const validation = validateIgnoredColumns(config);
+  if (!validation.ok) {
+    const summary = validation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`invalid ignored_columns: ${summary}`);
+  }
+  const db = getDb(customer.region);
+  return db.transaction(async (tx) => {
+    // Ownership check on the parent first so a write-through can't confirm a
+    // foreign project's existence (mirrors applyPolicyConfigChange).
+    const parent = await tx
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(eq(projects.id, id), eq(projects.customerId, customer.id)))
+      .limit(1);
+    if (parent.length === 0) return null;
+    const updated = await tx
+      .update(projectDatabases)
+      .set({ ignoredColumns: validation.value })
+      .where(
+        and(
+          eq(projectDatabases.projectId, id),
+          eq(projectDatabases.name, dbName),
+        ),
+      )
+      .returning({ id: projectDatabases.id });
+    if (updated.length === 0) return null;
+    return { id: parent[0]!.id };
   });
 }
 

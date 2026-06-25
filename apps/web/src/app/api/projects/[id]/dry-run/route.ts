@@ -19,9 +19,12 @@
 // Tenant context is synthetic (nothing dials the customer DB), so no
 // real tenant value is ever needed here.
 
+import { createHmac } from "node:crypto";
+
 import { z } from "zod";
 
 import {
+  parseColumnMasksOrThrow,
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
@@ -183,7 +186,34 @@ export async function POST(
       tableAccess,
       tenantScope,
       guardrails,
+      // Carry masks even though dry-run only tests ACCESS decisions (nothing
+      // executes, so masks don't change a verdict). The container is shared via
+      // the registry — booting it mask-less would leave a mask-less container
+      // warm for the masked proxy/preview paths to reuse, silently dropping
+      // masking (a bypass). Spawning with the same masks keeps the pool honest.
+      columnMasks: parseColumnMasksOrThrow(cdb.columnMasks),
     });
+  }
+
+  // Masking salt (W1): same derivation as the proxy/preview so the dry-run's
+  // spawn fingerprint matches theirs. Fail closed if masks exist without a
+  // configured master — booting masked-without-salt would crash the engine.
+  const anyMasked = spawnDatabases.some(
+    (d) => d.columnMasks && Object.keys(d.columnMasks).length > 0,
+  );
+  let maskSalt: string | undefined;
+  if (anyMasked) {
+    const master = process.env.MIDPLANE_MASK_SALT_MASTER;
+    if (!master) {
+      console.error(
+        `[dry-run] project ${conn.id} has column_masks but MIDPLANE_MASK_SALT_MASTER is unset — refusing to spawn`,
+      );
+      return Response.json(
+        { error: "engine_unavailable", detail: "masking misconfigured" },
+        { status: 503 },
+      );
+    }
+    maskSalt = createHmac("sha256", master).update(conn.id).digest("hex");
   }
 
   // One engine call per request: the probe matrix (or custom statement)
@@ -224,6 +254,7 @@ export async function POST(
       projectId: conn.id,
       region: conn.region,
       databases: spawnDatabases,
+      maskSalt,
     },
     requests,
     freshEntries,
