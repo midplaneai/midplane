@@ -61,6 +61,12 @@ export function NewProjectForm({
           name="dsn"
           type="text"
           required
+          autoComplete="off"
+          data-1p-ignore
+          data-lpignore="true"
+          spellCheck={false}
+          autoCapitalize="none"
+          autoCorrect="off"
           placeholder="postgres://readonly_agent:pass@host:5432/db?sslmode=require"
           className="font-mono"
           aria-invalid={state.error ? true : undefined}

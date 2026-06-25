@@ -71,7 +71,7 @@ export function RotateProjectForm({
         <Label htmlFor="rotate-dsn">New connection string</Label>
         <Input
           id="rotate-dsn"
-          type="password"
+          type="text"
           name="dsn"
           value={dsn}
           onChange={(e) => {
@@ -79,9 +79,12 @@ export function RotateProjectForm({
             setError(null);
           }}
           required
-          autoComplete="new-password"
+          autoComplete="off"
           data-1p-ignore
           data-lpignore="true"
+          spellCheck={false}
+          autoCapitalize="none"
+          autoCorrect="off"
           placeholder="postgres://user:pass@host:5432/db"
           className="font-mono"
         />
