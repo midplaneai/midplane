@@ -189,11 +189,14 @@ export function AddDatabaseForm({
             <Input
               id="add-db-dsn"
               name="dsn"
-              type="password"
+              type="text"
               required
-              autoComplete="new-password"
+              autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              spellCheck={false}
+              autoCapitalize="none"
+              autoCorrect="off"
               placeholder="postgres://user:pass@host:5432/db"
               className="font-mono"
               onChange={reset}
