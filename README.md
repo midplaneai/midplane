@@ -1,389 +1,137 @@
-# midplane-cloud
+# Midplane
 
-Midplane is **AST-grade, safe-by-default SQL guardrails for AI agents**. An
-inspectable engine sits in the query path between an agent (Claude, Cursor, any
-MCP client) and your database and parses every statement with a real SQL AST
-(not regex) — enforcing declarative table-access policy, blocking no-WHERE DML
-and DDL, and writing an event-sourced audit log of which agent ran what.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![CI](https://github.com/midplaneai/midplane/actions/workflows/engine-test.yml/badge.svg)](https://github.com/midplaneai/midplane/actions/workflows/engine-test.yml)
+[![Docs](https://img.shields.io/badge/docs-midplane.ai%2Fdocs-2ea44f.svg)](https://midplane.ai/docs)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20Streamable%20HTTP-blueviolet)](https://modelcontextprotocol.io/)
 
-This repository is the open-core monorepo — **one codebase, two deployables**:
+**Safe-by-default SQL guardrails for AI agents.** Midplane sits in the query path
+between an AI agent (Claude, Cursor, any MCP client) and your Postgres database. It
+parses every statement with a real SQL AST — not a regex blocklist — enforces a
+declarative per-table access policy, blocks destructive DML/DDL, and writes an
+event-sourced audit log of which agent ran what, **before** the query executes.
 
-- **control plane** (repo root): the dashboard, project + policy management,
-  audit views, agent-token issuance, and the hosted MCP proxy. Open core — MIT
-  except `apps/web/src/ee/` (the commercial Enterprise Edition).
-- **engine** ([`engine/`](./engine)): the MIT query-path engine (SQL parsing,
-  policy enforcement, guardrails), built once via `bun build --compile` into a
-  self-contained binary. The control plane spawns it per project and never
-  reimplements it, so hosted/self-host parity is mechanically enforced by
-  running the same engine everywhere — only the packaging differs: hosted and
-  local-dev run it as the minimal `midplane/midplane` Docker image (Fly machine
-  / `docker run`); self-host exec's the same binary, bundled in the
-  control-plane image, as a subprocess (no Docker daemon).
+> 📖 **Full documentation lives at [midplane.ai/docs](https://midplane.ai/docs)** —
+> agent setup, the policy reference, self-hosting, deployment, and the threat model.
+> This README is just the orientation.
 
-"One codebase" is not "one process": the engine stays a tiny, minimal-attack-
-surface artifact in the query path; the control plane is one web app.
+<!-- TODO(screenshot): a dashboard audit-log or denied-query view belongs here.
+     Open-core dashboards convert on a visual; highest-leverage single addition. -->
 
-## Open core
+## Why this exists
 
-The control plane is open core, MIT, and self-hostable. Everything outside
-`apps/web/src/ee/` is the Community Edition — the whole single-tenant product
-(dashboard, policy editor, audit log, dry-run, every guardrail), uncapped when
-self-hosted. `apps/web/src/ee/` is the commercial Enterprise Edition (SSO/SAML
-today; the governance band over time); see [`LICENSE`](./LICENSE) and
-[`apps/web/src/ee/LICENSE`](./apps/web/src/ee/LICENSE). Deleting `ee/` leaves a
-working MIT build.
+AI coding agents are being plugged into production Postgres without an audit trail
+or a safety layer. The deprecated Anthropic reference Postgres MCP shipped a
+stacked-statement injection vector (Datadog Security Labs, 2025); the Supabase
+service-role pattern has been used to exfiltrate cross-tenant data. Midplane parses
+every query as an AST, denies the dangerous shapes, and writes a durable audit row
+**before** the query reaches your database.
 
-Run it single-tenant with `MIDPLANE_SELF_HOST=1` (keyless, uncapped, one
-Postgres + a local engine) — see the SELF-HOST block in `.env.example`. The
-managed multi-region cloud is the same codebase and is the supported, paid path.
-Contributions: [`CONTRIBUTING.md`](./CONTRIBUTING.md). Security:
-[`SECURITY.md`](./SECURITY.md).
+## What it blocks
 
-## Layout
+- **Destructive writes by default** — `DELETE FROM users` is denied even with a
+  `WHERE`, until you opt the table into `read_write`.
+- **Whole-table wipes and schema destruction** — no-`WHERE` `DELETE` / `UPDATE`
+  and all `DROP` / `TRUNCATE` / `ALTER`, regardless of table policy.
+- **Stacked-statement injection** — `SELECT 1; DROP TABLE users` denied at parse time.
+- **Cross-tenant exfiltration** — map a tenant column once; unscoped queries are
+  denied at any AST depth (subqueries, CTEs, JOINs).
 
-```
-apps/web              Next.js dashboard + Better Auth + projects API
-apps/web/Dockerfile   Multi-stage bun + Next.js standalone build (control plane)
-packages/db           Drizzle schema (customers, projects, audit_events_index)
-packages/kms          encryptDsn / decryptDsn (env-mode dev, AWS KMS prod)
-packages/router       Hosted MCP request handler — token → project → Fly app
-fly-web-eu.toml       EU control-plane Fly app (also serves apex app.midplane.ai)
-fly-web-us.toml       US control-plane Fly app
-fly-eu.toml           EU regional MCP runtime app (pinned to Frankfurt)
-fly-us.toml           US regional MCP runtime app (pinned to Ashburn)
-scripts/bootstrap.sh  One-shot dev setup
-```
+The full policy model, the parse → policy → audit pipeline, and the adversarial
+corpus that pins it are documented at [midplane.ai/docs](https://midplane.ai/docs).
 
-Multi-region is V1, not V1.5. Schema and URL format are multi-region from day one. Bootstrap deploys `eu` (Frankfurt, eu-central-1) only; `us` (Dulles, us-east-2) is provisioned in the V1 launch session as pure deploy work — no migration. Customer-facing names track the jurisdiction (`eu.midplane.ai`, `us.midplane.ai`); the underlying Fly DC is configurable per region so EU can move to ams later without renaming anything else.
+## In a real chat
+
+A `delete all users` prompt to Claude Code, against a Midplane-fronted DB:
+
+> ⏺ Hold on — that's destructive and irreversible. Before I run
+> `DELETE FROM public.users`, please confirm.
+>
+> *user: confirm delete all users*
+>
+> ⏺ Midplane blocked it: *"writes to table `users` are not allowed by the
+> table-access policy."* The DELETE was audited but not executed.
 
 ## Quick start
 
-```bash
-bun install
-cp .env.example .env.local   # fill in Better Auth, Postgres, KMS dev key
-bun db:generate              # generate drizzle migrations from schema
-bun migrate:eu               # apply migrations to your EU Neon dev branch
-                             # (use migrate:us / migrate:all in prod; locally
-                             #  only the EU side is configured by default)
-bun dev                      # localhost:3000
-bun run test                 # vitest baseline — note `bun run test`, not
-                             # `bun test`. The bare form invokes Bun's
-                             # built-in runner which doesn't load the
-                             # vitest module-mock layer the unit suites
-                             # rely on.
-bun run test:e2e             # Playwright smoke (E2E_LIVE=1 for live)
-```
+Start hosted, or run it yourself — same open-core codebase. Step-by-step guides are
+at **[midplane.ai/docs](https://midplane.ai/docs)**.
 
-## OSS engine image
+### Managed cloud
 
-The router spawns `midplane/midplane:0.13.0` (published on Docker Hub). The image
-tag has a single source of truth — `OSS_ENGINE_IMAGE` in
-`packages/router/src/oss-image.ts` — and `bun scripts/check-image-pin.ts` (CI)
-fails if any config/doc site drifts from it.
+The fastest way to try Midplane: **[sign up at app.midplane.ai](https://app.midplane.ai)**
+and go from zero to your first guarded query in a couple of minutes. Nothing to
+install, multi-region, fully supported.
 
-For local dev (when the published tag isn't on Docker Hub yet, or while iterating
-on the engine), build the image from the in-tree engine:
+### Self-host
+
+The complete single-tenant app — dashboard, policy editor, audit log, agent-token
+issuance — keyless and uncapped, on your own Postgres + a local engine.
 
 ```bash
-bun run dev:image            # builds engine/docker/Dockerfile, tag from MIDPLANE_OSS_IMAGE
+cp .env.self-host.example .env.self-host         # fill 3 secrets
+docker compose -f docker-compose.self-host.yml up -d postgres
+bun run migrate:self-host
+bun run build:engine-binary
+export MIDPLANE_ENGINE_BIN="$PWD/engine/dist/midplane"
+bun --env-file=.env.self-host run dev            # http://localhost:3000
 ```
 
-The engine source lives at [`engine/`](./engine) — no separate clone needed. Run
-its tests with `bun run test:engine`; run the full production-image battery with
-`bash engine/scripts/test-image.sh`.
+Walkthrough, engine-spawn topology, and the single-image deploy:
+[midplane.ai/docs](https://midplane.ai/docs) (in-repo: [`SELF_HOST.md`](./SELF_HOST.md)).
 
-### Neon (control-plane Postgres)
+> The MIT query-path engine also ships as a standalone Docker image
+> (`midplane/midplane`) — for guarding a single database or a CI pipeline without
+> the dashboard. Setup at [midplane.ai/docs](https://midplane.ai/docs).
 
-Two Neon projects, one per region — physical isolation is what makes
-env-var locality meaningful. Create both before the Fly secrets block
-below:
+## Open core
 
-1. https://console.neon.tech → New Project, region **AWS eu-central-1**,
-   name `midplane-prod-eu`. Copy the **pooled** connection string (the
-   `-pooler` host) → `DATABASE_URL_EU`. `packages/db/src/index.ts`
-   passes `prepare: false` so pgbouncer-mode pooling works.
-2. Same flow in **AWS us-east-2**, name `midplane-prod-us` →
-   `DATABASE_URL_US`.
+Midplane is **open core, MIT, and self-hostable.** Everything outside
+`apps/web/src/ee/` is the Community Edition — the whole single-tenant product,
+uncapped when self-hosted. `apps/web/src/ee/` is the commercial Enterprise Edition
+(SSO/SAML today; the governance band over time); deleting it leaves a working MIT
+build. The managed cloud is the same codebase and the supported, paid path. See
+[`LICENSE`](./LICENSE).
 
-Apply migrations against each project before first deploy.
-`migrate:eu` / `migrate:us` read from `.env.local`, so either set the
-prod URLs there temporarily or inline them:
+## Architecture
 
-```bash
-DATABASE_URL_EU='postgres://...eu-central-1.aws.neon.tech/...' bun migrate:eu
-DATABASE_URL_US='postgres://...us-east-2.aws.neon.tech/...' bun migrate:us
+One codebase, two deployables:
+
+- **Control plane** (repo root) — dashboard, policy management, audit views,
+  agent-token issuance, hosted MCP proxy. MIT except `apps/web/src/ee/`.
+- **Engine** ([`engine/`](./engine)) — the MIT query-path engine, compiled to a
+  self-contained binary. The control plane spawns it per project and never
+  reimplements it, so hosted and self-host run the exact same engine — only the
+  packaging differs.
+
+```
+apps/web              Next.js dashboard + Better Auth + projects API
+packages/db           Drizzle schema (customers, projects, audit index)
+packages/kms          encryptDsn / decryptDsn (env-mode dev, AWS KMS prod)
+packages/router       Hosted MCP request handler — token → project → engine
+engine/               The MIT query-path engine
+infra/telemetry-proxy Cloudflare Worker for anonymized OSS install telemetry
 ```
 
-Migration `0004_force_rls.sql` runs `FORCE ROW LEVEL SECURITY` on
-`audit_events_index` — Neon's project owner role would otherwise bypass
-the policy and silently cross customers. `e2e/audit-isolation.e2e.ts`
-guards against regressions.
+Operating the managed multi-region cloud (Fly + Neon + KMS) is in
+[`docs/deploy.md`](./docs/deploy.md).
 
-## Deploy (control plane)
+## Contributing
 
-The Next.js control plane (apps/web) runs on Fly so it shares the same
-6PN private network as the regional runtime apps. `FlyMachineSpawner`
-returns IPv6 private IPs that only same-Fly-org apps can reach — hosting
-the control plane on Vercel/Render would force every customer audit
-request through an extra public-Internet hop.
+Issues and PRs welcome — start with [`CONTRIBUTING.md`](./CONTRIBUTING.md). The
+single highest-leverage contribution is a new entry in the adversarial SQL corpus:
+a bypass attempt and the policy fix that defeats it. Commits are DCO-signed
+(`git commit -s`). For security issues, follow [`SECURITY.md`](./SECURITY.md) —
+don't open a public issue.
 
-First-time setup (one-shot, user-driven). Two regional control-plane apps,
-each pinned to one Neon project + one KMS key. **Env-var locality:** each
-app only carries its region's `DATABASE_URL_<REGION>`, `MIDPLANE_KMS_KEY_<REGION>`,
-`FLY_APP_<REGION>`, etc. The opposite region's secrets stay UNSET so a stray
-cross-region call throws at the env-var read.
+## License
 
-```bash
-# 1. Create both apps in your Fly org.
-fly apps create midplane-web    --org <your-org>   # EU control plane
-fly apps create midplane-web-us --org <your-org>   # US control plane
+MIT — see [`LICENSE`](./LICENSE). No copyleft, no BSL, no source-available rug-pull.
+The one carve-out is `apps/web/src/ee/` (the commercial Enterprise Edition); deleting
+it leaves a fully working MIT build.
 
-# 2. EU app secrets. NEVER set DATABASE_URL_US / MIDPLANE_KMS_KEY_US /
-#    MIDPLANE_KMS_DEV_KEY_US / FLY_APP_US / FLY_REGION_US /
-#    MIDPLANE_PUBLIC_HOST_US on this app.
-fly secrets set --app midplane-web \
-  MIDPLANE_REGION='eu' \
-  DATABASE_URL_EU='postgres://...eu-central-1.aws.neon.tech/midplane?sslmode=require' \
-  MIDDLEWARE_ENFORCE='false' \
-  BETTER_AUTH_SECRET="$(openssl rand -base64 32)" \
-  BETTER_AUTH_URL='https://eu.app.midplane.ai' \
-  MIDPLANE_KMS_MODE='env' \
-  MIDPLANE_KMS_DEV_KEY_EU="$(openssl rand -hex 32)" \
-  FLY_API_TOKEN='fly_...' \
-  FLY_APP_EU='midplane-eu' \
-  FLY_REGION_EU='fra' \
-  MIDPLANE_PUBLIC_HOST_EU='eu.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.13.0' \
-  INDEXER_TOKEN="$(openssl rand -hex 32)" \
-  MIDPLANE_STAFF_USER_IDS='user_...'
+---
 
-# 3. US app secrets — symmetric. NEVER set DATABASE_URL_EU /
-#    MIDPLANE_KMS_KEY_EU / etc. on this app.
-fly secrets set --app midplane-web-us \
-  MIDPLANE_REGION='us' \
-  DATABASE_URL_US='postgres://...us-east-2.aws.neon.tech/midplane?sslmode=require' \
-  MIDDLEWARE_ENFORCE='false' \
-  BETTER_AUTH_SECRET="$(openssl rand -base64 32)" \
-  BETTER_AUTH_URL='https://us.app.midplane.ai' \
-  MIDPLANE_KMS_MODE='env' \
-  MIDPLANE_KMS_DEV_KEY_US="$(openssl rand -hex 32)" \
-  FLY_API_TOKEN='fly_...' \
-  FLY_APP_US='midplane-us' \
-  FLY_REGION_US='iad' \
-  MIDPLANE_PUBLIC_HOST_US='us.midplane.ai' \
-  MIDPLANE_OSS_IMAGE='midplane/midplane:0.13.0' \
-  INDEXER_TOKEN="$(openssl rand -hex 32)" \
-  MIDPLANE_STAFF_USER_IDS='user_...'
-
-# 4. DNS + TLS. Fly matches certs by SNI, so the apex needs its own
-#    cert on the EU app (NOT covered by eu.app.midplane.ai's cert).
-#    Control-plane hostnames (Next.js dashboard + MCP proxy):
-fly certs add eu.app.midplane.ai  --app midplane-web
-fly certs add app.midplane.ai     --app midplane-web
-fly certs add us.app.midplane.ai  --app midplane-web-us
-
-#    Customer-facing MCP host (the URLs printed in `claude mcp add ...
-#    https://<region>.midplane.ai/mcp/<tok>` snippets, from
-#    MIDPLANE_PUBLIC_HOST_{EU,US}). These point at the WEB apps, NOT the engine
-#    apps: /mcp/<token> is served by the web app's proxyMcp, which resolves the
-#    token (cloud DB), decrypts the DSN (KMS), spawns/reuses the OSS container,
-#    and proxies to it over the private 6PN network. The engine apps
-#    (midplane-eu/us) only HOST those private containers — they take no public
-#    MCP traffic and need no public IP or cert of their own.
-fly certs add eu.midplane.ai      --app midplane-web
-fly certs add us.midplane.ai      --app midplane-web-us
-
-# DNS records:
-#   eu.app.midplane.ai  CNAME midplane-web.fly.dev
-#   us.app.midplane.ai  CNAME midplane-web-us.fly.dev
-#   app.midplane.ai     CNAME eu.app.midplane.ai
-#                       (EU app handles apex; middleware redirects authed
-#                        users to their regional subdomain)
-#   eu.midplane.ai      CNAME midplane-web.fly.dev     (web app serves /mcp)
-#   us.midplane.ai      CNAME midplane-web-us.fly.dev
-```
-
-### KMS mode for production credential storage
-
-Hosted-mode customer DSNs are stored encrypted. `MIDPLANE_KMS_MODE` selects
-the algorithm:
-
-- `env` (default in the snippet above): AES-256-GCM with a per-region
-  symmetric key from `MIDPLANE_KMS_DEV_KEY_{EU,US}`. Suitable only for
-  pre-launch bootstrap — no envelope encryption, no rotation, no HSM.
-- `kms`: AWS KMS `GenerateDataKey` + AES-256-GCM with the wrapped data key.
-  Per-region CMK, with `EncryptionContext = {customerId, region}` bound on
-  both `GenerateDataKey` and `Decrypt` so a US-region compromise cannot
-  decrypt EU rows (and vice versa).
-
-To switch a deployed control plane from `env` to `kms`:
-
-```bash
-# 1. Provision one CMK per region (eu-central-1 and us-east-2). Aliases
-#    work as the ARN value — e.g. alias/midplane-prod-eu. The Fly machine's
-#    AWS identity (via OIDC or a long-lived access key in secrets) needs
-#    kms:GenerateDataKey + kms:Decrypt on each key, scoped by
-#    EncryptionContext so the credential can't be used to decrypt rows
-#    belonging to other customers.
-#
-#    Sample key policy statement (attach to each region's CMK):
-#      {
-#        "Effect": "Allow",
-#        "Principal": { "AWS": "arn:aws:iam::<acct>:role/midplane-web" },
-#        "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
-#        "Resource": "*",
-#        "Condition": {
-#          "StringEquals": { "kms:EncryptionContextKeys": ["customerId", "region"] },
-#          "StringEqualsIfExists": { "kms:EncryptionContext:region": "<eu|us>" }
-#        }
-#      }
-
-# 2. Point the control plane at the CMKs.
-fly secrets set --app midplane-web \
-  MIDPLANE_KMS_MODE='kms' \
-  MIDPLANE_KMS_KEY_EU='arn:aws:kms:eu-central-1:<acct>:key/<uuid>' \
-  MIDPLANE_KMS_KEY_US='arn:aws:kms:us-east-2:<acct>:key/<uuid>'
-
-# 3. Provide AWS credentials to the Fly machine. One IAM principal per
-#    region, each authorized for ONE CMK only — cross-region isolation
-#    is enforced by IAM/key-policy here (not by env-var naming; see note
-#    below). The simplest production-safe path is one IAM user per region
-#    with an inline policy:
-
-# EU principal
-aws iam create-user --user-name midplane-web-eu
-aws iam put-user-policy --user-name midplane-web-eu \
-  --policy-name midplane-kms-eu \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
-      "Resource": "arn:aws:kms:eu-central-1:<acct>:key/<eu-uuid>",
-      "Condition": {
-        "StringEquals": { "kms:EncryptionContext:region": "eu" }
-      }
-    }]
-  }'
-aws iam create-access-key --user-name midplane-web-eu
-# → copy AccessKeyId + SecretAccessKey into the EU app:
-fly secrets set --app midplane-web \
-  AWS_ACCESS_KEY_ID='AKIA...' \
-  AWS_SECRET_ACCESS_KEY='...'
-
-# US principal
-aws iam create-user --user-name midplane-web-us
-aws iam put-user-policy --user-name midplane-web-us \
-  --policy-name midplane-kms-us \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
-      "Resource": "arn:aws:kms:us-east-2:<acct>:key/<us-uuid>",
-      "Condition": {
-        "StringEquals": { "kms:EncryptionContext:region": "us" }
-      }
-    }]
-  }'
-aws iam create-access-key --user-name midplane-web-us
-# → copy AccessKeyId + SecretAccessKey into the US app:
-fly secrets set --app midplane-web-us \
-  AWS_ACCESS_KEY_ID='AKIA...' \
-  AWS_SECRET_ACCESS_KEY='...'
-
-# Also update each CMK's key policy to grant its region's IAM user (or
-# the role you use under OIDC) — the sample at step 1 has Principal as
-# a placeholder role ARN; swap in `user/midplane-web-eu` etc.
-#
-# For production, prefer Fly's OIDC provider + sts:AssumeRoleWithWebIdentity
-# over long-lived access keys. The credential resolution is identical from
-# the SDK's perspective; only the secret-rotation story changes.
-```
-
-> AWS credentials don't take a `_EU` / `_US` suffix the way our own
-> region-pinned vars do. The AWS SDK's credential provider reads
-> `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (and the OIDC variants)
-> by fixed name — renaming them would bypass the standard credential
-> chain. That's fine here: each Fly app already carries exactly one
-> region's IAM principal, and the cross-region failure mode is the CMK
-> key policy denying decryption under the wrong `EncryptionContext`, not
-> a missing env var.
-
-The `kmsKeyId` column on `projects` routes per row: existing rows with
-`env:eu` / `env:us` keep decrypting via the env-mode path; new rows written
-after the cutover store the CMK ARN and decrypt via KMS. No backfill is
-needed for the cutover itself — rotation of pre-existing env-mode rows is
-a separate operation.
-
-### Analytics (PostHog)
-
-Authenticated cloud-user events — `signup_completed`, `project_*`,
-`token_*`, `database_test_run` — are captured server-side from the Next.js
-app via `posthog-node` (see `apps/web/src/lib/posthog.ts`). The client
-returns `null` when either env var is unset, so dev and CI no-op without
-any extra config.
-
-Set the secrets on both regional web apps:
-
-```bash
-fly secrets set --app midplane-web \
-  POSTHOG_API_KEY='phc_...' \
-  POSTHOG_HOST='https://us.i.posthog.com'
-fly secrets set --app midplane-web-us \
-  POSTHOG_API_KEY='phc_...' \
-  POSTHOG_HOST='https://us.i.posthog.com'
-```
-
-This is distinct from `infra/telemetry-proxy` (the `t.midplane.ai`
-Cloudflare Worker), which proxies anonymized `install_id` events from OSS
-engine installs. Same PostHog project, two sources — the `source` property
-on every cloud event (`"dashboard"` or `"api"`) lets the two be separated
-in funnels.
-
-Per-deploy:
-
-```bash
-# No NEXT_PUBLIC_* build args needed: the Better Auth client is same-origin,
-# so nothing auth-related is baked into the client bundle — BETTER_AUTH_SECRET
-# and the rest are runtime Fly secrets. Run both deploys when shipping (same
-# image, different region pin).
-fly deploy --config fly-web-eu.toml
-fly deploy --config fly-web-us.toml
-
-# After the deploy has been stable for ~24h (no region.null_metadata or
-# region.cross_region anomalies), flip MIDDLEWARE_ENFORCE to "true" so
-# cross-region requests get 302'd instead of just logged.
-fly secrets set --app midplane-web    MIDDLEWARE_ENFORCE='true'
-fly secrets set --app midplane-web-us MIDDLEWARE_ENFORCE='true'
-```
-
-Health check: `https://midplane-web.fly.dev/api/health` returns
-`{ "ok": true }`. Fly's `[[http_service.checks]]` polls this every 30s.
-The check intentionally does not touch Postgres — a Neon outage should
-not take down the proxy.
-
-Local Docker smoke test (no fly required):
-
-```bash
-docker build -t midplane-web -f apps/web/Dockerfile .
-```
-
-## Testing
-
-`bun run test` runs the vitest unit suite (not bare `bun test` — see the quick-start note). Live end-to-end suites under `e2e/` are gated on `E2E_LIVE=1` and require Docker + a Neon dev branch:
-
-```bash
-bun run test:e2e:live                          # all live suites
-bun run test:e2e:live --grep signup            # critical-path #1 only
-```
-
-The signup suite (`e2e/signup.live.e2e.ts`) drives the conversion path end to end: real Better Auth session → region pick → paste DSN → MCP endpoint → first MCP query → audit row in container SQLite (and `audit_events_index` if `INDEXER_TOKEN` is set).
-
-Auth runs through Better Auth, so there are no testing tokens or bot-detection to bypass: each run creates a brand-new test user directly via the sign-up API (`POST /api/auth/sign-up/email`, email/password — no verification gate in dev) and tears it down in `afterAll` with a direct delete against the regional Postgres (FK cascades clear the session/account/member rows). The helpers live in `e2e/_auth-helpers.ts`; no Clerk credentials or global-setup token mint are involved.
-
-## What's in scope here
-
-V1 critical path: signup → region pick → paste DSN → encrypted store → hosted MCP URL → Cursor connects → first query exercises the OSS image with stored creds → audit lands in container SQLite.
-
-NOT this session: indexer, dashboard read views, rotation flow, prod AWS KMS, us region deploy, billing, public deploy.
+**More:** [Docs](https://midplane.ai/docs) · [Pricing](./PRICING.md) ·
+[Support](./SUPPORT.md) · [Design system](./DESIGN.md) ·
+[Code of Conduct](./CODE_OF_CONDUCT.md)
