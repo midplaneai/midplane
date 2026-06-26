@@ -5,9 +5,10 @@
 #   # then run the control plane (see SELF_HOST.md)
 #
 # Keyless, uncapped, single-owner, one Postgres, no region routing, no cloud
-# vendors. See SELF_HOST.md for the full run + the engine-spawning topology
-# (the control plane spawns one OSS engine container per connection via the
-# host Docker daemon, so it needs Docker access — documented there).
+# vendors. See SELF_HOST.md for the full run + the engine topology: in self-host
+# the control plane exec's the compiled engine binary as a loopback subprocess
+# per connection (no Docker daemon or socket needed). This compose file only
+# brings up Postgres + runs migrations.
 #
 # Env: copy .env.self-host.example to .env.self-host and fill the secrets.
 
