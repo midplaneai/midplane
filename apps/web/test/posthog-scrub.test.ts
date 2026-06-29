@@ -140,12 +140,12 @@ describe("scrubPostHogEvent — non-goals / footguns", () => {
     expect(props(out).$exception_fingerprint).toBe("abc");
   });
 
-  it("does NOT nuke a bare `token` analytics id or `connectionDatabaseId`", () => {
+  it("does NOT nuke a bare `token` analytics id or `projectDatabaseId`", () => {
     const out = scrubPostHogEvent(
-      ev({ token: "tok_abc123", connectionDatabaseId: "cdb_42" }, "token_created"),
+      ev({ token: "tok_abc123", projectDatabaseId: "pdb_42" }, "token_created"),
     );
     expect(props(out).token).toBe("tok_abc123");
-    expect(props(out).connectionDatabaseId).toBe("cdb_42");
+    expect(props(out).projectDatabaseId).toBe("pdb_42");
   });
 
   it("leaves non-string scalars and unrelated prose intact", () => {

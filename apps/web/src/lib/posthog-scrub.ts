@@ -32,8 +32,9 @@ const REDACTED = "[redacted]";
 // is dropped wholesale regardless of its content. Substring, case-insensitive.
 //
 // Deliberately scoped:
-//   - `conn…string` requires the "string" suffix so it matches `connectionString`
-//     but NOT `connectionDatabaseId` (a non-sensitive id used in analytics).
+//   - the DB "connection string" pattern requires the "string" suffix so it
+//     targets that secret specifically and won't swallow unrelated identifier
+//     keys (e.g. `projectDatabaseId`, a non-sensitive id used in analytics).
 //   - bare `token` is intentionally absent: token lifecycle events capture token
 //     *ids* (`tok_…`) and the `mp_live`/`mp_test` env PREFIX for funnels, and
 //     posthog-node does not carry the project api key in `properties.token` (the
