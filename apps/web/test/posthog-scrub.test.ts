@@ -72,6 +72,32 @@ describe("scrubPostHogEvent — secret/DSN floor", () => {
     expect(p.nested).toEqual({ masterSecret: "[redacted]", access_key: "[redacted]" });
   });
 
+  it("redacts a Midplane MCP token embedded in a copied URL", () => {
+    const tok = `mp_live_${"a".repeat(32)}_ABC123`;
+    const out = scrubPostHogEvent(
+      ev({
+        $exception_list: [
+          { type: "Error", value: `404 on POST /mcp/${tok}/sse` },
+        ],
+        url: `https://app.midplane.ai/mcp/${tok}`,
+      }),
+    );
+    const value = (props(out).$exception_list as { value: string }[])[0]!.value;
+    expect(value).not.toContain(tok);
+    expect(value).toContain("[redacted]");
+    expect(value).toContain("/mcp/"); // path prose survives, secret doesn't
+    expect(props(out).url as string).not.toContain(tok);
+  });
+
+  it("redacts an mp_test token in a non-sensitive key (value pattern, not key name)", () => {
+    const tok = `mp_test_${"f".repeat(32)}_0HJKMN`;
+    // `note` is not on the sensitive-key list, so a pass here proves the value
+    // pattern caught the token shape — the gap the reviewer flagged.
+    const out = scrubPostHogEvent(ev({ note: `minted ${tok}`, prefix: "mp_live" }, "token_created"));
+    expect(props(out).note).toBe("minted [redacted]");
+    expect(props(out).prefix).toBe("mp_live"); // dashboard metadata, not a secret
+  });
+
   it("redacts JWTs and Bearer tokens in free text", () => {
     const jwt = "eyJhbGc.eyJzdWI.sIgVaTuRe";
     const out = scrubPostHogEvent(

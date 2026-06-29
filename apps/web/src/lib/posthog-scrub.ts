@@ -35,9 +35,11 @@ const REDACTED = "[redacted]";
 //   - `conn…string` requires the "string" suffix so it matches `connectionString`
 //     but NOT `connectionDatabaseId` (a non-sensitive id used in analytics).
 //   - bare `token` is intentionally absent: token lifecycle events capture token
-//     *ids* (`tok_…`) for funnels, and posthog-node does not carry the project
-//     api key in `properties.token` (the posthog-js footgun). Actual token
-//     *secrets* are caught by the value-pattern pass below instead.
+//     *ids* (`tok_…`) and the `mp_live`/`mp_test` env PREFIX for funnels, and
+//     posthog-node does not carry the project api key in `properties.token` (the
+//     posthog-js footgun). The actual MCP token *secret* (mp_live_…) is caught
+//     by the value-pattern pass below, which matches the full token shape, not
+//     the bare prefix.
 const SENSITIVE_KEY =
   /(dsn|conn(?:ection)?[_-]?string|pass(?:word|wd)?|pwd|secret|api[_-]?key|access[_-]?key|priv(?:ate)?[_-]?key|salt|pepper|credential|authorization|bearer|cookie|session[_-]?token|master[_-]?(?:key|secret)|encryption[_-]?key)/i;
 
@@ -54,6 +56,13 @@ const VALUE_PATTERNS: ReadonlyArray<RegExp> = [
   /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
   // PostHog personal/project API keys (phc_/phx_/phs_…).
   /\bph[a-z]_[A-Za-z0-9]{10,}\b/g,
+  // Midplane MCP token secrets: mp_(live|test)_<32 hex>_<6 Crockford-base32 crc>
+  // (the full plaintext, per packages/db/src/token-format.ts TOKEN_REGEX). These
+  // ride inside copied MCP URLs (/mcp/mp_live_…), so match the embedded shape —
+  // unanchored, and no trailing boundary so the secret goes even when a path
+  // segment follows. Only well-formed tokens match; the bare mp_live prefix is
+  // left alone (it's non-secret dashboard metadata).
+  /mp_(?:live|test)_[0-9a-f]{32}_[0-9A-HJKMNP-Z]{6}/g,
 ];
 
 // `Bearer <token>` keeps the scheme so the shape stays legible in a trace.
