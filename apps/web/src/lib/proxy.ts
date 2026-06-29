@@ -38,6 +38,7 @@ import {
   resolveProjectForCustomer,
   resolveScope,
   resolveSoleProjectId,
+  safeErrorDetail,
   scopeHeaderValue,
 } from "@midplane-cloud/router";
 import {
@@ -617,7 +618,9 @@ async function forwardResolved(
       maskSalt,
     });
   } catch (err) {
-    console.error("spawn failed", err);
+    // Opaque class only: a spawn failure can wrap a Postgres connect error
+    // carrying the DB host/user/name. See router/db-error.ts.
+    console.error("spawn failed:", safeErrorDetail(err));
     return Response.json(
       {
         jsonrpc: "2.0",
@@ -647,7 +650,7 @@ async function forwardResolved(
     // Container may have been killed externally. Drop registry entry so the
     // next request respawns.
     await ctx.registry.invalidate(project.id).catch(() => undefined);
-    console.error("proxy fetch failed", err);
+    console.error("proxy fetch failed:", safeErrorDetail(err));
     return Response.json(
       {
         jsonrpc: "2.0",

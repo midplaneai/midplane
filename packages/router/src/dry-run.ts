@@ -25,6 +25,7 @@
 import type { DatabaseEntry } from "@midplane-cloud/db";
 
 import { pushPolicy, PushPolicyError } from "./admin.ts";
+import { safeErrorDetail } from "./db-error.ts";
 import type { ContainerRegistry, SpawnOptions } from "./spawner.ts";
 
 export interface DryRunProbe {
@@ -261,6 +262,10 @@ export async function dryRunPolicy(
   }
 }
 
+// The `detail` carrier for unexpected failures. Driver/network errors collapse
+// to an opaque class so a DB host or a Postgres "relation … does not exist"
+// (with its table name) never rides out in `detail`; our own thrown messages
+// (e.g. "project disappeared during dry-run") pass through unchanged.
 function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return safeErrorDetail(err);
 }
