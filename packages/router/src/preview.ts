@@ -32,6 +32,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+import { safeErrorDetail } from "./db-error.ts";
 import type { ContainerRegistry, SpawnOptions } from "./spawner.ts";
 
 export interface PreviewRequest {
@@ -242,6 +243,9 @@ async function defaultCallQueryTool(
   }
 }
 
+// See dry-run.ts: driver/network errors collapse to an opaque class so DB host
+// or schema identifiers never ride out in `detail`; curated app messages pass
+// through.
 function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return safeErrorDetail(err);
 }

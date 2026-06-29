@@ -1,4 +1,5 @@
 export { OSS_ENGINE_IMAGE } from "./oss-image.ts";
+export { safeErrorDetail, sanitizeDbError } from "./db-error.ts";
 export { DecryptCache } from "./decrypt-cache.ts";
 export type {
   CacheEntry,
