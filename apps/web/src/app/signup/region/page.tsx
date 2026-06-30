@@ -73,8 +73,9 @@ export default async function RegionPicker() {
             {userId ? "Set up your workspace" : "Pick your data region"}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Your audit log and encrypted credentials live in this region. This
-            choice is permanent — we can&apos;t move an account between regions.
+            {userId
+              ? "Your audit log and encrypted credentials live in this region. It's fixed to the region you signed up on and can't be changed later."
+              : "Your audit log and encrypted credentials live in this region. This choice is permanent — we can't move an account between regions."}
           </p>
         </div>
 
@@ -181,12 +182,24 @@ async function pickRegionAuthed(formData: FormData) {
   // Set the signed region cookie alongside the DB write — this is the routing
   // fast-path the middleware reads to send the user to their regional subdomain
   // (and bounce cross-region requests) with no DB lookup.
-  const cookieStore = await cookies();
-  cookieStore.set(
-    REGION_COOKIE,
-    await signRegionCookieValue(region),
-    regionCookieOptions(),
-  );
+  //
+  // This is an optimization, not a correctness requirement: the org + customer
+  // row are already committed above, and the middleware falls back to a DB
+  // lookup when the cookie is absent. So a signing failure here (e.g. a
+  // misconfigured MIDPLANE_REGION_COOKIE_SECRET) must NOT take down the user's
+  // very first action with a 500 — degrade gracefully and still land them in the
+  // app. (This is the exact failure that 500'd every new signup when the secret
+  // was unset in prod.)
+  try {
+    const cookieStore = await cookies();
+    cookieStore.set(
+      REGION_COOKIE,
+      await signRegionCookieValue(region),
+      regionCookieOptions(),
+    );
+  } catch (err) {
+    console.error("signup: failed to set region cookie (continuing)", err);
+  }
 
   const posthog = getPostHog();
   if (posthog && userId) {
