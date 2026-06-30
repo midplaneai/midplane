@@ -7,14 +7,17 @@
 //   block_ddl               DROP / TRUNCATE / ALTER
 //
 // Each row is an explicit two-segment block/allow control (same shape as
-// the permission grid's LevelCell — no implicit "empty means off" state).
-// Block takes the deny color because a blocked statement is a denied
-// query; Allow deliberately takes WARN, not allow-green — permitting
-// destructive statements is an opted-into risk state, the same anomaly
-// amber as the panel's writable-default callout. Block sits leftmost so
-// the deny-red column lands on the same side as the permission grid's
-// deny column directly above (restrictive-left, one red edge across both
-// cards). Both ship ON: allowing is the opt-out, saved deliberately.
+// the permission grid's LevelCell — no implicit "empty means off" state)
+// and shares its config-surface palette. Block is the restrictive floor, so
+// it takes the neutral wash: a safe, default-ON choice shouldn't light up
+// red — red is reserved for a query that actually got DENIED (the audit
+// log, the Test panel), not for picking the guard. Allow takes WARN/amber
+// because permitting destructive statements is an opted-into risk — the
+// same amber as the permission grid's write column and the Test panel's
+// writable-default callout. Allow sits rightmost so that amber lands under
+// the grid's write column directly above (permissive-right, one amber edge
+// across both stacked cards). Both ship ON: allowing is the opt-out, saved
+// deliberately.
 //
 // Save posts the whole config as one JSON form field; the server action
 // validates again and calls setGuardrails(), which writes Postgres and
@@ -128,7 +131,7 @@ export function GuardrailsToggles({
               selected={config[key]}
               groupName={`guardrail-${key}`}
               rowLabel={label}
-              selectedClass="bg-deny/10 font-medium text-deny"
+              selectedClass="bg-foreground/10 font-medium text-foreground"
               onSelect={() => setFlag(key, true)}
             />
             <GuardrailCell
@@ -136,7 +139,7 @@ export function GuardrailsToggles({
               selected={!config[key]}
               groupName={`guardrail-${key}`}
               rowLabel={label}
-              selectedClass="bg-warn/10 font-medium text-warn"
+              selectedClass="bg-warn/15 font-medium text-warn"
               onSelect={() => setFlag(key, false)}
             />
           </div>

@@ -181,6 +181,11 @@ export function PermissionGrid({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      <p className="max-w-prose text-xs text-muted-foreground">
+        Grant the narrowest access each agent needs — the default below covers
+        every table without an explicit rule. You can widen it later.
+      </p>
+
       <div
         className="border border-border"
         role="group"
@@ -362,14 +367,25 @@ const LEVEL_LABEL: Record<AccessLevel, string> = {
   read_write: "Read + write",
 };
 
-// Semantic-color vocabulary from DESIGN.md: deny=red, read=warn (cautious
-// middle), read_write=allow (open). The selected segment takes the level's
-// color as both text and a faint background tint; unselected segments stay
-// neutral so the lit one is unambiguous.
+// Selection follows the shared config-surface palette (also used by the
+// guardrails card and the OAuth DB-scope control in db-access-control):
+//
+//   deny       → neutral wash   the restrictive floor. A SAFE choice never
+//                               lights up red — red is reserved for a query
+//                               that actually got DENIED (the audit log, the
+//                               Test panel), never for picking the guard.
+//   read       → allow / green  a real but low-risk grant (the agent can
+//                               read this table).
+//   read_write → warn / amber   the elevated grant — what a reviewer scans
+//                               for; the strongest attention color, so
+//                               writable tables pop down the column.
+//
+// The neutral wash is a light tint of --foreground, distinct from the dark
+// --accent hover so a selected cell never reads as merely hovered.
 const LEVEL_SELECTED_CLASS: Record<AccessLevel, string> = {
-  deny: "bg-deny/10 font-medium text-deny",
-  read: "bg-warn/10 font-medium text-warn",
-  read_write: "bg-allow/10 font-medium text-allow",
+  deny: "bg-foreground/10 font-medium text-foreground",
+  read: "bg-allow/15 font-medium text-allow",
+  read_write: "bg-warn/15 font-medium text-warn",
 };
 
 function policyToRows(policy: TableAccessPolicy): TableRow[] {
