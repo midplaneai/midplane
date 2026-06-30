@@ -140,3 +140,142 @@ export async function buildCatalog(
   }
   return catalog;
 }
+
+// ── By-name catalog (masking source-rewrite, T0) ──────────────────────────────
+//
+// The source-rewrite path resolves relations by NAME *before* execution (the
+// rewriter needs the full column list to rebuild the projection), where the
+// post-exec masker resolved by OID *after* execution from the RowDescription.
+// Run this on a TxClient so name resolution shares the SAME pinned search_path as
+// the rewritten query that follows (otherwise "what we wrapped" can diverge from
+// "what executes" — the pooling trap). Returns only the relations it could
+// resolve; the rewriter fails closed on any masked ref missing from the result.
+
+/** A relation reference as written in the statement (schema null = unqualified,
+ *  resolved against the pinned `public`). */
+export interface RelationRef {
+  schema: string | null;
+  relname: string;
+}
+
+/** Catalog facts the rewriter needs for one referenced relation, by name. */
+export interface RelByName {
+  oid: number;
+  schema: string;
+  relname: string;
+  /** pg_class.relkind: r=table, p=partition, v=view, m=matview, f=foreign, … */
+  relkind: string;
+  /** canonical "schema.relname" of the inheritance/partition top (self if none) —
+   *  the mask is declared on the parent, so the rewriter looks masks up here. */
+  parentKey: string;
+  /** full column-name list in attnum order — the wrap projects ALL of these. */
+  columns: string[];
+  /** column name → pg_type.typcategory ('S' string / 'D' date / 'N' numeric / …),
+   *  for the rewriter's input-domain check (same domains as the post-exec masker). */
+  columnTypes: Map<string, string>;
+}
+
+/** Keyed by canonical "schema.relname" AS REFERENCED (unqualified → public). */
+export type ByNameCatalog = Map<string, RelByName>;
+
+const canonKey = (schema: string | null, relname: string): string =>
+  `${schema ?? "public"}.${relname}`;
+
+export async function buildCatalogByName(
+  queryFn: CatalogQueryFn,
+  refs: RelationRef[],
+): Promise<ByNameCatalog> {
+  const out: ByNameCatalog = new Map();
+  const wantSchemas: string[] = [];
+  const wantNames: string[] = [];
+  const seen = new Set<string>();
+  for (const r of refs) {
+    const schema = r.schema ?? "public";
+    const key = `${schema}.${r.relname}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    wantSchemas.push(schema);
+    wantNames.push(r.relname);
+  }
+  if (wantNames.length === 0) return out;
+
+  // 1. Resolve each (schema, relname) → oid/relkind. Zip the two arrays so the
+  //    match is fully parameterized (no name interpolation).
+  const relRows = await queryFn(
+    `SELECT c.oid::int8 AS oid, c.relname, c.relkind, n.nspname AS schema
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE (n.nspname, c.relname) IN (SELECT s, r FROM unnest($1::text[], $2::text[]) AS u(s, r))`,
+    [wantSchemas, wantNames],
+  );
+  if (relRows.length === 0) return out;
+  const refOids = relRows.map((r) => Number(r.oid));
+
+  // 2. Inheritance/partition parents (mask declared on the parent).
+  const inhRows = await queryFn(
+    "SELECT inhrelid::int8 AS child, inhparent::int8 AS parent FROM pg_inherits",
+    [],
+  );
+  const parentOf = new Map<number, number>();
+  for (const r of inhRows) parentOf.set(Number(r.child), Number(r.parent));
+  const topAncestor = (oid: number): number => {
+    let cur = oid;
+    const s = new Set<number>([cur]);
+    while (parentOf.has(cur)) {
+      const p = parentOf.get(cur)!;
+      if (s.has(p)) break;
+      s.add(p);
+      cur = p;
+    }
+    return cur;
+  };
+
+  // 3. Names for ref + parent oids (a parent may be outside the ref set).
+  const nameTargets = [...new Set([...refOids, ...refOids.map(topAncestor)])];
+  const nameRows = await queryFn(
+    `SELECT c.oid::int8 AS oid, c.relname, n.nspname AS schema
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.oid = ANY($1::oid[])`,
+    [nameTargets],
+  );
+  const nameOf = new Map<number, string>();
+  for (const r of nameRows) nameOf.set(Number(r.oid), `${String(r.schema)}.${String(r.relname)}`);
+
+  // 4. Full column list (+ typcategory) for the ref oids, attnum order.
+  const attRows = await queryFn(
+    `SELECT a.attrelid::int8 AS oid, a.attname, t.typcategory
+       FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
+      WHERE a.attrelid = ANY($1::oid[]) AND a.attnum > 0 AND NOT a.attisdropped
+      ORDER BY a.attrelid, a.attnum`,
+    [refOids],
+  );
+  const colsByOid = new Map<number, string[]>();
+  const typesByOid = new Map<number, Map<string, string>>();
+  for (const r of attRows) {
+    const oid = Number(r.oid);
+    const name = String(r.attname);
+    let cols = colsByOid.get(oid);
+    if (!cols) colsByOid.set(oid, (cols = []));
+    cols.push(name);
+    if (r.typcategory != null) {
+      let tm = typesByOid.get(oid);
+      if (!tm) typesByOid.set(oid, (tm = new Map()));
+      tm.set(name, String(r.typcategory));
+    }
+  }
+
+  for (const r of relRows) {
+    const oid = Number(r.oid);
+    const schema = String(r.schema);
+    const relname = String(r.relname);
+    out.set(canonKey(schema, relname), {
+      oid,
+      schema,
+      relname,
+      relkind: String(r.relkind),
+      parentKey: nameOf.get(topAncestor(oid)) ?? `${schema}.${relname}`,
+      columns: colsByOid.get(oid) ?? [],
+      columnTypes: typesByOid.get(oid) ?? new Map(),
+    });
+  }
+  return out;
+}

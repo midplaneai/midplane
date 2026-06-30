@@ -44,7 +44,24 @@
 // keys (`app_data.users: read`). Bare refs always resolve to public.
 
 import pg from "pg";
-import type { Executor, ExecuteContext, ExecutionResult } from "@midplane/engine";
+import type { Executor, ExecuteContext, ExecutionResult, TxClient } from "@midplane/engine";
+
+// Lift node-pg's QueryResult into the engine's ExecutionResult, mapping the
+// driver's RowDescription provenance (tableID/columnID/dataTypeID) into the
+// fields the masker reads. Shared by execute() and the transaction-scoped exec()
+// so both paths report identical provenance (a computed output is tableID=0).
+function liftResult(result: pg.QueryResult): ExecutionResult {
+  return {
+    rows: result.rows,
+    rowCount: result.rowCount ?? 0,
+    fields: (result.fields ?? []).map((f) => ({
+      name: f.name,
+      tableOid: f.tableID ?? 0,
+      columnAttnum: f.columnID ?? 0,
+      dataTypeOid: f.dataTypeID ?? 0,
+    })),
+  };
+}
 
 export interface PgPoolExecutorOptions {
   databaseUrl: string;
@@ -92,21 +109,7 @@ export class PgPoolExecutor implements Executor {
       const result = await client.query(sql);
       await client.query("COMMIT");
       inTransaction = false;
-      return {
-        rows: result.rows,
-        rowCount: result.rowCount ?? 0,
-        // Lift per-column provenance from the driver's RowDescription so the
-        // masker can map output->source columns from Postgres' own resolution
-        // (correct through aliases / joins / `SELECT *`). node-pg field defs
-        // expose tableID (pg_class OID), columnID (attnum), dataTypeID (pg_type
-        // OID); a computed output reports tableID=0 / columnID=0.
-        fields: (result.fields ?? []).map((f) => ({
-          name: f.name,
-          tableOid: f.tableID ?? 0,
-          columnAttnum: f.columnID ?? 0,
-          dataTypeOid: f.dataTypeID ?? 0,
-        })),
-      };
+      return liftResult(result);
     } catch (err) {
       if (client && inTransaction) {
         // ROLLBACK can itself fail when the connection is already torn
@@ -116,6 +119,43 @@ export class PgPoolExecutor implements Executor {
         await client.query("ROLLBACK").catch(() => {});
       }
       // Surface SQLSTATE on .code so engine FAILED audit captures error_class.
+      const e = err as Error & { code?: string };
+      if (!e.code) e.code = "UNKNOWN";
+      throw e;
+    } finally {
+      if (client) client.release();
+    }
+  }
+
+  // Transaction-scoped client for the masking source-rewrite path (T0). Same
+  // checked-out-client + BEGIN + SET LOCAL search_path setup as execute(), but it
+  // hands the caller a TxClient so catalog resolution (by name), the mask-salt
+  // GUC, and the rewritten user query all run on ONE backend. The pooler can't
+  // rebind mid-transaction, so the search_path pin and any SET LOCAL the caller
+  // adds (the salt, via set_config(.., true)) are in force for every statement
+  // and expire at COMMIT — no session state leaks back into the shared pool.
+  async withTransaction<T>(_ctx: ExecuteContext, fn: (tx: TxClient) => Promise<T>): Promise<T> {
+    let client: pg.PoolClient | null = null;
+    let inTransaction = false;
+    try {
+      client = await this.pool.connect();
+      await client.query("BEGIN");
+      inTransaction = true;
+      await client.query(SET_LOCAL_SEARCH_PATH_SQL);
+      const c = client;
+      const tx: TxClient = {
+        query: async (sql, params = []) =>
+          (await c.query(sql, params as unknown[])).rows as Record<string, unknown>[],
+        exec: async (sql) => liftResult(await c.query(sql)),
+      };
+      const out = await fn(tx);
+      await client.query("COMMIT");
+      inTransaction = false;
+      return out;
+    } catch (err) {
+      if (client && inTransaction) {
+        await client.query("ROLLBACK").catch(() => {});
+      }
       const e = err as Error & { code?: string };
       if (!e.code) e.code = "UNKNOWN";
       throw e;
