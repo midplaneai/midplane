@@ -652,9 +652,10 @@ export default async function ProjectWorkspace({
         <p className="mt-1 text-xs text-muted-foreground">
           Per-table read / write policy enforced by the Midplane engine.{" "}
           <strong className="font-medium text-foreground">
-            Saving stops the running session
+            Changes take effect immediately
           </strong>{" "}
-          so the new policy takes effect on the next agent request.
+          — the engine hot-swaps the policy on the next agent request, without
+          interrupting active sessions.
         </p>
         <div className="pt-3">
           {/* key: the editors hold form state in useState — without a
