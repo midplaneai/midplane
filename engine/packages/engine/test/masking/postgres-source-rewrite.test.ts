@@ -137,7 +137,7 @@ describe("postgresSourceRewriter.rewrite", () => {
 
   test("unmasked table → returned byte-for-byte unchanged", () => {
     const q = "SELECT count(*) FROM products";
-    expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q });
+    expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
   });
 
   test("masked view → fail closed", () => {

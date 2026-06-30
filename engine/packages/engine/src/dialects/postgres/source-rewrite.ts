@@ -18,7 +18,10 @@ import type { RewriteOutcome, SourceRewriter } from "../../masking/source-rewrit
 import type { ColumnMasks } from "../../masking/mask-result-set.ts";
 import type { ByNameCatalog, RelationRef } from "../../masking/catalog.ts";
 import type { MaskRule } from "../../masking/transforms.ts";
+import type { TxClient } from "../../executor.ts";
+import type { GateOutcome, ShapeOutcome } from "../../masking/source-rewrite.ts";
 import { quoteIdent, transformToSql } from "./transform-sql.ts";
+import { checkMaskSafeShape, shadowScan as runShadowScan } from "./mask-safety.ts";
 
 interface RangeVarNode {
   schemaname?: string;
@@ -134,6 +137,7 @@ export const postgresSourceRewriter: SourceRewriter = {
 
     const edits: { start: number; end: number; repl: string }[] = [];
     const wrappedKeys = new Set<string>();
+    const maskedColumns: string[] = [];
     let reject: string | null = null;
 
     eachRangeVar(ast, (rv) => {
@@ -177,6 +181,7 @@ export const postgresSourceRewriter: SourceRewriter = {
           return;
         }
         proj.push(`${emit.sql} AS ${qc}`);
+        maskedColumns.push(`${rel.parentKey}.${colName}`);
       }
 
       const innerRef =
@@ -192,7 +197,7 @@ export const postgresSourceRewriter: SourceRewriter = {
     });
 
     if (reject) return { ok: false, reason: reject };
-    if (edits.length === 0) return { ok: true, sql }; // nothing masked → byte-for-byte verbatim
+    if (edits.length === 0) return { ok: true, sql, maskedColumns: [] }; // nothing masked → verbatim
 
     const colrefReject = schemaQualifiedColrefReject(ast, wrappedKeys);
     if (colrefReject) return { ok: false, reason: colrefReject };
@@ -201,6 +206,14 @@ export const postgresSourceRewriter: SourceRewriter = {
     edits.sort((a, b) => b.start - a.start);
     let out = sql;
     for (const e of edits) out = out.slice(0, e.start) + e.repl + out.slice(e.end);
-    return { ok: true, sql: out };
+    return { ok: true, sql: out, maskedColumns };
+  },
+
+  // Covert-channel gate (ET2), delegated to mask-safety.ts.
+  checkShape(sql: string): ShapeOutcome {
+    return checkMaskSafeShape(sql);
+  },
+  shadowScan(tx: TxClient, names: string[]): Promise<GateOutcome> {
+    return runShadowScan(tx, names);
   },
 };

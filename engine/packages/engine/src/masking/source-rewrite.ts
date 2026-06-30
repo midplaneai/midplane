@@ -54,21 +54,38 @@ export async function setMaskSalt(tx: TxClient, salt: string): Promise<void> {
 }
 
 export type RewriteOutcome =
-  | { ok: true; sql: string }
+  | { ok: true; sql: string; maskedColumns: string[] }
   | { ok: false; reason: string };
 
-/** The dialect-supplied rewriter seam (eng-review A1: the AST rewrite that names
- *  RangeVar/RangeSubselect lives in the dialect, not here). The Postgres impl is
- *  the span-splice proven in the Phase-0 spike (`.context/spike-emission/`). */
+/** Covert-channel SHAPE gate result — `ok` carries the allowlisted bare function
+ *  names the statement used, to feed the per-connection shadow scan (stage 2). */
+export type ShapeOutcome =
+  | { ok: true; allowlistedFns: string[] }
+  | { ok: false; reason: string };
+
+/** Per-connection gate result (shadow scan). */
+export type GateOutcome = { ok: true } | { ok: false; reason: string };
+
+/** The dialect-supplied masking seam (eng-review A1: the AST rewrite + the
+ *  covert-channel gate, which both name dialect AST nodes / dialect builtins, live
+ *  in the dialect, not here). The Postgres impl is the span-splice proven in the
+ *  Phase-0 spike (`.context/spike-emission/`) + the ET2 mask-safety gate. */
 export interface SourceRewriter {
   /** Parse the statement and return the base-relation references that need catalog
    *  resolution. Cheap, sync, no DB. */
   collectRefs(sql: string): RelationRef[];
   /** Rewrite the statement, wrapping each masked relation in its masking subquery
    *  using the resolved catalog. Fail closed (ok:false) on anything unprovable:
-   *  view/foreign relkind, unresolved ref, off-allowlist function/operator,
-   *  schema-qualified column ref on a wrapped table, emission failure. */
+   *  view/foreign relkind, unresolved ref, schema-qualified column ref on a wrapped
+   *  table, out-of-domain transform, emission failure. `maskedColumns` lists the
+   *  `schema.table.col` refs actually wrapped (for the EXECUTED audit). */
   rewrite(sql: string, masks: ColumnMasks, catalog: ByNameCatalog): RewriteOutcome;
+  /** Covert-channel SHAPE gate (sync, AST-only) — deny-by-default function/operator
+   *  allowlist. Runs in the policy phase so a reject avoids opening the txn. */
+  checkShape(sql: string): ShapeOutcome;
+  /** Covert-channel SHADOW scan (per-connection) — verify no allowlisted builtin
+   *  name is shadowed by a user-schema function. Runs inside the rewrite txn. */
+  shadowScan(tx: TxClient, names: string[]): Promise<GateOutcome>;
 }
 
 export interface SourceRewriteDeps {
@@ -76,10 +93,12 @@ export interface SourceRewriteDeps {
   rewriter: SourceRewriter;
   columnMasks: ColumnMasks;
   salt: string;
+  /** Allowlisted bare function names from the SHAPE gate, for the shadow scan. */
+  shadowNames: string[];
 }
 
 export type SourceRewriteResult =
-  | { ok: true; result: ExecutionResult }
+  | { ok: true; result: ExecutionResult; maskedColumns: string[] }
   | { ok: false; reason: string };
 
 /** Run a statement through the source-rewrite path on one transaction-scoped
@@ -90,7 +109,7 @@ export async function runSourceRewrite(
   ctx: ExecuteContext,
   deps: SourceRewriteDeps,
 ): Promise<SourceRewriteResult | null> {
-  const { executor, rewriter, columnMasks, salt } = deps;
+  const { executor, rewriter, columnMasks, salt, shadowNames } = deps;
   if (!executor.withTransaction) return null;
 
   return executor.withTransaction(ctx, async (tx): Promise<SourceRewriteResult> => {
@@ -102,15 +121,21 @@ export async function runSourceRewrite(
       throw e; // infra error -> ROLLBACK + propagate
     }
 
-    // 2. Resolve referenced relations by name on this client (shared search_path).
+    // 2. Covert-channel SHADOW scan on this client: no allowlisted builtin name is
+    //    shadowed by a user-schema UDF (the SHAPE gate already ran in the policy
+    //    phase). Fail closed.
+    const sc = await rewriter.shadowScan(tx, shadowNames);
+    if (!sc.ok) return { ok: false, reason: sc.reason };
+
+    // 3. Resolve referenced relations by name on this client (shared search_path).
     const refs = rewriter.collectRefs(sql);
     const catalog = await buildCatalogByName((s, p) => tx.query(s, p), refs);
 
-    // 3. Rewrite (dialect span-splice). Fail closed on reject.
+    // 4. Rewrite (dialect span-splice). Fail closed on reject.
     const out = rewriter.rewrite(sql, columnMasks, catalog);
     if (!out.ok) return { ok: false, reason: out.reason };
 
-    // 4. Execute the rewritten SQL on the same client.
-    return { ok: true, result: await tx.exec(out.sql) };
+    // 5. Execute the rewritten SQL on the same client.
+    return { ok: true, result: await tx.exec(out.sql), maskedColumns: out.maskedColumns };
   });
 }

@@ -65,7 +65,9 @@ describe("setMaskSalt", () => {
 describe("runSourceRewrite", () => {
   const okRewriter: SourceRewriter = {
     collectRefs: () => [{ schema: null, relname: "customers" }],
-    rewrite: (sql) => ({ ok: true, sql: `/*rw*/ ${sql}` }),
+    rewrite: (sql) => ({ ok: true, sql: `/*rw*/ ${sql}`, maskedColumns: [] }),
+    checkShape: () => ({ ok: true, allowlistedFns: [] }),
+    shadowScan: async () => ({ ok: true }),
   };
   // Executor whose withTransaction runs fn against a fake tx and reports salt OK.
   function txExecutor() {
@@ -94,8 +96,9 @@ describe("runSourceRewrite", () => {
       rewriter: okRewriter,
       columnMasks: masks,
       salt: "S",
+      shadowNames: [],
     });
-    expect(out).toEqual({ ok: true, result: { rows: [{ ok: 1 }], rowCount: 1, fields: [] } });
+    expect(out).toEqual({ ok: true, result: { rows: [{ ok: 1 }], rowCount: 1, fields: [] }, maskedColumns: [] });
     expect(execed).toEqual(["/*rw*/ SELECT credit_card FROM customers"]); // rewritten, not original
   });
 
@@ -104,12 +107,15 @@ describe("runSourceRewrite", () => {
     const rejecter: SourceRewriter = {
       collectRefs: () => [{ schema: null, relname: "customers" }],
       rewrite: () => ({ ok: false, reason: "references a view" }),
+      checkShape: () => ({ ok: true, allowlistedFns: [] }),
+      shadowScan: async () => ({ ok: true }),
     };
     const out = await runSourceRewrite("SELECT * FROM v", ctx, {
       executor,
       rewriter: rejecter,
       columnMasks: masks,
       salt: "S",
+      shadowNames: [],
     });
     expect(out).toEqual({ ok: false, reason: "references a view" });
     expect(execed).toHaveLength(0);
@@ -126,6 +132,7 @@ describe("runSourceRewrite", () => {
       rewriter: okRewriter,
       columnMasks: masks,
       salt: "S",
+      shadowNames: [],
     });
     expect(out?.ok).toBe(false);
     expect(execed).toHaveLength(0);
@@ -138,6 +145,7 @@ describe("runSourceRewrite", () => {
       rewriter: okRewriter,
       columnMasks: masks,
       salt: "S",
+      shadowNames: [],
     });
     expect(out).toBeNull();
   });

@@ -25,8 +25,7 @@
 
 import { parseSync } from "libpg-query";
 import type { TxClient } from "../../executor.ts";
-
-export type GateOutcome = { ok: true } | { ok: false; reason: string };
+import type { GateOutcome, ShapeOutcome } from "../../masking/source-rewrite.ts";
 
 // Pure, non-reflective scalar + aggregate builtins safe to run over a masked
 // projection. Bare names only — schema-qualified calls are denied outright (below).
@@ -117,9 +116,7 @@ function inventory(ast: unknown): Invocations {
 /** Stage 1 — sync, AST-only. Reject if any function/operator is off-allowlist or
  *  schema-qualified to a non-builtin. Returns the bare allowlisted function names
  *  used, to feed the shadow scan (stage 2). */
-export function checkMaskSafeShape(
-  sql: string,
-): { ok: true; allowlistedFns: string[] } | { ok: false; reason: string } {
+export function checkMaskSafeShape(sql: string): ShapeOutcome {
   let ast: unknown;
   try {
     ast = parseSync(sql);

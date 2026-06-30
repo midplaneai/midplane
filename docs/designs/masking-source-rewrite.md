@@ -598,13 +598,20 @@ explicitly closes is salt-missing (was: silent NULL → now: reject, D4).
    `shadowScan` (per-connection `pg_proc` check that no allowlisted builtin name is
    shadowed by a `public.*` UDF — Codex #5 identity-not-spelling). 13 tests pass.
    `MASK_SAFE_FUNCTIONS` is a conservative SEED (deny-by-default ⇒ sound while
-   incomplete) flagged for security review + expansion before ship. **Remaining for
-   Phase-1:** wiring `runSourceRewrite` + `postgresSourceRewriter` + the gate into
-   `handle()` behind `mask_source_rewrite` (shape check in policy phase, shadow scan
-   + rewrite in the coordinator) with the post-exec fallback; write-path
+   incomplete) flagged for security review + expansion before ship.
+1d. **handle() wiring — BUILT 2026-06-30:** `MaskingConfig.sourceRewrite = { enabled,
+   rewriter }`; `Engine.applySourceRewrite` runs the SHAPE gate (covert-channel,
+   AST-only, before opening a txn) then `runSourceRewrite` (shadow scan + resolve +
+   span-splice rewrite + exec on one client), with the retained post-exec masker as
+   the fallback when the flag is off or the executor has no `withTransaction`. The
+   rewrite reject path reuses the existing `column_masking` denial + EXECUTED audit
+   (`columns_masked`). Integration tests prove handle() executes the *rewritten* SQL
+   and the gate denies `query_to_xml`/`current_setting` without executing. Full
+   engine suite 926 pass / 0 fail; both packages typecheck clean; verdict baseline
+   regenerated for the 2 new gate-test SQLs. **Remaining for Phase-1:** write-path
    (WHERE-on-masked reject + RETURNING rewrite); system-column reject; consistent-hash
    JS-token alignment (ET5); config-save type-domain (ET6); live-PG equivalence
-   harness (ET7).
+   harness (ET7); `MASK_SAFE_FUNCTIONS` security review/expansion.
 1b. **Core rewrite + covert-channel gate together** (Codex #3 — they ship as one):
    `null-out`, `full-redact`, `partial`, `generalize`, `noise`, `consistent-hash`;
    by-name catalog (fail-closed staleness, shared search_path), FROM-wrap (quoted

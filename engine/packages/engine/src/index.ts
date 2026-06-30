@@ -73,6 +73,8 @@ export { runSourceRewrite, setMaskSalt, MaskSaltError, MASK_SALT_GUC } from "./m
 export type {
   SourceRewriter,
   RewriteOutcome,
+  ShapeOutcome,
+  GateOutcome,
   SourceRewriteDeps,
   SourceRewriteResult,
 } from "./masking/source-rewrite.ts";
@@ -113,7 +115,6 @@ export {
   MASK_SAFE_FUNCTIONS,
   MASK_SAFE_OPERATORS,
 } from "./dialects/postgres/mask-safety.ts";
-export type { GateOutcome } from "./dialects/postgres/mask-safety.ts";
 export {
   postgresDialect,
   getDialect,
