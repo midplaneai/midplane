@@ -24,6 +24,7 @@
 
 import type {
   ColumnMasksConfig,
+  DatabaseEntry,
   GuardrailsConfig,
   TableAccessPolicy,
   TenantScopeConfig,
@@ -58,6 +59,31 @@ export interface SpawnDatabase {
   /** Column masking (design A2): "schema.table" -> (column -> transform).
    *  Empty/absent yields no column_masks block in the rendered YAML. */
   columnMasks?: ColumnMasksConfig;
+}
+
+/** Map a SpawnDatabase to the policy DatabaseEntry the engine's boot YAML is
+ *  rendered from — the single source of truth for the SPAWN mapping (previously
+ *  duplicated verbatim in every spawner). The hot-reload path (/admin/policy) does
+ *  NOT use this: it deliberately omits masking, which is boot-time-only.
+ *
+ *  ISSUE-007 launch: `maskSourceRewrite` is turned ON for every DB that declares
+ *  masks, so the cloud emits `mask_source_rewrite: true` + the
+ *  `requires_features: [mask_source_rewrite]` interlock and the engine masks at the
+ *  SOURCE relation (aggregates over unmasked tables stop being blanket-denied)
+ *  instead of the post-exec output filter. Inert on an unmasked DB — the serializer
+ *  only emits the flag/token alongside a non-empty column_masks block — so setting it
+ *  unconditionally is safe. Rollback: set this back to `false` and redeploy; engines
+ *  pick up the post-exec path on their next spawn. */
+export function toDatabaseEntry(db: SpawnDatabase): DatabaseEntry {
+  return {
+    name: db.name,
+    projectDatabaseId: db.projectDatabaseId,
+    tableAccess: db.tableAccess,
+    tenantScope: db.tenantScope,
+    guardrails: db.guardrails,
+    columnMasks: db.columnMasks,
+    maskSourceRewrite: true,
+  };
 }
 
 export interface SpawnOptions {

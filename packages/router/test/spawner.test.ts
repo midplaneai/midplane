@@ -5,10 +5,46 @@ import type { ColumnMasksConfig } from "@midplane-cloud/db";
 import {
   bootFingerprint,
   ContainerRegistry,
+  toDatabaseEntry,
+  type SpawnDatabase,
   type SpawnedContainer,
   type Spawner,
   type SpawnOptions,
 } from "../src/spawner.ts";
+
+describe("toDatabaseEntry (ISSUE-007 launch: source-rewrite on)", () => {
+  const base: SpawnDatabase = {
+    name: "main",
+    projectDatabaseId: "01HXYZ",
+    dsn: "postgres://x",
+    tableAccess: { default: "read", tables: {} },
+    tenantScope: { column: null, overrides: {}, exempt: [] },
+    guardrails: { block_unqualified_dml: true, block_ddl: true },
+  };
+
+  it("turns source-rewrite ON (maskSourceRewrite: true) and carries every field through", () => {
+    const e = toDatabaseEntry({ ...base, columnMasks: { "public.users": { email: "full-redact" } } });
+    expect(e).toEqual({
+      name: "main",
+      projectDatabaseId: "01HXYZ",
+      tableAccess: base.tableAccess,
+      tenantScope: base.tenantScope,
+      guardrails: base.guardrails,
+      columnMasks: { "public.users": { email: "full-redact" } },
+      maskSourceRewrite: true,
+    });
+    // dsn is NOT part of the policy entry (it's injected as an env var, never YAML).
+    expect("dsn" in e).toBe(false);
+  });
+
+  it("is inert on an unmasked DB — the serializer emits no flag/token without masks", () => {
+    // maskSourceRewrite: true is still set, but serializeMultiDbPolicyToYaml only emits
+    // the flag+token alongside a non-empty column_masks block (covered in db tests).
+    const e = toDatabaseEntry(base);
+    expect(e.columnMasks).toBeUndefined();
+    expect(e.maskSourceRewrite).toBe(true);
+  });
+});
 
 class StubSpawner implements Spawner {
   calls = 0;

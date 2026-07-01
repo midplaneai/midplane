@@ -18,6 +18,7 @@ import {
 import type { Region } from "@midplane-cloud/kms";
 import { OSS_ENGINE_IMAGE } from "./oss-image.ts";
 import type { RegionConfig } from "./region.ts";
+import { toDatabaseEntry } from "./spawner.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 
 // Path inside the OSS container where the policy YAML is materialized.
@@ -286,14 +287,7 @@ export class FlyMachineSpawner implements Spawner {
       dsnEnv[dsnEnvVarFor(db.projectDatabaseId)] = db.dsn;
     }
     const policyYaml = serializeMultiDbPolicyToYaml(
-      opts.databases.map((db) => ({
-        name: db.name,
-        projectDatabaseId: db.projectDatabaseId,
-        tableAccess: db.tableAccess,
-        tenantScope: db.tenantScope,
-        guardrails: db.guardrails,
-        columnMasks: db.columnMasks,
-      })),
+      opts.databases.map(toDatabaseEntry),
     );
     const res = await this.fetchFn(`${this.apiBase}/v1/apps/${app}/machines`, {
       method: "POST",

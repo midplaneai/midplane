@@ -37,6 +37,7 @@ import {
   serializeMultiDbPolicyToYaml,
 } from "@midplane-cloud/db";
 
+import { toDatabaseEntry } from "./spawner.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 
 // Loopback bind. The engine is reachable only from this host — there is no
@@ -162,16 +163,7 @@ export class ProcessSpawner implements Spawner {
     const policyPath = join(policyDir, "policy.yaml");
     await writeFile(
       policyPath,
-      serializeMultiDbPolicyToYaml(
-        opts.databases.map((db) => ({
-          name: db.name,
-          projectDatabaseId: db.projectDatabaseId,
-          tableAccess: db.tableAccess,
-          tenantScope: db.tenantScope,
-          guardrails: db.guardrails,
-          columnMasks: db.columnMasks,
-        })),
-      ),
+      serializeMultiDbPolicyToYaml(opts.databases.map(toDatabaseEntry)),
       { mode: 0o644 },
     );
 
