@@ -22,6 +22,18 @@ describe("checkMaskSafeShape — allows analytics builtins", () => {
   test("a query with no functions or operators passes", () => {
     expect(checkMaskSafeShape("SELECT credit_card FROM customers").ok).toBe(true);
   });
+
+  test("expanded analytics functions pass (math / string / date / stat / window)", () => {
+    const q =
+      "SELECT round(avg(salary), 2), stddev(salary), corr(x, y), upper(name), " +
+      "regexp_replace(name, 'a', 'b'), string_agg(name, ','), date_bin('1 hour', ts, ts), " +
+      "rank() OVER (ORDER BY salary), ntile(4) OVER (ORDER BY salary) FROM customers";
+    expect(checkMaskSafeShape(q).ok).toBe(true);
+  });
+
+  test("regex + bitwise operators pass", () => {
+    expect(checkMaskSafeShape("SELECT name FROM customers WHERE name ~ '^A' AND (flags & 1) = 1").ok).toBe(true);
+  });
 });
 
 describe("checkMaskSafeShape — denies the covert-read channels (deny-by-default)", () => {
@@ -33,6 +45,12 @@ describe("checkMaskSafeShape — denies the covert-read channels (deny-by-defaul
     ["to_jsonb whole-row serialization", "SELECT to_jsonb(c) FROM customers c"],
     ["current_setting (would read the mask-salt GUC)", "SELECT current_setting('midplane.mask_salt')"],
     ["off-allowlist scalar fn", "SELECT pg_read_file('/etc/passwd')"],
+    ["nextval — dereferences a sequence", "SELECT nextval('s')"],
+    ["pg_relation_size — reads the named object", "SELECT pg_relation_size('customers')"],
+    ["pg_sleep — DoS", "SELECT pg_sleep(10)"],
+    ["generate_series — set-returning", "SELECT generate_series(1, 100)"],
+    ["json_agg — whole-row/json serialization", "SELECT json_agg(c) FROM customers c"],
+    ["lo_get — large object", "SELECT lo_get(1)"],
   ];
   for (const [label, sql] of denied) {
     test(`denies ${label}`, () => {
@@ -62,19 +80,28 @@ describe("shadowScan — catches a builtin shadowed by a user-schema UDF", () =>
 
   test("no names → no round-trip", async () => {
     const { tx, getQueried } = fakeTx([]);
-    expect(await shadowScan(tx, [])).toEqual({ ok: true });
+    expect(await shadowScan(tx, { functions: [], operators: [] })).toEqual({ ok: true });
     expect(getQueried()).toBeNull();
   });
 
   test("allowlisted name with no user-schema definition → ok", async () => {
     const { tx } = fakeTx([]);
-    expect(await shadowScan(tx, ["sum"])).toEqual({ ok: true });
+    expect(await shadowScan(tx, { functions: ["sum"], operators: [] })).toEqual({ ok: true });
   });
 
-  test("public.sum shadowing the builtin → reject (Codex #5)", async () => {
+  test("public.sum shadowing the builtin FUNCTION → reject (Codex #5)", async () => {
     const { tx } = fakeTx([{ schema: "public", name: "sum" }]);
-    const r = await shadowScan(tx, ["sum"]);
+    const r = await shadowScan(tx, { functions: ["sum"], operators: [] });
     expect(r.ok).toBe(false);
     expect((r as { reason: string }).reason).toContain("shadowed");
+  });
+
+  test("public.|| shadowing a builtin OPERATOR → reject (Codex allowlist review, High)", async () => {
+    // a user operator whose body calls current_setting/query_to_xml would bypass the
+    // spelling-only allowlist; the pg_operator scan catches it.
+    const { tx } = fakeTx([{ schema: "public", name: "||" }]);
+    const r = await shadowScan(tx, { functions: [], operators: ["||"] });
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain("operator");
   });
 });

@@ -75,6 +75,7 @@ export type {
   RewriteOutcome,
   ShapeOutcome,
   GateOutcome,
+  ShadowUsed,
   SourceRewriteDeps,
   SourceRewriteResult,
 } from "./masking/source-rewrite.ts";

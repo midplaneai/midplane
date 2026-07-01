@@ -66,7 +66,7 @@ describe("runSourceRewrite", () => {
   const okRewriter: SourceRewriter = {
     collectRefs: () => [{ schema: null, relname: "customers" }],
     rewrite: (sql) => ({ ok: true, sql: `/*rw*/ ${sql}`, maskedColumns: [] }),
-    checkShape: () => ({ ok: true, allowlistedFns: [] }),
+    checkShape: () => ({ ok: true, allowlistedFns: [], allowlistedOps: [] }),
     shadowScan: async () => ({ ok: true }),
   };
   // Executor whose withTransaction runs fn against a fake tx and reports salt OK.
@@ -96,7 +96,7 @@ describe("runSourceRewrite", () => {
       rewriter: okRewriter,
       columnMasks: masks,
       salt: "S",
-      shadowNames: [],
+      shadowUsed: { functions: [], operators: [] },
     });
     expect(out).toEqual({ ok: true, result: { rows: [{ ok: 1 }], rowCount: 1, fields: [] }, maskedColumns: [] });
     expect(execed).toEqual(["/*rw*/ SELECT credit_card FROM customers"]); // rewritten, not original
@@ -107,7 +107,7 @@ describe("runSourceRewrite", () => {
     const rejecter: SourceRewriter = {
       collectRefs: () => [{ schema: null, relname: "customers" }],
       rewrite: () => ({ ok: false, reason: "references a view" }),
-      checkShape: () => ({ ok: true, allowlistedFns: [] }),
+      checkShape: () => ({ ok: true, allowlistedFns: [], allowlistedOps: [] }),
       shadowScan: async () => ({ ok: true }),
     };
     const out = await runSourceRewrite("SELECT * FROM v", ctx, {
@@ -115,7 +115,7 @@ describe("runSourceRewrite", () => {
       rewriter: rejecter,
       columnMasks: masks,
       salt: "S",
-      shadowNames: [],
+      shadowUsed: { functions: [], operators: [] },
     });
     expect(out).toEqual({ ok: false, reason: "references a view" });
     expect(execed).toHaveLength(0);
@@ -132,7 +132,7 @@ describe("runSourceRewrite", () => {
       rewriter: okRewriter,
       columnMasks: masks,
       salt: "S",
-      shadowNames: [],
+      shadowUsed: { functions: [], operators: [] },
     });
     expect(out?.ok).toBe(false);
     expect(execed).toHaveLength(0);
@@ -145,7 +145,7 @@ describe("runSourceRewrite", () => {
       rewriter: okRewriter,
       columnMasks: masks,
       salt: "S",
-      shadowNames: [],
+      shadowUsed: { functions: [], operators: [] },
     });
     expect(out).toBeNull();
   });

@@ -19,7 +19,7 @@ import type { ColumnMasks } from "../../masking/mask-result-set.ts";
 import type { ByNameCatalog, RelationRef } from "../../masking/catalog.ts";
 import type { MaskRule } from "../../masking/transforms.ts";
 import type { TxClient } from "../../executor.ts";
-import type { GateOutcome, ShapeOutcome } from "../../masking/source-rewrite.ts";
+import type { GateOutcome, ShadowUsed, ShapeOutcome } from "../../masking/source-rewrite.ts";
 import { quoteIdent, transformToSql } from "./transform-sql.ts";
 import { checkMaskSafeShape, shadowScan as runShadowScan } from "./mask-safety.ts";
 
@@ -421,7 +421,7 @@ export const postgresSourceRewriter: SourceRewriter = {
   checkShape(sql: string): ShapeOutcome {
     return checkMaskSafeShape(sql);
   },
-  shadowScan(tx: TxClient, names: string[]): Promise<GateOutcome> {
-    return runShadowScan(tx, names);
+  shadowScan(tx: TxClient, used: ShadowUsed): Promise<GateOutcome> {
+    return runShadowScan(tx, used);
   },
 };

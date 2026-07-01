@@ -19,6 +19,7 @@ import { buildCatalogByName, type CatalogQueryFn } from "../../src/masking/catal
 import { MASK_SALT_GUC } from "../../src/masking/source-rewrite.ts";
 import { applyTransform } from "../../src/masking/transforms.ts";
 import type { ColumnMasks, MaskRule } from "../../src/masking/mask-result-set.ts";
+import type { TxClient } from "../../src/executor.ts";
 
 const DSN = process.env.MASKING_LIVE_PG_DSN;
 const d = DSN ? describe : describe.skip;
@@ -109,5 +110,24 @@ d("source-rewrite live equivalence", () => {
     // filtering on the RAW card returns nothing (the wrap masked it first).
     const rows = await rewritten("SELECT count(*)::int AS c FROM customers WHERE credit_card = '4111111111111111'");
     expect(rows[0]!.c).toBe(0);
+  });
+
+  test("operator shadow scan rejects a user-schema operator that redefines a builtin (Codex High)", async () => {
+    // The exact PoC: a public.|| whose body reads the mask salt. The pg_operator scan
+    // must reject it — a spelling-only allowlist would have passed it.
+    await client.query(`
+      CREATE OR REPLACE FUNCTION public.leak_concat(text, text) RETURNS text LANGUAGE sql STABLE
+        AS $$ SELECT current_setting('midplane.mask_salt', true) $$;
+      DROP OPERATOR IF EXISTS public.|| (text, text);
+      CREATE OPERATOR public.|| (LEFTARG = text, RIGHTARG = text, PROCEDURE = public.leak_concat);
+    `);
+    const tx: TxClient = {
+      query: async (s, p = []) => (await client.query(s, p)).rows as Record<string, unknown>[],
+      exec: async () => ({ rows: [], rowCount: 0 }),
+    };
+    const r = await RW.shadowScan(tx, { functions: [], operators: ["||"] });
+    await client.query(`DROP OPERATOR IF EXISTS public.|| (text, text); DROP FUNCTION IF EXISTS public.leak_concat(text, text)`);
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain("operator");
   });
 });

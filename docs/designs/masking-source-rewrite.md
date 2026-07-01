@@ -656,10 +656,23 @@ explicitly closes is salt-missing (was: silent NULL → now: reject, D4).
      typcategory rules in `packages/db` (cross-package, drift-checked). A control-
      plane feature, not a rewriter fix; do it when the mask-authoring UI wires column
      types through.
-   - **`MASK_SAFE_FUNCTIONS` security review** — the seed is deny-by-default (sound
-     while incomplete). Expanding it is a threat-modeling task for a human, not a
-     mechanical change; leaving it conservative on purpose.
    - RETURNING *masking* (vs the current reject), observability metrics/tripwire.
+1g. **Allowlist security review — DONE 2026-06-30.** Stated the safety criterion (a
+   builtin is mask-safe iff every value it observes derives from its syntactic args +
+   non-secret session context — the wrap already masked any masked-column arg), then
+   expanded `MASK_SAFE_FUNCTIONS` across the provably-safe families (statistical/
+   ordered-set/window aggregates, transcendental math, pure string incl. `regexp_replace`/
+   `encode`/`sha*`, date/time incl. `date_bin`) and the operators (POSIX regex,
+   bitwise) — still deny-by-default. Kept the dangerous families excluded with the
+   mechanism documented (dynamic SQL, FS/LO, GUC introspection incl. the salt,
+   object-name/regclass deref, reflective/admin/DoS, whole-row/JSON serialization and
+   SRFs — the last two deferred, not dismissed). An **adversarial Codex pass found a
+   real High**: the operator allowlist was spelling-only and the shadow scan covered
+   `pg_proc` but not `pg_operator`, so a `public.||` redefining a builtin (body calling
+   `current_setting`/`query_to_xml`) would bypass the gate. **Fixed:** the shadow scan
+   now resolves operator identity via `pg_operator` too. Verified end-to-end on real
+   PG16 (the PoC operator is created and rejected). Full engine suite 948 pass / 0
+   fail; live harness 6/6. (Residual, tracked: RETURNING/JSON-serialization deferral.)
 1b. **Core rewrite + covert-channel gate together** (Codex #3 — they ship as one):
    `null-out`, `full-redact`, `partial`, `generalize`, `noise`, `consistent-hash`;
    by-name catalog (fail-closed staleness, shared search_path), FROM-wrap (quoted

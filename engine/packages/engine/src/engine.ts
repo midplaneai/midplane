@@ -457,7 +457,7 @@ export class Engine {
       rewriter,
       columnMasks: m.columnMasks,
       salt: m.salt,
-      shadowNames: shape.allowlistedFns,
+      shadowUsed: { functions: shape.allowlistedFns, operators: shape.allowlistedOps },
     });
     if (rw === null) return { handled: false }; // executor has no withTransaction -> fall back
     if (!rw.ok) {

@@ -58,13 +58,21 @@ export type RewriteOutcome =
   | { ok: false; reason: string };
 
 /** Covert-channel SHAPE gate result — `ok` carries the allowlisted bare function
- *  names the statement used, to feed the per-connection shadow scan (stage 2). */
+ *  names AND operator spellings the statement used, to feed the per-connection
+ *  shadow scan (stage 2), which checks both pg_proc and pg_operator for shadowing. */
 export type ShapeOutcome =
-  | { ok: true; allowlistedFns: string[] }
+  | { ok: true; allowlistedFns: string[]; allowlistedOps: string[] }
   | { ok: false; reason: string };
 
 /** Per-connection gate result (shadow scan). */
 export type GateOutcome = { ok: true } | { ok: false; reason: string };
+
+/** Allowlisted bare names the shape gate accepted, to shadow-scan for user-schema
+ *  redefinitions ahead of pg_catalog. */
+export interface ShadowUsed {
+  functions: string[];
+  operators: string[];
+}
 
 /** The dialect-supplied masking seam (eng-review A1: the AST rewrite + the
  *  covert-channel gate, which both name dialect AST nodes / dialect builtins, live
@@ -84,8 +92,9 @@ export interface SourceRewriter {
    *  allowlist. Runs in the policy phase so a reject avoids opening the txn. */
   checkShape(sql: string): ShapeOutcome;
   /** Covert-channel SHADOW scan (per-connection) — verify no allowlisted builtin
-   *  name is shadowed by a user-schema function. Runs inside the rewrite txn. */
-  shadowScan(tx: TxClient, names: string[]): Promise<GateOutcome>;
+   *  function OR operator is shadowed by a user-schema definition ahead of
+   *  pg_catalog. Runs inside the rewrite txn. */
+  shadowScan(tx: TxClient, used: ShadowUsed): Promise<GateOutcome>;
 }
 
 export interface SourceRewriteDeps {
@@ -93,8 +102,8 @@ export interface SourceRewriteDeps {
   rewriter: SourceRewriter;
   columnMasks: ColumnMasks;
   salt: string;
-  /** Allowlisted bare function names from the SHAPE gate, for the shadow scan. */
-  shadowNames: string[];
+  /** Allowlisted bare function names + operator spellings from the SHAPE gate. */
+  shadowUsed: ShadowUsed;
 }
 
 export type SourceRewriteResult =
@@ -109,7 +118,7 @@ export async function runSourceRewrite(
   ctx: ExecuteContext,
   deps: SourceRewriteDeps,
 ): Promise<SourceRewriteResult | null> {
-  const { executor, rewriter, columnMasks, salt, shadowNames } = deps;
+  const { executor, rewriter, columnMasks, salt, shadowUsed } = deps;
   if (!executor.withTransaction) return null;
 
   return executor.withTransaction(ctx, async (tx): Promise<SourceRewriteResult> => {
@@ -124,7 +133,7 @@ export async function runSourceRewrite(
     // 2. Covert-channel SHADOW scan on this client: no allowlisted builtin name is
     //    shadowed by a user-schema UDF (the SHAPE gate already ran in the policy
     //    phase). Fail closed.
-    const sc = await rewriter.shadowScan(tx, shadowNames);
+    const sc = await rewriter.shadowScan(tx, shadowUsed);
     if (!sc.ok) return { ok: false, reason: sc.reason };
 
     // 3. Resolve referenced relations by name on this client (shared search_path).
