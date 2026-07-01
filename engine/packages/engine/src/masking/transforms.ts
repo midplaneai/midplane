@@ -50,7 +50,7 @@
 // (null-out makes NULL a transform TARGET — every value becomes NULL — which is
 // distinct from this passthrough of an already-NULL input.)
 
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { PSEUDONYM_EMAILS } from "./dictionaries/emails.ts";
 import { PSEUDONYM_NAMES } from "./dictionaries/names.ts";
 import { PSEUDONYM_PHONES } from "./dictionaries/phones.ts";
@@ -172,13 +172,20 @@ function nullOut(): null {
   return null;
 }
 
-/** consistent-hash: deterministic pseudonym. HMAC-SHA256(salt, text(value))
- *  truncated to a stable hex token. Same (salt, value) => same token, so the
- *  agent can still join/group on the masked column; different salt => different
- *  token. Collision-resistant for join semantics. */
+/** consistent-hash: deterministic pseudonym. `md5(salt || text(value))` as a stable
+ *  hex token. Same (salt, value) => same token, so the agent can still join/group on
+ *  the masked column; different salt => different token.
+ *
+ *  MUST match the source-rewrite SQL emission
+ *  (`dialects/postgres/transform-sql.ts`: `md5(current_setting(salt) || col::text)`)
+ *  so flipping the `mask_source_rewrite` flag is token-stable — a value hashed by
+ *  the post-exec masker (fallback) and by the in-DB rewrite produce the SAME token
+ *  (D2 / ET5). For a text column `col::text` is the value itself, so JS
+ *  `salt + text` equals SQL `salt || col::text`. (A value-corpus parity test pins
+ *  this.) */
 function consistentHash(value: unknown, ctx: TransformContext): string {
   const text = stringify(value);
-  return createHmac("sha256", ctx.salt).update(text).digest("hex").slice(0, 16);
+  return createHash("md5").update(ctx.salt + text).digest("hex");
 }
 
 /** partial: reveal `keepStart` leading + `keepEnd` trailing characters, mask the

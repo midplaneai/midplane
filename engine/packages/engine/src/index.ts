@@ -31,6 +31,7 @@ export type {
   ExecutionResult,
   ExecuteContext,
   ResultField,
+  TxClient,
 } from "./executor.ts";
 
 export {
@@ -60,8 +61,24 @@ export type {
   MaskResultSetInput,
   RelInfo,
 } from "./masking/mask-result-set.ts";
-export { buildCatalog, CachingCatalogResolver } from "./masking/catalog.ts";
-export type { CatalogResolver, CatalogQueryFn } from "./masking/catalog.ts";
+export { buildCatalog, buildCatalogByName, CachingCatalogResolver } from "./masking/catalog.ts";
+export type {
+  CatalogResolver,
+  CatalogQueryFn,
+  RelationRef,
+  RelByName,
+  ByNameCatalog,
+} from "./masking/catalog.ts";
+export { runSourceRewrite, setMaskSalt, MaskSaltError, MASK_SALT_GUC } from "./masking/source-rewrite.ts";
+export type {
+  SourceRewriter,
+  RewriteOutcome,
+  ShapeOutcome,
+  GateOutcome,
+  ShadowUsed,
+  SourceRewriteDeps,
+  SourceRewriteResult,
+} from "./masking/source-rewrite.ts";
 
 export type { Rule, RuleVerdict } from "./policy/index.ts";
 export type {
@@ -90,6 +107,15 @@ export {
 // compiling unchanged; the underlying source moved into `dialects/postgres/`.
 export { parse, warmup } from "./dialects/postgres/index.ts";
 export type { ParseResult, PgParseTree } from "./dialects/postgres/index.ts";
+export { postgresSourceRewriter } from "./dialects/postgres/source-rewrite.ts";
+export { transformToSql, quoteIdent, quoteLiteral } from "./dialects/postgres/transform-sql.ts";
+export type { SqlEmit } from "./dialects/postgres/transform-sql.ts";
+export {
+  checkMaskSafeShape,
+  shadowScan,
+  MASK_SAFE_FUNCTIONS,
+  MASK_SAFE_OPERATORS,
+} from "./dialects/postgres/mask-safety.ts";
 export {
   postgresDialect,
   getDialect,

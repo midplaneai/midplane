@@ -50,6 +50,32 @@ export interface ExecuteContext {
   agent_version: string | null;
 }
 
+// A single checked-out, transaction-scoped client for the masking source-rewrite
+// path (T0). The transaction already has search_path pinned (same as execute()),
+// and a pooled connection cannot rebind mid-transaction — so catalog resolution,
+// the mask-salt GUC, and the rewritten user query all run against ONE backend.
+// This is the fix for the split today's executor has: execute() is transaction-
+// scoped but the catalog reads (query()) run on a SEPARATE pooled connection with
+// no search_path pin, so pre-exec name resolution could disagree with execution
+// and the salt GUC might not be on the execution client.
+//
+// Driver-agnostic by construction (no pg types leak here), like Executor itself.
+export interface TxClient {
+  // Metadata/catalog query within the transaction. Same shape as CatalogQueryFn
+  // so buildCatalogByName / a CachingCatalogResolver can run on THIS client.
+  query(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]>;
+  // Execute the (rewritten) user SQL, lifting RowDescription provenance — same
+  // ExecutionResult shape (and same provenance semantics) as Executor.execute().
+  exec(sql: string): Promise<ExecutionResult>;
+}
+
 export interface Executor {
   execute(sql: string, ctx: ExecuteContext): Promise<ExecutionResult>;
+  // Run one unit of work on a transaction-scoped client (search_path pinned), for
+  // the masking source-rewrite path. OPTIONAL: an executor that doesn't implement
+  // it (mock executors, or a deployment without rewrite support) signals the engine
+  // to use the post-exec masker instead — so this is purely additive and never
+  // breaks an existing Executor. The transaction COMMITs when `fn` resolves and
+  // ROLLBACKs if it throws.
+  withTransaction?<T>(ctx: ExecuteContext, fn: (tx: TxClient) => Promise<T>): Promise<T>;
 }

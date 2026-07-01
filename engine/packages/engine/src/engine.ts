@@ -14,10 +14,12 @@ import { ulid } from "ulid";
 import { createHash } from "node:crypto";
 import type { AuditWriter } from "./audit/index.ts";
 import type { CredentialStore } from "./crypto/credential-store.ts";
-import type { Executor, ExecutionResult } from "./executor.ts";
+import type { Executor, ExecuteContext, ExecutionResult } from "./executor.ts";
 import { maskResultSet } from "./masking/mask-result-set.ts";
 import type { ColumnMasks } from "./masking/mask-result-set.ts";
 import type { CatalogResolver } from "./masking/catalog.ts";
+import { runSourceRewrite } from "./masking/source-rewrite.ts";
+import type { SourceRewriter } from "./masking/source-rewrite.ts";
 import type { Rule } from "./policy/rules/index.ts";
 import { evaluate } from "./policy/index.ts";
 import type { Dialect } from "./dialects/types.ts";
@@ -111,6 +113,17 @@ export type MaskingConfig = {
   salt: string;
   /** Turns result OIDs into the catalog the masker needs (cached per conn). */
   resolver: CatalogResolver;
+  // Optional source-rewrite path (T0). When `enabled`, a masked query is rewritten
+  // at the source relation (mask under the computation) on one transaction-scoped
+  // client, instead of post-processing the result set — so aggregates over unmasked
+  // tables stop being blanket-denied (ISSUE-007). The `rewriter` is the dialect's
+  // span-splice + covert-channel gate (postgresSourceRewriter). When disabled, or
+  // when the executor has no `withTransaction`, enforcement falls back to the
+  // retained post-exec masker (the rollback path) — so this is safe to flip per env.
+  sourceRewrite?: {
+    enabled: boolean;
+    rewriter: SourceRewriter;
+  };
 };
 
 export interface EngineOptions {
@@ -268,15 +281,45 @@ export class Engine {
       };
     }
 
-    // ── 5. execute (only on ALLOW)
+    // ── 5. execute (only on ALLOW). Two enforcement paths, both wrapped so an
+    //    infra throw becomes a FAILED audit + re-raise:
+    //    • source-rewrite ON (and the executor supports transactions): the masked
+    //      query is rewritten at the SOURCE on one transaction-scoped client and
+    //      comes back already masked — aggregates over unmasked tables are no longer
+    //      blanket-denied (ISSUE-007). A covert-channel / rewrite reject withholds
+    //      the rows (column_masking) WITHOUT executing.
+    //    • otherwise (rewrite disabled, or the executor has no withTransaction):
+    //      plain execute, then the retained post-exec masker (5b) transforms the
+    //      masked columns OR rejects. This is the fallback / rollback path.
     const execStart = this.now();
+    const execCtx: ExecuteContext = {
+      tenant_id: input.ctx.tenant_id,
+      agent_name: input.ctx.agent_name,
+      agent_version: input.ctx.agent_version,
+    };
     let execResult: ExecutionResult;
+    let columnsMasked: string[] | undefined;
+    let maskingRejectReason: string | undefined;
+    let didExecute = true; // false for a pre-execution masking denial (rewrite path)
     try {
-      execResult = await this.executor.execute(input.sql, {
-        tenant_id: input.ctx.tenant_id,
-        agent_name: input.ctx.agent_name,
-        agent_version: input.ctx.agent_version,
-      });
+      const sr = await this.applySourceRewrite(input.sql, execCtx);
+      if (sr.handled) {
+        execResult = sr.result;
+        columnsMasked = sr.columnsMasked;
+        maskingRejectReason = sr.rejectReason;
+        didExecute = sr.executed;
+      } else {
+        // ── 5b. fallback: plain execute + retained post-exec masker (fail-closed).
+        execResult = await this.executor.execute(input.sql, execCtx);
+        if (this.masking && this.masking.columnMasks.size > 0) {
+          const masked = await this.applyMasking(execResult);
+          if (masked.ok) {
+            columnsMasked = masked.columnsMasked.length ? masked.columnsMasked : undefined;
+          } else {
+            maskingRejectReason = masked.reason;
+          }
+        }
+      }
     } catch (err) {
       const failed: AuditEvent = {
         id: this.idGen(),
@@ -306,51 +349,60 @@ export class Engine {
       throw err;
     }
 
-    // ── 5b. column masking (post-execute, fail-closed). Runs only when this
-    //    engine is configured with a non-empty mask set. The query has already
-    //    executed; masking transforms the masked columns' values before the rows
-    //    leave the engine, OR rejects — withholding the rows from the agent —
-    //    when a masked column can't be safely masked (view / computed /
-    //    whole-row, or a stale catalog after one refresh). On reject the rows
-    //    never reach the agent. Covers SELECT and INSERT/UPDATE...RETURNING
-    //    (same execute path). `execResult.rows` is replaced in place on success.
-    let columnsMasked: string[] | undefined;
-    let maskingRejectReason: string | undefined;
-    if (this.masking && this.masking.columnMasks.size > 0) {
-      const masked = await this.applyMasking(execResult);
-      if (masked.ok) {
-        columnsMasked = masked.columnsMasked.length ? masked.columnsMasked : undefined;
-      } else {
-        maskingRejectReason = masked.reason;
-      }
+    // Audit the outcome. A query that RAN (rewrite ok, or the fallback execute)
+    // writes EXECUTED, carrying the masking outcome (columns_masked, or
+    // masking_rejected when the post-exec masker withheld the rows). A PRE-execution
+    // masking DENIAL (source-rewrite shape gate / salt / shadow / rewrite reject)
+    // ran no SQL, so it must NOT look executed: record it as a FAILED event with a
+    // distinct `column_masking` error_class, so a denied — e.g. covert-channel —
+    // attempt is never logged as an executed query.
+    if (maskingRejectReason && !didExecute) {
+      const denied: AuditEvent = {
+        id: this.idGen(),
+        query_id: queryId,
+        tenant_id: input.ctx.tenant_id,
+        database: this.databaseName,
+        agent_name: input.ctx.agent_name,
+        agent_version: input.ctx.agent_version,
+        agent_intent: intent,
+        mcp_token_id: input.ctx.mcp_token_id,
+        ts: this.now(),
+        schema_version: 3,
+        event_type: "FAILED",
+        payload: {
+          exec_ms: 0,
+          overhead_ms: Math.max(0, this.now() - start),
+          error_class: "column_masking",
+          error_message: maskingRejectReason.slice(0, 4096),
+        },
+      };
+      await this.writePostExecBestEffort(denied);
+    } else {
+      const executed: AuditEvent = {
+        id: this.idGen(),
+        query_id: queryId,
+        tenant_id: input.ctx.tenant_id,
+        database: this.databaseName,
+        agent_name: input.ctx.agent_name,
+        agent_version: input.ctx.agent_version,
+        agent_intent: intent,
+        mcp_token_id: input.ctx.mcp_token_id,
+        ts: this.now(),
+        schema_version: 3,
+        event_type: "EXECUTED",
+        payload: {
+          exec_ms: Math.max(0, this.now() - execStart),
+          overhead_ms: Math.max(0, execStart - start),
+          rows_returned: execResult.rows.length,
+          rows_affected: execResult.rowCount,
+          ...(columnsMasked ? { columns_masked: columnsMasked } : {}),
+          ...(maskingRejectReason
+            ? { masking_rejected: true, masking_reason: maskingRejectReason.slice(0, 512) }
+            : {}),
+        },
+      };
+      await this.writePostExecBestEffort(executed);
     }
-
-    // EXECUTED is always written (the query DID run), carrying the masking
-    // outcome. On a masking reject we then return a structured denial below.
-    const executed: AuditEvent = {
-      id: this.idGen(),
-      query_id: queryId,
-      tenant_id: input.ctx.tenant_id,
-      database: this.databaseName,
-      agent_name: input.ctx.agent_name,
-      agent_version: input.ctx.agent_version,
-      agent_intent: intent,
-      mcp_token_id: input.ctx.mcp_token_id,
-      ts: this.now(),
-      schema_version: 3,
-      event_type: "EXECUTED",
-      payload: {
-        exec_ms: Math.max(0, this.now() - execStart),
-        overhead_ms: Math.max(0, execStart - start),
-        rows_returned: execResult.rows.length,
-        rows_affected: execResult.rowCount,
-        ...(columnsMasked ? { columns_masked: columnsMasked } : {}),
-        ...(maskingRejectReason
-          ? { masking_rejected: true, masking_reason: maskingRejectReason.slice(0, 512) }
-          : {}),
-      },
-    };
-    await this.writePostExecBestEffort(executed);
 
     if (maskingRejectReason) {
       return {
@@ -362,6 +414,61 @@ export class Engine {
     }
 
     return { allowed: true, result: execResult, auditId: decidedId };
+  }
+
+  // Source-rewrite enforcement path (T0). Active only when masking is configured
+  // with `sourceRewrite.enabled`. Rewrites the masked query at the source on ONE
+  // transaction-scoped client: SHAPE gate (covert-channel, AST-only) → SHADOW scan
+  // + by-name resolve + span-splice rewrite → execute, all fail-closed. Returns
+  // { handled:false } when source-rewrite is off OR the executor can't open a
+  // transaction — the caller then falls back to plain execute + the post-exec
+  // masker (the rollback path), so flipping the flag is always safe.
+  private async applySourceRewrite(
+    sql: string,
+    execCtx: ExecuteContext,
+  ): Promise<
+    | { handled: false }
+    | {
+        handled: true;
+        // `executed` distinguishes a query that actually ran (rewrite succeeded)
+        // from a pre-execution masking DENIAL (shape gate / salt / shadow / rewrite
+        // reject), so the caller never audits a denied — e.g. covert-channel —
+        // attempt as EXECUTED.
+        executed: boolean;
+        result: ExecutionResult;
+        columnsMasked?: string[];
+        rejectReason?: string;
+      }
+  > {
+    const m = this.masking;
+    if (!m || m.columnMasks.size === 0 || !m.sourceRewrite?.enabled) {
+      return { handled: false };
+    }
+    const rewriter = m.sourceRewrite.rewriter;
+    // SHAPE gate (covert-channel) — AST-only, before opening a transaction, so an
+    // off-allowlist function (query_to_xml, dblink, a UDF, current_setting) is
+    // rejected without executing anything.
+    const shape = rewriter.checkShape(sql);
+    if (!shape.ok) {
+      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: shape.reason };
+    }
+    const rw = await runSourceRewrite(sql, execCtx, {
+      executor: this.executor,
+      rewriter,
+      columnMasks: m.columnMasks,
+      salt: m.salt,
+      shadowUsed: { functions: shape.allowlistedFns, operators: shape.allowlistedOps },
+    });
+    if (rw === null) return { handled: false }; // executor has no withTransaction -> fall back
+    if (!rw.ok) {
+      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: rw.reason };
+    }
+    return {
+      handled: true,
+      executed: true,
+      result: rw.result,
+      columnsMasked: rw.maskedColumns.length ? [...new Set(rw.maskedColumns)] : undefined,
+    };
   }
 
   // Post-execute column masking. Maps each output column to its source via the
