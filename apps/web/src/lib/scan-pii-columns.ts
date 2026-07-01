@@ -10,6 +10,7 @@
 
 import postgres from "postgres";
 
+import type { MaskColumnTypes } from "@midplane-cloud/db/policy";
 import { classifyColumn, type PiiMatch } from "./pii-heuristics.ts";
 
 const TABLE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*)?$/;
@@ -88,6 +89,49 @@ export async function scanPiiColumns(dsn: string): Promise<ScanResult> {
     );
 
     return { columns, scannedColumns: rows.length };
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
+}
+
+// Column-type source for the authoring-time mask type-domain check (ET6/B5). Same
+// posture as scanPiiColumns — a fresh single connection, strict timeouts,
+// information_schema only, no customer row data — but returns EVERY user column's
+// `data_type` keyed as "schema.table" -> column -> data_type (a masked column need
+// not be PII-flagged). Callers use it best-effort: on any failure they save without
+// the check, since query-time enforcement is the fail-closed backstop.
+export async function fetchColumnTypes(dsn: string): Promise<MaskColumnTypes> {
+  const sql = postgres(dsn, {
+    max: 1,
+    idle_timeout: 5,
+    connect_timeout: 5,
+    prepare: false,
+    onnotice: () => undefined,
+  });
+  try {
+    await sql.unsafe("SET statement_timeout = '5s'");
+    const rows = await sql<
+      { schema_name: string; table_name: string; column_name: string; data_type: string }[]
+    >`
+      SELECT
+        c.table_schema AS schema_name,
+        c.table_name   AS table_name,
+        c.column_name  AS column_name,
+        c.data_type    AS data_type
+      FROM information_schema.columns c
+      WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
+        AND c.table_schema NOT LIKE 'pg_temp_%'
+        AND c.table_schema NOT LIKE 'pg_toast%'
+      ORDER BY c.table_schema, c.table_name, c.ordinal_position
+      LIMIT ${MAX_COLUMNS}
+    `;
+    const out: MaskColumnTypes = {};
+    for (const r of rows) {
+      const table = `${r.schema_name}.${r.table_name}`;
+      if (!TABLE_NAME_RE.test(table) || !IDENT_RE.test(r.column_name)) continue;
+      (out[table] ??= {})[r.column_name] = r.data_type;
+    }
+    return out;
   } finally {
     await sql.end({ timeout: 1 });
   }

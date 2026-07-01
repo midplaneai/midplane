@@ -45,6 +45,39 @@ jobs:
       - name: engine bun:test
         run: cd engine && bun test
 
+  # The masking source-rewrite live harness (ET7) runs the SHIPPED rewriter +
+  # catalog + transform SQL + salt GUC against a real Postgres 16, and includes the
+  # operator-shadow covert-channel exploit PoC (Codex High). It's gated on
+  # MASKING_LIVE_PG_DSN so the plain `bun test` job above skips it (no DB there); this
+  # job supplies the DB so the security-critical live behavior is actually exercised.
+  live-masking:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: probe
+          POSTGRES_DB: probe
+        ports:
+          - 5432:5432
+        # Wait until the server accepts connections before the steps run.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install
+      - name: engine masking live-PG harness
+        working-directory: engine
+        env:
+          MASKING_LIVE_PG_DSN: postgres://postgres:probe@127.0.0.1:5432/probe
+        run: bun test packages/engine/test/masking/source-rewrite.live.test.ts
+
   smoketest:
     runs-on: ubuntu-latest
     steps:

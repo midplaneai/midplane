@@ -112,6 +112,44 @@ d("source-rewrite live equivalence", () => {
     expect(rows[0]!.c).toBe(0);
   });
 
+  test("RETURNING a masked column: the write stores the RAW value, RETURNING returns it MASKED (B4)", async () => {
+    // read-side masking: the raw card lands in the table; the RETURNING projection is masked.
+    const returned = await rewritten(
+      "INSERT INTO customers (id, credit_card) VALUES (90, '4900000000000000') RETURNING id, credit_card",
+    );
+    expect(returned).toEqual([{ id: 90, credit_card: "***" }]);
+    const stored = await raw("SELECT credit_card FROM customers WHERE id=90");
+    expect(stored).toEqual([{ credit_card: "4900000000000000" }]); // stored raw (write is not masked)
+    await client.query("DELETE FROM customers WHERE id=90");
+  });
+
+  test("RETURNING *: masked columns come back masked, others real (B4)", async () => {
+    const returned = await rewritten(
+      "INSERT INTO customers (id, name, credit_card, email) VALUES (91, 'Zed', '4911111111111111', 'zed@acme.io') RETURNING *",
+    );
+    const row = returned[0]!;
+    expect(row.name).toBe("Zed"); // unmasked column: real
+    expect(row.credit_card).toBe("***"); // full-redact
+    expect(row.email).not.toBe("zed@acme.io"); // consistent-hash token, not the raw email
+    expect(row.email).toBe(applyTransform("consistent-hash", "zed@acme.io", { salt: SALT }));
+    expect(JSON.stringify(returned)).not.toContain("4911111111111111");
+    await client.query("DELETE FROM customers WHERE id=91");
+  });
+
+  test("RETURNING a computed expression over a masked column → rejected (fail-closed, B4)", async () => {
+    await expect(
+      rewritten("UPDATE customers SET name=name WHERE id=1 RETURNING credit_card || 'x'"),
+    ).rejects.toThrow(/computed expression/);
+  });
+
+  test("json_build_object over a masked column serializes the MASKED value (B6)", async () => {
+    // The wrap masks credit_card before json_build_object sees it — the argument, not
+    // a whole-row composite, so no raw value reaches the serializer.
+    const rows = await rewritten("SELECT json_build_object('id', id, 'cc', credit_card) AS j FROM customers WHERE id=1");
+    expect(rows).toEqual([{ j: { id: 1, cc: "***" } }]);
+    expect(JSON.stringify(rows)).not.toContain("4111111111111111");
+  });
+
   test("operator shadow scan rejects a user-schema operator that redefines a builtin (Codex High)", async () => {
     // The exact PoC: a public.|| whose body reads the mask salt. The pg_operator scan
     // must reject it — a spelling-only allowlist would have passed it.

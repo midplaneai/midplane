@@ -34,6 +34,19 @@ describe("checkMaskSafeShape — allows analytics builtins", () => {
   test("regex + bitwise operators pass", () => {
     expect(checkMaskSafeShape("SELECT name FROM customers WHERE name ~ '^A' AND (flags & 1) = 1").ok).toBe(true);
   });
+
+  test("json CONSTRUCTION from explicit scalar args passes (B6) — the arg is masked by the wrap", () => {
+    // json_build_object/_array have no whole-row overload; a masked-column arg is
+    // already masked before serialization (verified live: {"cc":"***"}).
+    const r = checkMaskSafeShape(
+      "SELECT json_build_object('id', id, 'cc', credit_card), jsonb_build_array(name, age) FROM customers",
+    );
+    expect(r.ok).toBe(true);
+    expect((r as { allowlistedFns: string[] }).allowlistedFns.sort()).toEqual([
+      "json_build_object",
+      "jsonb_build_array",
+    ]);
+  });
 });
 
 describe("checkMaskSafeShape — denies the covert-read channels (deny-by-default)", () => {
@@ -50,6 +63,9 @@ describe("checkMaskSafeShape — denies the covert-read channels (deny-by-defaul
     ["pg_sleep — DoS", "SELECT pg_sleep(10)"],
     ["generate_series — set-returning", "SELECT generate_series(1, 100)"],
     ["json_agg — whole-row/json serialization", "SELECT json_agg(c) FROM customers c"],
+    ["row_to_json — whole-row serialization (composite-capable)", "SELECT row_to_json(c) FROM customers c"],
+    ["json_populate_record — rowtype/table-name deref (bypasses the wrap)", "SELECT json_populate_record(null::customers, '{}')"],
+    ["jsonb_to_record — untyped record from json", "SELECT * FROM jsonb_to_record('{}') AS x(a int)"],
     ["lo_get — large object", "SELECT lo_get(1)"],
   ];
   for (const [label, sql] of denied) {

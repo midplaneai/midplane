@@ -6,17 +6,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  checkMaskTypeDomain,
   MASK_TRANSFORMS,
   maskRuleKind,
   maskRuleLabel,
   normalizeMaskRule,
   parseColumnMasksOrThrow,
   parseIgnoredColumnsOrThrow,
+  pgDataTypeToMaskCategory,
   PSEUDONYMIZE_KINDS,
   serializeMultiDbPolicyToYaml,
   validateColumnMasks,
   validateIgnoredColumns,
   type DatabaseEntry,
+  type MaskColumnCategory,
+  type MaskRule,
 } from "../src/policy.ts";
 
 describe("validateColumnMasks: presets", () => {
@@ -236,6 +240,97 @@ describe("parseColumnMasksOrThrow", () => {
   });
 });
 
+describe("mask type-domain validation (ET6 / B5)", () => {
+  it("maps information_schema data_type strings to the engine's typcategory", () => {
+    for (const t of ["text", "character varying", "varchar", "char", "name", "citext"]) {
+      expect(pgDataTypeToMaskCategory(t)).toBe("S");
+    }
+    for (const t of ["integer", "bigint", "smallint", "numeric", "decimal", "real", "double precision", "money"]) {
+      expect(pgDataTypeToMaskCategory(t)).toBe("N");
+    }
+    for (const t of ["date", "timestamp without time zone", "timestamp with time zone", "time with time zone"]) {
+      expect(pgDataTypeToMaskCategory(t)).toBe("D");
+    }
+    // unknown / user-defined → null → the check is SKIPPED (query-time backstop).
+    for (const t of ["boolean", "uuid", "jsonb", "bytea", "interval", "USER-DEFINED"]) {
+      expect(pgDataTypeToMaskCategory(t)).toBeNull();
+    }
+  });
+
+  it("pins the (transform, category) grid for BOTH modes — must match the engine SSOTs", () => {
+    // post_exec mirrors mask-result-set.ts checkInputDomain (full-redact/consistent-hash
+    // are DOMAIN-FREE); source_rewrite mirrors transform-sql.ts (they collapse to text).
+    // Drift here means authoring-time and query-time disagree.
+    const grid: Array<{ rule: MaskRule; post: [boolean, boolean, boolean]; rw: [boolean, boolean, boolean] }> = [
+      // rule                                   post_exec [S,N,D]   source_rewrite [S,N,D]
+      { rule: "null-out",                        post: [true, true, true],   rw: [true, true, true] },
+      { rule: "full-redact",                     post: [true, true, true],   rw: [true, false, false] },
+      { rule: "consistent-hash",                 post: [true, true, true],   rw: [true, false, false] },
+      { rule: { t: "partial", keepEnd: 4 },      post: [true, false, false], rw: [true, false, false] },
+      { rule: { t: "pseudonymize", kind: "email" }, post: [true, false, false], rw: [true, false, false] },
+      { rule: { t: "generalize", granularity: "year" }, post: [false, false, true], rw: [false, false, true] },
+      { rule: { t: "generalize", granularity: 1000 }, post: [false, true, false], rw: [false, true, false] },
+      { rule: { t: "noise", ratio: 0.1 },        post: [false, true, false], rw: [false, true, false] },
+    ];
+    const cats = ["S", "N", "D"] as MaskColumnCategory[];
+    for (const row of grid) {
+      cats.forEach((cat, i) => {
+        expect(checkMaskTypeDomain(row.rule, cat, "post_exec").ok).toBe(row.post[i]);
+        expect(checkMaskTypeDomain(row.rule, cat, "source_rewrite").ok).toBe(row.rw[i]);
+        // default mode is post_exec (today's live behavior)
+        expect(checkMaskTypeDomain(row.rule, cat).ok).toBe(row.post[i]);
+      });
+    }
+  });
+
+  it("default (post_exec) mode does NOT reject full-redact/consistent-hash on non-text (valid today)", () => {
+    // Regression: applying source-rewrite strictness by default would reject a mask that
+    // is perfectly valid under the current post-exec masker.
+    expect(validateColumnMasks(
+      { "public.users": { age: "full-redact", joined: "consistent-hash" } },
+      { "public.users": { age: "integer", joined: "date" } },
+    ).ok).toBe(true);
+  });
+
+  it("rejects an always-invalid (transform, type) at authoring even in post_exec mode", () => {
+    // partial/generalize/noise on the wrong type is rejected in BOTH modes.
+    const r = validateColumnMasks(
+      { "public.users": { age: { t: "partial", keepEnd: 4 }, email: { t: "partial", keepEnd: 4 } } },
+      { "public.users": { age: "integer", email: "text" } },
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.errors.map((e) => e.path)).toEqual(["public.users.age"]); // age(int) rejected; email(text) ok
+      expect(r.errors[0]!.message).toContain("column type: integer");
+    }
+  });
+
+  it("source_rewrite mode DOES reject full-redact on a non-text column (pre-flip catch)", () => {
+    const r = validateColumnMasks(
+      { "public.users": { age: "full-redact" } },
+      { "public.users": { age: "integer" } },
+      "source_rewrite",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]!.message).toContain("source-rewrite");
+  });
+
+  it("validateColumnMasks skips the check for unknown types + when no types are given", () => {
+    // unknown type (jsonb → null category) → not judged.
+    expect(validateColumnMasks({ "public.t": { data: "full-redact" } }, { "public.t": { data: "jsonb" } }).ok).toBe(true);
+    // no columnTypes → current behavior, no type check.
+    expect(validateColumnMasks({ "public.t": { data: "full-redact" } }).ok).toBe(true);
+  });
+
+  it("accepts a type-appropriate config (generalize:year on a date, noise on numeric)", () => {
+    const r = validateColumnMasks(
+      { "public.e": { created_at: { t: "generalize", granularity: "year" }, salary: { t: "noise", ratio: 0.1 } } },
+      { "public.e": { created_at: "date", salary: "numeric" } },
+    );
+    expect(r.ok).toBe(true);
+  });
+});
+
 describe("serializeMultiDbPolicyToYaml + column_masks", () => {
   function entry(overrides: Partial<DatabaseEntry> = {}): DatabaseEntry {
     return {
@@ -272,6 +367,39 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
         "        ssn: consistent-hash",
       ].join("\n"),
     );
+  });
+
+  it("maskSourceRewrite adds the flag + requires_features token when masks are present", () => {
+    const yaml = serializeMultiDbPolicyToYaml([
+      entry({
+        maskSourceRewrite: true,
+        columnMasks: { "public.users": { email: "full-redact" } },
+      }),
+    ]);
+    expect(yaml).toContain(
+      [
+        "    requires_features:",
+        "      - column_masks",
+        "      - mask_source_rewrite",
+        "    mask_source_rewrite: true",
+        "    column_masks:",
+      ].join("\n"),
+    );
+  });
+
+  it("maskSourceRewrite defaults OFF ⇒ byte-identical to today (no flag, token = column_masks only)", () => {
+    const withMasks = { columnMasks: { "public.users": { email: "full-redact" } } };
+    const off = serializeMultiDbPolicyToYaml([entry(withMasks)]);
+    expect(off).not.toContain("mask_source_rewrite");
+    // Explicit false is the same as absent.
+    const explicitOff = serializeMultiDbPolicyToYaml([entry({ ...withMasks, maskSourceRewrite: false })]);
+    expect(explicitOff).toEqual(off);
+  });
+
+  it("maskSourceRewrite is inert without masks (no token requiring a feature for nothing)", () => {
+    const yaml = serializeMultiDbPolicyToYaml([entry({ maskSourceRewrite: true })]);
+    expect(yaml).not.toContain("mask_source_rewrite");
+    expect(yaml).not.toContain("requires_features");
   });
 
   it("emits parametric rules as nested block maps (deterministic key order)", () => {

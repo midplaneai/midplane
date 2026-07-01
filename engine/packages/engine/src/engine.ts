@@ -19,7 +19,11 @@ import { maskResultSet } from "./masking/mask-result-set.ts";
 import type { ColumnMasks } from "./masking/mask-result-set.ts";
 import type { CatalogResolver } from "./masking/catalog.ts";
 import { runSourceRewrite } from "./masking/source-rewrite.ts";
-import type { SourceRewriter } from "./masking/source-rewrite.ts";
+import type {
+  SourceRewriter,
+  SourceRewriteObserver,
+  MaskStage,
+} from "./masking/source-rewrite.ts";
 import type { Rule } from "./policy/rules/index.ts";
 import { evaluate } from "./policy/index.ts";
 import type { Dialect } from "./dialects/types.ts";
@@ -123,6 +127,12 @@ export type MaskingConfig = {
   sourceRewrite?: {
     enabled: boolean;
     rewriter: SourceRewriter;
+    // Optional operator-facing observability sink (A2). The engine is dep-free, so
+    // this is how engine-internal masking signals (salt-redacted rewritten SQL, a
+    // sanitized exec error, a flag-on-but-no-transaction fallback) reach the
+    // mcp-server logger. Reject metrics ride the audit log's `masking_stage`
+    // instead. Never invoked with the salt or an unredacted rewritten SQL.
+    observer?: SourceRewriteObserver;
   };
 };
 
@@ -301,6 +311,11 @@ export class Engine {
     let columnsMasked: string[] | undefined;
     let maskingRejectReason: string | undefined;
     let didExecute = true; // false for a pre-execution masking denial (rewrite path)
+    // Which enforcement path produced the result (audited so the cloud can count
+    // source-rewrite vs post-exec adoption across the fleet), and — on a
+    // pre-execution rewrite reject — the stage it failed at.
+    let maskingPath: "source_rewrite" | "post_exec" | undefined;
+    let maskingRejectStage: MaskStage | undefined;
     try {
       const sr = await this.applySourceRewrite(input.sql, execCtx);
       if (sr.handled) {
@@ -308,10 +323,13 @@ export class Engine {
         columnsMasked = sr.columnsMasked;
         maskingRejectReason = sr.rejectReason;
         didExecute = sr.executed;
+        maskingRejectStage = sr.rejectStage;
+        if (sr.executed) maskingPath = "source_rewrite";
       } else {
         // ── 5b. fallback: plain execute + retained post-exec masker (fail-closed).
         execResult = await this.executor.execute(input.sql, execCtx);
         if (this.masking && this.masking.columnMasks.size > 0) {
+          maskingPath = "post_exec";
           const masked = await this.applyMasking(execResult);
           if (masked.ok) {
             columnsMasked = masked.columnsMasked.length ? masked.columnsMasked : undefined;
@@ -374,6 +392,7 @@ export class Engine {
           overhead_ms: Math.max(0, this.now() - start),
           error_class: "column_masking",
           error_message: maskingRejectReason.slice(0, 4096),
+          ...(maskingRejectStage ? { masking_stage: maskingRejectStage } : {}),
         },
       };
       await this.writePostExecBestEffort(denied);
@@ -395,6 +414,7 @@ export class Engine {
           overhead_ms: Math.max(0, execStart - start),
           rows_returned: execResult.rows.length,
           rows_affected: execResult.rowCount,
+          ...(maskingPath ? { masking_path: maskingPath } : {}),
           ...(columnsMasked ? { columns_masked: columnsMasked } : {}),
           ...(maskingRejectReason
             ? { masking_rejected: true, masking_reason: maskingRejectReason.slice(0, 512) }
@@ -438,6 +458,10 @@ export class Engine {
         result: ExecutionResult;
         columnsMasked?: string[];
         rejectReason?: string;
+        // The stage a pre-execution reject happened at (gate/salt/shadow/rewrite),
+        // stamped on the column_masking FAILED audit so the cloud can separate
+        // covert-channel probing from an emission bug in the metrics it derives.
+        rejectStage?: MaskStage;
       }
   > {
     const m = this.masking;
@@ -445,12 +469,13 @@ export class Engine {
       return { handled: false };
     }
     const rewriter = m.sourceRewrite.rewriter;
+    const observer = m.sourceRewrite.observer;
     // SHAPE gate (covert-channel) — AST-only, before opening a transaction, so an
     // off-allowlist function (query_to_xml, dblink, a UDF, current_setting) is
     // rejected without executing anything.
     const shape = rewriter.checkShape(sql);
     if (!shape.ok) {
-      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: shape.reason };
+      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: shape.reason, rejectStage: "gate" };
     }
     const rw = await runSourceRewrite(sql, execCtx, {
       executor: this.executor,
@@ -458,10 +483,17 @@ export class Engine {
       columnMasks: m.columnMasks,
       salt: m.salt,
       shadowUsed: { functions: shape.allowlistedFns, operators: shape.allowlistedOps },
+      observer,
     });
-    if (rw === null) return { handled: false }; // executor has no withTransaction -> fall back
+    if (rw === null) {
+      // Flag is ON but the executor can't open a transaction — fall back to the
+      // post-exec masker (still fail-closed), and surface it: this is a
+      // misconfiguration worth an alert, unlike the steady-state flag-off path.
+      observer?.({ kind: "fallback", reason: "no_transaction" });
+      return { handled: false };
+    }
     if (!rw.ok) {
-      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: rw.reason };
+      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: rw.reason, rejectStage: rw.stage };
     }
     return {
       handled: true,

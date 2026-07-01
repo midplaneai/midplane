@@ -27,6 +27,7 @@ import {
   dangerousStatement,
   getDialect,
   CachingCatalogResolver,
+  postgresSourceRewriter,
   type AuditEvent,
   type AuditWriter,
   type CatalogQueryFn,
@@ -37,6 +38,7 @@ import {
   type Executor,
   type MaskingConfig,
   type MaskRule,
+  type SourceRewriteObserver,
   type TableAccessConfig,
   type TenantScopeConfig,
 } from "@midplane/engine";
@@ -187,6 +189,7 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
           hasGuardrails: false,
           columnMasks: null,
           hasColumnMasks: false,
+          maskSourceRewrite: null,
         },
       ],
       hasDatabasesBlock: false,
@@ -533,10 +536,61 @@ function buildMaskingConfig(
     ]),
   );
 
+  // Source-rewrite enforcement (ISSUE-007). Per-DB `mask_source_rewrite:` YAML
+  // wins; otherwise inherit the engine-wide MIDPLANE_MASK_SOURCE_REWRITE default
+  // (one engine per project ⇒ that env flag is per-project). OFF ⇒ the engine
+  // falls back to the retained post-exec masker (byte-identical to today), so
+  // flipping this is always safe. The rewriter is the Postgres span-splice +
+  // covert-channel gate; the engine only invokes it when `enabled` AND the
+  // executor supports transactions (PgPoolExecutor does).
+  const sourceRewriteEnabled = spec.maskSourceRewrite ?? cfg.maskSourceRewrite;
+
   return {
     columnMasks,
     salt: cfg.maskSalt,
     resolver: new CachingCatalogResolver(queryFn),
+    sourceRewrite: {
+      enabled: sourceRewriteEnabled,
+      rewriter: postgresSourceRewriter,
+      // A2 observability: the engine is dep-free, so it emits masking signals
+      // through this sink. Reject metrics ride the audit log's `masking_stage`;
+      // these are the operator-facing debug/alert lines the audit shouldn't carry.
+      observer: makeSourceRewriteObserver(spec.name),
+    },
+  };
+}
+
+// Bridge the engine's dep-free source-rewrite signals to the mcp-server pino
+// logger. A stable `event: "mask_source_rewrite"` tag makes each signal a
+// log-derived metric; the salt-redacted rewritten SQL lands at debug so it's
+// available for reconstructing a masking complaint without being on by default.
+function makeSourceRewriteObserver(db: string): SourceRewriteObserver {
+  return (signal) => {
+    switch (signal.kind) {
+      case "rewritten":
+        logger.debug(
+          { event: "mask_source_rewrite", kind: signal.kind, db, masked: signal.maskedColumns, sql: signal.redactedSql },
+          "masking: executed rewritten query",
+        );
+        return;
+      case "exec_error":
+        // The rewritten SQL is OURS — a failure here is our emission bug or a
+        // genuine user error; either way the agent gets a sanitized error while the
+        // operator gets the (salt-redacted) detail. warn so it surfaces in ops.
+        logger.warn(
+          { event: "mask_source_rewrite", kind: signal.kind, db, sqlstate: signal.sqlstate, message: signal.message, sql: signal.redactedSql },
+          "masking: rewritten query failed at the database",
+        );
+        return;
+      case "fallback":
+        // Flag is on but the executor couldn't open a transaction — a
+        // misconfiguration; masking still enforced via the post-exec masker.
+        logger.warn(
+          { event: "mask_source_rewrite", kind: signal.kind, db, reason: signal.reason },
+          "masking: source-rewrite fell back to the post-exec masker",
+        );
+        return;
+    }
   };
 }
 

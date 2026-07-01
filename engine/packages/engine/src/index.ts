@@ -69,7 +69,14 @@ export type {
   RelByName,
   ByNameCatalog,
 } from "./masking/catalog.ts";
-export { runSourceRewrite, setMaskSalt, MaskSaltError, MASK_SALT_GUC } from "./masking/source-rewrite.ts";
+export {
+  runSourceRewrite,
+  setMaskSalt,
+  MaskSaltError,
+  SourceRewriteExecError,
+  redactSalt,
+  MASK_SALT_GUC,
+} from "./masking/source-rewrite.ts";
 export type {
   SourceRewriter,
   RewriteOutcome,
@@ -78,6 +85,9 @@ export type {
   ShadowUsed,
   SourceRewriteDeps,
   SourceRewriteResult,
+  SourceRewriteObserver,
+  SourceRewriteSignal,
+  MaskStage,
 } from "./masking/source-rewrite.ts";
 
 export type { Rule, RuleVerdict } from "./policy/index.ts";

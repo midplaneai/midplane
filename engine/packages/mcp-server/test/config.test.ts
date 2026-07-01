@@ -29,6 +29,18 @@ describe("loadConfig", () => {
     expect(cfg.tenantId).toBe("__self_host__");
     expect(cfg.transport).toBe("http");
     expect(cfg.policyFile).toBeUndefined();
+    expect(cfg.maskSourceRewrite).toBe(false); // unset env → off
+  });
+
+  test("MIDPLANE_MASK_SOURCE_REWRITE env is threaded into maskSourceRewrite (env-bool)", () => {
+    // The canary env knob must actually reach the config — regression for a missing
+    // raw-object wire-up that left the flag stuck at the default.
+    for (const v of ["1", "true", "yes", "ON"]) {
+      expect(loadConfig({ DATABASE_URL: "postgres://x", MIDPLANE_MASK_SOURCE_REWRITE: v }).maskSourceRewrite).toBe(true);
+    }
+    for (const v of ["0", "false", "", "no"]) {
+      expect(loadConfig({ DATABASE_URL: "postgres://x", MIDPLANE_MASK_SOURCE_REWRITE: v }).maskSourceRewrite).toBe(false);
+    }
   });
 
   test("PORT coerces from string and validates range", () => {
