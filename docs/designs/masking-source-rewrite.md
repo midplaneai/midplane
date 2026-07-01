@@ -608,10 +608,40 @@ explicitly closes is salt-missing (was: silent NULL → now: reject, D4).
    (`columns_masked`). Integration tests prove handle() executes the *rewritten* SQL
    and the gate denies `query_to_xml`/`current_setting` without executing. Full
    engine suite 926 pass / 0 fail; both packages typecheck clean; verdict baseline
-   regenerated for the 2 new gate-test SQLs. **Remaining for Phase-1:** write-path
-   (WHERE-on-masked reject + RETURNING rewrite); system-column reject; consistent-hash
-   JS-token alignment (ET5); config-save type-domain (ET6); live-PG equivalence
-   harness (ET7); `MASK_SAFE_FUNCTIONS` security review/expansion.
+   regenerated for the 2 new gate-test SQLs.
+1e. **Soundness completeness — BUILT 2026-06-30:**
+   - **Write-path:** the write TARGET (UPDATE/DELETE/INSERT/MERGE `relation`) is
+     never wrapped (fixes a real bug — the earlier walk would have wrapped a write
+     target into invalid `UPDATE (SELECT …) SET …`); a write to a masked table that
+     references a masked column in `WHERE`/`ON CONFLICT`/`RETURNING` (or any masked-
+     target `MERGE`) fails closed. Read-position tables inside a write (UPDATE…FROM,
+     INSERT…SELECT) are still wrapped. (libpg_query serializes `relation` inline, no
+     `{RangeVar:…}` wrapper — handled.)
+   - **System-column reject:** `ctid`/`tableoid`/`xmin`/… on a wrapped table fails
+     closed (they're attnum<0, absent from the wrap projection).
+   - **ET5 token alignment:** the JS `consistent-hash` now emits `md5(salt||text)`
+     matching the SQL `md5(current_setting(salt)||col::text)`, so the fallback flag
+     is token-stable. **Verified on live PG:** the JS `applyTransform` token equals
+     the in-DB value.
+   - **ET7 live-PG harness:** `source-rewrite.live.test.ts` (gated on
+     `MASKING_LIVE_PG_DSN`) runs the *shipped* rewriter + `buildCatalogByName` +
+     `transformToSql` + salt GUC against real PG16 — count-over-unmasked untouched,
+     aggregate-over-masked equivalence, full-redact + no-raw-leak, consistent-hash
+     token parity, and WHERE-on-masked returns 0 (inference closed). 5/5 pass.
+   Full engine suite 934 pass / 27 skip / 0 fail; both packages typecheck clean.
+   **Remaining for Phase-1:**
+   - **ET6 (config-save type-domain) — DEFERRED, not a soundness gap.** `transformToSql`
+     already enforces the type domain fail-closed at query time. Catching it at
+     *authoring* needs a column-type source threaded into `validateColumnMasks`
+     (the save path — `setColumnMasks` — takes only the config today; it would need
+     a schema-type fetch against the customer DB) plus duplicating the transform↔
+     typcategory rules in `packages/db` (cross-package, drift-checked). A control-
+     plane feature, not a rewriter fix; do it when the mask-authoring UI wires column
+     types through.
+   - **`MASK_SAFE_FUNCTIONS` security review** — the seed is deny-by-default (sound
+     while incomplete). Expanding it is a threat-modeling task for a human, not a
+     mechanical change; leaving it conservative on purpose.
+   - RETURNING *masking* (vs the current reject), observability metrics/tripwire.
 1b. **Core rewrite + covert-channel gate together** (Codex #3 — they ship as one):
    `null-out`, `full-redact`, `partial`, `generalize`, `noise`, `consistent-hash`;
    by-name catalog (fail-closed staleness, shared search_path), FROM-wrap (quoted

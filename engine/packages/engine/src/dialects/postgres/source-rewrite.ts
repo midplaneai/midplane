@@ -113,6 +113,103 @@ function schemaQualifiedColrefReject(ast: unknown, wrappedKeys: Set<string>): st
   return bad;
 }
 
+// True system columns (attnum < 0): NOT in the wrap projection, so a reference to
+// one on a wrapped table won't bind. `oid` is omitted — it's a plausible user
+// column name and rarely a system column post-PG12.
+const SYSTEM_COLUMNS = new Set(["ctid", "tableoid", "xmin", "xmax", "cmin", "cmax"]);
+
+function topStmt(ast: unknown): Record<string, unknown> | null {
+  const s = (ast as { stmts?: { stmt?: unknown }[] }).stmts?.[0]?.stmt;
+  return s && typeof s === "object" ? (s as Record<string, unknown>) : null;
+}
+
+// The write TARGET relation (UPDATE/DELETE/INSERT/MERGE). Never wrapped — a write
+// target can't be a subquery — and the place we guard masked-column references.
+// libpg_query serializes the typed `relation` (RangeVar*) field INLINE (no
+// {RangeVar:...} wrapper, unlike generic fromClause items), so read both shapes.
+function writeTarget(stmt: Record<string, unknown> | null): { rv: RangeVarNode; key: string } | null {
+  if (!stmt) return null;
+  for (const k of ["UpdateStmt", "DeleteStmt", "InsertStmt", "MergeStmt"]) {
+    const relation = (stmt[k] as { relation?: unknown } | undefined)?.relation;
+    const rv = asRangeVar(relation);
+    if (rv) return { rv, key: canonKey(rv.schemaname, rv.relname) };
+  }
+  return null;
+}
+
+function asRangeVar(relation: unknown): RangeVarNode | null {
+  if (!relation || typeof relation !== "object") return null;
+  const o = relation as Record<string, unknown>;
+  if (o.RangeVar) return o.RangeVar as RangeVarNode; // defensive: wrapped shape
+  return typeof o.relname === "string" ? (o as unknown as RangeVarNode) : null; // inline shape
+}
+
+// True if any ColumnRef under `node` names one of `masked` (its last identifier).
+function refsMaskedColumn(node: unknown, masked: Set<string>): boolean {
+  let found = false;
+  (function walk(n: unknown): void {
+    if (found) return;
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (n && typeof n === "object") {
+      const o = n as Record<string, unknown>;
+      if (o.ColumnRef) {
+        const fields = (o.ColumnRef as { fields?: unknown[] }).fields ?? [];
+        const last = fields.map((f) => (f as { String?: { sval?: string } }).String?.sval).pop();
+        if (typeof last === "string" && masked.has(last)) {
+          found = true;
+          return;
+        }
+      }
+      for (const k of Object.keys(o)) walk(o[k]);
+    }
+  })(node);
+  return found;
+}
+
+// Masking is READ-side. A write to a masked target may not reference a masked column
+// in its WHERE / ON CONFLICT (inference via rows-affected) or RETURNING (v1 doesn't
+// mask RETURNING); a masked-target MERGE is rejected wholesale in v1. Returns the
+// offending clause name, or null. (The SET targetList is not checked — writing a
+// masked value into another column reveals nothing to the agent that wrote it.)
+function maskedWriteClause(stmt: Record<string, unknown>, masked: Set<string>): string | null {
+  if (stmt.MergeStmt) return "MERGE";
+  const target = (stmt.UpdateStmt ?? stmt.DeleteStmt ?? stmt.InsertStmt) as
+    | Record<string, unknown>
+    | undefined;
+  if (!target) return null;
+  if (refsMaskedColumn(target.whereClause, masked)) return "WHERE";
+  if (refsMaskedColumn(target.onConflictClause, masked)) return "ON CONFLICT";
+  if (refsMaskedColumn(target.returningList, masked)) return "RETURNING";
+  return null;
+}
+
+// System-column reject (Codex #8): reject a system-column reference qualified by a
+// wrapped table's alias, or unqualified while something is wrapped (fail-closed).
+function systemColumnReject(ast: unknown, wrappedAliases: Set<string>): string | null {
+  let bad: string | null = null;
+  (function walk(n: unknown): void {
+    if (bad) return;
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (n && typeof n === "object") {
+      const o = n as Record<string, unknown>;
+      if (o.ColumnRef) {
+        const parts = ((o.ColumnRef as { fields?: unknown[] }).fields ?? []).map(
+          (f) => (f as { String?: { sval?: string } }).String?.sval,
+        );
+        const last = parts[parts.length - 1];
+        if (typeof last === "string" && SYSTEM_COLUMNS.has(last)) {
+          const qualifier = parts.length >= 2 ? parts[parts.length - 2] : null;
+          if (qualifier == null || wrappedAliases.has(qualifier)) {
+            bad = `system column "${last}" is not available on a masked (wrapped) table`;
+          }
+        }
+      }
+      for (const k of Object.keys(o)) walk(o[k]);
+    }
+  })(ast);
+  return bad;
+}
+
 export const postgresSourceRewriter: SourceRewriter = {
   collectRefs(sql: string): RelationRef[] {
     let ast: unknown;
@@ -135,13 +232,42 @@ export const postgresSourceRewriter: SourceRewriter = {
       return { ok: false, reason: "could not parse statement for rewrite" };
     }
 
+    // Write-target guard (masking is read-side). The write target is never wrapped
+    // (a write target can't be a subquery); a write to a masked table may not
+    // reference a masked column in WHERE / ON CONFLICT / RETURNING. Read-position
+    // tables inside the write (UPDATE … FROM, INSERT … SELECT) are still wrapped by
+    // the loop below.
+    const stmt = topStmt(ast);
+    const write = writeTarget(stmt);
+    if (write && stmt) {
+      const targetRel = catalog.get(write.key);
+      if (!targetRel) {
+        if (M.has(write.key)) {
+          return { ok: false, reason: `could not resolve masked relation ${write.key} — re-scan the schema and retry` };
+        }
+      } else {
+        const tcm = M.get(targetRel.parentKey);
+        if (tcm) {
+          const clause = maskedWriteClause(stmt, new Set(tcm.keys()));
+          if (clause) {
+            return {
+              ok: false,
+              reason: `a write to masked table ${targetRel.parentKey} references a masked column in its ${clause}; masking protects reads — remove the masked column from the ${clause}`,
+            };
+          }
+        }
+      }
+    }
+
     const edits: { start: number; end: number; repl: string }[] = [];
     const wrappedKeys = new Set<string>();
+    const wrappedAliases = new Set<string>();
     const maskedColumns: string[] = [];
     let reject: string | null = null;
 
     eachRangeVar(ast, (rv) => {
       if (reject) return;
+      if (write && rv === write.rv) return; // write target: never a read position
       const refKey = canonKey(rv.schemaname, rv.relname);
       const rel = catalog.get(refKey);
       if (!rel) {
@@ -194,6 +320,7 @@ export const postgresSourceRewriter: SourceRewriter = {
       const wrap = `(SELECT ${proj.join(", ")} FROM ${innerRef})` + (rv.alias ? "" : ` ${quoteIdent(rv.relname)}`);
       edits.push({ start, end, repl: wrap });
       wrappedKeys.add(refKey);
+      wrappedAliases.add(rv.alias?.aliasname ?? rv.relname);
     });
 
     if (reject) return { ok: false, reason: reject };
@@ -201,6 +328,9 @@ export const postgresSourceRewriter: SourceRewriter = {
 
     const colrefReject = schemaQualifiedColrefReject(ast, wrappedKeys);
     if (colrefReject) return { ok: false, reason: colrefReject };
+
+    const sysReject = systemColumnReject(ast, wrappedAliases);
+    if (sysReject) return { ok: false, reason: sysReject };
 
     // Apply right-to-left so earlier byte offsets stay valid.
     edits.sort((a, b) => b.start - a.start);

@@ -171,3 +171,50 @@ describe("postgresSourceRewriter.rewrite", () => {
     expect(sql.match(/'\*\*\*'::text/g)?.length).toBe(2);
   });
 });
+
+describe("postgresSourceRewriter.rewrite — write path", () => {
+  test("UPDATE with a WHERE on a masked column → fail closed (inference hole)", () => {
+    const out = RW.rewrite("UPDATE customers SET name='x' WHERE credit_card='4111'", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("WHERE");
+  });
+
+  test("DELETE with a WHERE on a masked column → fail closed", () => {
+    const out = RW.rewrite("DELETE FROM customers WHERE credit_card='4111'", masks, catalog);
+    expect(out.ok).toBe(false);
+  });
+
+  test("INSERT ... RETURNING a masked column → fail closed", () => {
+    const out = RW.rewrite("INSERT INTO customers (name) VALUES ('x') RETURNING credit_card", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("RETURNING");
+  });
+
+  test("write target is NOT wrapped — a plain write to a masked table passes verbatim (no invalid SQL)", () => {
+    const q = "UPDATE customers SET name='x' WHERE id=1";
+    expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
+  });
+
+  test("INSERT without masked-col refs → verbatim (target not wrapped)", () => {
+    const q = "INSERT INTO customers (name) VALUES ('x')";
+    expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
+  });
+});
+
+describe("postgresSourceRewriter.rewrite — system columns", () => {
+  test("system column on a wrapped table → fail closed", () => {
+    const out = RW.rewrite("SELECT ctid FROM customers", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("system column");
+  });
+
+  test("qualified system column on a wrapped table → fail closed", () => {
+    const out = RW.rewrite("SELECT customers.tableoid FROM customers", masks, catalog);
+    expect(out.ok).toBe(false);
+  });
+
+  test("system column on an UNmasked table → verbatim (no wrap, no reject)", () => {
+    const q = "SELECT ctid FROM products";
+    expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
+  });
+});
