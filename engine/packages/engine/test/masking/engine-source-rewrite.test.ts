@@ -67,18 +67,20 @@ class RewriteMockExecutor implements Executor {
 }
 
 function makeEngine(masking: MaskingConfig, executor: Executor) {
+  const audit = new MemoryAuditWriter();
   let counter = 0;
-  return new Engine({
+  const engine = new Engine({
     policy: {
       rules: [parseError(), multiStatement(), tableAccess(), tenantScope(), dangerousStatement()],
     },
-    audit: new MemoryAuditWriter(),
+    audit,
     credentials: new StubCredentialStore(),
     executor,
     masking,
     now: () => 1_700_000_000_000,
     idGen: () => `01TESTID${(counter++).toString().padStart(18, "0")}`,
   });
+  return { engine, audit };
 }
 
 describe("Engine.handle + source-rewrite", () => {
@@ -116,9 +118,9 @@ describe("Engine.handle + source-rewrite", () => {
     expect((exec.payload as { columns_masked?: string[] }).columns_masked).toEqual(["public.users.email"]);
   });
 
-  test("covert-channel: query_to_xml is denied by the shape gate, never executes", async () => {
+  test("covert-channel: query_to_xml is denied, never executes, and is NOT audited as EXECUTED (reviewer #3)", async () => {
     const executor = new RewriteMockExecutor();
-    const engine = makeEngine(
+    const { engine, audit } = makeEngine(
       {
         columnMasks: MASKS,
         salt: "s3cret",
@@ -137,11 +139,15 @@ describe("Engine.handle + source-rewrite", () => {
     if (!d.allowed) expect(d.reason).toBe("column_masking");
     expect(executor.executed).toHaveLength(0); // never opened/executed
     expect(executor.plainCalls).toBe(0);
+    // a denied pre-execution attempt must NOT look executed in the audit log.
+    expect(audit.byType("EXECUTED")).toHaveLength(0);
+    const failed = audit.byType("FAILED")[0]!;
+    expect((failed.payload as { error_class?: string }).error_class).toBe("column_masking");
   });
 
-  test("current_setting (salt-read attempt) is denied by the shape gate", async () => {
+  test("current_setting (salt-read attempt) is denied and audited as a masking denial, not executed", async () => {
     const executor = new RewriteMockExecutor();
-    const engine = makeEngine(
+    const { engine, audit } = makeEngine(
       {
         columnMasks: MASKS,
         salt: "s3cret",
@@ -153,5 +159,7 @@ describe("Engine.handle + source-rewrite", () => {
     const d = await engine.handle({ sql: "SELECT current_setting('midplane.mask_salt')", ctx: baseCtx });
     expect(d.allowed).toBe(false);
     expect(executor.executed).toHaveLength(0);
+    expect(audit.byType("EXECUTED")).toHaveLength(0);
+    expect((audit.byType("FAILED")[0]!.payload as { error_class?: string }).error_class).toBe("column_masking");
   });
 });

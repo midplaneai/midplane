@@ -300,12 +300,14 @@ export class Engine {
     let execResult: ExecutionResult;
     let columnsMasked: string[] | undefined;
     let maskingRejectReason: string | undefined;
+    let didExecute = true; // false for a pre-execution masking denial (rewrite path)
     try {
       const sr = await this.applySourceRewrite(input.sql, execCtx);
       if (sr.handled) {
         execResult = sr.result;
         columnsMasked = sr.columnsMasked;
         maskingRejectReason = sr.rejectReason;
+        didExecute = sr.executed;
       } else {
         // ── 5b. fallback: plain execute + retained post-exec masker (fail-closed).
         execResult = await this.executor.execute(input.sql, execCtx);
@@ -347,32 +349,60 @@ export class Engine {
       throw err;
     }
 
-    // EXECUTED is always written (the query DID run), carrying the masking
-    // outcome. On a masking reject we then return a structured denial below.
-    const executed: AuditEvent = {
-      id: this.idGen(),
-      query_id: queryId,
-      tenant_id: input.ctx.tenant_id,
-      database: this.databaseName,
-      agent_name: input.ctx.agent_name,
-      agent_version: input.ctx.agent_version,
-      agent_intent: intent,
-      mcp_token_id: input.ctx.mcp_token_id,
-      ts: this.now(),
-      schema_version: 3,
-      event_type: "EXECUTED",
-      payload: {
-        exec_ms: Math.max(0, this.now() - execStart),
-        overhead_ms: Math.max(0, execStart - start),
-        rows_returned: execResult.rows.length,
-        rows_affected: execResult.rowCount,
-        ...(columnsMasked ? { columns_masked: columnsMasked } : {}),
-        ...(maskingRejectReason
-          ? { masking_rejected: true, masking_reason: maskingRejectReason.slice(0, 512) }
-          : {}),
-      },
-    };
-    await this.writePostExecBestEffort(executed);
+    // Audit the outcome. A query that RAN (rewrite ok, or the fallback execute)
+    // writes EXECUTED, carrying the masking outcome (columns_masked, or
+    // masking_rejected when the post-exec masker withheld the rows). A PRE-execution
+    // masking DENIAL (source-rewrite shape gate / salt / shadow / rewrite reject)
+    // ran no SQL, so it must NOT look executed: record it as a FAILED event with a
+    // distinct `column_masking` error_class, so a denied — e.g. covert-channel —
+    // attempt is never logged as an executed query.
+    if (maskingRejectReason && !didExecute) {
+      const denied: AuditEvent = {
+        id: this.idGen(),
+        query_id: queryId,
+        tenant_id: input.ctx.tenant_id,
+        database: this.databaseName,
+        agent_name: input.ctx.agent_name,
+        agent_version: input.ctx.agent_version,
+        agent_intent: intent,
+        mcp_token_id: input.ctx.mcp_token_id,
+        ts: this.now(),
+        schema_version: 3,
+        event_type: "FAILED",
+        payload: {
+          exec_ms: 0,
+          overhead_ms: Math.max(0, this.now() - start),
+          error_class: "column_masking",
+          error_message: maskingRejectReason.slice(0, 4096),
+        },
+      };
+      await this.writePostExecBestEffort(denied);
+    } else {
+      const executed: AuditEvent = {
+        id: this.idGen(),
+        query_id: queryId,
+        tenant_id: input.ctx.tenant_id,
+        database: this.databaseName,
+        agent_name: input.ctx.agent_name,
+        agent_version: input.ctx.agent_version,
+        agent_intent: intent,
+        mcp_token_id: input.ctx.mcp_token_id,
+        ts: this.now(),
+        schema_version: 3,
+        event_type: "EXECUTED",
+        payload: {
+          exec_ms: Math.max(0, this.now() - execStart),
+          overhead_ms: Math.max(0, execStart - start),
+          rows_returned: execResult.rows.length,
+          rows_affected: execResult.rowCount,
+          ...(columnsMasked ? { columns_masked: columnsMasked } : {}),
+          ...(maskingRejectReason
+            ? { masking_rejected: true, masking_reason: maskingRejectReason.slice(0, 512) }
+            : {}),
+        },
+      };
+      await this.writePostExecBestEffort(executed);
+    }
 
     if (maskingRejectReason) {
       return {
@@ -398,7 +428,17 @@ export class Engine {
     execCtx: ExecuteContext,
   ): Promise<
     | { handled: false }
-    | { handled: true; result: ExecutionResult; columnsMasked?: string[]; rejectReason?: string }
+    | {
+        handled: true;
+        // `executed` distinguishes a query that actually ran (rewrite succeeded)
+        // from a pre-execution masking DENIAL (shape gate / salt / shadow / rewrite
+        // reject), so the caller never audits a denied — e.g. covert-channel —
+        // attempt as EXECUTED.
+        executed: boolean;
+        result: ExecutionResult;
+        columnsMasked?: string[];
+        rejectReason?: string;
+      }
   > {
     const m = this.masking;
     if (!m || m.columnMasks.size === 0 || !m.sourceRewrite?.enabled) {
@@ -410,7 +450,7 @@ export class Engine {
     // rejected without executing anything.
     const shape = rewriter.checkShape(sql);
     if (!shape.ok) {
-      return { handled: true, result: { rows: [], rowCount: 0 }, rejectReason: shape.reason };
+      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: shape.reason };
     }
     const rw = await runSourceRewrite(sql, execCtx, {
       executor: this.executor,
@@ -421,10 +461,11 @@ export class Engine {
     });
     if (rw === null) return { handled: false }; // executor has no withTransaction -> fall back
     if (!rw.ok) {
-      return { handled: true, result: { rows: [], rowCount: 0 }, rejectReason: rw.reason };
+      return { handled: true, executed: false, result: { rows: [], rowCount: 0 }, rejectReason: rw.reason };
     }
     return {
       handled: true,
+      executed: true,
       result: rw.result,
       columnsMasked: rw.maskedColumns.length ? [...new Set(rw.maskedColumns)] : undefined,
     };

@@ -166,12 +166,56 @@ function refsMaskedColumn(node: unknown, masked: Set<string>): boolean {
   return found;
 }
 
+// A RETURNING clause on a masked target may expose a masked column three ways: an
+// explicit masked column, `*` / `t.*` (A_Star), or a whole-row composite of the
+// target (`RETURNING <target>`). v1 doesn't mask RETURNING and the write target is
+// never wrapped, so ANY of these would return the raw masked value — reject all.
+function returningExposesMasked(
+  returningList: unknown,
+  masked: Set<string>,
+  targetNames: Set<string>,
+): boolean {
+  let bad = false;
+  (function walk(n: unknown): void {
+    if (bad) return;
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (n && typeof n === "object") {
+      const o = n as Record<string, unknown>;
+      if (o.A_Star) {
+        bad = true; // RETURNING * or RETURNING t.*
+        return;
+      }
+      if (o.ColumnRef) {
+        const parts = ((o.ColumnRef as { fields?: unknown[] }).fields ?? []).map(
+          (f) => (f as { String?: { sval?: string } }).String?.sval,
+        );
+        const last = parts[parts.length - 1];
+        if (typeof last === "string" && masked.has(last)) {
+          bad = true; // explicit masked column
+          return;
+        }
+        if (parts.length === 1 && typeof parts[0] === "string" && targetNames.has(parts[0])) {
+          bad = true; // whole-row composite of the target (RETURNING <target>)
+          return;
+        }
+      }
+      for (const k of Object.keys(o)) walk(o[k]);
+    }
+  })(returningList);
+  return bad;
+}
+
 // Masking is READ-side. A write to a masked target may not reference a masked column
-// in its WHERE / ON CONFLICT (inference via rows-affected) or RETURNING (v1 doesn't
-// mask RETURNING); a masked-target MERGE is rejected wholesale in v1. Returns the
-// offending clause name, or null. (The SET targetList is not checked — writing a
-// masked value into another column reveals nothing to the agent that wrote it.)
-function maskedWriteClause(stmt: Record<string, unknown>, masked: Set<string>): string | null {
+// in its WHERE / ON CONFLICT (inference via rows-affected) or expose one via
+// RETURNING (v1 doesn't mask RETURNING); a masked-target MERGE is rejected wholesale
+// in v1. Returns the offending clause name, or null. (The SET targetList is not
+// checked — writing a masked value into another column reveals nothing to the agent
+// that wrote it.) `targetNames` = the write target's relname + alias.
+function maskedWriteClause(
+  stmt: Record<string, unknown>,
+  masked: Set<string>,
+  targetNames: Set<string>,
+): string | null {
   if (stmt.MergeStmt) return "MERGE";
   const target = (stmt.UpdateStmt ?? stmt.DeleteStmt ?? stmt.InsertStmt) as
     | Record<string, unknown>
@@ -179,8 +223,23 @@ function maskedWriteClause(stmt: Record<string, unknown>, masked: Set<string>): 
   if (!target) return null;
   if (refsMaskedColumn(target.whereClause, masked)) return "WHERE";
   if (refsMaskedColumn(target.onConflictClause, masked)) return "ON CONFLICT";
-  if (refsMaskedColumn(target.returningList, masked)) return "RETURNING";
+  if (returningExposesMasked(target.returningList, masked, targetNames)) return "RETURNING";
   return null;
+}
+
+// CTE names declared anywhere in the statement (for the shadowing check).
+function collectCteNames(ast: unknown): Set<string> {
+  const names = new Set<string>();
+  (function walk(n: unknown): void {
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (n && typeof n === "object") {
+      const o = n as Record<string, unknown>;
+      const name = (o.CommonTableExpr as { ctename?: string } | undefined)?.ctename;
+      if (typeof name === "string") names.add(name);
+      for (const k of Object.keys(o)) walk(o[k]);
+    }
+  })(ast);
+  return names;
 }
 
 // System-column reject (Codex #8): reject a system-column reference qualified by a
@@ -232,6 +291,21 @@ export const postgresSourceRewriter: SourceRewriter = {
       return { ok: false, reason: "could not parse statement for rewrite" };
     }
 
+    // CTE shadowing guard (reviewer #2). A CTE that shares a name with a masked table
+    // makes `FROM <name>` bind to the CTE in SQL, but the catalog lookup below would
+    // wrap it as the base table — changing semantics / reading a relation the query
+    // didn't reference at that scope. Fail closed on the collision (bare CTE names vs
+    // the masked tables' bare relnames).
+    const maskedBare = new Set([...M.keys()].map((k) => k.slice(k.lastIndexOf(".") + 1)));
+    for (const cte of collectCteNames(ast)) {
+      if (maskedBare.has(cte)) {
+        return {
+          ok: false,
+          reason: `a CTE named "${cte}" shadows a masked table; rename the CTE so masking can tell the base table from the CTE`,
+        };
+      }
+    }
+
     // Write-target guard (masking is read-side). The write target is never wrapped
     // (a write target can't be a subquery); a write to a masked table may not
     // reference a masked column in WHERE / ON CONFLICT / RETURNING. Read-position
@@ -248,7 +322,11 @@ export const postgresSourceRewriter: SourceRewriter = {
       } else {
         const tcm = M.get(targetRel.parentKey);
         if (tcm) {
-          const clause = maskedWriteClause(stmt, new Set(tcm.keys()));
+          const targetNames = new Set<string>([
+            write.rv.relname,
+            ...(write.rv.alias?.aliasname ? [write.rv.alias.aliasname] : []),
+          ]);
+          const clause = maskedWriteClause(stmt, new Set(tcm.keys()), targetNames);
           if (clause) {
             return {
               ok: false,

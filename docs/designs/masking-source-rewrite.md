@@ -629,6 +629,24 @@ explicitly closes is salt-missing (was: silent NULL → now: reject, D4).
      aggregate-over-masked equivalence, full-redact + no-raw-leak, consistent-hash
      token parity, and WHERE-on-masked returns 0 (inference closed). 5/5 pass.
    Full engine suite 934 pass / 27 skip / 0 fail; both packages typecheck clean.
+1f. **PR #130 review fixes — BUILT 2026-06-30:**
+   - **RETURNING star/whole-row leak:** the write-clause guard now rejects
+     `RETURNING *` / `t.*` (A_Star) and a whole-row composite of the target
+     (`RETURNING <target>`), not just an explicitly-named masked column — the write
+     target isn't wrapped and handled rewrites skip post-exec masking, so those forms
+     would have returned the raw masked value. RETURNING of only-unmasked columns
+     still passes.
+   - **CTE shadowing:** a CTE that shares a name with a masked table (e.g. `WITH
+     customers AS (…) … FROM customers`) is rejected — `FROM <name>` binds to the CTE
+     in SQL, but the catalog lookup would wrap it as the base table (wrong semantics /
+     reads a relation the query didn't reference at that scope). A non-colliding CTE
+     that reads a masked table in its body still wraps the base table correctly.
+   - **Pre-exec masking rejects no longer audited as EXECUTED:** a source-rewrite
+     denial (shape gate / salt / shadow / rewrite reject) runs no SQL, so it's now
+     recorded as a `FAILED` event with a distinct `column_masking` error_class —
+     a denied covert-channel attempt is never logged as an executed query. (Post-exec
+     masker rejects, which DID run, still write EXECUTED with `masking_rejected`.)
+   Full engine suite 939 pass / 0 fail; live-PG harness 5/5; both packages tsc clean.
    **Remaining for Phase-1:**
    - **ET6 (config-save type-domain) — DEFERRED, not a soundness gap.** `transformToSql`
      already enforces the type domain fail-closed at query time. Catching it at

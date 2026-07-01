@@ -218,3 +218,35 @@ describe("postgresSourceRewriter.rewrite — system columns", () => {
     expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
   });
 });
+
+describe("postgresSourceRewriter.rewrite — RETURNING star/whole-row (reviewer #1)", () => {
+  test("RETURNING * on a masked table → fail closed (would leak the masked column)", () => {
+    const out = RW.rewrite("INSERT INTO customers (name) VALUES ('x') RETURNING *", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("RETURNING");
+  });
+
+  test("RETURNING whole-row composite on a masked table → fail closed", () => {
+    const out = RW.rewrite("UPDATE customers SET name='x' WHERE id=1 RETURNING customers", masks, catalog);
+    expect(out.ok).toBe(false);
+  });
+
+  test("RETURNING only unmasked columns → allowed, target not wrapped", () => {
+    const q = "INSERT INTO customers (name) VALUES ('x') RETURNING id, name";
+    expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
+  });
+});
+
+describe("postgresSourceRewriter.rewrite — CTE shadowing (reviewer #2)", () => {
+  test("a CTE named like a masked table → fail closed (would rewrite the CTE as the base table)", () => {
+    const out = RW.rewrite("WITH customers AS (SELECT 1 AS id) SELECT * FROM customers", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("CTE");
+  });
+
+  test("a non-colliding CTE reading a masked table in its body still wraps the base table", () => {
+    const out = RW.rewrite("WITH recent AS (SELECT credit_card FROM customers) SELECT * FROM recent", masks, catalog);
+    expect(out.ok).toBe(true);
+    expect((out as { sql: string }).sql).toContain("'***'::text AS \"credit_card\"");
+  });
+});
