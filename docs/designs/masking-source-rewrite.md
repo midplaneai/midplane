@@ -742,14 +742,24 @@ explicitly closes is salt-missing (was: silent NULL → now: reject, D4).
      ephemeral Postgres 16 service and runs `source-rewrite.live.test.ts` (previously
      skipped without a DB) — it includes the operator-shadow covert-channel PoC. 10/10.
    - **B5 — config-save type-domain validation (ET6).** `validateColumnMasks(config,
-     columnTypes?)` now rejects a transform whose output type can't fit the column
-     (`full-redact` on an int, `generalize:year` on text, …) at AUTHORING time, mirroring
-     `transform-sql.ts`'s query-time domains (+ `pseudonymize`=text) — pinned by a drift
-     test in `policy-column-masks.test.ts`. `pgDataTypeToMaskCategory` maps
-     information_schema `data_type` → typcategory; unknown types skip (query-time stays the
-     fail-closed backstop). `setColumnMasks` threads the types; `columnMasksAction` fetches
-     them BEST-EFFORT (`fetchColumnTypes`, fail-open — a save never depends on the customer
-     DB being reachable). Full engine 971/0, control-plane vitest 913/0, live 10/10.
+     columnTypes?, mode?)` rejects a transform whose output type can't fit the column at
+     AUTHORING time. **Mode-aware** (review fix): the domains depend on the active
+     enforcement path, so `mode` DEFAULTS to `post_exec` (today's live masker —
+     `mask-result-set.ts`, where full-redact/consistent-hash are DOMAIN-FREE) and a
+     project running the rewrite passes `source_rewrite` (the stricter `transform-sql.ts`
+     collapse-to-text domains). Validating with the wrong mode would reject a mask that's
+     valid today (full-redact on an int post-exec) — the default prevents that. Both grids
+     are drift-pinned. `pgDataTypeToMaskCategory` maps information_schema `data_type` →
+     typcategory; unknown types skip (query-time stays the fail-closed backstop).
+     `setColumnMasks`/`columnMasksAction` fetch types BEST-EFFORT (`fetchColumnTypes`,
+     fail-open) and validate in the default post_exec mode (no per-project rewrite-mode
+     source exists yet — thread `source_rewrite` when the rollout gate is persisted).
+   - **Review fixes 2026-07-01:** (1) `MIDPLANE_MASK_SOURCE_REWRITE` was defined in
+     `ConfigSchema` but never copied into `loadConfig`'s `raw`, so the env knob was inert
+     — now threaded (with a regression test). (2) B5 was applying source-rewrite
+     strictness unconditionally, which would have rejected valid post-exec masks — fixed
+     by the mode-aware default above. Full engine 972/0, control-plane vitest 915/0,
+     live 10/10.
 1b. **Core rewrite + covert-channel gate together** (Codex #3 — they ship as one):
    `null-out`, `full-redact`, `partial`, `generalize`, `noise`, `consistent-hash`;
    by-name catalog (fail-closed staleness, shared search_path), FROM-wrap (quoted

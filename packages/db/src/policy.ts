@@ -808,19 +808,29 @@ export function normalizeMaskRule(
 }
 
 // ── Type-domain validation (ET6 / B5) ──────────────────────────────────────
-// The engine's source-rewrite emitter (`transform-sql.ts`) fails a transform
-// closed at QUERY time when the column's type doesn't fit (e.g. full-redact on an
-// int column collapses to text). This mirrors those rules so an incompatible mask
-// is caught at AUTHORING time instead of surfacing as a query-time reject.
-//
-// SSOT: `engine/packages/engine/src/dialects/postgres/transform-sql.ts`. The one
-// deliberate difference: `pseudonymize` is valid here (text-only, enforced by the
-// retained post-exec masker) though it is NOT source-rewritable. Keep this matrix in
-// lockstep with transform-sql.ts — the drift test in policy-column-masks.test.ts
-// pins the exact (transform, category) grid.
+// Catch a mask whose transform can't apply to a column's type at AUTHORING time
+// instead of surfacing it as a query-time reject. The domains DEPEND ON THE ACTIVE
+// ENFORCEMENT MODE, so this is mode-aware:
+//   - `post_exec` (today's DEFAULT): the retained post-exec masker's checkInputDomain
+//     (`mask-result-set.ts`) — full-redact / null-out / consistent-hash are
+//     DOMAIN-FREE (full-redact on an int returns '***', consistent-hash hashes the
+//     stringified value), only partial / pseudonymize (text), generalize (date/num),
+//     noise (num) are domain-checked.
+//   - `source_rewrite`: the emitter's stricter domains (`transform-sql.ts`) — under a
+//     source rewrite full-redact / consistent-hash COLLAPSE TO TEXT and need a text
+//     column; everything else is the same.
+// Validating with the wrong (strict) mode would reject a mask that is perfectly valid
+// under today's post-exec enforcement — hence the default is `post_exec`. Callers that
+// know a project runs in rewrite mode pass `source_rewrite` to also catch the
+// collapse-to-text incompatibilities before the flip. SSOTs: mask-result-set.ts +
+// transform-sql.ts; the drift test in policy-column-masks.test.ts pins both grids.
 
 /** pg_type.typcategory letters the mask domains key on (same as the engine). */
 export type MaskColumnCategory = "S" | "N" | "D";
+
+/** Which enforcement path the masks will run under — selects the domain strictness.
+ *  Default `post_exec` matches today's live behavior (the retained masker). */
+export type MaskEnforcementMode = "post_exec" | "source_rewrite";
 
 // information_schema.columns.data_type strings → typcategory letter. Unknown /
 // user-defined types map to null → the caller SKIPS the check (query-time stays the
@@ -837,21 +847,25 @@ export function pgDataTypeToMaskCategory(dataType: string): MaskColumnCategory |
   return null; // interval, boolean, uuid, json, bytea, USER-DEFINED, … → don't judge
 }
 
-/** Is `rule` valid on a column of the given typcategory? Mirrors transform-sql.ts's
- *  rewrite domains (+ pseudonymize=text). `ok:false` carries a user-facing reason. */
+/** Is `rule` valid on a column of the given typcategory, under `mode`? `ok:false`
+ *  carries a user-facing reason. See the block comment for the mode difference. */
 export function checkMaskTypeDomain(
   rule: MaskRule,
   category: MaskColumnCategory,
+  mode: MaskEnforcementMode = "post_exec",
 ): { ok: true } | { ok: false; reason: string } {
   const kind = maskRuleKind(rule);
   switch (kind) {
     case "null-out":
-      return { ok: true }; // untyped NULL — the one type-preserving transform
+      return { ok: true }; // untyped NULL — type-preserving in both modes
     case "full-redact":
     case "consistent-hash":
+      // Post-exec applies these to ANY type, so a full-redact on an int is VALID today.
+      // Only a source rewrite collapses them to text and needs a text column.
+      if (mode === "post_exec") return { ok: true };
       return category === "S"
         ? { ok: true }
-        : { ok: false, reason: `${kind} collapses to text — valid only on a text column` };
+        : { ok: false, reason: `${kind} collapses to text under source-rewrite — valid only on a text column` };
     case "partial":
       return category === "S" ? { ok: true } : { ok: false, reason: "partial is text-only" };
     case "pseudonymize":
@@ -886,11 +900,15 @@ export type MaskColumnTypes = Record<string, Record<string, string>>;
  *  form can surface them per-field.
  *
  *  `columnTypes` (optional, ET6/B5): when a masked column's Postgres type is known,
- *  reject a transform whose output type doesn't fit (full-redact on an int, etc.) at
- *  authoring time. Absent/unknown types skip the check — query-time is the backstop. */
+ *  reject a transform whose output type doesn't fit at authoring time. Absent/unknown
+ *  types skip the check — query-time is the backstop. `mode` selects the domain
+ *  strictness and DEFAULTS to `post_exec` (today's live enforcement) so a mask that is
+ *  valid under the current post-exec masker (e.g. full-redact on an int) is never
+ *  rejected at save; pass `source_rewrite` for a project running the rewrite path. */
 export function validateColumnMasks(
   input: unknown,
   columnTypes?: MaskColumnTypes,
+  mode: MaskEnforcementMode = "post_exec",
 ): ColumnMasksValidationResult {
   if (input == null) return { ok: true, value: {} };
   if (typeof input !== "object" || Array.isArray(input)) {
@@ -943,7 +961,7 @@ export function validateColumnMasks(
       if (dataType !== undefined) {
         const category = pgDataTypeToMaskCategory(dataType);
         if (category !== null) {
-          const domain = checkMaskTypeDomain(rule.value, category);
+          const domain = checkMaskTypeDomain(rule.value, category, mode);
           if (!domain.ok) {
             errors.push({ path: `${table}.${col}`, message: `${domain.reason} (column type: ${dataType})` });
             continue;

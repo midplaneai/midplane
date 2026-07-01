@@ -257,37 +257,62 @@ describe("mask type-domain validation (ET6 / B5)", () => {
     }
   });
 
-  it("pins the (transform, category) grid — must match engine transform-sql.ts", () => {
-    // rows: rule → { S, N, D } expected ok. Mirrors transform-sql.ts; drift here means
-    // authoring-time and query-time disagree.
-    const grid: Array<{ rule: MaskRule; S: boolean; N: boolean; D: boolean }> = [
-      { rule: "null-out", S: true, N: true, D: true }, // type-preserving
-      { rule: "full-redact", S: true, N: false, D: false }, // collapses to text
-      { rule: "consistent-hash", S: true, N: false, D: false }, // collapses to text
-      { rule: { t: "partial", keepEnd: 4 }, S: true, N: false, D: false },
-      { rule: { t: "pseudonymize", kind: "email" }, S: true, N: false, D: false },
-      { rule: { t: "generalize", granularity: "year" }, S: false, N: false, D: true },
-      { rule: { t: "generalize", granularity: 1000 }, S: false, N: true, D: false },
-      { rule: { t: "noise", ratio: 0.1 }, S: false, N: true, D: false },
+  it("pins the (transform, category) grid for BOTH modes — must match the engine SSOTs", () => {
+    // post_exec mirrors mask-result-set.ts checkInputDomain (full-redact/consistent-hash
+    // are DOMAIN-FREE); source_rewrite mirrors transform-sql.ts (they collapse to text).
+    // Drift here means authoring-time and query-time disagree.
+    const grid: Array<{ rule: MaskRule; post: [boolean, boolean, boolean]; rw: [boolean, boolean, boolean] }> = [
+      // rule                                   post_exec [S,N,D]   source_rewrite [S,N,D]
+      { rule: "null-out",                        post: [true, true, true],   rw: [true, true, true] },
+      { rule: "full-redact",                     post: [true, true, true],   rw: [true, false, false] },
+      { rule: "consistent-hash",                 post: [true, true, true],   rw: [true, false, false] },
+      { rule: { t: "partial", keepEnd: 4 },      post: [true, false, false], rw: [true, false, false] },
+      { rule: { t: "pseudonymize", kind: "email" }, post: [true, false, false], rw: [true, false, false] },
+      { rule: { t: "generalize", granularity: "year" }, post: [false, false, true], rw: [false, false, true] },
+      { rule: { t: "generalize", granularity: 1000 }, post: [false, true, false], rw: [false, true, false] },
+      { rule: { t: "noise", ratio: 0.1 },        post: [false, true, false], rw: [false, true, false] },
     ];
+    const cats = ["S", "N", "D"] as MaskColumnCategory[];
     for (const row of grid) {
-      for (const cat of ["S", "N", "D"] as MaskColumnCategory[]) {
-        expect(checkMaskTypeDomain(row.rule, cat).ok).toBe(row[cat]);
-      }
+      cats.forEach((cat, i) => {
+        expect(checkMaskTypeDomain(row.rule, cat, "post_exec").ok).toBe(row.post[i]);
+        expect(checkMaskTypeDomain(row.rule, cat, "source_rewrite").ok).toBe(row.rw[i]);
+        // default mode is post_exec (today's live behavior)
+        expect(checkMaskTypeDomain(row.rule, cat).ok).toBe(row.post[i]);
+      });
     }
   });
 
-  it("validateColumnMasks rejects an incompatible (transform, column-type) at authoring", () => {
+  it("default (post_exec) mode does NOT reject full-redact/consistent-hash on non-text (valid today)", () => {
+    // Regression: applying source-rewrite strictness by default would reject a mask that
+    // is perfectly valid under the current post-exec masker.
+    expect(validateColumnMasks(
+      { "public.users": { age: "full-redact", joined: "consistent-hash" } },
+      { "public.users": { age: "integer", joined: "date" } },
+    ).ok).toBe(true);
+  });
+
+  it("rejects an always-invalid (transform, type) at authoring even in post_exec mode", () => {
+    // partial/generalize/noise on the wrong type is rejected in BOTH modes.
     const r = validateColumnMasks(
-      { "public.users": { age: "full-redact", email: "full-redact" } },
+      { "public.users": { age: { t: "partial", keepEnd: 4 }, email: { t: "partial", keepEnd: 4 } } },
       { "public.users": { age: "integer", email: "text" } },
     );
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      // age (int) is rejected; email (text) is fine.
-      expect(r.errors.map((e) => e.path)).toEqual(["public.users.age"]);
+      expect(r.errors.map((e) => e.path)).toEqual(["public.users.age"]); // age(int) rejected; email(text) ok
       expect(r.errors[0]!.message).toContain("column type: integer");
     }
+  });
+
+  it("source_rewrite mode DOES reject full-redact on a non-text column (pre-flip catch)", () => {
+    const r = validateColumnMasks(
+      { "public.users": { age: "full-redact" } },
+      { "public.users": { age: "integer" } },
+      "source_rewrite",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]!.message).toContain("source-rewrite");
   });
 
   it("validateColumnMasks skips the check for unknown types + when no types are given", () => {

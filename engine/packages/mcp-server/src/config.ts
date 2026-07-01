@@ -371,6 +371,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     transport: env.MIDPLANE_TRANSPORT,
     indexerToken: env.INDEXER_TOKEN,
     maskSalt: env.MIDPLANE_MASK_SALT,
+    maskSourceRewrite: env.MIDPLANE_MASK_SOURCE_REWRITE,
   };
   // Strip undefined so zod defaults apply.
   const cleaned: Record<string, unknown> = {};
