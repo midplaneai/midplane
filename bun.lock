@@ -82,7 +82,7 @@
     },
     "engine/packages/mcp-server": {
       "name": "@midplane/mcp-server",
-      "version": "0.11.0",
+      "version": "0.13.0",
       "bin": {
         "midplane": "./src/cli.ts",
         "midplane-mcp-server": "./src/index.ts",
