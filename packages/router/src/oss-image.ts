@@ -18,4 +18,4 @@
 // re-resolve the digest (`docker buildx imagetools inspect midplane/midplane:<v>
 // --format '{{.Manifest.Digest}}'`), update the two fly configs, run
 // scripts/check-image-pin.ts.
-export const OSS_ENGINE_IMAGE = "midplane/midplane:0.13.0";
+export const OSS_ENGINE_IMAGE = "midplane/midplane:0.14.0";
