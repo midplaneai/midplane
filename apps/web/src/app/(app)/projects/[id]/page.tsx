@@ -7,8 +7,10 @@ import {
   parseGuardrailsOrThrow,
   parseIgnoredColumnsOrThrow,
   parsePolicyOrThrow,
+  type MaskColumnTypes,
 } from "@midplane-cloud/db";
 import { mcpGenericUrl } from "@midplane-cloud/router";
+import { fetchColumnTypes } from "@/lib/scan-pii-columns";
 
 import { ProjectRail } from "@/components/projects/project-rail";
 import { OAuthConnectGuide } from "@/components/projects/oauth-connect-guide";
@@ -425,7 +427,29 @@ export default async function ProjectWorkspace({
       }
     }
     const ctx = getMcpProxyContext();
-    const result = await setColumnMasks(customer, id, config, ctx, userId, selectedName);
+    // ET6/B5: best-effort authoring-time type-domain check. Fetch the DB's column
+    // types and let setColumnMasks reject a mask that can't apply to a column's type
+    // (full-redact on an int, …). Fail OPEN — the customer DB may be unreachable and a
+    // save must not depend on it; query-time enforcement is the fail-closed backstop.
+    let columnTypes: MaskColumnTypes | undefined;
+    if (Object.keys(config).length > 0) {
+      try {
+        // Credential-bearing fetch (encryptedDsn + kmsKeyId) so the resolver can
+        // decrypt; the ciphertext stays server-side.
+        const withCred = await getProjectWithDatabaseAndCredential(customer, id, selectedName);
+        if (withCred) {
+          const decrypt = await ctx.resolver.resolve({
+            projectDatabase: withCred.database,
+            region: withCred.project.region,
+            customerId: withCred.project.customerId,
+          });
+          if (decrypt.ok) columnTypes = await fetchColumnTypes(decrypt.plaintext);
+        }
+      } catch {
+        // unreachable DB / resolver miss → skip the check, save proceeds.
+      }
+    }
+    const result = await setColumnMasks(customer, id, config, ctx, userId, selectedName, columnTypes);
     if (!result) return { ok: false, error: "not found" };
     revalidatePath(`/projects/${id}`);
     return { ok: true };

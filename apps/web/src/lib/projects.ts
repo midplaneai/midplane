@@ -20,6 +20,7 @@ import {
   type DatabaseEntry,
   type GuardrailsConfig,
   type IgnoredColumnsConfig,
+  type MaskColumnTypes,
   type TableAccessPolicy,
   type TenantScopeConfig,
 } from "@midplane-cloud/db";
@@ -965,8 +966,13 @@ export async function setColumnMasks(
   deps: PolicyPushDeps,
   actorUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
+  // Optional per-column Postgres types (ET6/B5). When supplied, a transform whose
+  // output type doesn't fit the column (full-redact on an int, generalize:year on a
+  // text column, …) is rejected here at save instead of surfacing as a query-time
+  // reject once source-rewrite is on. Omitted ⇒ current behavior (no type check).
+  columnTypes?: MaskColumnTypes,
 ): Promise<{ id: string } | null> {
-  const validation = validateColumnMasks(config);
+  const validation = validateColumnMasks(config, columnTypes);
   if (!validation.ok) {
     const summary = validation.errors
       .map((e) => `${e.path}: ${e.message}`)

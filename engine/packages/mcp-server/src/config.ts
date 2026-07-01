@@ -27,6 +27,17 @@ export type Transport = z.infer<typeof TransportSchema>;
 // what the server actually binds.
 export const DEFAULT_PORT = 8080;
 
+// Env-var boolean. `"1"/"true"/"yes"/"on"` (case-insensitive) → true; everything
+// else (incl. `"0"`, `"false"`, unset) → false. z.coerce.boolean() is unsafe for
+// env flags — it treats ANY non-empty string ("0", "false") as true, so a
+// `FLAG=0` would silently enable. Default false so an unset flag is off.
+const EnvBoolSchema = z
+  .preprocess((v) => {
+    if (typeof v !== "string") return v;
+    return ["1", "true", "yes", "on"].includes(v.trim().toLowerCase());
+  }, z.boolean())
+  .default(false);
+
 export const ConfigSchema = z.object({
   // Optional in 0.2.0: a YAML `databases:` block can supply the DSN(s).
   // The loader (loadConfig) checks below that at least one of
@@ -51,6 +62,15 @@ export const ConfigSchema = z.object({
   // that declares column_masks without it (fail-closed — a zero/empty salt
   // would make masked join-keys predictable).
   maskSalt: z.string().min(1).optional(),
+  // Engine-wide DEFAULT for the masking source-rewrite enforcement path
+  // (ISSUE-007: mask at the source relation so aggregates over unmasked tables
+  // stop being blanket-denied). Sourced from MIDPLANE_MASK_SOURCE_REWRITE. One
+  // engine is spawned per project, so this env flag is effectively per-project —
+  // the cloud sets it on a canary project's engine. A per-database
+  // `mask_source_rewrite:` YAML key overrides it for that DB. OFF (the default)
+  // means the retained post-exec masker enforces masking, byte-for-byte identical
+  // to today. Only takes effect when the DB also declares column_masks.
+  maskSourceRewrite: EnvBoolSchema,
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -145,7 +165,7 @@ const ColumnMasksSchema = z.record(
 // future enforcement section can't be silently stripped by this engine. (The
 // current column_masks rollout's old-engine skew is handled by engine-first
 // sequencing E3 — an already-shipped old engine can't be taught to refuse.)
-const ENGINE_FEATURES = new Set<string>(["column_masks"]);
+const ENGINE_FEATURES = new Set<string>(["column_masks", "mask_source_rewrite"]);
 
 function assertFeaturesSupported(
   features: string[] | undefined,
@@ -185,6 +205,11 @@ const DatabaseEntrySchema = z.object({
   table_access: TableAccessSchema.optional(),
   guardrails: GuardrailsSchema.optional(),
   column_masks: ColumnMasksSchema.optional(),
+  // Per-DB override of the engine-wide MIDPLANE_MASK_SOURCE_REWRITE default.
+  // Present ⇒ this DB uses that enforcement mode regardless of the env default;
+  // absent ⇒ inherit the env default. Lets the cloud canary source-rewrite on
+  // one database inside a multi-DB project. Only meaningful with column_masks.
+  mask_source_rewrite: z.boolean().optional(),
   requires_features: z.array(z.string().min(1)).optional(),
 });
 
@@ -196,6 +221,9 @@ export const PolicyFileSchema = z.object({
   table_access: TableAccessSchema.optional(),
   guardrails: GuardrailsSchema.optional(),
   column_masks: ColumnMasksSchema.optional(),
+  // Legacy single-DB override of MIDPLANE_MASK_SOURCE_REWRITE (see the per-DB
+  // entry key above). Absent ⇒ inherit the env default.
+  mask_source_rewrite: z.boolean().optional(),
   requires_features: z.array(z.string().min(1)).optional(),
   // Multi-DB shape (0.2.0+). Mutually exclusive with the legacy shape at
   // resolve time; if both are present the legacy fields are ignored and a
@@ -262,6 +290,11 @@ export interface DatabaseSpec {
   // (boot-time, W3:A); column-mask hot-reload is a follow-up.
   columnMasks: ColumnMasksSpec | null;
   hasColumnMasks: boolean;
+  // Per-DB source-rewrite override (ISSUE-007). `true`/`false` when the source
+  // document set `mask_source_rewrite`; `null` when omitted (inherit the
+  // engine-wide MIDPLANE_MASK_SOURCE_REWRITE default). buildMaskingConfig
+  // resolves `spec.maskSourceRewrite ?? cfg.maskSourceRewrite`.
+  maskSourceRewrite: boolean | null;
 }
 
 // Resolved column-mask config: "schema.table" -> (column name -> mask rule).
@@ -396,6 +429,7 @@ export function parsePolicyYaml(
           hasGuardrails: false,
           columnMasks: null,
           hasColumnMasks: false,
+          maskSourceRewrite: null,
         },
       ],
       hasDatabasesBlock: false,
@@ -496,6 +530,7 @@ export function parsePolicyYaml(
         hasGuardrails,
         columnMasks,
         hasColumnMasks,
+        maskSourceRewrite: parsed.data.mask_source_rewrite ?? null,
       },
     ],
     hasDatabasesBlock: false,
@@ -610,6 +645,7 @@ function resolveDatabaseEntry(
     hasGuardrails,
     columnMasks,
     hasColumnMasks,
+    maskSourceRewrite: entry.mask_source_rewrite ?? null,
   };
 }
 

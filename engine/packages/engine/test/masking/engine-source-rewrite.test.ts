@@ -18,8 +18,10 @@ import { postgresSourceRewriter } from "../../src/dialects/postgres/source-rewri
 import { warmup } from "../../src/dialects/postgres/index.ts";
 import type { ColumnMasks } from "../../src/masking/mask-result-set.ts";
 import type { CatalogResolver } from "../../src/masking/catalog.ts";
+import { SourceRewriteExecError } from "../../src/masking/source-rewrite.ts";
 import type { Executor, ExecutionResult, TxClient } from "../../src/executor.ts";
 import type { MaskingConfig } from "../../src/engine.ts";
+import type { SourceRewriteSignal } from "../../src/masking/source-rewrite.ts";
 
 beforeAll(async () => {
   await warmup();
@@ -161,5 +163,154 @@ describe("Engine.handle + source-rewrite", () => {
     expect(executor.executed).toHaveLength(0);
     expect(audit.byType("EXECUTED")).toHaveLength(0);
     expect((audit.byType("FAILED")[0]!.payload as { error_class?: string }).error_class).toBe("column_masking");
+  });
+});
+
+// A2: observability signals, audit enrichment (masking_path / masking_stage), and
+// error hygiene (a rewrite exec error never leaks the wrap / salt to the agent).
+describe("Engine.handle + source-rewrite: observability & error hygiene (A2)", () => {
+  // Executor whose rewritten-query exec() THROWS a PG-shaped error whose message
+  // embeds the wrap AND the salt — exactly what must never reach the agent.
+  class ExecThrowsExecutor implements Executor {
+    plainCalls = 0;
+    async execute(): Promise<ExecutionResult> {
+      this.plainCalls++;
+      return { rows: [], rowCount: 0, fields: [] };
+    }
+    async withTransaction<T>(_ctx: unknown, fn: (tx: TxClient) => Promise<T>): Promise<T> {
+      const tx: TxClient = {
+        async query(sql, params = []) {
+          if (sql.includes("set_config")) return [{ v: params[1] }];
+          if (sql.includes("(n.nspname, c.relname) IN"))
+            return [{ oid: 100, relname: "users", relkind: "r", schema: "public" }];
+          if (sql.includes("FROM pg_inherits")) return [];
+          if (sql.includes("c.oid = ANY($1::oid[])") && sql.includes("relname"))
+            return [{ oid: 100, relname: "users", schema: "public" }];
+          if (sql.includes("pg_attribute"))
+            return [
+              { oid: 100, attname: "id", typcategory: "N" },
+              { oid: 100, attname: "email", typcategory: "S" },
+            ];
+          return [];
+        },
+        async exec(sql) {
+          const e = new Error(
+            `syntax error at or near "${sql}" while salt=s3cret was set`,
+          ) as Error & { code?: string };
+          e.code = "42601";
+          throw e;
+        },
+      };
+      return fn(tx);
+    }
+  }
+
+  function makeEngineWithObserver(opts: { enabled: boolean }, executor: Executor) {
+    const signals: SourceRewriteSignal[] = [];
+    const audit = new MemoryAuditWriter();
+    let counter = 0;
+    const engine = new Engine({
+      policy: {
+        rules: [parseError(), multiStatement(), tableAccess(), tenantScope(), dangerousStatement()],
+      },
+      audit,
+      credentials: new StubCredentialStore(),
+      executor,
+      masking: {
+        columnMasks: MASKS,
+        salt: "s3cret",
+        resolver: stubResolver,
+        sourceRewrite: {
+          enabled: opts.enabled,
+          rewriter: postgresSourceRewriter,
+          observer: (s) => signals.push(s),
+        },
+      },
+      now: () => 1_700_000_000_000,
+      idGen: () => `01TESTID${(counter++).toString().padStart(18, "0")}`,
+    });
+    return { engine, audit, signals };
+  }
+
+  test("a masked rewrite success stamps masking_path=source_rewrite on EXECUTED", async () => {
+    const { engine, audit } = makeEngineWithObserver({ enabled: true }, new RewriteMockExecutor());
+    await engine.handle({ sql: "SELECT email FROM users", ctx: baseCtx });
+    expect((audit.byType("EXECUTED")[0]!.payload as { masking_path?: string }).masking_path).toBe("source_rewrite");
+  });
+
+  test("the salt-redacted rewritten SQL is emitted via the observer (never the salt)", async () => {
+    const { engine, signals } = makeEngineWithObserver({ enabled: true }, new RewriteMockExecutor());
+    await engine.handle({ sql: "SELECT email FROM users", ctx: baseCtx });
+    const rewritten = signals.find((s) => s.kind === "rewritten");
+    expect(rewritten).toBeDefined();
+    if (rewritten?.kind === "rewritten") {
+      expect(rewritten.redactedSql).toContain("'***'::text");
+      expect(rewritten.redactedSql).not.toContain("s3cret");
+      expect(rewritten.maskedColumns).toEqual(["public.users.email"]);
+    }
+  });
+
+  test("a covert-channel gate reject stamps masking_stage=gate on the FAILED audit", async () => {
+    const { engine, audit } = makeEngineWithObserver({ enabled: true }, new RewriteMockExecutor());
+    await engine.handle({ sql: "SELECT query_to_xml('SELECT email FROM users', true, false, '')", ctx: baseCtx });
+    const failed = audit.byType("FAILED")[0]!;
+    expect((failed.payload as { masking_stage?: string }).masking_stage).toBe("gate");
+  });
+
+  test("error hygiene: a rewritten-query PG error is sanitized — no wrap, no salt, SQLSTATE kept", async () => {
+    const { engine, audit } = makeEngineWithObserver({ enabled: true }, new ExecThrowsExecutor());
+    let thrown: unknown;
+    try {
+      await engine.handle({ sql: "SELECT email FROM users", ctx: baseCtx });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SourceRewriteExecError);
+    const err = thrown as SourceRewriteExecError;
+    // Agent-facing: generic message, no wrap / mask expr / salt, SQLSTATE preserved.
+    expect(err.message).toBe("query execution failed after masking was applied");
+    expect(err.message).not.toContain("s3cret");
+    expect(err.message).not.toContain("'***'");
+    expect(err.code).toBe("42601");
+    // The FAILED audit records the sanitized message + real SQLSTATE — not the wrap.
+    const failed = audit.byType("FAILED")[0]!;
+    const payload = failed.payload as { error_class?: string; error_message?: string };
+    expect(payload.error_class).toBe("42601");
+    expect(payload.error_message).not.toContain("s3cret");
+    expect(payload.error_message).not.toContain("SELECT id");
+  });
+
+  test("error hygiene: the operator still gets the (salt-redacted) exec_error detail via the observer", async () => {
+    const { engine, signals } = makeEngineWithObserver({ enabled: true }, new ExecThrowsExecutor());
+    await engine.handle({ sql: "SELECT email FROM users", ctx: baseCtx }).catch(() => {});
+    const execErr = signals.find((s) => s.kind === "exec_error");
+    expect(execErr).toBeDefined();
+    if (execErr?.kind === "exec_error") {
+      expect(execErr.sqlstate).toBe("42601");
+      // operator sees the redacted rewritten SQL (the wrap), but never the salt.
+      expect(execErr.redactedSql).toContain("'***'::text");
+      expect(execErr.redactedSql).not.toContain("s3cret");
+      expect(execErr.message).toContain("‹redacted-salt›"); // salt scrubbed from the PG message too
+    }
+  });
+
+  test("flag ON but the executor can't open a transaction ⇒ fallback signal + post-exec masker", async () => {
+    // No withTransaction ⇒ runSourceRewrite returns null ⇒ fall back, and surface it.
+    const noTxExecutor: Executor = {
+      execute: async () => ({ rows: [], rowCount: 0, fields: [] }),
+    };
+    const { engine, signals, audit } = makeEngineWithObserver({ enabled: true }, noTxExecutor);
+    const d = await engine.handle({ sql: "SELECT email FROM users", ctx: baseCtx });
+    expect(d.allowed).toBe(true);
+    expect(signals.find((s) => s.kind === "fallback")).toEqual({ kind: "fallback", reason: "no_transaction" });
+    // it took the post-exec path.
+    expect((audit.byType("EXECUTED")[0]!.payload as { masking_path?: string }).masking_path).toBe("post_exec");
+  });
+
+  test("flag OFF ⇒ post-exec path, masking_path=post_exec, no source-rewrite signals", async () => {
+    const { engine, signals, audit } = makeEngineWithObserver({ enabled: false }, new RewriteMockExecutor());
+    await engine.handle({ sql: "SELECT email FROM users", ctx: baseCtx });
+    expect(signals).toHaveLength(0); // steady-state flag-off is silent (not per-query noise)
+    expect((audit.byType("EXECUTED")[0]!.payload as { masking_path?: string }).masking_path).toBe("post_exec");
   });
 });

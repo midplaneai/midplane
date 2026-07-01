@@ -117,6 +117,19 @@ describe("postgresSourceRewriter.collectRefs", () => {
     expect(refs).toContainEqual({ schema: null, relname: "customers" });
     expect(refs).toContainEqual({ schema: null, relname: "orders" });
   });
+
+  test("includes the write TARGET (inline relation, missed by the RangeVar walk)", () => {
+    // Without this a write to a masked table can't be resolved by name and rejects as
+    // "could not resolve" once the flag is on (the target isn't a {RangeVar:…} node).
+    expect(RW.collectRefs("UPDATE customers SET name='x' WHERE id=1")).toContainEqual({
+      schema: null,
+      relname: "customers",
+    });
+    // read-position tables inside a write are also surfaced, alongside the target.
+    const refs = RW.collectRefs("UPDATE customers SET name='x' FROM orders WHERE orders.cid=customers.id");
+    expect(refs).toContainEqual({ schema: null, relname: "customers" });
+    expect(refs).toContainEqual({ schema: null, relname: "orders" });
+  });
 });
 
 describe("postgresSourceRewriter.rewrite", () => {
@@ -184,12 +197,6 @@ describe("postgresSourceRewriter.rewrite — write path", () => {
     expect(out.ok).toBe(false);
   });
 
-  test("INSERT ... RETURNING a masked column → fail closed", () => {
-    const out = RW.rewrite("INSERT INTO customers (name) VALUES ('x') RETURNING credit_card", masks, catalog);
-    expect(out.ok).toBe(false);
-    expect((out as { reason: string }).reason).toContain("RETURNING");
-  });
-
   test("write target is NOT wrapped — a plain write to a masked table passes verbatim (no invalid SQL)", () => {
     const q = "UPDATE customers SET name='x' WHERE id=1";
     expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
@@ -219,21 +226,63 @@ describe("postgresSourceRewriter.rewrite — system columns", () => {
   });
 });
 
-describe("postgresSourceRewriter.rewrite — RETURNING star/whole-row (reviewer #1)", () => {
-  test("RETURNING * on a masked table → fail closed (would leak the masked column)", () => {
+describe("postgresSourceRewriter.rewrite — RETURNING masking (B4)", () => {
+  test("RETURNING a masked column → masks it in place, output name preserved", () => {
+    const out = RW.rewrite("INSERT INTO customers (name) VALUES ('x') RETURNING credit_card", masks, catalog);
+    expect(out.ok).toBe(true);
+    const sql = (out as { sql: string }).sql;
+    expect(reparses(sql)).toBe(true);
+    expect(sql).toContain("'***'::text AS \"credit_card\""); // name kept, not `md5`/expr default
+    expect(sql).toContain("VALUES ('x')"); // rest of the write is verbatim
+    expect((out as { maskedColumns: string[] }).maskedColumns).toEqual(["public.customers.credit_card"]);
+  });
+
+  test("RETURNING masked col AS alias → masks, explicit alias kept verbatim", () => {
+    const out = RW.rewrite("UPDATE customers SET name='x' WHERE id=1 RETURNING credit_card AS cc", masks, catalog);
+    expect(out.ok).toBe(true);
+    const sql = (out as { sql: string }).sql;
+    expect(reparses(sql)).toBe(true);
+    expect(sql).toContain("'***'::text AS cc"); // explicit alias, not re-aliased to credit_card
+  });
+
+  test("RETURNING mixed masked + unmasked → only the masked column is rewritten", () => {
+    const out = RW.rewrite("INSERT INTO customers (name) VALUES ('x') RETURNING id, credit_card, name", masks, catalog);
+    expect(out.ok).toBe(true);
+    const sql = (out as { sql: string }).sql;
+    expect(reparses(sql)).toBe(true);
+    expect(sql).toContain("RETURNING id, '***'::text AS \"credit_card\", name"); // id/name verbatim
+  });
+
+  test("RETURNING * → expands to the full masked projection", () => {
     const out = RW.rewrite("INSERT INTO customers (name) VALUES ('x') RETURNING *", masks, catalog);
-    expect(out.ok).toBe(false);
-    expect((out as { reason: string }).reason).toContain("RETURNING");
+    expect(out.ok).toBe(true);
+    const sql = (out as { sql: string }).sql;
+    expect(reparses(sql)).toBe(true);
+    expect(sql).toContain('"id", "name", \'***\'::text AS "credit_card"'); // all cols, masked one wrapped
+    expect((out as { maskedColumns: string[] }).maskedColumns).toEqual(["public.customers.credit_card"]);
   });
 
-  test("RETURNING whole-row composite on a masked table → fail closed", () => {
-    const out = RW.rewrite("UPDATE customers SET name='x' WHERE id=1 RETURNING customers", masks, catalog);
-    expect(out.ok).toBe(false);
-  });
-
-  test("RETURNING only unmasked columns → allowed, target not wrapped", () => {
+  test("RETURNING only unmasked columns → verbatim, target not wrapped", () => {
     const q = "INSERT INTO customers (name) VALUES ('x') RETURNING id, name";
     expect(RW.rewrite(q, masks, catalog)).toEqual({ ok: true, sql: q, maskedColumns: [] });
+  });
+
+  test("RETURNING a computed expression over a masked column → fail closed (v1)", () => {
+    const out = RW.rewrite("DELETE FROM customers WHERE id=1 RETURNING credit_card || 'z'", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("computed expression");
+  });
+
+  test("RETURNING <table>.* (qualified whole-row) → fail closed (v1)", () => {
+    const out = RW.rewrite("UPDATE customers t SET name='x' WHERE id=1 RETURNING t.*", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("*");
+  });
+
+  test("RETURNING whole-row composite of the target → fail closed", () => {
+    const out = RW.rewrite("UPDATE customers SET name='x' WHERE id=1 RETURNING customers", masks, catalog);
+    expect(out.ok).toBe(false);
+    expect((out as { reason: string }).reason).toContain("whole-row");
   });
 });
 

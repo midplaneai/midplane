@@ -673,6 +673,83 @@ explicitly closes is salt-missing (was: silent NULL → now: reject, D4).
    now resolves operator identity via `pg_operator` too. Verified end-to-end on real
    PG16 (the PoC operator is created and rejected). Full engine suite 948 pass / 0
    fail; live harness 6/6. (Residual, tracked: RETURNING/JSON-serialization deferral.)
+1h. **Turn-on-able (A1) + observability/error-hygiene (A2) + gated emission (A3) —
+   BUILT 2026-07-01.** The rewriter was merged (PR #130) but the flag was never SET,
+   so the feature was dormant. This makes it safely turn-on-able:
+   - **A1 flag wiring (the blocker).** `buildMaskingConfig` (`engine-factory.ts`) now
+     sets `sourceRewrite: { enabled, rewriter: postgresSourceRewriter }`. Granularity:
+     **env default + per-DB override** — `MIDPLANE_MASK_SOURCE_REWRITE` (`Config`,
+     robust env-bool) is the engine-wide default, and since ONE engine is spawned per
+     project it is *per-project* for free; a per-DB YAML `mask_source_rewrite:` key
+     (`DatabaseEntrySchema` + legacy shape → `DatabaseSpec.maskSourceRewrite`) overrides
+     it, so a multi-DB project can canary a single DB. Resolution:
+     `spec.maskSourceRewrite ?? cfg.maskSourceRewrite`. `mask_source_rewrite` added to
+     `ENGINE_FEATURES` so a `requires_features:[mask_source_rewrite]` policy is accepted.
+     Flag OFF ⇒ byte-identical to today (post-exec masker). Factory-level tests prove
+     flag-on runs the rewritten SQL, flag-off runs plain execute, and per-DB overrides
+     win both directions.
+   - **A2 observability + error hygiene.** The engine is dep-free, so it emits masking
+     signals through an injected `MaskingConfig.sourceRewrite.observer` (wired to the
+     mcp-server pino logger, `event: "mask_source_rewrite"`): the **salt-redacted**
+     rewritten SQL (debug, for reconstructing a complaint), a sanitized `exec_error`
+     (operator gets the redacted detail), and a `fallback: no_transaction` alert (flag
+     on but the executor can't open a txn). Reject/adoption **metrics ride the audit
+     log**: EXECUTED carries `masking_path` (`source_rewrite` | `post_exec`), and the
+     pre-exec `column_masking` FAILED carries `masking_stage` (`gate` | `salt` |
+     `shadow` | `rewrite`) — so gate-rejections (probing) are separable from
+     rewrite-emission failures. **Error hygiene:** a PG error on the REWRITTEN SQL is
+     converted to a `SourceRewriteExecError` (generic message, SQLSTATE preserved) so
+     the wrap / mask expressions / salt GUC never reach the agent; `redactSalt` scrubs
+     the salt from BOTH the observer's `redactedSql` and the echoed PG message.
+     Full engine suite 962 pass / 0 fail; both packages tsc clean.
+     - **Fail-open taint tripwire — DEFERRED** (per D3.3 "deferred unless the spike
+       shows we need it"). The rewriter is already fail-closed; the `no_transaction`
+       fallback + `masking_stage` metrics cover the fleet-health signal. Revisit if
+       staging surfaces an unwrap.
+   - **A3 gated emission (cloud).** `DatabaseEntry.maskSourceRewrite` (+ `emitColumnMasks`):
+     when true AND the DB has masks, the emitted YAML carries `mask_source_rewrite: true`
+     and adds `mask_source_rewrite` to `requires_features` (so an engine too old to
+     rewrite REFUSES the policy instead of silently masking the old way). Default/absent
+     ⇒ **byte-identical YAML** (zero behavior change); inert without masks. The call
+     sites don't set it yet — the flip is the human-gated rollout step below.
+     **NOT done (human-gated):** the `OSS_ENGINE_IMAGE` bump + image publish (bumping the
+     pin without publishing the tag breaks every spawn) and the prod canary. See runbook.
+1i. **Phase-B polish — BUILT 2026-07-01** (validated on live PG16 via the harness):
+   - **B4 — RETURNING masking (was: reject).** A write to a masked target now MASKS its
+     RETURNING projection instead of rejecting it (`rewriteReturning` in
+     `dialects/postgres/source-rewrite.ts`): `RETURNING *` expands to the full masked
+     projection; `RETURNING credit_card [AS x]` → `mask_expr(...) AS <name>` (output name
+     preserved). The WHERE/ON-CONFLICT reject is KEPT (inference hole). Still fail-closed
+     on the forms a projection rewrite can't prove it masks: a computed expression over a
+     masked column, `t.*`, a whole-row composite of the target, a schema-qualified masked
+     ref. **Fixed a pre-existing latent bug it surfaced:** `collectRefs` missed the write
+     TARGET (its `relation` is serialized inline, not a `{RangeVar:…}` node), so *any*
+     write to a masked table would have rejected as "could not resolve" once the flag was
+     on — the target is now added to the refs for by-name resolution. Live-verified: the
+     write stores the RAW value, RETURNING returns it masked; `RETURNING *` masks
+     credit_card + hashes email; a computed RETURNING rejects.
+   - **B6 — JSON/whole-row serialization allowlist review** (adversarial pass). Added ONLY
+     the cleanly-safe json *construction* helpers to `MASK_SAFE_FUNCTIONS` —
+     `json_build_object`/`_array` + jsonb variants (explicit scalar arg list, no whole-row
+     overload, no object-name deref; live-verified `json_build_object('cc', credit_card)`
+     → `{"cc":"***"}`). The composite serializers (`to_json`/`to_jsonb`/`row_to_json`/
+     `json_agg`) stay excluded — the gate keys on function NAME not arg type, and (finding)
+     the whole-row-composite reject is NOT implemented (only the system-column one is), so
+     the name-exclusion is the sole defense; and `json_populate_record`/`*_to_record` stay
+     excluded (rowtype/table-name deref bypasses the wrap — a real leak path). Rationale
+     recorded in the EXCLUSIONS block.
+   - **B7 — live-PG harness in CI.** A `live-masking` job in `engine-test.yml` stands up an
+     ephemeral Postgres 16 service and runs `source-rewrite.live.test.ts` (previously
+     skipped without a DB) — it includes the operator-shadow covert-channel PoC. 10/10.
+   - **B5 — config-save type-domain validation (ET6).** `validateColumnMasks(config,
+     columnTypes?)` now rejects a transform whose output type can't fit the column
+     (`full-redact` on an int, `generalize:year` on text, …) at AUTHORING time, mirroring
+     `transform-sql.ts`'s query-time domains (+ `pseudonymize`=text) — pinned by a drift
+     test in `policy-column-masks.test.ts`. `pgDataTypeToMaskCategory` maps
+     information_schema `data_type` → typcategory; unknown types skip (query-time stays the
+     fail-closed backstop). `setColumnMasks` threads the types; `columnMasksAction` fetches
+     them BEST-EFFORT (`fetchColumnTypes`, fail-open — a save never depends on the customer
+     DB being reachable). Full engine 971/0, control-plane vitest 913/0, live 10/10.
 1b. **Core rewrite + covert-channel gate together** (Codex #3 — they ship as one):
    `null-out`, `full-redact`, `partial`, `generalize`, `noise`, `consistent-hash`;
    by-name catalog (fail-closed staleness, shared search_path), FROM-wrap (quoted
@@ -696,6 +773,34 @@ Engine bump + `OSS_ENGINE_IMAGE` pin update + deliberate image release accompany
 Phase 1 (the `requires_features` token is the safety interlock; deploy the
 rewrite-capable engine first, then flip the cloud to emit rewrite-requiring policies).
 
+### Rollout runbook (turn-on) — human-gated, engine-first
+
+The code (A1/A2/A3) is landed and OFF; these are the deliberate release steps.
+
+1. **Publish the rewrite-capable engine image.** Cut a new tag via the `engine-v*`
+   publish workflow (provenance handling per the OSS-publish note — plain local
+   builds are arm64-only/attestation images Fly rejects). This image already carries
+   `mask_source_rewrite` in `ENGINE_FEATURES`.
+2. **Bump the pin.** Set `OSS_ENGINE_IMAGE` in `packages/router/src/oss-image.ts` to
+   the new `X.Y.Z`, run `bun scripts/check-image-pin.ts`, fix every drift-checked site
+   until green, and update the prod Fly TOML digest pins. Deploy the control plane so
+   the new image is what spawns. **Do NOT bump the pin before the tag exists** — the
+   spawn paths pull it by tag and would fail.
+3. **Canary one project.** Two equivalent knobs (one engine per project):
+   - env: set `MIDPLANE_MASK_SOURCE_REWRITE=1` on the canary project's spawn, **or**
+   - policy: set `DatabaseEntry.maskSourceRewrite = true` for the canary project's
+     masked DB(s) — this also emits the `requires_features:[mask_source_rewrite]`
+     interlock, so wire this at the `DatabaseEntry`-construction site behind a
+     rollout gate (env project-allowlist is the least-invasive; no schema migration).
+   Prefer the policy knob for widening (it carries the skew interlock).
+4. **Watch.** Confirm `masking_path=source_rewrite` on EXECUTED for the canary, watch
+   the `mask_source_rewrite` logger events (no `exec_error` / `fallback` spikes) and
+   the `masking_stage=gate` FAILED rate (a spike = probing OR a false-positive
+   blocking legit queries). The `no_transaction` fallback should be zero in prod.
+5. **Widen, then flip the default** (Phase 2): make `enabled` default true once soak is
+   clean; keep the post-exec masker as the flagged fallback for ≥1 release cycle.
+   Rollback = flip the flag off (the fallback path is byte-identical and fallback-tested).
+
 ## Open questions (for sign-off)
 
 Resolved in the 2026-06-30 CEO review (see review report): salt transport (accepted,
@@ -703,11 +808,14 @@ Resolved in the 2026-06-30 CEO review (see review report): salt transport (accep
 (projection-only), view handling (reject v1), post-exec masker (retained as fallback,
 D3), Approach (A primary, B fallback, D6).
 
-Still open:
-1. **Emission method** — span-splice vs. `pgsql-deparser`; Phase-0 spike decides.
-   Implement both for cross-checking, or commit to one?
-2. **`mask_source_rewrite` flag granularity** — global, per-connection, or
-   per-project? (Per-project lets us canary one customer.)
+Resolved during the A-phase build (2026-07-01):
+1. **Emission method** — span-splice, deparse retained as a differential oracle
+   (Phase-0 spike, GO; see Emission section).
+2. **`mask_source_rewrite` flag granularity** — **env default + per-DB override.**
+   `MIDPLANE_MASK_SOURCE_REWRITE` is the engine-wide default and, because one engine
+   is spawned per project, is *per-project* for free (canary one customer); a per-DB
+   YAML `mask_source_rewrite:` key overrides it so a multi-DB project can canary a
+   single DB. Resolution: `spec.maskSourceRewrite ?? cfg.maskSourceRewrite`.
 
 ## GSTACK REVIEW REPORT
 

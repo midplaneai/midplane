@@ -80,6 +80,14 @@ export const MASK_SAFE_FUNCTIONS: ReadonlySet<string> = new Set([
   "to_char", "to_number", "to_date", "to_timestamp",
   "make_date", "make_time", "make_timestamp", "make_timestamptz", "make_interval",
   "justify_days", "justify_hours", "justify_interval", "now",
+  // ── json CONSTRUCTION from explicit scalar arguments (B6) ──
+  // These build json from an explicit key/value/element LIST — every argument is an
+  // ordinary expression, so an argument sourced from a masked column is already masked
+  // by the wrap (verified live: json_build_object('cc', credit_card) → {"cc":"***"}).
+  // They have NO whole-row/composite overload and take no object-name/rowtype argument,
+  // so they can't reach raw data the way to_jsonb(c)/row_to_json/json_agg(c) can — see
+  // the WHOLE-ROW / JSON SERIALIZATION exclusion note below for why those stay out.
+  "json_build_object", "jsonb_build_object", "json_build_array", "jsonb_build_array",
 ]);
 
 // Allowlisted operator spellings (binary/unary). Schema-qualified operators
@@ -250,9 +258,24 @@ export async function shadowScan(tx: TxClient, used: ShadowUsed): Promise<GateOu
 //     pg_get_serial_sequence, pg_get_expr / pg_get_viewdef, has_*_privilege.
 //   REFLECTIVE / ADMIN / DoS: pg_* system-admin functions, txid_* / pg_current_xact_id,
 //     pg_backend_pid, pg_sleep (DoS), pg_stat_* readers.
-//   WHOLE-ROW / JSON SERIALIZATION — believed SAFE under source-rewrite (the wrap masks
-//     the row before serialization) but DEFERRED pending a dedicated review of the
-//     large json family (to_json/to_jsonb, row_to_json, json*_build_*, json*_agg,
-//     json*_populate_record*, jsonb_to_record*, hstore, xmlelement/xmlagg/xpath).
+//   WHOLE-ROW / JSON / XML SERIALIZATION — reviewed 2026-07-01 (B6, adversarial pass).
+//     Only the json *construction* helpers (json_build_object/_array + jsonb variants)
+//     proved cleanly safe and were ADDED above — they take an explicit scalar arg list,
+//     have no whole-row overload, and deref no object name. The rest stay EXCLUDED:
+//       - to_json / to_jsonb / row_to_json / json_agg / jsonb_agg / json_object_agg /
+//         xmlelement / xmlforest / xmlagg: composite-CAPABLE. The wrap masks the SIMPLE
+//         wrapped-alias case (to_jsonb(c) → the masked derived rowtype), but this gate
+//         keys on the function NAME, not the argument type, and there is NO whole-row-
+//         composite reject implemented (systemColumnReject covers only literal system
+//         columns, not fn args). So the NAME-exclusion here is the sole defense against
+//         the whole-row form; do not add these without first adding an AST guard that
+//         rejects a composite/whole-row argument to a function while masking is active.
+//       - json_populate_record / jsonb_populate_record(set) / json_to_record /
+//         jsonb_to_record: the first argument is a rowtype/table-name DEREF
+//         (null::some_table) — Postgres reads that table's shape out of the catalog,
+//         bypassing the source wrap entirely. A REAL leak path. Exclude.
+//       - hstore, xpath, table_to_xml/query_to_xml (already covered under dynamic SQL).
 //   SET-RETURNING: generate_series, unnest, regexp_matches / regexp_split_to_table,
-//     string_to_table, json*_array_elements* — deferred (target-list SRF semantics).
+//     string_to_table, json*_array_elements* / json*_each* — safe-on-DATA (input is the
+//     already-masked passed value) but deferred for target-list SRF semantics, a
+//     separate concern from data-reach.

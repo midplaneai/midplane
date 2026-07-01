@@ -117,7 +117,9 @@ describe("runSourceRewrite", () => {
       salt: "S",
       shadowUsed: { functions: [], operators: [] },
     });
-    expect(out).toEqual({ ok: false, reason: "references a view" });
+    // The coordinator stamps the reject stage (A2) so the audit/metrics can tell a
+    // rewrite-emission reject apart from a covert-channel gate reject.
+    expect(out).toEqual({ ok: false, reason: "references a view", stage: "rewrite" });
     expect(execed).toHaveLength(0);
   });
 

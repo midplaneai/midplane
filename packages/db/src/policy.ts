@@ -296,6 +296,15 @@ export interface DatabaseEntry {
    *  presupposes the read; the engine never returns rows for a denied table,
    *  so a mask on a denied column is inert. The form enforces the pairing. */
   columnMasks?: ColumnMasksConfig;
+  /** Source-rewrite masking (ISSUE-007). When true AND this DB has masks, the
+   *  emitted YAML carries `mask_source_rewrite: true` (the engine rewrites masks
+   *  at the source relation instead of the post-exec output filter) plus a
+   *  `requires_features: [mask_source_rewrite]` token so an engine that predates
+   *  the feature REFUSES the policy rather than silently enforcing masking the old
+   *  way. Absent/false ⇒ the YAML is byte-identical to today (post-exec masker).
+   *  Rollout is engine-first: publish the rewrite-capable image, THEN flip this on
+   *  per canary project. Inert without masks (nothing to rewrite). */
+  maskSourceRewrite?: boolean;
 }
 
 // Mirrors OSS ENV_INTERP_RE so the cloud refuses to derive an env var name
@@ -369,7 +378,7 @@ export function serializeMultiDbPolicyToYaml(
       `      block_unqualified_dml: ${db.guardrails.block_unqualified_dml}`,
     );
     lines.push(`      block_ddl: ${db.guardrails.block_ddl}`);
-    emitColumnMasks(lines, db.columnMasks ?? {});
+    emitColumnMasks(lines, db.columnMasks ?? {}, db.maskSourceRewrite ?? false);
   }
   return lines.join("\n") + "\n";
 }
@@ -798,13 +807,91 @@ export function normalizeMaskRule(
   return { ok: false, message: maskRuleMessage };
 }
 
+// ── Type-domain validation (ET6 / B5) ──────────────────────────────────────
+// The engine's source-rewrite emitter (`transform-sql.ts`) fails a transform
+// closed at QUERY time when the column's type doesn't fit (e.g. full-redact on an
+// int column collapses to text). This mirrors those rules so an incompatible mask
+// is caught at AUTHORING time instead of surfacing as a query-time reject.
+//
+// SSOT: `engine/packages/engine/src/dialects/postgres/transform-sql.ts`. The one
+// deliberate difference: `pseudonymize` is valid here (text-only, enforced by the
+// retained post-exec masker) though it is NOT source-rewritable. Keep this matrix in
+// lockstep with transform-sql.ts — the drift test in policy-column-masks.test.ts
+// pins the exact (transform, category) grid.
+
+/** pg_type.typcategory letters the mask domains key on (same as the engine). */
+export type MaskColumnCategory = "S" | "N" | "D";
+
+// information_schema.columns.data_type strings → typcategory letter. Unknown /
+// user-defined types map to null → the caller SKIPS the check (query-time stays the
+// fail-closed backstop), so we never over-reject a mask on a type we can't classify.
+const MASK_STRING_TYPES = new Set(["text", "character varying", "varchar", "character", "char", '"char"', "bpchar", "name", "citext"]);
+const MASK_NUMERIC_TYPES = new Set(["smallint", "integer", "bigint", "decimal", "numeric", "real", "double precision", "money"]);
+const MASK_DATETIME_TYPES = new Set(["date", "timestamp without time zone", "timestamp with time zone", "time without time zone", "time with time zone"]);
+
+export function pgDataTypeToMaskCategory(dataType: string): MaskColumnCategory | null {
+  const d = dataType.trim().toLowerCase();
+  if (MASK_STRING_TYPES.has(d)) return "S";
+  if (MASK_NUMERIC_TYPES.has(d)) return "N";
+  if (MASK_DATETIME_TYPES.has(d)) return "D";
+  return null; // interval, boolean, uuid, json, bytea, USER-DEFINED, … → don't judge
+}
+
+/** Is `rule` valid on a column of the given typcategory? Mirrors transform-sql.ts's
+ *  rewrite domains (+ pseudonymize=text). `ok:false` carries a user-facing reason. */
+export function checkMaskTypeDomain(
+  rule: MaskRule,
+  category: MaskColumnCategory,
+): { ok: true } | { ok: false; reason: string } {
+  const kind = maskRuleKind(rule);
+  switch (kind) {
+    case "null-out":
+      return { ok: true }; // untyped NULL — the one type-preserving transform
+    case "full-redact":
+    case "consistent-hash":
+      return category === "S"
+        ? { ok: true }
+        : { ok: false, reason: `${kind} collapses to text — valid only on a text column` };
+    case "partial":
+      return category === "S" ? { ok: true } : { ok: false, reason: "partial is text-only" };
+    case "pseudonymize":
+      return category === "S" ? { ok: true } : { ok: false, reason: "pseudonymize is text-only" };
+    case "generalize": {
+      const g = typeof rule === "object" ? (rule as { granularity?: unknown }).granularity : undefined;
+      if (g === "year" || g === "month" || g === "day") {
+        return category === "D"
+          ? { ok: true }
+          : { ok: false, reason: `generalize:${g} needs a date/time column` };
+      }
+      return category === "N"
+        ? { ok: true }
+        : { ok: false, reason: "a numeric generalize bucket needs a numeric column" };
+    }
+    case "noise":
+      return category === "N" ? { ok: true } : { ok: false, reason: "noise needs a numeric column" };
+    default:
+      return { ok: true }; // unknown kind — normalizeMaskRule already rejected it
+  }
+}
+
+/** Per-table `column -> data_type` (information_schema.columns.data_type), fed to
+ *  validateColumnMasks to enable the authoring-time type-domain check. */
+export type MaskColumnTypes = Record<string, Record<string, string>>;
+
 /** Validate untrusted input into a typed ColumnMasksConfig. Table names use
  *  the same schema-qualified shape as table_access; column names are single
  *  Postgres identifiers; each rule is normalized + validated per-shape by
  *  normalizeMaskRule (legacy bare strings + the new object forms). A table whose
  *  columns all fail validation is dropped. Structured errors so the dashboard
- *  form can surface them per-field. */
-export function validateColumnMasks(input: unknown): ColumnMasksValidationResult {
+ *  form can surface them per-field.
+ *
+ *  `columnTypes` (optional, ET6/B5): when a masked column's Postgres type is known,
+ *  reject a transform whose output type doesn't fit (full-redact on an int, etc.) at
+ *  authoring time. Absent/unknown types skip the check — query-time is the backstop. */
+export function validateColumnMasks(
+  input: unknown,
+  columnTypes?: MaskColumnTypes,
+): ColumnMasksValidationResult {
   if (input == null) return { ok: true, value: {} };
   if (typeof input !== "object" || Array.isArray(input)) {
     return {
@@ -849,6 +936,19 @@ export function validateColumnMasks(input: unknown): ColumnMasksValidationResult
       if (!rule.ok) {
         errors.push({ path: `${table}.${col}`, message: rule.message });
         continue;
+      }
+      // ET6/B5: reject a transform whose output type doesn't fit the column, when
+      // the column's Postgres type is known. Unknown types skip (query-time backstop).
+      const dataType = columnTypes?.[table]?.[col];
+      if (dataType !== undefined) {
+        const category = pgDataTypeToMaskCategory(dataType);
+        if (category !== null) {
+          const domain = checkMaskTypeDomain(rule.value, category);
+          if (!domain.ok) {
+            errors.push({ path: `${table}.${col}`, message: `${domain.reason} (column type: ${dataType})` });
+            continue;
+          }
+        }
       }
       out[col] = rule.value;
     }
@@ -955,7 +1055,18 @@ export function parseIgnoredColumnsOrThrow(input: unknown): IgnoredColumnsConfig
 // forward half of the version-skew defense T3; an already-old engine can't be
 // taught to refuse — engine-first sequencing covers that). Defense-in-depth
 // identifier checks mirror emitTenantScope's.
-function emitColumnMasks(lines: string[], masks: ColumnMasksConfig): void {
+//
+// `sourceRewrite` (ISSUE-007): when true, the DB also gets `mask_source_rewrite:
+// true` (flip the engine to source-side rewrite) and a `mask_source_rewrite`
+// requires_features token, so an engine too old to rewrite refuses instead of
+// silently masking the old (blast-radius) way. Inert without masks — the token
+// would pointlessly require a feature for a DB that rewrites nothing — so it
+// rides the same non-empty-masks gate.
+function emitColumnMasks(
+  lines: string[],
+  masks: ColumnMasksConfig,
+  sourceRewrite: boolean,
+): void {
   const tables = Object.entries(masks)
     .filter(([, cols]) => Object.keys(cols).length > 0)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -963,6 +1074,10 @@ function emitColumnMasks(lines: string[], masks: ColumnMasksConfig): void {
 
   lines.push(`    requires_features:`);
   lines.push(`      - column_masks`);
+  if (sourceRewrite) {
+    lines.push(`      - mask_source_rewrite`);
+    lines.push(`    mask_source_rewrite: true`);
+  }
   lines.push(`    column_masks:`);
   for (const [table, cols] of tables) {
     if (!TABLE_IDENT_RE.test(table)) {
