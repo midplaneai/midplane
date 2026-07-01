@@ -171,7 +171,11 @@ describe("DockerSpawner", () => {
       (a) => typeof a === "string" && a.endsWith(":/etc/midplane/policy.yaml:ro"),
     );
     const yaml = await readFile(mountArg!.split(":")[0]!, "utf8");
-    expect(yaml).toContain("    requires_features:\n      - column_masks");
+    // ISSUE-007 launch: a masked DB emits the source-rewrite flag + the skew token,
+    // so the engine masks at the source relation, not the post-exec output filter.
+    expect(yaml).toContain(
+      "    requires_features:\n      - column_masks\n      - mask_source_rewrite\n    mask_source_rewrite: true",
+    );
     expect(yaml).toContain(
       "    column_masks:\n      public.users:\n        email: full-redact",
     );

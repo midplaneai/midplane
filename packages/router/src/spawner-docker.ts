@@ -20,6 +20,7 @@ import {
 } from "@midplane-cloud/db";
 
 import { OSS_ENGINE_IMAGE } from "./oss-image.ts";
+import { toDatabaseEntry } from "./spawner.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 
 // Path inside the container where the OSS engine reads the policy file
@@ -80,16 +81,7 @@ export class DockerSpawner implements Spawner {
     const policyHostPath = join(policyDir, "policy.yaml");
     await writeFile(
       policyHostPath,
-      serializeMultiDbPolicyToYaml(
-        opts.databases.map((db) => ({
-          name: db.name,
-          projectDatabaseId: db.projectDatabaseId,
-          tableAccess: db.tableAccess,
-          tenantScope: db.tenantScope,
-          guardrails: db.guardrails,
-          columnMasks: db.columnMasks,
-        })),
-      ),
+      serializeMultiDbPolicyToYaml(opts.databases.map(toDatabaseEntry)),
       { mode: 0o644 },
     );
 
