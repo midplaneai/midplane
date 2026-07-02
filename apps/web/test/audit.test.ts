@@ -188,6 +188,26 @@ describe("listAuditQueries query shape", () => {
     expect(sel.sql).toContain("'PENDING'");
   });
 
+  it("buckets a column-masking rejection as DENIED, not FAILED", async () => {
+    handle.setNextResult([]);
+    const { listAuditQueries } = await import("../src/lib/audit.ts");
+    await listAuditQueries(VALID_CUSTOMER_ID, { region: "eu" });
+    const sel = lastSelect(handle.queries);
+    // The covert-channel gate emits a FAILED event with
+    // error_class='column_masking' — a deliberate policy refusal, so it must
+    // aggregate into has_masking_block and classify as DENIED (matching the
+    // MCP response's policy_rule:"column_masking"), NOT the generic FAILED.
+    expect(sel.sql).toContain(
+      "BOOL_OR(event_type = 'FAILED' AND payload ->> 'error_class' = 'column_masking') AS has_masking_block",
+    );
+    expect(sel.sql).toContain("WHEN has_masking_block THEN 'DENIED'");
+    // The masking-block branch must precede the generic has_failed branch,
+    // or a masking rejection would fall through to FAILED.
+    expect(sel.sql.indexOf("WHEN has_masking_block THEN 'DENIED'")).toBeLessThan(
+      sel.sql.indexOf("WHEN has_failed THEN 'FAILED'"),
+    );
+  });
+
   it("UNIONs POLICY_RELOADED rows so operators can verify hot-swaps from the audit log", async () => {
     handle.setNextResult([]);
     const { listAuditQueries } = await import("../src/lib/audit.ts");

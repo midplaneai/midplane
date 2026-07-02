@@ -301,6 +301,18 @@ function payloadFingerprint(payload: unknown): string {
   if (typeof decision === "string") return `decision=${decision}`;
   const reason = p.reason;
   if (typeof reason === "string") return reason;
+  // EXECUTED rows carry no fingerprint / decision / reason. Summarize the
+  // masking outcome — which enforcement path ran (source_rewrite vs the
+  // post_exec fallback) and how many columns were masked — so the lifecycle
+  // strip shows the answer at a glance instead of an opaque list of payload
+  // keys ("exec_ms, overhead_ms, masking_path").
+  const maskingPath = p.masking_path;
+  if (typeof maskingPath === "string") {
+    const cols = Array.isArray(p.columns_masked) ? p.columns_masked.length : 0;
+    return cols > 0
+      ? `${maskingPath} · ${cols} column${cols === 1 ? "" : "s"} masked`
+      : maskingPath;
+  }
   return Object.keys(p).slice(0, 3).join(", ") || "—";
 }
 

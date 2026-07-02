@@ -474,6 +474,7 @@ export async function listAuditQueries(
           BOOL_OR(event_type = 'DECIDED') AS has_decided,
           BOOL_OR(event_type = 'EXECUTED') AS has_executed,
           BOOL_OR(event_type = 'FAILED') AS has_failed,
+          BOOL_OR(event_type = 'FAILED' AND payload ->> 'error_class' = 'column_masking') AS has_masking_block,
           MAX(payload ->> 'sql_raw') FILTER (WHERE event_type = 'ATTEMPTED') AS sql_raw,
           MAX(payload ->> 'sql_fingerprint') FILTER (WHERE event_type = 'ATTEMPTED') AS sql_fingerprint,
           MAX(payload ->> 'decision') FILTER (WHERE event_type = 'DECIDED') AS decision,
@@ -513,6 +514,12 @@ export async function listAuditQueries(
           NULL::jsonb AS policy_payload,
           CASE
             WHEN has_executed THEN 'ALLOWED'
+            -- A pre-exec column-masking rejection (covert-channel gate) is a
+            -- deliberate policy refusal, not an execution error. Bucket it as
+            -- DENIED to match the MCP response's policy_rule:"column_masking".
+            -- Ordered before has_failed since it IS a FAILED event. Mirrored
+            -- in statusCounts + the volume histogram below — keep in sync.
+            WHEN has_masking_block THEN 'DENIED'
             WHEN has_failed THEN 'FAILED'
             WHEN has_decided AND lower(decision) = 'deny' THEN 'DENIED'
             WHEN last_ts < ${stuckCutoffIso}::timestamptz THEN 'STUCK'
@@ -915,9 +922,12 @@ export async function eventVolumeByHour(
         SELECT DISTINCT ON (query_id)
           query_id,
           ts,
-          CASE event_type
-            WHEN 'EXECUTED' THEN 'executed'
-            WHEN 'FAILED' THEN 'failed'
+          CASE
+            -- Column-masking rejection buckets as denied (policy refusal),
+            -- matching listAuditQueries + statusCounts.
+            WHEN event_type = 'FAILED' AND payload ->> 'error_class' = 'column_masking' THEN 'denied'
+            WHEN event_type = 'EXECUTED' THEN 'executed'
+            WHEN event_type = 'FAILED' THEN 'failed'
             ELSE 'denied'
           END AS terminal
         FROM audit_events_index
@@ -1021,6 +1031,7 @@ export async function countByStatus(
           MAX(ts) AS last_ts,
           BOOL_OR(event_type = 'EXECUTED') AS has_executed,
           BOOL_OR(event_type = 'FAILED') AS has_failed,
+          BOOL_OR(event_type = 'FAILED' AND payload ->> 'error_class' = 'column_masking') AS has_masking_block,
           BOOL_OR(event_type = 'DECIDED') AS has_decided,
           MAX(payload ->> 'decision') FILTER (WHERE event_type = 'DECIDED') AS decision
         FROM audit_events_index
@@ -1034,6 +1045,9 @@ export async function countByStatus(
       SELECT
         CASE
           WHEN has_executed THEN 'ALLOWED'
+          -- Column-masking rejection counts as DENIED, mirroring
+          -- listAuditQueries so the badge counts and the list agree.
+          WHEN has_masking_block THEN 'DENIED'
           WHEN has_failed THEN 'FAILED'
           WHEN has_decided AND lower(decision) = 'deny' THEN 'DENIED'
           WHEN last_ts < ${stuckCutoffIso}::timestamptz THEN 'STUCK'
