@@ -51,6 +51,7 @@ export {
   MAX_PROJECT_NAME_LENGTH,
   isValidDatabaseName,
   normalizeName,
+  slugifyDatabaseName,
 } from "./project-name.ts";
 
 // audit_events_index enforces RLS keyed on app.customer_id (see

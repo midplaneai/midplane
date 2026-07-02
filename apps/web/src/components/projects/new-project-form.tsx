@@ -51,7 +51,6 @@ export function NewProjectForm({
         <Label htmlFor="name">Name</Label>
         <Input
           id="name"
-          name="name"
           type="text"
           autoComplete="off"
           maxLength={32}
@@ -59,12 +58,18 @@ export function NewProjectForm({
           className="font-mono"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          // Snap to the alias grammar on blur so the value that submits
-          // already matches what the engine accepts — no post-submit
-          // "must be lowercase…" bounce.
+          // Cosmetic: snap the visible field to the alias grammar on blur so
+          // the user sees the canonical form. Correctness does NOT depend on
+          // this firing — the hidden field below is what submits, so
+          // Enter-to-submit (which skips blur) still posts a valid alias.
           onBlur={() => setName((s) => slugifyDatabaseName(s))}
           disabled={pending}
         />
+        {/* The server reads the slugified alias, never the raw text: the
+            visible input carries no `name`, so pressing Enter before blur
+            can't post an invalid value. Empty alias (no usable characters)
+            posts "" → the server derives the alias from the DSN. */}
+        <input type="hidden" name="name" value={alias} />
         <p className="text-xs text-muted-foreground">
           The{" "}
           <strong className="font-medium text-foreground">
