@@ -10,7 +10,7 @@ import { authClient } from "@/lib/auth-client";
 // googleAuthEnabled()); authClient.signIn.social is core (no plugin needed).
 // signIn.social REDIRECTS the browser to Google and back to callbackURL, so —
 // unlike the email form — there's no router.push here. A brand-new user who
-// lands on /dashboard without an org is bounced to /signup/region by
+// lands on /dashboard without an org is bounced to /signup by
 // currentCustomer() (the org/customer is created there), so sign-in and sign-up
 // can share the same flow; the page just passes the right callbackURL.
 export function GoogleSignIn({

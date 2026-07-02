@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RegionBadge } from "@/components/ui/region-badge";
+import { RegionFlag } from "@/components/ui/region-flag";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
 import { bootRegion } from "@/lib/region-context";
@@ -104,6 +105,7 @@ export default async function RegionPicker() {
               <div className="space-y-2 text-left sm:col-span-2">
                 <Label>Data region</Label>
                 <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-4">
+                  <RegionFlag region={appRegion} />
                   <RegionBadge region={appRegion} />
                   <span className="text-sm text-muted-foreground">
                     {REGION_LABELS[appRegion]} — permanent.
@@ -136,7 +138,8 @@ function RegionCard({
   return (
     <label className="flex cursor-pointer flex-col gap-2 rounded-lg border border-border bg-card p-4 transition-colors has-[:checked]:border-[hsl(var(--brand))] has-[:checked]:ring-2 has-[:checked]:ring-ring">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-foreground">
+        <span className="flex items-center gap-2 font-medium text-foreground">
+          <RegionFlag region={region} />
           {REGION_LABELS[region]}
         </span>
         {region === suggested && (
@@ -231,13 +234,20 @@ async function pickRegionUnauth(formData: FormData) {
   if (region !== "eu" && region !== "us") {
     throw new Error("invalid region");
   }
-  // On the apex, route to the chosen region's subdomain so signup (and its
-  // region-resident auth data) lands on the right app; the authed pass then
-  // writes the customer row + region cookie. On a regional app / dev single
-  // host, stay relative.
+  // Route to the CHOSEN region's app so signup (and its region-resident auth
+  // data) lands on the right one; the authed pass then writes the customer row +
+  // region cookie. This must fire on the apex AND on a regional host: a user can
+  // reach a regional /signup via the sign-in "Create account" link (e.g. after
+  // the apex email-router sent an unrecognized email to us.app/sign-in), and
+  // picking the OTHER region there must actually move them, not pin them to
+  // whichever regional app they happen to be on. Only dev/self-host (host is not
+  // a known cloud host, so the regional subdomains aren't reachable) stays
+  // relative.
   const host = (await headers()).get("host");
-  if (host === APEX_HOST) {
-    redirect(`https://${REGION_HOST[region]}/sign-up?redirect=/signup/region`);
+  const isCloudHost =
+    host === APEX_HOST || host === REGION_HOST.eu || host === REGION_HOST.us;
+  if (isCloudHost) {
+    redirect(`https://${REGION_HOST[region]}/sign-up?redirect=/signup`);
   }
-  redirect("/sign-up?redirect=/signup/region");
+  redirect("/sign-up?redirect=/signup");
 }

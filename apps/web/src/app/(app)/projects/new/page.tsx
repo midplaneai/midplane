@@ -33,7 +33,7 @@ import { getPostHog } from "@/lib/posthog";
 
 export default async function NewProject() {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   // Adding a project is an owner/admin capability — a member operates existing
   // projects, it doesn't provision new ones. Show a clear notice instead of the
@@ -157,9 +157,9 @@ async function createAction(
 ): Promise<NewProjectFormState> {
   "use server";
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
   const { userId } = await getOrgContext();
-  if (!userId) redirect("/signup/region");
+  if (!userId) redirect("/signup");
 
   // Owner/admin only. Return state (don't throw) so the client form renders it
   // inline — this is the tamper path; the page already hides the form for

@@ -18,7 +18,7 @@ export default async function SignUpPage({
   searchParams: Promise<{ redirect?: string }>;
 }) {
   const { redirect } = await searchParams;
-  const redirectTo = safeRedirect(redirect, "/signup/region");
+  const redirectTo = safeRedirect(redirect, "/signup");
   // Google shows only when this build was given OAuth creds. A Google sign-up
   // lands on the same region picker, which creates the org/customer row.
   const googleEnabled = googleAuthEnabled();

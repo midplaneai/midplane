@@ -108,7 +108,7 @@ export default async function ProjectWorkspace({
   searchParams: Promise<{ section?: string; db?: string; created?: string }>;
 }) {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   // Owner/admin manage the project (policy, guardrails, tokens, DSN, databases,
   // delete); a member can view it and connect their agent (OAuth) but sees no

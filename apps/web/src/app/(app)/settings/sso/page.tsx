@@ -24,7 +24,7 @@ export default async function SsoSettingsPage() {
   if (isSelfHost()) notFound();
 
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   const entitled = await hasEntitlement("sso");
 

@@ -24,7 +24,7 @@ import {
 // Look up the Midplane customer for the current session's active org, if it
 // exists. Returns null when the signed-in user has no active org yet (fresh
 // signup, before the region picker creates one) or has an org but no customer
-// row yet — the dashboard route uses null to redirect to /signup/region.
+// row yet — the dashboard route uses null to redirect to /signup.
 //
 // One Midplane customer == one organization. Org members are the actors who
 // can sign in and act on its behalf.

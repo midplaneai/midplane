@@ -170,7 +170,7 @@ function createAuth() {
           // session is created. Better Auth does NOT carry activeOrganizationId
           // across logins, so without this a returning user signs in org-less
           // (activeOrganizationId = null), currentCustomer() bounces them to
-          // /signup/region, and re-onboarding can mint a SECOND org/customer.
+          // /signup, and re-onboarding can mint a SECOND org/customer.
           // One org == one customer, so the first membership is the right one.
           before: async (session) => {
             // Self-host: the active org is ALWAYS the one implicit org. Set it

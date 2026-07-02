@@ -14,7 +14,7 @@ import { isSelfHost } from "@/lib/self-host";
 // cookie to redirect unauthenticated users off protected routes. It does NOT
 // validate the session (that needs a DB call; Next 15.1 middleware runs on the
 // Edge runtime). Real validation happens downstream: (app)/layout.tsx calls
-// currentCustomer() (a DB lookup) and redirects to /signup/region with no row.
+// currentCustomer() (a DB lookup) and redirects to /signup with no row.
 //
 // REGION: a dedicated SIGNED region cookie (lib/region-routing) routes an authed
 // user from the apex to their regional subdomain and bounces cross-region
@@ -27,7 +27,7 @@ import { isSelfHost } from "@/lib/self-host";
 // (reachable unauthenticated so a brand-new visitor sees it). Everything else
 // requires a session cookie. The marketing landing + legal pages moved to
 // midplane.ai (its own repo).
-const PUBLIC_EXACT = new Set(["/", "/signup/region"]);
+const PUBLIC_EXACT = new Set(["/", "/signup"]);
 
 // Public path prefixes — the route itself plus any subpath. Covers the auth UI
 // (/sign-in, /sign-up), Better Auth's own API (/api/auth/*) which must never be
@@ -103,12 +103,23 @@ export default async function middleware(
         `https://${REGION_HOST[region]}${pathname}${url.search}`,
       );
     }
-    // No region cookie. Public routes (auth UI, picker) render; everything else
-    // goes to the picker. A COOKIE-MISS for an authed existing user (fresh
-    // browser) lands here too — re-picking the region re-sets the cookie; the
-    // central email-hash→region pointer (deferred) makes it seamless.
+    // No region cookie yet. On the apex the region is chosen BEFORE signup, so
+    // send every /sign-up hit — including stray subpaths like /sign-up/region
+    // (an easy typo for /signup) — to the picker. The picker routes to the
+    // regional subdomain where region-resident signup actually happens; without
+    // this, /sign-up renders here on the apex (EU) app and silently pins the new
+    // account to EU. /sign-in is deliberately NOT redirected: a returning
+    // user's cookie-miss is the deferred email→region pointer problem, not a
+    // new-account default, so it still renders and the (app) layout backstops.
+    if (pathname === "/sign-up" || pathname.startsWith("/sign-up/")) {
+      return NextResponse.redirect(new URL("/signup", req.url));
+    }
+    // Other public routes (sign-in, Better Auth API, MCP, health) render;
+    // everything else goes to the picker. A COOKIE-MISS for an authed existing
+    // user (fresh browser) lands here too — re-picking the region re-sets the
+    // cookie; the central email-hash→region pointer (deferred) makes it seamless.
     if (isPublic(pathname)) return NextResponse.next();
-    return NextResponse.redirect(new URL("/signup/region", req.url));
+    return NextResponse.redirect(new URL("/signup", req.url));
   }
 
   // Regional subdomain (and dev single-host, where host !== apex).

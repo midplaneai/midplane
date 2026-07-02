@@ -64,7 +64,7 @@ function formatDate(d: Date): string {
 
 export default async function BillingPage() {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   // Billing is OWNER-ONLY — admins manage the workspace but not the money.
   // Mirror the nav (which shows Billing only to the owner) and gate the route

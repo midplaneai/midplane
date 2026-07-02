@@ -12,6 +12,11 @@ import type { NextRequest } from "next/server";
 
 export type RoutableRegion = "eu" | "us";
 
+/** The region that ISN'T `here` — the "other one" in the two-region cloud. */
+export function otherRegion(here: RoutableRegion): RoutableRegion {
+  return here === "eu" ? "us" : "eu";
+}
+
 // Apex + per-region hosts. Cross-region / apex→subdomain redirects build URLs
 // against these.
 export const APEX_HOST = "app.midplane.ai";
@@ -102,6 +107,62 @@ export async function verifyRegionCookie(
   req: NextRequest,
 ): Promise<RoutableRegion | null> {
   return verifyRegionCookieValue(req.cookies.get(REGION_COOKIE)?.value);
+}
+
+// ---- Email hint token (apex sign-in router → regional prefill) --------------
+//
+// The apex /sign-in is a pure ROUTER: a returning user types their email, we
+// resolve which regional app owns the account, and redirect there. This token
+// carries that email to the regional /sign-in so it can prefill the field —
+// WITHOUT the plaintext email riding in the URL (server logs, browser history)
+// and without it being forgeable. HMAC-signed + time-boxed, reusing the region
+// secret already shared across the apex + both regional apps.
+
+const EMAIL_HINT_TTL_SEC = 10 * 60; // 10 min — enough to redirect + type a password.
+
+/** Sign `<b64url(email)>.<expEpochSec>.<b64url(hmac)>`. `nowSec` is injectable
+ *  for tests. */
+export async function signEmailHint(
+  email: string,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): Promise<string> {
+  const payload = `${bytesToB64url(new TextEncoder().encode(email))}.${
+    nowSec + EMAIL_HINT_TTL_SEC
+  }`;
+  const key = await hmacKey(["sign"]);
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(payload),
+  );
+  return `${payload}.${bytesToB64url(new Uint8Array(sig))}`;
+}
+
+/** Verify + decode an email hint; returns the email only if the HMAC checks out
+ *  (constant-time) AND it hasn't expired, else null. */
+export async function verifyEmailHint(
+  token: string | undefined | null,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): Promise<string | null> {
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [b64email, expStr, sig] = parts;
+  if (!b64email || !expStr || !sig) return null;
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || exp < nowSec) return null;
+  try {
+    const key = await hmacKey(["verify"]);
+    const ok = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      b64urlToBytes(sig),
+      new TextEncoder().encode(`${b64email}.${expStr}`),
+    );
+    return ok ? new TextDecoder().decode(b64urlToBytes(b64email)) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Set-Cookie attributes for the region pick. Domain is set only in production

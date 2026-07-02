@@ -13,7 +13,7 @@ import { authClient } from "@/lib/auth-client";
 // Auth signs the user in automatically; we route to the region picker, which
 // creates the organization + customer row (the signup-completion step).
 export function SignUpForm({
-  redirectTo = "/signup/region",
+  redirectTo = "/signup",
 }: {
   redirectTo?: string;
 }) {
