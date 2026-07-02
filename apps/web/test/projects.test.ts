@@ -1894,6 +1894,42 @@ describe("isValidDatabaseName", () => {
   });
 });
 
+describe("slugifyDatabaseName", () => {
+  it("coerces arbitrary input into a valid alias", async () => {
+    const { slugifyDatabaseName, isValidDatabaseName } = await import(
+      "../src/lib/project-name.ts"
+    );
+    expect(slugifyDatabaseName("Mask E2E DB")).toBe("mask-e2e-db");
+    expect(slugifyDatabaseName("Analytics")).toBe("analytics");
+    expect(slugifyDatabaseName("my.db/prod")).toBe("my-db-prod");
+    expect(slugifyDatabaseName("  spaced  name  ")).toBe("spaced-name");
+    // Output is always a valid alias (or empty).
+    for (const s of ["Mask E2E DB", "my.db/prod", "UPPER"]) {
+      const slug = slugifyDatabaseName(s);
+      expect(slug === "" || isValidDatabaseName(slug)).toBe(true);
+    }
+  });
+
+  it("strips leading non-letters and trailing separators", async () => {
+    const { slugifyDatabaseName } = await import("../src/lib/project-name.ts");
+    expect(slugifyDatabaseName("123abc")).toBe("abc");
+    expect(slugifyDatabaseName("__db__")).toBe("db");
+    expect(slugifyDatabaseName("name-")).toBe("name");
+  });
+
+  it("returns empty when nothing valid survives (caller falls back to DSN name)", async () => {
+    const { slugifyDatabaseName } = await import("../src/lib/project-name.ts");
+    expect(slugifyDatabaseName("123")).toBe("");
+    expect(slugifyDatabaseName("   ")).toBe("");
+    expect(slugifyDatabaseName("!!!")).toBe("");
+  });
+
+  it("clamps to the 32-char engine grammar max", async () => {
+    const { slugifyDatabaseName } = await import("../src/lib/project-name.ts");
+    expect(slugifyDatabaseName("a".repeat(40)).length).toBe(32);
+  });
+});
+
 interface MutationDepsSpy {
   registry: { invalidate: ReturnType<typeof vi.fn> };
 }

@@ -20,8 +20,8 @@ import {
   createProject,
   getPlanUsage,
   hasEmptyProject,
-  isValidDatabaseName,
   isValidDsn,
+  slugifyDatabaseName,
 } from "@/lib/projects";
 import {
   projectCreateBlock,
@@ -172,18 +172,15 @@ async function createAction(
     return { error: "DSN must be a postgres:// or postgresql:// URL." };
   }
   // The optional name is the first database's agent-facing alias (the string
-  // the agent uses to address it). Validate a supplied value so the user gets
-  // inline feedback; blank is fine — createProject derives the alias from the
-  // DSN's database name.
+  // the agent uses to address it). Coerce it to the engine's name grammar
+  // rather than rejecting: the form submits an already-slugified hidden value,
+  // and hardening the server (for JS-off / non-browser callers) keeps the
+  // stored alias matching the form's live "Saved as …" preview. Empty after
+  // slugifying (no usable chars) → null, and createProject derives the alias
+  // from the DSN's database name.
   const nameRaw = formData.get("name");
-  const aliasInput = typeof nameRaw === "string" ? nameRaw.trim() : "";
-  if (aliasInput && !isValidDatabaseName(aliasInput)) {
-    return {
-      error:
-        "Database name must be 1–32 lowercase letters, digits, _ or -, starting with a letter.",
-    };
-  }
-  const name = aliasInput || null;
+  const rawInput = typeof nameRaw === "string" ? nameRaw : "";
+  const name = slugifyDatabaseName(rawInput) || null;
 
   // Form-posted radio values are strings. Validate against the canonical
   // enum so a tampered request can't smuggle in something the spawner

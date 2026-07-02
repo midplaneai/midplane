@@ -15,11 +15,11 @@ describe("classifyColumn: high-confidence categories", () => {
     }
   });
 
-  it("flags ssn / tax id → partial{keepEnd:4} on text columns", () => {
+  it("flags ssn / tax id → full-redact on text columns (highest sensitivity)", () => {
     for (const n of ["ssn", "social_security_number", "tax_id", "tin"]) {
       const m = classifyColumn(n, "text");
       expect(m).toMatchObject({ category: "ssn", confidence: "high" });
-      expect(m?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
+      expect(m?.suggestedTransform).toBe("full-redact");
     }
   });
 
@@ -31,11 +31,11 @@ describe("classifyColumn: high-confidence categories", () => {
     }
   });
 
-  it("flags credit card → partial{keepEnd:4}", () => {
+  it("flags credit card → full-redact (highest sensitivity)", () => {
     for (const n of ["credit_card", "card_number", "cc_number", "pan"]) {
       const m = classifyColumn(n, "text");
       expect(m?.category).toBe("credit_card");
-      expect(m?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
+      expect(m?.suggestedTransform).toBe("full-redact");
     }
   });
 
@@ -84,9 +84,10 @@ describe("classifyColumn: type-gate for type-changing transforms", () => {
     expect(classifyColumn("ip_address", "inet")?.suggestedTransform).toBe("null-out");
   });
 
-  it("keeps partial{keepEnd:4} for text-like types", () => {
-    expect(classifyColumn("ssn", "character varying")?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
+  it("keeps partial{keepEnd:4} for phone on text-like types; ssn/card fully redact", () => {
     expect(classifyColumn("phone", "varchar")?.suggestedTransform).toEqual({ t: "partial", keepEnd: 4 });
+    expect(classifyColumn("ssn", "character varying")?.suggestedTransform).toBe("full-redact");
+    expect(classifyColumn("credit_card", "text")?.suggestedTransform).toBe("full-redact");
   });
 });
 

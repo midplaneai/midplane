@@ -116,17 +116,25 @@ export function CreateTokenModal({
   // reached" with no action would be a UX trap).
   const [upgradeUrl, setUpgradeUrl] = useState<string | null>(null);
   const [mcpUrl, setMcpUrl] = useState<string | null>(null);
+  // Reveal panel: the user must tick "I've copied it" before the dismiss
+  // affordances unlock — an explicit acknowledgement, since the URL is shown
+  // once. The countdown alone let a fast click slip through.
+  const [copyConfirmed, setCopyConfirmed] = useState(false);
   const nameId = useId();
   const expiryId = useId();
 
   // Once the URL is on screen the modal becomes un-dismissable by accident:
-  // outside-click and Escape are swallowed (see the Content handlers) and the
-  // close affordances are gated behind a short countdown, so the plaintext
-  // can't be clicked through before it has been copied. The form state (no
+  // outside-click and Escape are swallowed (see the Content handlers), and the
+  // close affordances stay disabled until BOTH a short anti-fat-finger
+  // countdown elapses AND the user ticks "I've copied it" — an explicit
+  // acknowledgement, since the plaintext is shown once. The form state (no
   // URL yet) stays freely dismissable — there's nothing to lose there.
   const reveal = mcpUrl !== null;
   const remaining = useUnlockCountdown(reveal, 3);
   const locked = reveal && remaining > 0;
+  // Dismiss affordances (the X and "I've saved it") require the copy
+  // acknowledgement on top of the countdown while the URL is revealed.
+  const dismissLocked = reveal && (locked || !copyConfirmed);
 
   const selectedScopeCount = Object.values(scope).filter(
     (v) => v !== "none",
@@ -139,6 +147,7 @@ export function CreateTokenModal({
     setError(null);
     setUpgradeUrl(null);
     setMcpUrl(null);
+    setCopyConfirmed(false);
   }
 
   function handleOpenChange(next: boolean) {
@@ -246,10 +255,10 @@ export function CreateTokenModal({
           )}
         >
           <DialogPrimitive.Close
-            disabled={locked}
+            disabled={dismissLocked}
             className={cn(
               "absolute right-4 top-4 rounded-sm text-subtle transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-              locked && "pointer-events-none opacity-40",
+              dismissLocked && "pointer-events-none opacity-40",
             )}
             aria-label="Close"
           >
@@ -267,6 +276,8 @@ export function CreateTokenModal({
               mcpUrl={mcpUrl}
               locked={locked}
               remaining={remaining}
+              confirmed={copyConfirmed}
+              onConfirmedChange={setCopyConfirmed}
               onClose={() => handleOpenChange(false)}
             />
           ) : (
@@ -401,6 +412,8 @@ function SuccessPanel({
   mcpUrl,
   locked,
   remaining,
+  confirmed,
+  onConfirmedChange,
   onClose,
 }: {
   mcpUrl: string;
@@ -408,8 +421,12 @@ function SuccessPanel({
   locked: boolean;
   /** Seconds left on that countdown (for the button label). */
   remaining: number;
+  /** Whether the user has ticked the copy-acknowledgement checkbox. */
+  confirmed: boolean;
+  onConfirmedChange: (next: boolean) => void;
   onClose: () => void;
 }) {
+  const confirmId = useId();
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -422,11 +439,28 @@ function SuccessPanel({
         </DialogPrimitive.Description>
       </div>
       <ShowOnceUrl mcpUrl={mcpUrl} />
+      <label
+        htmlFor={confirmId}
+        className="flex items-start gap-2 text-xs text-muted-foreground"
+      >
+        <input
+          id={confirmId}
+          type="checkbox"
+          checked={confirmed}
+          onChange={(e) => onConfirmedChange(e.target.checked)}
+          className="mt-0.5 h-3.5 w-3.5 accent-[hsl(var(--brand))]"
+          data-testid="copy-confirmed"
+        />
+        <span>
+          I&apos;ve copied and stored this URL — I understand it won&apos;t be
+          shown again.
+        </span>
+      </label>
       <div className="flex items-center justify-end pt-2">
         <Button
           size="sm"
           onClick={onClose}
-          disabled={locked}
+          disabled={locked || !confirmed}
           data-testid="ive-saved-it"
         >
           {locked ? `I've saved it (${remaining})` : "I've saved it"}
