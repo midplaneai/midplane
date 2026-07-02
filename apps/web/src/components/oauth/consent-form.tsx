@@ -213,13 +213,16 @@ export function ConsentForm({
               </p>
             </div>
           ) : (
-            <p className="text-xs text-subtle">
-              Connecting to{" "}
-              <span className="font-medium text-foreground">
-                {selectedProject?.projectName || selectedProject?.projectId}
-              </span>
-              . Pick its databases below.
-            </p>
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-foreground">Project</p>
+              <p className="text-sm text-muted-foreground">
+                Connecting to{" "}
+                <span className="font-medium text-foreground">
+                  {selectedProject?.projectName || selectedProject?.projectId}
+                </span>
+                . Choose its databases below.
+              </p>
+            </div>
           )}
 
           {selectedProject ? (
@@ -307,9 +310,9 @@ export function ConsentForm({
             ? "Authorizing…"
             : mustPickProject
               ? "Choose a project"
-              : hasDbs
-                ? `Allow access${selectedCount > 0 ? ` to ${selectedCount}` : ""}`
-                : "Allow access"}
+              : selectedCount > 0
+                ? `Allow access to ${selectedCount} database${selectedCount === 1 ? "" : "s"}`
+                : "Approve without database access"}
         </Button>
       </div>
     </div>
