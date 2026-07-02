@@ -21,7 +21,7 @@ interface PageProps {
 
 export default async function AuditDetailPage({ params }: PageProps) {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   const { id } = await params;
   // Clamp the deep-link read to the plan's retention window — an out-of-window

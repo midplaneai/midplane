@@ -33,7 +33,7 @@ export interface OrgContext {
  *  one. Better Auth's SSO flow creates the session (our session.create hook runs
  *  with no membership yet → null active org) and only THEN provisions the org
  *  membership, so a first SSO login lands with activeOrganizationId=null and
- *  would be bounced to /signup/region as un-onboarded. When the session active
+ *  would be bounced to /signup as un-onboarded. When the session active
  *  org is missing, we resolve it from the user's membership instead. Resolve-
  *  ONLY (no setActiveOrganization persist): getOrgContext runs during Server
  *  Component render, where writing a cookie throws — the session self-heals on

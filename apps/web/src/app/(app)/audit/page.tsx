@@ -83,7 +83,7 @@ interface PageProps {
 
 export default async function AuditListPage({ searchParams }: PageProps) {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   // The audit log is owner/admin only — a member has no oversight surface in
   // v1. The nav hides the link for members; this guards the route itself

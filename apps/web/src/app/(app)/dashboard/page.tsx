@@ -46,7 +46,7 @@ export default async function Dashboard({
   searchParams: Promise<{ setup?: string | string[] }>;
 }) {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   // An older create flow redirected to /dashboard?setup=<id> to auto-open
   // the agent setup sheet. New projects now land on the project's Connect

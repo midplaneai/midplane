@@ -35,7 +35,7 @@ import { SignOutButton } from "./sign-out-button";
 // lib/workspace.ts, so this page can't be the only thing enforcing the rule.
 export default async function AccountPage() {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   const session = await getAuth().api.getSession({ headers: await headers() });
   const userId = session?.user.id ?? "";

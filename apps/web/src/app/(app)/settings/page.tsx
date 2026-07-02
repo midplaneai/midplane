@@ -34,7 +34,7 @@ import { RenameWorkspaceForm } from "./rename-workspace-form";
 // path (lib/seats.ts) via the org plugin's membershipLimit.
 export default async function SettingsPage() {
   const customer = await currentCustomer();
-  if (!customer) redirect("/signup/region");
+  if (!customer) redirect("/signup");
 
   const db = getDb(bootRegion());
   const orgRow = (

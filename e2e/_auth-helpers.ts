@@ -6,7 +6,7 @@
 // shares the browser context's cookie jar, so the session cookie it sets makes
 // the page authed. No UI bot-detection token to mint (unlike Clerk), so there's
 // no global-setup step. The org + customer row are created by the real
-// /signup/region Server Action the suites drive next (Better Auth doesn't
+// /signup Server Action the suites drive next (Better Auth doesn't
 // auto-create an org on signup); activeOrgId() reads the resulting org id off
 // the session.
 //
@@ -49,7 +49,7 @@ async function getSession(page: Page): Promise<SessionShape | null> {
 }
 
 // Create a Better Auth user and establish a browser session. No org yet — the
-// /signup/region Server Action the suite drives next creates it. onUserCreated
+// /signup Server Action the suite drives next creates it. onUserCreated
 // fires the instant the id is known so afterAll can still delete the user if a
 // later step throws.
 export async function signUp(
@@ -77,7 +77,7 @@ export async function signUp(
   return { userId };
 }
 
-// The active org id on the current session — set by the /signup/region Server
+// The active org id on the current session — set by the /signup Server
 // Action once onboarding completes. Call after waiting for /dashboard.
 export async function activeOrgId(page: Page): Promise<string> {
   const orgId = (await getSession(page))?.session?.activeOrganizationId;
@@ -93,7 +93,7 @@ export async function activeOrgId(page: Page): Promise<string> {
 // For an authed user the region is FIXED to this app (region-resident auth) —
 // the picker shows it read-only, no choice to make — so we just submit.
 export async function onboard(page: Page): Promise<{ orgId: string }> {
-  await page.goto("/signup/region");
+  await page.goto("/signup");
   await page.getByRole("button", { name: /continue/i }).click();
   await page.waitForURL("**/dashboard", { timeout: 15_000 });
   return { orgId: await activeOrgId(page) };

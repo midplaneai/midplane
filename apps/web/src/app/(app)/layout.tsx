@@ -28,12 +28,12 @@ export default async function AuthenticatedLayout({
   if (!customer) {
     // Self-host: a null customer for an authed user means NOT a member (signed
     // up via an invite not yet accepted, or revoked). Route them to accept a
-    // still-pending invite, or to sign-in — never /signup/region, which is
+    // still-pending invite, or to sign-in — never /signup, which is
     // cloud-only and bounces to /dashboard, looping the membership gate.
     if (isSelfHost()) {
       redirect(await selfHostNonMemberRedirect(await getActorEmail()));
     }
-    redirect("/signup/region");
+    redirect("/signup");
   }
 
   // Self-host has one region and no region routing, so the region chrome is

@@ -164,7 +164,7 @@ export function resolveSelfHostAccess(opts: {
  *  signed up via an invite they haven't accepted, or whose invite was revoked.
  *  If a pending, unexpired invite still exists for their email, send them to
  *  accept it (the recovery path); otherwise they have no access — back to
- *  sign-in. Deliberately NOT /signup/region: that's cloud-only and would bounce
+ *  sign-in. Deliberately NOT /signup: that's cloud-only and would bounce
  *  to /dashboard, looping against the (app) layout's membership gate. */
 export async function selfHostNonMemberRedirect(
   email: string | null,

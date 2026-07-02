@@ -1,7 +1,7 @@
 # EU control-plane Fly app for midplane-cloud.
 #
 # Serves eu.app.midplane.ai (regional EU subdomain) AND app.midplane.ai
-# (apex — middleware renders /signup/region for unauth, 302s authed
+# (apex — middleware renders /signup for unauth, 302s authed
 # users to their regional subdomain). Talks ONLY to the EU Neon project
 # (DATABASE_URL_EU); DATABASE_URL_US is intentionally unset so a stray
 # getDb('us') call throws at the env-var read.
@@ -78,7 +78,7 @@ primary_region = "fra"
   internal_port = 3000
   force_https = true
   # Always-on: the control plane terminates customer MCP traffic AND
-  # serves the apex /signup/region picker. Cold starts on either would
+  # serves the apex /signup picker. Cold starts on either would
   # surface as broken pages on first visit.
   auto_stop_machines = "off"
   auto_start_machines = true
