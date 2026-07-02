@@ -902,9 +902,11 @@ export type MaskColumnTypes = Record<string, Record<string, string>>;
  *  `columnTypes` (optional, ET6/B5): when a masked column's Postgres type is known,
  *  reject a transform whose output type doesn't fit at authoring time. Absent/unknown
  *  types skip the check — query-time is the backstop. `mode` selects the domain
- *  strictness and DEFAULTS to `post_exec` (today's live enforcement) so a mask that is
- *  valid under the current post-exec masker (e.g. full-redact on an int) is never
- *  rejected at save; pass `source_rewrite` for a project running the rewrite path. */
+ *  strictness and DEFAULTS to `post_exec` (the retained result-set masker's domains —
+ *  full-redact/consistent-hash are type-free there). NOTE: masked DBs now run the
+ *  source-rewrite path unconditionally, so the masking SAVE PATH (setColumnMasks)
+ *  passes `source_rewrite` explicitly — the `post_exec` default only models the
+ *  engine's rollback masker and is the SSOT baseline the drift check pins. */
 export function validateColumnMasks(
   input: unknown,
   columnTypes?: MaskColumnTypes,

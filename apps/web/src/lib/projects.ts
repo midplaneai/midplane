@@ -968,10 +968,15 @@ export async function setColumnMasks(
   // Optional per-column Postgres types (ET6/B5). When supplied, a transform whose
   // output type doesn't fit the column (full-redact on an int, generalize:year on a
   // text column, …) is rejected here at save instead of surfacing as a query-time
-  // reject once source-rewrite is on. Omitted ⇒ current behavior (no type check).
+  // reject. Omitted ⇒ no type check (query-time stays the fail-closed backstop).
   columnTypes?: MaskColumnTypes,
 ): Promise<{ id: string } | null> {
-  const validation = validateColumnMasks(config, columnTypes);
+  // Enforce the SOURCE_REWRITE type domains: every DB that declares masks runs the
+  // source-rewrite path (the spawner emits `mask_source_rewrite: true` + a
+  // `requires_features` interlock, unconditionally), so a mask that's valid post-exec
+  // but not under source-rewrite (full-redact / consistent-hash on a non-text column)
+  // must be caught HERE — otherwise it passes save and the engine rejects it at spawn.
+  const validation = validateColumnMasks(config, columnTypes, "source_rewrite");
   if (!validation.ok) {
     const summary = validation.errors
       .map((e) => `${e.path}: ${e.message}`)
