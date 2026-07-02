@@ -94,7 +94,7 @@ fly secrets set --app midplane-web \
   MIDPLANE_PUBLIC_HOST_EU='eu.midplane.ai' \
   MIDPLANE_OSS_IMAGE='midplane/midplane:0.13.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
-  MIDPLANE_STAFF_USER_IDS='user_...'
+  MIDPLANE_STAFF_USER_IDS='<better-auth-user-id>'
 
 # 3. US app secrets — symmetric. NEVER set DATABASE_URL_EU /
 #    MIDPLANE_KMS_KEY_EU / etc. on this app.
@@ -112,7 +112,7 @@ fly secrets set --app midplane-web-us \
   MIDPLANE_PUBLIC_HOST_US='us.midplane.ai' \
   MIDPLANE_OSS_IMAGE='midplane/midplane:0.13.0' \
   INDEXER_TOKEN="$(openssl rand -hex 32)" \
-  MIDPLANE_STAFF_USER_IDS='user_...'
+  MIDPLANE_STAFF_USER_IDS='<better-auth-user-id>'
 
 # 4. DNS + TLS. Fly matches certs by SNI, so the apex needs its own
 #    cert on the EU app (NOT covered by eu.app.midplane.ai's cert).
@@ -141,6 +141,22 @@ fly certs add us.midplane.ai      --app midplane-web-us
 #   eu.midplane.ai      CNAME midplane-web.fly.dev     (web app serves /mcp)
 #   us.midplane.ai      CNAME midplane-web-us.fly.dev
 ```
+
+`MIDPLANE_STAFF_USER_IDS` is a comma-separated allowlist of Better Auth
+`user.id` values. It gates the internal admin surfaces — the `/admin` stats
+dashboard and the `POST /admin/customer/:id/region` staff endpoint — for
+operators who are not customer org members. It is read **per region host**, so
+set it on both `midplane-web` and `midplane-web-us` to reach `/admin` on either.
+
+To find your id, query the regional Neon DB where you signed up (`user` is a
+reserved word — keep the quotes):
+
+```sql
+SELECT id, email FROM "user" WHERE email = 'you@example.com';
+```
+
+The `id` is a random Better Auth identifier (no `user_` prefix — that shape was
+the pre-migration Clerk id). Paste it verbatim into the secret above.
 
 ## KMS mode for production credential storage
 
