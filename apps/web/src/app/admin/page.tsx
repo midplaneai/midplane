@@ -386,7 +386,7 @@ function ActivityCard({
               <span className="text-subtle"> / {totals.projects}</span>
             </div>
             <div className="mt-1 font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
-              projects with queries
+              active projects
             </div>
           </div>
           <div>
@@ -394,7 +394,7 @@ function ActivityCard({
               {totals.events.toLocaleString("en-US")}
             </div>
             <div className="mt-1 font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
-              audited queries
+              audit events
             </div>
           </div>
         </div>

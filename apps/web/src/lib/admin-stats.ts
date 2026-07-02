@@ -42,6 +42,11 @@ const PLANS = ["free", "pro", "team"] as const;
 /** Activity window for the "are agents actually querying?" pulse. */
 const ACTIVITY_WINDOW_DAYS = 7;
 
+/** Crockford-alphabet ULID shape — same guard lib/audit.ts uses before it
+ *  interpolates a customer id into a `SET LOCAL` (which can't be parameterized).
+ *  customers.id is always a ULID, but we re-check defensively before inlining. */
+const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
 export interface RecentSignup {
   email: string;
   region: Region;
@@ -152,6 +157,7 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
     // customer count ever grows past a few thousand.
     const customerRows = await db
       .select({
+        id: customers.id,
         email: customers.email,
         region: customers.region,
         plan: customers.plan,
@@ -181,13 +187,14 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
         .select({ status: subscriptionTable.status, c: count() })
         .from(subscriptionTable)
         .groupBy(subscriptionTable.status),
-      db
-        .select({
-          activeProjects: sql<number>`count(distinct ${auditEventsIndex.projectId})::int`,
-          events: count(),
-        })
-        .from(auditEventsIndex)
-        .where(gte(auditEventsIndex.ts, cutoff)),
+      // audit_events_index is the ONLY RLS table here (FORCE ROW LEVEL
+      // SECURITY, tenant-isolated on app.customer_id). Its aggregate needs the
+      // per-customer scoped path — see collectAuditActivity.
+      collectAuditActivity(
+        db,
+        customerRows.map((c) => c.id),
+        cutoff,
+      ),
     ]);
 
     // Each count query returns exactly one row; ?? 0 satisfies the strict
@@ -197,7 +204,7 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
     const projectCount = projectsRes[0]?.projectCount ?? 0;
     const databaseCount = databasesRes[0]?.databaseCount ?? 0;
     const activeAgents = agentsRes[0]?.activeAgents ?? 0;
-    const activity = activityRes[0];
+    const activity = activityRes; // { activeProjects, events }
 
     const billingPlanCounts = zeroPlanRecord();
     const planCounts = zeroPlanRecord();
@@ -240,12 +247,54 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
       compedCounts,
       subscriptionStatusCounts,
       recentSignups,
-      activeProjects: Number(activity?.activeProjects ?? 0),
-      events: Number(activity?.events ?? 0),
+      activeProjects: activity.activeProjects,
+      events: activity.events,
     };
   } catch (err) {
     return { region, reachable: false, error: shortError(err), ...empty };
   }
+}
+
+/** 7-day activity from the audit index, summed across customers.
+ *
+ *  audit_events_index is FORCE ROW LEVEL SECURITY with a tenant-isolation
+ *  policy (customer_id = current_setting('app.customer_id', true)). A
+ *  cross-customer aggregate that doesn't bind app.customer_id matches the NULL
+ *  setting and reads ZERO rows — so this MUST scope per customer. A SECURITY
+ *  DEFINER function can't rescue it either: FORCE RLS applies to the definer
+ *  unless that role holds BYPASSRLS, which Neon's non-superuser role can't be
+ *  granted. So we bind per customer inside one transaction (the same SET LOCAL
+ *  idiom lib/audit.ts uses) and sum. Every project belongs to exactly one
+ *  customer, so summed per-customer distinct-project counts equal the global
+ *  distinct count — no double-count. O(customers) statements in a single
+ *  transaction; fine at current scale, revisit if the customer count grows. */
+async function collectAuditActivity(
+  db: ReturnType<typeof getDb>,
+  customerIds: string[],
+  cutoff: Date,
+): Promise<{ activeProjects: number; events: number }> {
+  if (customerIds.length === 0) return { activeProjects: 0, events: 0 };
+  return db.transaction(async (tx) => {
+    let activeProjects = 0;
+    let events = 0;
+    for (const id of customerIds) {
+      // SET LOCAL can't be parameterized; the ULID guard makes the interpolation
+      // injection-safe. A malformed id (shouldn't happen — it's a PK) is skipped
+      // rather than binding an unvalidated string.
+      if (!ULID_RE.test(id)) continue;
+      await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${id}'`));
+      const rows = await tx
+        .select({
+          activeProjects: sql<number>`count(distinct ${auditEventsIndex.projectId})::int`,
+          events: sql<number>`count(*)::int`,
+        })
+        .from(auditEventsIndex)
+        .where(gte(auditEventsIndex.ts, cutoff));
+      activeProjects += Number(rows[0]?.activeProjects ?? 0);
+      events += Number(rows[0]?.events ?? 0);
+    }
+    return { activeProjects, events };
+  });
 }
 
 function addPlanRecords(
