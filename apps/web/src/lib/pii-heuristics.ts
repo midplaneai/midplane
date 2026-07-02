@@ -93,11 +93,12 @@ function isDateType(dataType: string): boolean {
   return DATE_TYPES.has(t) || t.startsWith("timestamp");
 }
 
-// Pick a type-valid default rule for a category. Text PII reveals the last 4
-// (partial) or fully redacts; a dob on a real date column generalizes to the
-// birth YEAR (identifier dies, age-cohort analytics survive). Anything without a
-// type-valid suggestion falls back to null-out (type-preserving for every type),
-// so a suggested mask NEVER silently changes a column's type or rejects.
+// Pick a type-valid default rule for a category. High-sensitivity identifiers
+// (SSN, card) and free-form PII (email, name, address, ip) FULLY redact; phone
+// keeps the last 4 (partial); a dob on a real date column generalizes to the
+// birth YEAR (identifier dies, age-cohort analytics survive). Anything without
+// a type-valid suggestion falls back to null-out (type-preserving for every
+// type), so a suggested mask NEVER silently changes a column's type or rejects.
 //
 // The floor stays on the deterministic, redaction-flavored transforms. We do
 // NOT auto-suggest `pseudonymize` (realistic fakes are a deliberate product
@@ -107,8 +108,16 @@ function isDateType(dataType: string): boolean {
 function suggestTransform(category: PiiCategory, dataType: string): MaskRule {
   const text = isTextType(dataType);
   switch (category) {
+    // Highest-sensitivity identifiers default to FULL redaction. Revealing
+    // even the last 4 of a card or SSN is a needless leak for a
+    // scan-suggested default — the user can still dial down to `partial` in
+    // the picker if they want the trailing digits.
     case "ssn":
     case "credit_card":
+      return text ? "full-redact" : "null-out";
+    // Phone keeps the last 4 (partial): lower sensitivity, and the trailing
+    // digits aid recognition ("is this the right record?") without exposing
+    // the number.
     case "phone":
       return text ? { t: "partial", keepEnd: 4 } : "null-out";
     case "dob":

@@ -601,9 +601,12 @@ export function ExposureScan({
         ) : null}
 
         <p className="rounded-lg border border-border border-l-2 border-l-[hsl(var(--warn))] bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
-          <strong className="font-medium text-foreground">Masking redacts results — it doesn&apos;t make the data secret.</strong>{" "}
-          A masked column is reliably replaced in what the agent reads back, but the agent can still
-          filter or sort on the real value (<span className="font-mono">where email = …</span>) to infer it.
+          <strong className="font-medium text-foreground">Masking rewrites the query at the source.</strong>{" "}
+          The agent reads, filters, and sorts on the masked value —{" "}
+          <span className="font-mono">where credit_card = &apos;4111…&apos;</span> matches
+          nothing, so the value can&apos;t be inferred by probing. Deterministic transforms
+          (consistent-hash, partial) still let rows be grouped or joined by whether they
+          share a value, but never expose the value itself.
         </p>
       </div>
     </TooltipProvider>
