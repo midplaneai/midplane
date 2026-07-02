@@ -30,11 +30,14 @@ export const dynamic = "force-dynamic";
 
 // Identity scopes are the Better Auth OIDC defaults — shown muted; the `mcp`
 // database scope is now expressed by the picker itself, not a bullet.
+// Each phrase carries its own verb so the joined list reads as a single
+// grammatical sentence after the "It will also " lead-in (a shared "read"
+// lead-in can't govern this mix of verb- and noun-phrases).
 const IDENTITY_COPY: Record<string, string> = {
   openid: "confirm your identity",
-  profile: "your name and profile image",
-  email: "your email address",
-  offline_access: "staying connected without re-approving each time",
+  profile: "read your name and profile image",
+  email: "read your email address",
+  offline_access: "stay connected without re-approving each time",
 };
 
 export default async function OAuthConsentPage({
@@ -118,19 +121,14 @@ export default async function OAuthConsentPage({
             </div>
 
             {identityScopes.length > 0 && (
-              <div className="flex w-full gap-3">
-                <span aria-hidden className="mt-0.5 font-mono text-subtle">
-                  ·
-                </span>
-                <p className="text-xs text-muted-foreground">
-                  It will also read{" "}
-                  {identityScopes
-                    .map((s) => IDENTITY_COPY[s])
-                    .join(", ")
-                    .replace(/, ([^,]*)$/, " and $1")}
-                  .
-                </p>
-              </div>
+              <p className="w-full text-xs text-muted-foreground">
+                It will also{" "}
+                {identityScopes
+                  .map((s) => IDENTITY_COPY[s])
+                  .join(", ")
+                  .replace(/, ([^,]*)$/, " and $1")}
+                .
+              </p>
             )}
 
             <ConsentForm
