@@ -7,6 +7,7 @@ import { TestDsnButton } from "@/components/projects/test-dsn-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { slugifyDatabaseName } from "@/lib/project-name";
 
 // Server-action result used by useActionState. On validation failure the
 // action returns `{ error }` and the form renders it inline. On success
@@ -32,6 +33,17 @@ export function NewProjectForm({
   // Remount key for TestDsnButton — editing the DSN clears a stale
   // "✓ reachable".
   const [testVersion, setTestVersion] = useState(0);
+  // Controlled fields. React 19 auto-resets a <form action={fn}> after the
+  // action returns WITHOUT redirecting — so an uncontrolled field is wiped on
+  // any validation-error return (bad name, plan cap), losing the user's
+  // pasted DSN. Driving both from state makes the values survive that reset.
+  // `name` also powers the live alias preview + blur-slugify below.
+  const [name, setName] = useState("");
+  const [dsn, setDsn] = useState("");
+  // The agent-facing alias the name resolves to (engine grammar). Empty when
+  // the input has no usable characters — the server then derives the alias
+  // from the DSN's database name, which the hint surfaces.
+  const alias = slugifyDatabaseName(name);
 
   return (
     <form action={formAction} className="space-y-6" noValidate>
@@ -42,17 +54,42 @@ export function NewProjectForm({
           name="name"
           type="text"
           autoComplete="off"
-          pattern="^[a-z][a-z0-9_\-]{0,31}$"
           maxLength={32}
           placeholder="analytics"
           className="font-mono"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          // Snap to the alias grammar on blur so the value that submits
+          // already matches what the engine accepts — no post-submit
+          // "must be lowercase…" bounce.
+          onBlur={() => setName((s) => slugifyDatabaseName(s))}
           disabled={pending}
         />
         <p className="text-xs text-muted-foreground">
-          The name your agent uses to address this database.{" "}
-          <strong className="font-medium text-foreground">Optional</strong> —
-          defaults to the database in your connection string.
+          The{" "}
+          <strong className="font-medium text-foreground">
+            handle your agent uses
+          </strong>{" "}
+          to address this database — lowercase letters, digits,{" "}
+          <span className="font-mono">_</span> or{" "}
+          <span className="font-mono">-</span>. Optional; defaults to the
+          database in your connection string.
         </p>
+        {name.trim() && name !== alias ? (
+          <p className="text-xs text-muted-foreground">
+            {alias ? (
+              <>
+                Saved as{" "}
+                <span className="font-mono text-foreground">{alias}</span>.
+              </>
+            ) : (
+              <>
+                No usable characters — defaults to your connection
+                string&apos;s database.
+              </>
+            )}
+          </p>
+        ) : null}
       </div>
       <div className="space-y-2">
         <Label htmlFor="dsn">DATABASE_URL</Label>
@@ -72,7 +109,13 @@ export function NewProjectForm({
           aria-invalid={state.error ? true : undefined}
           aria-describedby={state.error ? "new-project-error" : undefined}
           disabled={pending}
-          onChange={() => setTestVersion((v) => v + 1)}
+          value={dsn}
+          onChange={(e) => {
+            setDsn(e.target.value);
+            // Editing the DSN invalidates a prior "✓ reachable" — bump the
+            // key so the test status resets.
+            setTestVersion((v) => v + 1);
+          }}
         />
         <p className="text-xs text-muted-foreground">
           <strong className="font-medium text-foreground">Best practice:</strong>{" "}

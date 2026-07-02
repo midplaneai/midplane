@@ -13,3 +13,34 @@ export function normalizeName(name: string | null | undefined): string | null {
   if (trimmed.length === 0) return null;
   return trimmed.slice(0, MAX_PROJECT_NAME_LENGTH);
 }
+
+// The agent-facing database ALIAS grammar — the string the agent uses to
+// address a database. Mirror of the OSS engine's DB_NAME_RE, so a name
+// validated here also parses engine-side without a round-trip: a leading
+// lowercase letter, then up to 31 more of [a-z0-9_-] (1–32 chars total).
+// This is NOT the cosmetic project label (that's normalizeName above and
+// allows any string) — it's a machine identifier, so it's strict.
+//
+// Pure + dependency-free so the client form can slugify/preview with the
+// exact same rule the server enforces (no Drizzle/postgres in the bundle).
+export const DB_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+export function isValidDatabaseName(s: unknown): s is string {
+  return typeof s === "string" && DB_NAME_RE.test(s);
+}
+
+// Coerce arbitrary user input into a valid database alias: lowercase,
+// collapse illegal runs to a single "-", drop leading non-letters (the
+// grammar needs a leading letter), clamp to 32, and trim a trailing
+// separator. Returns "" when nothing valid survives (e.g. "123", "  ") —
+// callers treat empty as "no alias supplied" and fall back to the DSN's
+// database name. Shared by the create form (live preview) and
+// deriveDatabaseAlias (DSN path) so both produce identical slugs.
+export function slugifyDatabaseName(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[^a-z]+/, "")
+    .slice(0, 32)
+    .replace(/[-_]+$/, "");
+}

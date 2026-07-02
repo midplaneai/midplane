@@ -31,7 +31,12 @@ import {
 } from "@midplane-cloud/kms";
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 
-import { normalizeName } from "./project-name.ts";
+import {
+  DB_NAME_RE,
+  isValidDatabaseName,
+  normalizeName,
+  slugifyDatabaseName,
+} from "./project-name.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
 import { EVENT_TYPES } from "./audit.ts";
@@ -44,6 +49,7 @@ import {
 
 export {
   MAX_PROJECT_NAME_LENGTH,
+  isValidDatabaseName,
   normalizeName,
 } from "./project-name.ts";
 
@@ -156,13 +162,10 @@ export async function emitConfigAuditRow(
 // argument that defaults to this value.
 export const DEFAULT_DATABASE_NAME = "main";
 
-// Mirror of the OSS engine's DB_NAME_RE. A name validated here also
-// passes OSS-side parsing without an extra round-trip.
-const DB_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
-
-export function isValidDatabaseName(s: unknown): s is string {
-  return typeof s === "string" && DB_NAME_RE.test(s);
-}
+// DB_NAME_RE / isValidDatabaseName / slugifyDatabaseName now live in
+// ./project-name.ts (pure + client-safe) so the create form previews the
+// exact alias grammar the engine enforces. isValidDatabaseName is
+// re-exported above to keep this module's public surface unchanged.
 
 // Derive an agent-facing database alias from a Postgres DSN. Takes the URL's
 // database path (postgres://…/<db>), lowercases it, and sanitizes to
@@ -182,12 +185,7 @@ export function deriveDatabaseAlias(dsn: string): string {
   } catch {
     // Leave raw as-is on a malformed %-escape; the sanitizer below copes.
   }
-  const sanitized = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-") // illegal runs collapse to one separator
-    .replace(/^[^a-z]+/, "") // grammar requires a leading letter
-    .slice(0, 32)
-    .replace(/[-_]+$/, ""); // no trailing separator
+  const sanitized = slugifyDatabaseName(raw);
   return isValidDatabaseName(sanitized) ? sanitized : DEFAULT_DATABASE_NAME;
 }
 
