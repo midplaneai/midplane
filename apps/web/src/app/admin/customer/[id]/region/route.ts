@@ -27,6 +27,7 @@ import { customers, getDb } from "@midplane-cloud/db";
 
 import { getOrgContext } from "@/lib/org-context";
 import { bootRegion } from "@/lib/region-context";
+import { isStaffUserId } from "@/lib/staff";
 
 const Body = z.object({
   region: z.enum(["eu", "us"]),
@@ -35,16 +36,6 @@ const Body = z.object({
 const RATE_LIMIT_MAX = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const recentChanges = new Map<string, number[]>();
-
-function staffAllowlist(): Set<string> {
-  const raw = process.env.MIDPLANE_STAFF_USER_IDS ?? "";
-  return new Set(
-    raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0),
-  );
-}
 
 function checkRateLimit(actor: string): boolean {
   const now = Date.now();
@@ -67,8 +58,7 @@ export async function POST(
   if (!userId) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
-  const allow = staffAllowlist();
-  if (!allow.has(userId)) {
+  if (!isStaffUserId(userId)) {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
 
