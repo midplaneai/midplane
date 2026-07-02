@@ -42,10 +42,32 @@ const PLANS = ["free", "pro", "team"] as const;
 /** Activity window for the "are agents actually querying?" pulse. */
 const ACTIVITY_WINDOW_DAYS = 7;
 
+/** How many trailing days the signups sparkline spans. */
+const SIGNUP_SERIES_DAYS = 30;
+
+/** UTC calendar-day key ("YYYY-MM-DD") — the bucket for the signups series. */
+function dayKeyUTC(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 /** Crockford-alphabet ULID shape — same guard lib/audit.ts uses before it
  *  interpolates a customer id into a `SET LOCAL` (which can't be parameterized).
  *  customers.id is always a ULID, but we re-check defensively before inlining. */
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** One bucket of the trailing daily signups series. */
+export interface DayCount {
+  /** UTC "YYYY-MM-DD". */
+  day: string;
+  count: number;
+}
+
+/** Rolling counts at the three windows the growth tiles render. */
+export interface WindowCounts {
+  d1: number;
+  d7: number;
+  d30: number;
+}
 
 export interface RecentSignup {
   email: string;
@@ -84,6 +106,19 @@ export interface RegionStats {
   activeProjects: number;
   /** Total audited events in the activity window. */
   events: number;
+  /** New customers (orgs) in the trailing 1/7/30d, by customers.created_at. */
+  newCustomers: WindowCounts;
+  /** New users (accounts) in the trailing 1/7/30d, by user.created_at. */
+  newUsers: WindowCounts;
+  /** Agents SEEN (kind='url' tokens with a last_used_at) in the trailing 1/7d —
+   *  real usage recency, distinct from activeAgents (merely usable). */
+  agentsSeen: { d1: number; d7: number };
+  /** Entitled subscriptions set to cancel at period end (soft churn signal). */
+  pendingCancels: number;
+  /** Trials ending within the next 7 days (conversion / churn watch). */
+  trialsEndingSoon: number;
+  /** Sparse daily signup counts within the trailing SIGNUP_SERIES_DAYS. */
+  signupsByDay: DayCount[];
 }
 
 export interface AdminStats {
@@ -109,7 +144,16 @@ export interface AdminStats {
     subscriptionStatusCounts: Record<string, number>;
     activeProjects: number;
     events: number;
+    newCustomers: WindowCounts;
+    newUsers: WindowCounts;
+    agentsSeen: { d1: number; d7: number };
+    pendingCancels: number;
+    trialsEndingSoon: number;
   };
+  /** Trailing daily signups, filled + ordered oldest→newest, length =
+   *  signupWindowDays. Merged across reachable regions. */
+  signupsByDay: DayCount[];
+  signupWindowDays: number;
   recentSignups: RecentSignup[];
 }
 
@@ -142,14 +186,25 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
     recentSignups: [],
     activeProjects: 0,
     events: 0,
+    newCustomers: { d1: 0, d7: 0, d30: 0 },
+    newUsers: { d1: 0, d7: 0, d30: 0 },
+    agentsSeen: { d1: 0, d7: 0 },
+    pendingCancels: 0,
+    trialsEndingSoon: 0,
+    signupsByDay: [],
   };
 
   try {
     const db = getDb(region); // throws when DATABASE_URL_<region> is unset
 
-    const cutoff = new Date(
-      Date.now() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
-    );
+    const now = Date.now();
+    const cutoff = new Date(now - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const day = 24 * 60 * 60 * 1000;
+    const d1 = new Date(now - day);
+    const d7 = new Date(now - 7 * day);
+    const d30 = new Date(now - 30 * day);
+    const in7d = new Date(now + 7 * day);
+    const seriesFrom = now - SIGNUP_SERIES_DAYS * day;
 
     // Customer rows carry both plan axes and the signup timeline. At current
     // (pre-launch) scale fetching all of them and reducing in JS is cheaper to
@@ -173,6 +228,9 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
       databasesRes,
       agentsRes,
       subscriptionRows,
+      newUsersRes,
+      agentsSeenRes,
+      subSignalsRes,
       activityRes,
     ] = await Promise.all([
       db.select({ users: count() }).from(user),
@@ -187,6 +245,32 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
         .select({ status: subscriptionTable.status, c: count() })
         .from(subscriptionTable)
         .groupBy(subscriptionTable.status),
+      // New users by created_at (customers/orgs are computed from the rows we
+      // already fetched; users need their own windowed count). FILTER is a
+      // single index-friendly pass over the small user table.
+      db
+        .select({
+          d1: sql<number>`count(*) filter (where ${user.createdAt} >= ${d1})::int`,
+          d7: sql<number>`count(*) filter (where ${user.createdAt} >= ${d7})::int`,
+          d30: sql<number>`count(*) filter (where ${user.createdAt} >= ${d30})::int`,
+        })
+        .from(user),
+      // Agents SEEN: kind='url' tokens with a recent last_used_at. Usage
+      // recency, not the "usable" activeAgents count.
+      db
+        .select({
+          d1: sql<number>`count(*) filter (where ${mcpTokens.lastUsedAt} >= ${d1})::int`,
+          d7: sql<number>`count(*) filter (where ${mcpTokens.lastUsedAt} >= ${d7})::int`,
+        })
+        .from(mcpTokens)
+        .where(eq(mcpTokens.kind, "url")),
+      // Churn watch: entitled subs set to cancel, and trials ending ≤7d.
+      db
+        .select({
+          pendingCancels: sql<number>`count(*) filter (where ${subscriptionTable.cancelAtPeriodEnd} = true and ${subscriptionTable.status} in ('active','trialing'))::int`,
+          trialsEndingSoon: sql<number>`count(*) filter (where ${subscriptionTable.trialEnd} is not null and ${subscriptionTable.trialEnd} >= now() and ${subscriptionTable.trialEnd} < ${in7d})::int`,
+        })
+        .from(subscriptionTable),
       // audit_events_index is the ONLY RLS table here (FORCE ROW LEVEL
       // SECURITY, tenant-isolated on app.customer_id). Its aggregate needs the
       // per-customer scoped path — see collectAuditActivity.
@@ -205,17 +289,44 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
     const databaseCount = databasesRes[0]?.databaseCount ?? 0;
     const activeAgents = agentsRes[0]?.activeAgents ?? 0;
     const activity = activityRes; // { activeProjects, events }
+    const newUsers: WindowCounts = {
+      d1: Number(newUsersRes[0]?.d1 ?? 0),
+      d7: Number(newUsersRes[0]?.d7 ?? 0),
+      d30: Number(newUsersRes[0]?.d30 ?? 0),
+    };
+    const agentsSeen = {
+      d1: Number(agentsSeenRes[0]?.d1 ?? 0),
+      d7: Number(agentsSeenRes[0]?.d7 ?? 0),
+    };
+    const pendingCancels = Number(subSignalsRes[0]?.pendingCancels ?? 0);
+    const trialsEndingSoon = Number(subSignalsRes[0]?.trialsEndingSoon ?? 0);
 
     const billingPlanCounts = zeroPlanRecord();
     const planCounts = zeroPlanRecord();
     const compedCounts = zeroPlanRecord();
+    // New-customer windows + the daily signup series come from the rows we
+    // already fetched — no extra query. Bucket by UTC day for the series.
+    const newCustomers: WindowCounts = { d1: 0, d7: 0, d30: 0 };
+    const signupBuckets = new Map<string, number>();
     for (const c of customerRows) {
       const billing = (c.plan ?? "free") as Plan;
       const effective = (c.planOverride ?? c.plan ?? "free") as Plan;
       billingPlanCounts[billing] += 1;
       planCounts[effective] += 1;
       if (c.planOverride) compedCounts[c.planOverride as Plan] += 1;
+
+      const t = c.createdAt.getTime();
+      if (t >= d30.getTime()) newCustomers.d30 += 1;
+      if (t >= d7.getTime()) newCustomers.d7 += 1;
+      if (t >= d1.getTime()) newCustomers.d1 += 1;
+      if (t >= seriesFrom) {
+        const k = dayKeyUTC(c.createdAt);
+        signupBuckets.set(k, (signupBuckets.get(k) ?? 0) + 1);
+      }
     }
+    const signupsByDay: DayCount[] = [...signupBuckets.entries()].map(
+      ([day, count]) => ({ day, count }),
+    );
 
     const subscriptionStatusCounts: Record<string, number> = {};
     for (const row of subscriptionRows) {
@@ -249,6 +360,12 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
       recentSignups,
       activeProjects: activity.activeProjects,
       events: activity.events,
+      newCustomers,
+      newUsers,
+      agentsSeen,
+      pendingCancels,
+      trialsEndingSoon,
+      signupsByDay,
     };
   } catch (err) {
     return { region, reachable: false, error: shortError(err), ...empty };
@@ -325,7 +442,15 @@ export async function collectAdminStats(hostRegion: Region): Promise<AdminStats>
     subscriptionStatusCounts: {},
     activeProjects: 0,
     events: 0,
+    newCustomers: { d1: 0, d7: 0, d30: 0 },
+    newUsers: { d1: 0, d7: 0, d30: 0 },
+    agentsSeen: { d1: 0, d7: 0 },
+    pendingCancels: 0,
+    trialsEndingSoon: 0,
   };
+
+  // Merged sparse day→count map for the signups series (reachable regions).
+  const signupBuckets = new Map<string, number>();
 
   for (const r of perRegion) {
     if (!r.reachable) continue;
@@ -337,12 +462,23 @@ export async function collectAdminStats(hostRegion: Region): Promise<AdminStats>
     totals.activeAgents += r.activeAgents;
     totals.activeProjects += r.activeProjects;
     totals.events += r.events;
+    totals.pendingCancels += r.pendingCancels;
+    totals.trialsEndingSoon += r.trialsEndingSoon;
+    for (const k of ["d1", "d7", "d30"] as const) {
+      totals.newCustomers[k] += r.newCustomers[k];
+      totals.newUsers[k] += r.newUsers[k];
+    }
+    totals.agentsSeen.d1 += r.agentsSeen.d1;
+    totals.agentsSeen.d7 += r.agentsSeen.d7;
     addPlanRecords(totals.billingPlanCounts, r.billingPlanCounts);
     addPlanRecords(totals.planCounts, r.planCounts);
     addPlanRecords(totals.compedCounts, r.compedCounts);
     for (const [status, c] of Object.entries(r.subscriptionStatusCounts)) {
       totals.subscriptionStatusCounts[status] =
         (totals.subscriptionStatusCounts[status] ?? 0) + c;
+    }
+    for (const { day, count } of r.signupsByDay) {
+      signupBuckets.set(day, (signupBuckets.get(day) ?? 0) + count);
     }
   }
   totals.payingCustomers =
@@ -353,13 +489,25 @@ export async function collectAdminStats(hostRegion: Region): Promise<AdminStats>
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
     .slice(0, 25);
 
+  const generatedAt = new Date();
+  // Fill the series to a dense, ordered oldest→newest axis so the chart renders
+  // gaps as empty bars (not skipped days). Anchored on generatedAt (UTC days).
+  const day = 24 * 60 * 60 * 1000;
+  const signupsByDay: DayCount[] = [];
+  for (let i = SIGNUP_SERIES_DAYS - 1; i >= 0; i--) {
+    const key = dayKeyUTC(new Date(generatedAt.getTime() - i * day));
+    signupsByDay.push({ day: key, count: signupBuckets.get(key) ?? 0 });
+  }
+
   return {
-    generatedAt: new Date(),
+    generatedAt,
     activityWindowDays: ACTIVITY_WINDOW_DAYS,
     hostRegion,
     perRegion,
     complete: perRegion.every((r) => r.reachable),
     totals,
+    signupsByDay,
+    signupWindowDays: SIGNUP_SERIES_DAYS,
     recentSignups,
   };
 }

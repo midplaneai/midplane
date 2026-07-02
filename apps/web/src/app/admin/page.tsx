@@ -13,8 +13,10 @@ import { RegionBadge } from "@/components/ui/region-badge";
 import {
   collectAdminStats,
   type AdminStats,
+  type DayCount,
   type RecentSignup,
   type RegionStats,
+  type WindowCounts,
 } from "@/lib/admin-stats";
 import { formatRelative } from "@/lib/format";
 import { getOrgContext } from "@/lib/org-context";
@@ -107,6 +109,10 @@ export default async function AdminPage() {
         />
       </div>
 
+      <div className="mt-6">
+        <GrowthCard stats={stats} />
+      </div>
+
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <PlanMixCard totals={totals} mrr={mrr} compedTotal={compedTotal} />
         <SubscriptionsCard totals={totals} />
@@ -175,6 +181,99 @@ function StatTile({
         {label}
       </div>
     </Card>
+  );
+}
+
+// --- growth over time --------------------------------------------------------
+
+function GrowthCard({ stats }: { stats: AdminStats }) {
+  const { totals } = stats;
+  const newInWindow = stats.signupsByDay.reduce((n, d) => n + d.count, 0);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>signups · last {stats.signupWindowDays}d</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-2xl tabular-nums text-foreground">
+            {newInWindow}
+          </span>
+          <span className="font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
+            new customers · {totals.customers} all-time
+          </span>
+        </div>
+
+        <SignupsChart data={stats.signupsByDay} />
+
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-t border-border pt-4 sm:grid-cols-3">
+          <Delta label="new customers" w={totals.newCustomers} />
+          <Delta label="new users" w={totals.newUsers} />
+          <div>
+            <div className="font-mono text-sm tabular-nums text-foreground">
+              {totals.agentsSeen.d1}
+              <span className="text-subtle"> · {totals.agentsSeen.d7}</span>
+            </div>
+            <div className="mt-1 font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
+              agents seen · 24h·7d
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Server-rendered daily bar chart — no client charting lib, matching the
+// mono/minimal aesthetic. Container is fixed-height + items-stretch so each
+// column is full height and the inner bar's height % resolves against it.
+function SignupsChart({ data }: { data: DayCount[] }) {
+  const max = Math.max(1, ...data.map((d) => d.count));
+  const first = data[0]?.day;
+  const last = data[data.length - 1]?.day;
+  return (
+    <div>
+      <div className="flex h-20 items-stretch gap-px">
+        {data.map((d) => (
+          <div
+            key={d.day}
+            className="group flex flex-1 items-end"
+            title={`${d.day}: ${d.count} signup${d.count === 1 ? "" : "s"}`}
+          >
+            <div
+              className={cn(
+                "w-full transition-colors",
+                d.count > 0
+                  ? "bg-[hsl(var(--brand)/0.65)] group-hover:bg-[hsl(var(--brand))]"
+                  : "bg-transparent",
+              )}
+              style={{ height: `${(d.count / max) * 100}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 flex justify-between border-t border-border pt-1.5 font-mono text-[10px] text-subtle">
+        {/* MM-DD endpoints — enough to anchor the axis without labeling all 30 */}
+        <span>{first?.slice(5)}</span>
+        <span>{last?.slice(5)}</span>
+      </div>
+    </div>
+  );
+}
+
+// One growth stat rendered as three trailing windows (24h · 7d · 30d).
+function Delta({ label, w }: { label: string; w: WindowCounts }) {
+  return (
+    <div>
+      <div className="font-mono text-sm tabular-nums text-foreground">
+        {w.d1}
+        <span className="text-subtle"> · {w.d7}</span>
+        <span className="text-subtle"> · {w.d30}</span>
+      </div>
+      <div className="mt-1 font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
+        {label} · 24h·7d·30d
+      </div>
+    </div>
   );
 }
 
@@ -268,19 +367,41 @@ function SubscriptionsCard({ totals }: { totals: AdminStats["totals"] }) {
             No subscription rows yet.
           </p>
         ) : (
-          <ul className="space-y-2">
-            {entries.map(([status, c]) => (
-              <li
-                key={status}
-                className="flex items-center justify-between gap-3"
+          <>
+            <ul className="space-y-2">
+              {entries.map(([status, c]) => (
+                <li
+                  key={status}
+                  className="flex items-center justify-between gap-3"
+                >
+                  <Badge variant={statusVariant(status)}>{status}</Badge>
+                  <span className="font-mono text-sm tabular-nums text-foreground">
+                    {c}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
+              <span
+                className={
+                  totals.pendingCancels > 0 ? "text-[hsl(var(--warn))]" : undefined
+                }
               >
-                <Badge variant={statusVariant(status)}>{status}</Badge>
-                <span className="font-mono text-sm tabular-nums text-foreground">
-                  {c}
-                </span>
-              </li>
-            ))}
-          </ul>
+                {totals.pendingCancels}
+              </span>{" "}
+              set to cancel ·{" "}
+              <span
+                className={
+                  totals.trialsEndingSoon > 0
+                    ? "text-[hsl(var(--warn))]"
+                    : undefined
+                }
+              >
+                {totals.trialsEndingSoon}
+              </span>{" "}
+              trial{totals.trialsEndingSoon === 1 ? "" : "s"} ending ≤7d
+            </div>
+          </>
         )}
       </CardContent>
     </Card>
