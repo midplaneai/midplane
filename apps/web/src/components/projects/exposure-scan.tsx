@@ -12,7 +12,8 @@
 // type-gates each rule (partial → text, generalize → date/numeric), matching the
 // engine's fail-closed input-type domains.
 
-import { useEffect, useState, useTransition } from "react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import {
   MASK_TRANSFORMS,
@@ -20,6 +21,7 @@ import {
   maskRuleLabel,
   PSEUDONYMIZE_KINDS,
   type IgnoredColumnsConfig,
+  type MaskColumnTypes,
   type MaskRule,
   type MaskTransformKind,
   type PseudonymizeKind,
@@ -28,11 +30,18 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 interface PiiMatch {
   category: string;
@@ -167,6 +176,7 @@ export function ExposureScan({
   initialIgnored,
   onSave,
   onSaveIgnored,
+  onLoadColumnTypes,
 }: {
   projectId: string;
   db: string;
@@ -178,6 +188,12 @@ export function ExposureScan({
   initialIgnored: IgnoredColumnsConfig;
   onSave: (masks: ColumnMasks) => Promise<SaveResult>;
   onSaveIgnored: (ignored: IgnoredColumnsConfig) => Promise<SaveResult>;
+  /** Best-effort lazy resolver for the DB's column types, so the transform picker
+   *  can gate type-specific transforms on masked-but-unscanned columns (which render
+   *  with an unknown type) WITHOUT a full scan. Called once on mount when masks
+   *  exist; null on an unreachable DB (picker stays permissive, save-reject is the
+   *  floor). A run scan supersedes it (scan types are authoritative). */
+  onLoadColumnTypes?: () => Promise<MaskColumnTypes | null>;
 }) {
   // Seed from persisted state so masked + dismissed columns render (and stay
   // manageable) with NO scan run; the scan only adds the live "exposed" rows.
@@ -186,10 +202,46 @@ export function ExposureScan({
   const [ignored, setIgnored] = useState<IgnoredColumnsConfig>(initialIgnored);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Changes apply immediately (optimistic) — this surfaces WHICH state we're in.
+  // `saving` while the write is in flight, then `applied` for a beat so the user
+  // sees the change landed (the row itself no longer moves, so the badge flip is
+  // easy to miss without this). Auto-resets to `idle`; a new save re-arms it.
+  const [status, setStatus] = useState<"idle" | "saving" | "applied">("idle");
+  // `${table}.${column}` of the row whose save is in flight, for a per-row spinner.
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  // Lazily-resolved column types (schema.table → col → pg type) so the picker can
+  // gate type-specific transforms on masked-but-unscanned columns. Fed into
+  // mergeRows as a fallback; a run scan's types take precedence.
+  const [loadedTypes, setLoadedTypes] = useState<MaskColumnTypes>({});
+  const typesFetchedRef = useRef(false);
   const [showDismissed, setShowDismissed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [addTable, setAddTable] = useState("");
   const [addColumn, setAddColumn] = useState("");
+
+  useEffect(() => {
+    if (status !== "applied") return;
+    const t = setTimeout(() => setStatus("idle"), 2200);
+    return () => clearTimeout(t);
+  }, [status]);
+
+  // Resolve column types once, the first render where a mask exists — so the picker
+  // gates masked-but-unscanned columns (unknown type → the whole reason `noise` was
+  // selectable on a text column). Skipped when nothing is masked (no DB probe on an
+  // unmasked project). Fail-open: a null result leaves types unknown and the
+  // save-time reject remains the backstop.
+  useEffect(() => {
+    if (typesFetchedRef.current || !onLoadColumnTypes) return;
+    if (Object.keys(masks).length === 0) return;
+    typesFetchedRef.current = true;
+    onLoadColumnTypes()
+      .then((t) => {
+        if (t) setLoadedTypes(t);
+      })
+      .catch(() => {
+        // best-effort — leave types unknown, save-reject is the floor
+      });
+  }, [onLoadColumnTypes, masks]);
 
   // On-demand: introspection hits the live DB, so we only run on an explicit
   // click (initial state is `idle`). Switching DB remounts (parent `key`), so
@@ -228,33 +280,55 @@ export function ExposureScan({
   // Optimistically apply `next`, persist, and revert on failure. Masks and
   // dismissals are independent JSONB columns with independent save actions, so
   // each has its own optimistic state + revert.
-  function commitMasks(next: ColumnMasks) {
+  function commitMasks(next: ColumnMasks, key: string) {
     const prev = masks;
     setMasks(next);
     setSaveError(null);
+    setStatus("saving");
+    setPendingKey(key);
     startTransition(async () => {
-      const res = await onSave(next);
+      // The action is written to RETURN {ok:false} for user errors, but a throw
+      // (an unexpected server error, a network drop) would otherwise surface as
+      // the Next runtime-error overlay. Catch it → revert + inline error, no crash.
+      const res = await onSave(next).catch(
+        (): SaveResult => ({ ok: false, error: "Couldn’t save — please retry." }),
+      );
+      setPendingKey(null);
       if (!res.ok) {
         setMasks(prev);
         setSaveError(res.error);
+        setStatus("idle");
+      } else {
+        setStatus("applied");
       }
     });
   }
-  function commitIgnored(next: IgnoredColumnsConfig) {
+  function commitIgnored(next: IgnoredColumnsConfig, key: string) {
     const prev = ignored;
     setIgnored(next);
     setSaveError(null);
+    setStatus("saving");
+    setPendingKey(key);
     startTransition(async () => {
-      const res = await onSaveIgnored(next);
+      const res = await onSaveIgnored(next).catch(
+        (): SaveResult => ({ ok: false, error: "Couldn’t save — please retry." }),
+      );
+      setPendingKey(null);
       if (!res.ok) {
         setIgnored(prev);
         setSaveError(res.error);
+        setStatus("idle");
+      } else {
+        setStatus("applied");
       }
     });
   }
 
   function setMask(table: string, column: string, rule: MaskRule) {
-    commitMasks({ ...masks, [table]: { ...(masks[table] ?? {}), [column]: rule } });
+    commitMasks(
+      { ...masks, [table]: { ...(masks[table] ?? {}), [column]: rule } },
+      `${table}.${column}`,
+    );
   }
   function unmask(table: string, column: string) {
     const tableMasks = { ...(masks[table] ?? {}) };
@@ -262,19 +336,19 @@ export function ExposureScan({
     const next = { ...masks };
     if (Object.keys(tableMasks).length === 0) delete next[table];
     else next[table] = tableMasks;
-    commitMasks(next);
+    commitMasks(next, `${table}.${column}`);
   }
   function ignore(table: string, column: string) {
     const list = ignored[table] ?? [];
     if (list.includes(column)) return;
-    commitIgnored({ ...ignored, [table]: [...list, column] });
+    commitIgnored({ ...ignored, [table]: [...list, column] }, `${table}.${column}`);
   }
   function restore(table: string, column: string) {
     const list = (ignored[table] ?? []).filter((c) => c !== column);
     const next = { ...ignored };
     if (list.length === 0) delete next[table];
     else next[table] = list;
-    commitIgnored(next);
+    commitIgnored(next, `${table}.${column}`);
   }
   function addCustom() {
     const t = addTable.trim();
@@ -293,15 +367,20 @@ export function ExposureScan({
   // control at the top, not a gate on the whole surface — masked columns stay
   // visible and editable in every scan state (idle / loading / error).
   const scanColumns = scan.kind === "ok" ? scan.columns : [];
-  const rows = mergeRows(scanColumns, masks, ignored);
+  const rows = mergeRows(scanColumns, masks, ignored, loadedTypes);
   const maskedRows = rows.filter((r) => r.masked !== null);
   const exposedRows = rows.filter(
     (r) => r.masked === null && !r.ignored && r.category !== null,
   );
   const dismissedRows = rows.filter((r) => r.masked === null && r.ignored);
-  // Masked-first, then the still-exposed action items (each group already sorted
-  // by table → column). The detected badge keeps the two visually distinct.
-  const tableRows = [...maskedRows, ...exposedRows];
+  // Stable table → column order (mergeRows already sorts) so masked and exposed
+  // rows interleave IN PLACE — masking a column flips its badge + controls where
+  // it sits instead of yanking it to the top. Masked-vs-exposed stays legible via
+  // the detected badge + the warn row tint, not row position. Dismissed rows live
+  // in their own collapsed section below.
+  const tableRows = rows.filter(
+    (r) => r.masked !== null || (!r.ignored && r.category !== null),
+  );
   const showMeta =
     scan.kind === "ok" || maskedRows.length > 0 || dismissedRows.length > 0;
   // Masking is unenforceable without the deployment salt — block ADDING masks
@@ -394,13 +473,32 @@ export function ExposureScan({
               )}
             </div>
           </div>
-          {showMeta ? (
-            <p className="font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
-              {scan.kind === "ok" ? `scanned ${scan.scannedColumns} columns · ` : ""}
-              {maskedRows.length} masked
-              {dismissedRows.length > 0 ? ` · ${dismissedRows.length} dismissed` : ""}
-              {pending ? " · saving…" : ""}
-            </p>
+          {showMeta || status !== "idle" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {showMeta ? (
+                <p className="font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
+                  {scan.kind === "ok" ? `scanned ${scan.scannedColumns} columns · ` : ""}
+                  {maskedRows.length} masked
+                  {dismissedRows.length > 0 ? ` · ${dismissedRows.length} dismissed` : ""}
+                </p>
+              ) : null}
+              {/* Immediate-apply status. The write lands optimistically, so this is
+                  the "did it take?" signal: `updating` in flight, `applied` for a
+                  beat after. aria-live announces the transition to screen readers. */}
+              <span aria-live="polite">
+                {status === "saving" ? (
+                  <Badge variant="default">
+                    <Loader2 aria-hidden className="h-2.5 w-2.5 motion-safe:animate-spin" />
+                    updating
+                  </Badge>
+                ) : status === "applied" ? (
+                  <Badge variant="allow" withDot={false}>
+                    <Check aria-hidden className="h-2.5 w-2.5" />
+                    applied
+                  </Badge>
+                ) : null}
+              </span>
+            </div>
           ) : null}
           {saveError ? (
             <p className="text-xs text-[hsl(var(--deny))]">Couldn&apos;t save: {saveError}</p>
@@ -420,9 +518,12 @@ export function ExposureScan({
                 </tr>
               </thead>
               <tbody>
-                {tableRows.map((r) => (
+                {tableRows.map((r) => {
+                  const rowKey = `${r.table}.${r.column}`;
+                  const rowPending = pendingKey === rowKey;
+                  return (
                   <tr
-                    key={`${r.table}.${r.column}`}
+                    key={rowKey}
                     className={`border-b border-card ${r.masked === null && r.category !== null ? "bg-[hsl(var(--warn)/0.05)]" : ""}`}
                   >
                     <td className="px-3.5 py-2.5 font-mono text-xs text-foreground">
@@ -452,46 +553,55 @@ export function ExposureScan({
                         </span>
                       )}
                     </td>
-                    <td className="px-3.5 py-2.5 text-right">
-                      {r.masked !== null ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={pending}
-                          onClick={() => unmask(r.table, r.column)}
-                        >
-                          Unmask
-                        </Button>
-                      ) : r.category !== null ? (
-                        <div className="flex items-center justify-end gap-1.5">
-                          {r.suggested ? (
-                            <Button
-                              size="sm"
-                              disabled={maskDisabled}
-                              title={
-                                !maskingConfigured
-                                  ? "Masking isn’t configured (set MIDPLANE_MASK_SALT_MASTER)"
-                                  : undefined
-                              }
-                              onClick={() => setMask(r.table, r.column, r.suggested!)}
-                            >
-                              Mask
-                            </Button>
-                          ) : null}
+                    <td className="px-3.5 py-2.5">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {rowPending ? (
+                          <Loader2
+                            aria-label="saving"
+                            className="h-3 w-3 shrink-0 text-subtle motion-safe:animate-spin"
+                          />
+                        ) : null}
+                        {r.masked !== null ? (
                           <Button
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
                             disabled={pending}
-                            title="Not personal data — stop flagging this column"
-                            onClick={() => ignore(r.table, r.column)}
+                            onClick={() => unmask(r.table, r.column)}
                           >
-                            Ignore
+                            Unmask
                           </Button>
-                        </div>
-                      ) : null}
+                        ) : r.category !== null ? (
+                          <>
+                            {r.suggested ? (
+                              <Button
+                                size="sm"
+                                disabled={maskDisabled}
+                                title={
+                                  !maskingConfigured
+                                    ? "Masking isn’t configured (set MIDPLANE_MASK_SALT_MASTER)"
+                                    : undefined
+                                }
+                                onClick={() => setMask(r.table, r.column, r.suggested!)}
+                              >
+                                Mask
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={pending}
+                              title="Not personal data — stop flagging this column"
+                              onClick={() => ignore(r.table, r.column)}
+                            >
+                              Ignore
+                            </Button>
+                          </>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -641,11 +751,13 @@ function defaultRuleForKind(kind: MaskTransformKind, dataType: string): MaskRule
   }
 }
 
-// The transform + params editor. A kind <select> (type-gated: partial → text,
-// generalize → date/numeric) plus per-kind param inputs. Param inputs commit on
-// change for selects and on blur for free-text/number fields (each save respawns
-// the engine, so we don't persist per keystroke). An unknown column type
-// (dataType === "", a masked-but-unscanned column) leaves every kind enabled.
+// The transform + params editor. A rich kind picker (TransformPicker — each
+// option carries a plain-language description, a before→after example, and a
+// keeps/breaks-joins tag; type-gated: partial → text, generalize → date/numeric)
+// plus per-kind param inputs. Param inputs commit on change for selects and on
+// blur for free-text/number fields (each save respawns the engine, so we don't
+// persist per keystroke). An unknown column type (dataType === "", a
+// masked-but-unscanned column) leaves every kind enabled.
 function TransformEditor({
   value,
   dataType,
@@ -657,44 +769,17 @@ function TransformEditor({
   disabled: boolean;
   onChange: (rule: MaskRule) => void;
 }) {
-  const unknownType = dataType === "";
-  const textOk = unknownType || isTextType(dataType);
-  const numericOk = unknownType || isNumericType(dataType);
-  const dateOk = unknownType || isDateType(dataType);
-  const generalizeOk = dateOk || numericOk;
+  const dateOk = dataType === "" || isDateType(dataType);
   const kind = maskRuleKind(value);
-
-  function changeKind(next: MaskTransformKind) {
-    onChange(defaultRuleForKind(next, dataType));
-  }
-
-  const gateNote = (k: MaskTransformKind): string => {
-    if ((k === "partial" || k === "pseudonymize") && !textOk) return " (text only)";
-    if (k === "generalize" && !generalizeOk) return " (date / numeric only)";
-    if (k === "noise" && !numericOk) return " (numeric only)";
-    return "";
-  };
-  const gateDisabled = (k: MaskTransformKind): boolean =>
-    ((k === "partial" || k === "pseudonymize") && !textOk) ||
-    (k === "generalize" && !generalizeOk) ||
-    (k === "noise" && !numericOk);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <select
-        className={selectClass}
-        value={kind}
+      <TransformPicker
+        value={value}
+        dataType={dataType}
         disabled={disabled}
-        aria-label="mask transform"
-        onChange={(e) => changeKind(e.target.value as MaskTransformKind)}
-      >
-        {MASK_TRANSFORMS.map((k) => (
-          <option key={k} value={k} disabled={gateDisabled(k)}>
-            {k}
-            {gateNote(k)}
-          </option>
-        ))}
-      </select>
+        onChange={onChange}
+      />
 
       {kind === "partial" && typeof value !== "string" && value.t === "partial" ? (
         <PartialParams value={value} disabled={disabled} onChange={onChange} />
@@ -718,6 +803,135 @@ function TransformEditor({
         <NoiseParams value={value} disabled={disabled} onChange={onChange} />
       ) : null}
     </div>
+  );
+}
+
+// Plain-language catalog for the transform picker: what each transform does and
+// a concrete before→after. (The join-preservation tradeoff isn't surfaced per-row
+// — it's a second-order concern that lived louder than it earned; it stays in the
+// persistent footnote below the table and on the `noise` param's own badge.)
+const TRANSFORM_CATALOG: Record<
+  MaskTransformKind,
+  { description: string; example: string }
+> = {
+  "full-redact": {
+    description: "Replaces the whole value with a fixed mask.",
+    example: "john@acme.com → ••••••",
+  },
+  "null-out": {
+    description: "Returns NULL for every row.",
+    example: "john@acme.com → NULL",
+  },
+  "consistent-hash": {
+    description: "Hashes the value — the same input always hashes the same.",
+    example: "john@acme.com → a3f9c2…",
+  },
+  partial: {
+    description: "Keeps a few leading or trailing characters, masks the rest.",
+    example: "4111 1111 1111 1111 → •••• 1111",
+  },
+  generalize: {
+    description: "Coarsens to a bucket — a date unit or a numeric band.",
+    example: "1994-03-12 → 1994",
+  },
+  pseudonymize: {
+    description: "Swaps in a realistic, deterministic fake of the same shape.",
+    example: "john@acme.com → mia@example.org",
+  },
+  noise: {
+    description: "Adds ±random jitter to a number.",
+    example: "84500 → 88120",
+  },
+};
+
+const pickerTriggerClass =
+  "inline-flex min-w-[9.5rem] items-center justify-between gap-2 rounded-none border border-input bg-background px-2 py-1 font-mono text-[11px] text-foreground hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))] disabled:opacity-50";
+
+// The kind picker. Replaces the bare native <select> (which couldn't explain a
+// jargon name like `consistent-hash`) with a dropdown whose rows spell out the
+// meaning + a before→after example. Options that don't apply to THIS column's
+// type (partial on an int, generalize on text, …) are shown dimmed + unclickable
+// with a short "why" tag ("text only") — the engine fail-closes on a type
+// mismatch, so we never offer one. Re-selecting the current kind is a no-op so it
+// never clobbers tuned params (keepEnd, bucket width, …).
+function TransformPicker({
+  value,
+  dataType,
+  disabled,
+  onChange,
+}: {
+  value: MaskRule;
+  dataType: string;
+  disabled: boolean;
+  onChange: (rule: MaskRule) => void;
+}) {
+  const unknownType = dataType === "";
+  const textOk = unknownType || isTextType(dataType);
+  const numericOk = unknownType || isNumericType(dataType);
+  const dateOk = unknownType || isDateType(dataType);
+  const generalizeOk = dateOk || numericOk;
+  const kind = maskRuleKind(value);
+
+  const gateReason = (k: MaskTransformKind): string | null => {
+    if ((k === "partial" || k === "pseudonymize") && !textOk) return "text only";
+    if (k === "generalize" && !generalizeOk) return "date / numeric only";
+    if (k === "noise" && !numericOk) return "numeric only";
+    return null;
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={disabled}>
+        <button type="button" aria-label="mask transform" className={pickerTriggerClass}>
+          <span>{kind}</span>
+          <ChevronDown aria-hidden className="h-3 w-3 text-subtle" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[340px] p-0">
+        {MASK_TRANSFORMS.map((k) => {
+          const cat = TRANSFORM_CATALOG[k];
+          const reason = gateReason(k);
+          const gated = reason !== null;
+          const selected = k === kind;
+          return (
+            <DropdownMenuItem
+              key={k}
+              disabled={gated}
+              onSelect={() => {
+                if (!selected) onChange(defaultRuleForKind(k, dataType));
+              }}
+              // --accent === --popover in this theme, so the primitive's default
+              // focus:bg-accent is invisible on a popover; lift to --border-strong
+              // for a hover/keyboard-highlight that actually reads. Hairline
+              // dividers between rows (last row drops its border).
+              className="items-start gap-2.5 border-b border-border px-3 py-2.5 last:border-b-0 focus:bg-[hsl(var(--border-strong))] data-[highlighted]:bg-[hsl(var(--border-strong))]"
+            >
+              <Check
+                aria-hidden
+                className={cn(
+                  "mt-[3px] h-3.5 w-3.5 shrink-0 text-[hsl(var(--brand))]",
+                  selected ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-xs text-foreground">{k}</span>
+                  {gated ? (
+                    <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.04em] text-subtle">
+                      {reason}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  {cat.description}
+                </p>
+                <p className="font-mono text-[11px] text-subtle">{cat.example}</p>
+              </div>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -950,6 +1164,9 @@ function mergeRows(
   columns: ScannedColumn[],
   masks: ColumnMasks,
   ignored: IgnoredColumnsConfig,
+  // Lazily-resolved types, used ONLY to fill the dataType of a masked/dismissed
+  // column the scan didn't cover — a scanned column's own dataType is authoritative.
+  types: MaskColumnTypes = {},
 ): Row[] {
   const ignoredSet = new Set<string>();
   for (const [table, cols] of Object.entries(ignored)) {
@@ -978,7 +1195,7 @@ function mergeRows(
         byKey.set(key, {
           table,
           column,
-          dataType: "",
+          dataType: types[table]?.[column] ?? "",
           category: null,
           confidence: null,
           masked: rule,
@@ -996,7 +1213,7 @@ function mergeRows(
         byKey.set(key, {
           table,
           column,
-          dataType: "",
+          dataType: types[table]?.[column] ?? "",
           category: null,
           confidence: null,
           masked: null,

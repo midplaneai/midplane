@@ -449,7 +449,18 @@ export default async function ProjectWorkspace({
         // unreachable DB / resolver miss → skip the check, save proceeds.
       }
     }
-    const result = await setColumnMasks(customer, id, config, ctx, userId, selectedName, columnTypes);
+    // setColumnMasks THROWS on a type-domain violation (noise on a text column,
+    // full-redact on an int under source-rewrite, …) and on an engine-side policy
+    // reject. Return those as recoverable {ok:false} state — an uncaught throw here
+    // escapes the server action and crashes the client, which awaits a SaveResult
+    // and (rightly) doesn't wrap the call in try/catch for expected user errors.
+    let result;
+    try {
+      result = await setColumnMasks(customer, id, config, ctx, userId, selectedName, columnTypes);
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : "couldn’t save masks";
+      return { ok: false, error: raw.replace(/^invalid column_masks:\s*/, "") };
+    }
     if (!result) return { ok: false, error: "not found" };
     revalidatePath(`/projects/${id}`);
     return { ok: true };
@@ -477,6 +488,34 @@ export default async function ProjectWorkspace({
     if (!result) return { ok: false, error: "not found" };
     revalidatePath(`/projects/${id}`);
     return { ok: true };
+  }
+
+  // Lazy column-type resolver for the exposure scan (design D3). A masked column
+  // that wasn't part of a fresh scan renders with an UNKNOWN type, so the transform
+  // picker can't gate type-specific transforms (noise on a text column, …) and would
+  // let the user pick one only to have the save rejected. The client calls this on
+  // mount to resolve the DB's real Postgres types WITHOUT a full PII scan, so the
+  // picker gates correctly up front. Best-effort: a slow/unreachable DB returns null
+  // and the picker falls back to "all enabled" + the graceful save-time reject.
+  async function columnTypesAction(): Promise<MaskColumnTypes | null> {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) return null;
+    await assertManager();
+    if (!selectedName) return null;
+    try {
+      const withCred = await getProjectWithDatabaseAndCredential(customer, id, selectedName);
+      if (!withCred) return null;
+      const decrypt = await getMcpProxyContext().resolver.resolve({
+        projectDatabase: withCred.database,
+        region: withCred.project.region,
+        customerId: withCred.project.customerId,
+      });
+      if (decrypt.ok) return await fetchColumnTypes(decrypt.plaintext);
+    } catch {
+      // unreachable DB / resolver miss → null (picker stays permissive; reject is the floor)
+    }
+    return null;
   }
 
   async function guardrailsAction(formData: FormData) {
@@ -807,6 +846,7 @@ export default async function ProjectWorkspace({
               initialIgnored={parseIgnoredColumnsOrThrow(selDb.ignoredColumns)}
               onSave={columnMasksAction}
               onSaveIgnored={ignoredColumnsAction}
+              onLoadColumnTypes={columnTypesAction}
             />
           </div>
 
