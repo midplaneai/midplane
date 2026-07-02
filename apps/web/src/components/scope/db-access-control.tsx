@@ -27,7 +27,7 @@ export function DbAccessControl({
     <div
       role="radiogroup"
       aria-label="Database access"
-      className="inline-flex overflow-hidden border border-border"
+      className="inline-flex divide-x divide-border overflow-hidden border border-border"
     >
       {options.map((o) => {
         const active = value === o.v;
