@@ -74,7 +74,63 @@ export async function enforceSelfHostSignupGate(email: string): Promise<void> {
   );
   if (hasValidInvite) return;
 
-  const claimed = await db
+  let claimed = await claimOwner(db, email);
+
+  // Defense in depth. A zero-row claim means ONE of two things that must NOT be
+  // conflated:
+  //   (a) a real second owner — the row EXISTS with a different owner_email set;
+  //   (b) the implicit customer row was never seeded — an EMPTY database.
+  // (a) is the gate doing its job; (b) is the P0 that bricks the FIRST signup.
+  // (A present-but-UNCLAIMED row can't reach here: the claim's `owner_email IS
+  // NULL` arm would have matched it, so a zero-row claim with the row present
+  // always means owned-by-someone-else.)
+  //
+  // The row is normally seeded at boot by ensureImplicitCustomer()
+  // (instrumentation.register). But if that hook didn't run — e.g. a build that
+  // dropped instrumentation from the standalone output — the row is absent and a
+  // genuinely first signup gets a spurious "already has an owner", bricking the
+  // instance. Rather than hang a P0 invariant on build-tool file discovery,
+  // self-heal case (b): when the row is absent, seed it (idempotent — the same
+  // org + customer + Default project the boot hook seeds) and retry the SAME
+  // atomic claim, turning "bricked" into "first request seeds". Case (a) skips
+  // the reseed entirely (the row is present) and falls through to the throw, so
+  // a real second owner is still rejected and the abusive reject path stays
+  // cheap. The dynamic import keeps customer.ts off the static graph (it already
+  // imports this file — resolveSelfHostAccess — so a static edge back would
+  // cycle) and out of the hot path.
+  if (claimed.length === 0) {
+    const rowPresent =
+      (
+        await db
+          .select({ id: customers.id })
+          .from(customers)
+          .where(eq(customers.id, SELF_HOST_CUSTOMER_ID))
+          .limit(1)
+      ).length > 0;
+    if (!rowPresent) {
+      const { ensureImplicitCustomer } = await import("./customer.ts");
+      await ensureImplicitCustomer();
+      claimed = await claimOwner(db, email);
+    }
+  }
+
+  if (claimed.length === 0) {
+    throw new APIError("FORBIDDEN", {
+      message:
+        "This Midplane instance already has an owner. Ask the owner for an invitation link to join.",
+    });
+  }
+}
+
+/** The atomic owner claim: set owner_email on the implicit customer row iff it's
+ *  still unclaimed OR already this email (the retry-safe arm). Returns the
+ *  updated rows — zero means the row is missing or owned by someone else. Kept
+ *  as one helper so the seed-and-retry path re-runs byte-identical SQL. */
+async function claimOwner(
+  db: ReturnType<typeof getDb>,
+  email: string,
+): Promise<Array<{ ownerEmail: string | null }>> {
+  return db
     .update(customers)
     .set({ ownerEmail: email })
     .where(
@@ -87,12 +143,6 @@ export async function enforceSelfHostSignupGate(email: string): Promise<void> {
       ),
     )
     .returning({ ownerEmail: customers.ownerEmail });
-  if (claimed.length === 0) {
-    throw new APIError("FORBIDDEN", {
-      message:
-        "This Midplane instance already has an owner. Ask the owner for an invitation link to join.",
-    });
-  }
 }
 
 /** Link the OWNER as an `owner` member of the implicit org. Called from the

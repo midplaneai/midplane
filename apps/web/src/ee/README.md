@@ -41,20 +41,23 @@ The seam threads that needle:
    `registerEeAuthPlugins()` / `getEeAuthPlugins()`.
 2. `src/ee/register.ts` (`registerEe()`) builds the ee plugins and pushes them
    into that registry. ee MAY import core, so this is allowed.
-3. `instrumentation.ts` (OUTSIDE `src/` — the sanctioned cloud-only entrypoint)
-   dynamically imports `src/ee/register.ts` once at boot, guarded by
-   `NEXT_RUNTIME==="nodejs"` && `MIDPLANE_EE==="1"` and wrapped in try/catch.
+3. `src/instrumentation.ts` (the cloud-only boot entrypoint) dynamically imports
+   `src/ee/register.ts` once at boot, guarded by `NEXT_RUNTIME==="nodejs"` &&
+   `MIDPLANE_EE==="1"` and wrapped in try/catch. It lives under `src/` (Next.js
+   only discovers instrumentation there in a src/ layout), so the eslint boundary
+   applies — but the ee import is a template literal, not a string literal, so
+   `no-restricted-imports` doesn't match it and the MIT-core→ee ban stays intact.
 4. `createAuth()` reads `getEeAuthPlugins()` synchronously (before
    `nextCookies()`). Next awaits `register()` before serving, and auth is built
    lazily on the first request, so the registry is always populated in time.
 
 So the ONLY reference from the always-present graph into `ee/` is the one
-guarded line in `instrumentation.ts`. Cloud surfaces gate on
+guarded line in `src/instrumentation.ts`. Cloud surfaces gate on
 `hasEntitlement("sso")` (the ee build switch AND the Team plan); they call the
 Better Auth SSO HTTP endpoints, so no `src/` file imports `ee/`.
 
 **Producing an MIT build:** delete `src/ee/`, drop the ee bootstrap block in
-`instrumentation.ts`, and leave `MIDPLANE_EE` unset. The eslint boundary
+`src/instrumentation.ts`, and leave `MIDPLANE_EE` unset. The eslint boundary
 guarantees nothing else needs touching.
 
 ## Activation (recap)

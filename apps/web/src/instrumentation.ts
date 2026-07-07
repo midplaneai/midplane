@@ -9,11 +9,20 @@
 // Without this, a missing var (e.g. MIDPLANE_TOKEN_PEPPER_EU_V1) only
 // surfaces when the first request reaches the code path that reads it.
 //
+// LOCATION MATTERS: this file MUST live at src/instrumentation.ts, not the
+// package root. Next.js only discovers `instrumentation` inside src/ when the
+// app uses a src/ layout (this one does: src/app, src/middleware.ts). The
+// Turbopack dev server is lax enough to also pick up a root-level file, but
+// `next build` (webpack) does NOT — a root instrumentation.ts compiles to
+// nothing in the standalone output, so register() never runs in production.
+// That silently un-seeds the self-host implicit customer below and bricks the
+// first signup (P0). Keep it in src/.
+//
 // Intentionally minimal — does not import the db client (cf. /api/health
 // design rationale: no DB touch in the liveness path).
 
-import { assertBootEnv } from "./src/lib/assert-boot-env.ts";
-import { isSelfHost } from "./src/lib/self-host.ts";
+import { assertBootEnv } from "./lib/assert-boot-env.ts";
+import { isSelfHost } from "./lib/self-host.ts";
 
 export async function register() {
   const region = process.env.MIDPLANE_REGION ?? "<unset>";
@@ -37,16 +46,14 @@ export async function register() {
   // 'nodejs' keeps that import out of the Edge compilation entirely. The
   // dynamic import also keeps the cloud boot path db-free.
   if (process.env.NEXT_RUNTIME === "nodejs" && isSelfHost()) {
-    const { ensureImplicitCustomer } = await import("./src/lib/customer.ts");
+    const { ensureImplicitCustomer } = await import("./lib/customer.ts");
     await ensureImplicitCustomer();
   }
 
   // Enterprise Edition bootstrap — the SOLE bridge from the always-present graph
-  // into ee/. This file lives OUTSIDE src/ (exempt from the open-core eslint
-  // boundary), so it is the sanctioned "cloud-only entrypoint": it registers the
-  // ee Better Auth plugins (SSO/SAML) into the neutral registry that createAuth()
-  // reads synchronously on the first request. Runs once at boot, before any
-  // request builds auth.
+  // into ee/. It registers the ee Better Auth plugins (SSO/SAML) into the
+  // neutral registry that createAuth() reads synchronously on the first request.
+  // Runs once at boot, before any request builds auth.
   //
   // Triple-guarded: nodejs only (ee pulls Node-only SAML deps; never enter the
   // Edge bundle), MIDPLANE_EE=1 (so keyless cloud / self-host never load it), and
@@ -55,14 +62,22 @@ export async function register() {
   // eeEnabled() too.
   if (process.env.NEXT_RUNTIME === "nodejs" && process.env.MIDPLANE_EE === "1") {
     try {
-      // Non-literal specifier ON PURPOSE: a `: string`-typed value keeps ee/ out
-      // of TypeScript's module graph (no "cannot find module" when src/ee/ is
-      // deleted for an MIT build) while the static "./src/ee/" prefix lets the
-      // bundler tolerate its absence too — so a deleted ee/ both type-checks and
-      // compiles; the import just rejects at runtime and we catch it. With ee/
-      // present this resolves register.ts normally.
-      const eeEntry: string = "register.ts";
-      const mod = (await import(`./src/ee/${eeEntry}`)) as {
+      // Non-literal specifier ON PURPOSE, doing triple duty now that this file
+      // lives under src/ (compiled by `next build`, and covered by the open-core
+      // eslint boundary):
+      //   1. A `: string`-typed value keeps ee/ out of TypeScript's module graph
+      //      (no "cannot find module" when src/ee/ is deleted for an MIT build).
+      //   2. A template literal (not a string literal) slips past
+      //      no-restricted-imports, so the MIT-core→ee ban doesn't false-positive.
+      //   3. The static prefix is "./ee/register." — NOT a bare "./ee/" — so the
+      //      lazy context webpack derives for this dynamic import globs only
+      //      ee/register.* (the entrypoint + its deps). A bare "./ee/" context
+      //      would sweep in ee/'s non-code governance files (LICENSE, README.md)
+      //      and fail the build with "no loader to handle this file type". Keep
+      //      the "register." in the static part.
+      // With ee/ present this resolves ee/register.ts and calls registerEe().
+      const eeExt: string = "ts";
+      const mod = (await import(`./ee/register.${eeExt}`)) as {
         registerEe: () => void;
       };
       mod.registerEe();

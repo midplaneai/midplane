@@ -32,13 +32,23 @@ import { isIP } from "node:net";
 import { pingDsn, type PingDsnResult } from "@/lib/ping-dsn";
 
 export const GENERIC_PING_ERROR =
-  "Could not connect. Check the host, port, and that the database accepts projects from the internet.";
+  "Could not connect. Check the host, port, and that the database accepts connections from the internet.";
 
 export function pingGuardEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   if (env.PING_GUARD === "on") return true;
   if (env.PING_GUARD === "off") return false;
+  // Self-host is single-tenant: the operator owns the box and legitimately
+  // points at an in-network/private Postgres (the bundled compose's
+  // postgres://…@postgres:5432). The guard exists to stop the multi-tenant
+  // CLOUD from being turned into an internal-network reachability oracle — a
+  // threat that doesn't exist on a single-owner install — so it defaults OFF
+  // here, exactly like local dev. Without this the test-connection button
+  // false-negatives ("Could not connect") on the very DSN the engine then
+  // connects to fine from the same container. An operator can still force it on
+  // with PING_GUARD=on.
+  if (env.MIDPLANE_SELF_HOST === "1") return false;
   return env.NODE_ENV === "production";
 }
 
