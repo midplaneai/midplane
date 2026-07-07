@@ -26,6 +26,7 @@
     "typecheck": "bun --filter '@midplane-cloud/*' typecheck",
     "check:pins": "bun scripts/check-image-pin.ts",
     "check:transforms": "bun scripts/check-mask-transforms.ts",
+    "check:no-inline-secrets": "bun scripts/check-no-inline-secrets.ts",
     "db:generate": "bun --filter '@midplane-cloud/db' generate",
     "db:studio": "bun --filter '@midplane-cloud/db' studio",
     "migrate:eu": "bun --filter '@midplane-cloud/db' migrate:eu",

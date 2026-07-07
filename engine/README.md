@@ -26,7 +26,7 @@ docker run --env-file .env -p 8080:8080 -v midplane-audit:/data midplane/midplan
 The MCP endpoint comes up at `http://localhost:8080/mcp`; point your agent at it.
 Setup details are at [midplane.ai/docs](https://midplane.ai/docs).
 
-> **Never put credentials on the docker command line** — `-e DATABASE_URL=…` leaks
+> **Never put credentials on the docker command line** — an inline `-e` DSN leaks
 > the password to `ps aux` and your shell history. Use `--env-file`.
 
 ## Develop
