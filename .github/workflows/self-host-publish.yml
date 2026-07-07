@@ -1,0 +1,86 @@
+name: self-host-publish
+
+# Builds Dockerfile.self-host (the one-container self-host image: web dashboard +
+# bundled engine binary + boot-time migrations) and publishes it to GHCR:
+#   :latest            on every push to main
+#   :main-<sha>        on every push to main (immutable per-commit ref)
+#   :<version> :latest on a self-host-v* tag  (e.g. self-host-v0.1.0 → :0.1.0)
+#
+# SEPARATE from engine-publish.yml (Docker Hub midplane/midplane, tags engine-v*)
+# and the Fly control-plane deploy (deploy-fly.yml). Multi-arch amd64+arm64 so
+# the compiled engine binary matches the host it runs on.
+
+on:
+  push:
+    branches: [main]
+    tags: ["self-host-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version X.Y.Z to publish as :<version> + :latest (optional)."
+        required: false
+        type: string
+
+concurrency:
+  group: self-host-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      # arm64 is emulated under QEMU (no native arm runner). `bun build --compile`
+      # of the engine binary runs inside the emulated build — slower, but produces
+      # a genuine arm64 image.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image + tags
+        id: meta
+        # GHCR repository names must be lowercase; owner may contain uppercase.
+        run: |
+          image="ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/midplane-self-host"
+          if [ -n "${{ inputs.version }}" ]; then
+            tags="$image:${{ inputs.version }},$image:latest"
+          else
+            case "${{ github.ref }}" in
+              refs/tags/self-host-v*)
+                v="${GITHUB_REF#refs/tags/self-host-v}"
+                tags="$image:$v,$image:latest" ;;
+              refs/heads/main)
+                tags="$image:latest,$image:main-$(echo "${GITHUB_SHA}" | cut -c1-12)" ;;
+              *)
+                echo "::error::unexpected ref ${{ github.ref }} — nothing to publish"; exit 1 ;;
+            esac
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "publishing: $tags"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.self-host
+          platforms: linux/amd64,linux/arm64
+          # Keep the manifest index to just the two platform images (no
+          # unknown/unknown attestation manifests) — same posture as engine-publish.
+          provenance: false
+          sbom: false
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

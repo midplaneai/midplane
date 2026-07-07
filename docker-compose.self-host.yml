@@ -1,20 +1,26 @@
 # Single-tenant self-host stack for the midplane control plane.
 #
-#   docker compose -f docker-compose.self-host.yml up -d postgres
-#   docker compose -f docker-compose.self-host.yml run --rm migrate
-#   # then run the control plane (see SELF_HOST.md)
+# One command (generates secrets, brings the whole stack up, migrates on boot):
+#
+#   ./bin/self-host up      # → dashboard on http://localhost:3000
+#
+# Or drive compose directly — but ALWAYS pass --env-file so the secrets and
+# ${POSTGRES_PORT} override are read (raw `docker compose` reads `.env`, not this):
+#
+#   docker compose --env-file .env.self-host -f docker-compose.self-host.yml up -d --wait
 #
 # Keyless, uncapped, single-owner, one Postgres, no region routing, no cloud
-# vendors. See SELF_HOST.md for the full run + the engine topology: in self-host
-# the control plane exec's the compiled engine binary as a loopback subprocess
-# per connection (no Docker daemon or socket needed). This compose file only
-# brings up Postgres + runs migrations.
+# vendors. In self-host the control plane exec's the compiled engine binary as a
+# loopback subprocess per connection (baked into the web image — no Docker daemon
+# or socket needed). See SELF_HOST.md.
 #
-# Env: copy .env.self-host.example to .env.self-host and fill the secrets.
+# Env: copy .env.self-host.example to .env.self-host and fill the secrets
+# (bin/self-host does this for you).
 
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: midplane
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-midplane}
@@ -29,20 +35,66 @@ services:
       timeout: 3s
       retries: 20
 
-  # One-shot: apply Drizzle migrations to the single DB, then exit.
+  # The whole control plane in one container: web dashboard + the bundled engine
+  # binary. Applies DB migrations on boot (entrypoint), then serves on :3000.
+  web:
+    # Published image (fast pull). `build:` is the fork/dev fallback and is used
+    # automatically when the image isn't present locally and can't be pulled.
+    image: ghcr.io/midplaneai/midplane-self-host:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.self-host
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      MIDPLANE_SELF_HOST: "1"
+      # In-network Postgres — NOT localhost (that's the container itself). This
+      # overrides the from-source localhost DATABASE_URL in .env.self-host.
+      DATABASE_URL: postgres://midplane:${POSTGRES_PASSWORD:-midplane}@postgres:5432/midplane?sslmode=disable
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      MIDPLANE_KMS_MODE: env
+      # Required secrets. `:?` fails compose loudly with this message if unset —
+      # generate them once via `./bin/self-host up` (persisted in .env.self-host;
+      # regenerating bricks stored credentials + tokens).
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?missing — run ./bin/self-host up (fills .env.self-host)}
+      MIDPLANE_KMS_DEV_KEY_EU: ${MIDPLANE_KMS_DEV_KEY_EU:?missing — run ./bin/self-host up (fills .env.self-host)}
+      MIDPLANE_TOKEN_PEPPER_EU_V1: ${MIDPLANE_TOKEN_PEPPER_EU_V1:?missing — run ./bin/self-host up (fills .env.self-host)}
+    healthcheck:
+      # bun is on PATH in the image; any HTTP response (even a redirect) means the
+      # server is listening. Generous start_period covers migrations + Next boot.
+      test:
+        [
+          "CMD-SHELL",
+          "bun -e \"fetch('http://127.0.0.1:3000/').then(()=>process.exit(0)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # Optional separate migrate step (same image, migrate binary only, then exit).
+  # The web service already migrates on boot, so this is only for people who want
+  # to run migrations as a discrete step:
+  #
+  #   docker compose --env-file .env.self-host -f docker-compose.self-host.yml \
+  #     --profile migrate run --rm migrate
   migrate:
-    image: oven/bun:1.3-slim
-    working_dir: /app/packages/db
+    image: ghcr.io/midplaneai/midplane-self-host:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.self-host
+    profiles: ["migrate"]
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      # In-compose the DB is reachable at host `postgres`; from the host it's
-      # localhost:${POSTGRES_PORT}. sslmode=disable — it's a local network.
       DATABASE_URL: postgres://midplane:${POSTGRES_PASSWORD:-midplane}@postgres:5432/midplane?sslmode=disable
-    volumes:
-      - .:/app
-    command: ["bun", "run", "src/migrate.ts", "self-host"]
+      MIGRATIONS_DIR: /app/migrations
+    entrypoint: ["midplane-migrate"]
 
 volumes:
   midplane_pg:

@@ -1,0 +1,56 @@
+name: migrate-fresh
+
+# Regression gate for the self-host install: the full Drizzle migration chain
+# (squash baseline 0000 + every later migration) must apply cleanly on ONE
+# connection against a BRAND-NEW postgres:16-alpine, exactly as a fresh self-host
+# does. Guards the search_path regression that emptied the session path in 0000's
+# pg_dump preamble and rolled the whole batch back, leaving fresh DBs empty.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/db/migrations/**"
+      - "packages/db/src/migrate*.ts"
+      - "scripts/check-fresh-migration.ts"
+      - ".github/workflows/migrate-fresh.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/db/migrations/**"
+      - "packages/db/src/migrate*.ts"
+      - "scripts/check-fresh-migration.ts"
+      - ".github/workflows/migrate-fresh.yml"
+
+jobs:
+  fresh-db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: midplane
+          POSTGRES_PASSWORD: midplane
+          POSTGRES_DB: midplane
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U midplane -d midplane"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://midplane:midplane@localhost:5432/midplane?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+
+      - name: Apply full migration chain (fresh DB, one connection)
+        working-directory: packages/db
+        run: bun run src/migrate.ts self-host
+
+      - name: Assert the chain landed
+        run: bun scripts/check-fresh-migration.ts
