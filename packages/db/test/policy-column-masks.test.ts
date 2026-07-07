@@ -388,7 +388,9 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
   });
 
   it("maskSourceRewrite defaults OFF ⇒ byte-identical to today (no flag, token = column_masks only)", () => {
-    const withMasks = { columnMasks: { "public.users": { email: "full-redact" } } };
+    const withMasks: Partial<DatabaseEntry> = {
+      columnMasks: { "public.users": { email: "full-redact" } },
+    };
     const off = serializeMultiDbPolicyToYaml([entry(withMasks)]);
     expect(off).not.toContain("mask_source_rewrite");
     // Explicit false is the same as absent.

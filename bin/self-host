@@ -1,0 +1,113 @@
+#!/bin/sh
+# Midplane self-host bootstrap — one command from a fresh clone to a running
+# dashboard, Docker the only prerequisite (no Bun, no manual migrations, no
+# hand-generated secrets).
+#
+#   ./bin/self-host up        # generate secrets + bring the stack up
+#   ./bin/self-host down      # stop the stack (data volume kept)
+#   ./bin/self-host upgrade   # pull newer images + restart
+#
+# Secrets are generated ONCE into .env.self-host and reused on every boot.
+# MIDPLANE_KMS_DEV_KEY_EU encrypts project DSNs at rest and
+# MIDPLANE_TOKEN_PEPPER_EU_V1 backs machine-token verification — regenerating
+# either bricks every stored credential and token, so this script never
+# regenerates a value that is already set.
+set -eu
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+ENV_FILE=".env.self-host"
+EXAMPLE=".env.self-host.example"
+COMPOSE_FILE="docker-compose.self-host.yml"
+
+# `docker compose` (v2) is the interface; `--env-file` makes the file drive both
+# ${VAR} interpolation (POSTGRES_PORT, the secrets) and, via the compose file's
+# `environment:` blocks, the container env. Raw `docker compose` without it reads
+# `.env`, not `.env.self-host` — every doc/command must carry this flag.
+compose() {
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "error: docker is not installed or not on PATH." >&2
+    echo "Install Docker Desktop (macOS/Windows) or Docker Engine (Linux) and retry." >&2
+    exit 1
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "error: 'docker compose' (v2) is unavailable. Update Docker to a release" >&2
+    echo "that bundles Compose v2 (Docker Desktop, or the docker-compose-plugin)." >&2
+    exit 1
+  fi
+}
+
+# 32 bytes of randomness. Prefer openssl; fall back to /dev/urandom so the script
+# works on a stock box without openssl.
+rand_b64() { openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '\n'; }
+rand_hex() { openssl rand -hex 32 2>/dev/null || od -An -tx1 -N 32 /dev/urandom | tr -d ' \n'; }
+
+# Fill an EMPTY `KEY=` line in $ENV_FILE with a value. No-op if the key already
+# has a value (never clobber a persisted secret). awk builds the replacement line
+# so base64 padding (`=`, `+`, `/`) survives untouched — no sed delimiter games.
+fill_if_empty() {
+  key="$1"
+  val="$2"
+  if grep -Fxq "${key}=" "$ENV_FILE"; then
+    awk -v k="$key" -v v="$val" '$0 == k"=" { print k"=" v; next } { print }' \
+      "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
+    echo "  generated $key"
+  fi
+}
+
+ensure_env() {
+  if [ ! -f "$ENV_FILE" ]; then
+    if [ ! -f "$EXAMPLE" ]; then
+      echo "error: $EXAMPLE not found — run this from a Midplane checkout." >&2
+      exit 1
+    fi
+    cp "$EXAMPLE" "$ENV_FILE"
+    echo "created $ENV_FILE from $EXAMPLE"
+  fi
+  echo "filling any missing secrets in $ENV_FILE (existing values kept):"
+  fill_if_empty "BETTER_AUTH_SECRET" "$(rand_b64)"
+  fill_if_empty "MIDPLANE_KMS_DEV_KEY_EU" "$(rand_hex)"
+  fill_if_empty "MIDPLANE_TOKEN_PEPPER_EU_V1" "$(rand_b64)"
+}
+
+cmd_up() {
+  require_docker
+  ensure_env
+  # Prefer the published image (fast); fall back to a local build for forks/dev
+  # or before the image is published. A pull miss is non-fatal — `up` then builds
+  # from the compose `build:` block.
+  compose pull 2>/dev/null || echo "  (image pull skipped — building from source)"
+  echo "starting the self-host stack…"
+  compose up -d --wait
+  echo
+  echo "Midplane self-host is up → http://localhost:3000"
+  echo "The first email + password signup becomes the owner."
+}
+
+cmd_down() {
+  require_docker
+  compose down
+}
+
+cmd_upgrade() {
+  require_docker
+  ensure_env
+  compose pull
+  compose up -d --wait
+  echo "upgraded."
+}
+
+case "${1:-}" in
+  up) cmd_up ;;
+  down) cmd_down ;;
+  upgrade) cmd_upgrade ;;
+  *)
+    echo "usage: ./bin/self-host <up|down|upgrade>" >&2
+    exit 1
+    ;;
+esac

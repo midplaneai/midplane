@@ -57,6 +57,20 @@ COPY engine/packages ./engine/packages
 
 RUN bun build --compile ./engine/packages/mcp-server/src/cli.ts --outfile /app/midplane
 
+# ---- migrate-builder: compile the boot-time migration runner -------------
+# Applied against DATABASE_URL by the entrypoint before the web server starts,
+# so a fresh DB is provisioned with zero manual steps. Compiled to a standalone
+# binary (bundles drizzle-orm + postgres) so the runner needs no node_modules;
+# the .sql files themselves are read from disk at runtime (copied to /app/migrations).
+FROM oven/bun:1.3-slim AS migrate-builder
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json bun.lock bunfig.toml ./
+COPY packages/db ./packages/db
+
+RUN bun build --compile ./packages/db/src/migrate-image.ts --outfile /app/midplane-migrate
+
 # ---- runner: web standalone + the engine binary --------------------------
 FROM oven/bun:1.3-slim AS runner
 WORKDIR /app
@@ -67,6 +81,8 @@ ENV HOSTNAME=0.0.0.0
 # Select the single-tenant build + the process-spawn engine backend.
 ENV MIDPLANE_SELF_HOST=1
 ENV MIDPLANE_ENGINE_BIN=/usr/local/bin/midplane
+# Where the entrypoint's migrate step reads the .sql files from (copied below).
+ENV MIGRATIONS_DIR=/app/migrations
 
 # `output: 'standalone'` + `outputFileTracingRoot: <repo root>` writes
 # apps/web/.next/standalone/{apps/web,packages/*,node_modules,...}; copy the
@@ -82,6 +98,15 @@ COPY --from=web-builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=engine-builder /app/midplane /usr/local/bin/midplane
 COPY --from=engine-builder /app/node_modules/libpg-query/wasm/libpg-query.wasm /app/node_modules/libpg-query/wasm/libpg-query.wasm
 
+# Boot-time migrations: the compiled runner + the .sql files it applies, and the
+# entrypoint that runs it before starting the web server. Migrations are
+# idempotent, so this is safe on every boot; a failure aborts boot loudly.
+COPY --from=migrate-builder /app/midplane-migrate /usr/local/bin/midplane-migrate
+COPY packages/db/migrations /app/migrations
+COPY docker/self-host-entrypoint.sh /usr/local/bin/self-host-entrypoint.sh
+RUN chmod +x /usr/local/bin/self-host-entrypoint.sh
+
 EXPOSE 3000
 
+ENTRYPOINT ["/usr/local/bin/self-host-entrypoint.sh"]
 CMD ["bun", "run", "apps/web/server.js"]

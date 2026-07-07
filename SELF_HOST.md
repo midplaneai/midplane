@@ -21,64 +21,106 @@ same codebase is the multi-tenant cloud, byte-for-byte unchanged.
 SSO and the rest of the governance band stay behind the commercial `ee/` license
 and are dark in the community build.
 
-## Prerequisites
+## Quick start (Docker only)
 
-- Bun ≥ 1.3 (to run migrations, the control plane, and to compile the engine
-  binary).
-- Docker — **optional**. Only the bundled Postgres
-  (`docker-compose.self-host.yml`) uses it; point `DATABASE_URL` at your own
-  Postgres and you don't need Docker at all. The engine is **not** a container
-  in self-host (see the topology section) — there is no Docker-socket
-  requirement.
-
-## 1. Configure
+Docker is the only prerequisite — no Bun, no manual migrations, no hand-generated
+secrets.
 
 ```bash
+git clone https://github.com/midplaneai/midplane && cd midplane
+./bin/self-host up
+```
+
+`bin/self-host up`:
+
+1. Creates `.env.self-host` from the example and fills the three generated
+   secrets (`BETTER_AUTH_SECRET`, `MIDPLANE_KMS_DEV_KEY_EU`,
+   `MIDPLANE_TOKEN_PEPPER_EU_V1`) — once, then reused on every boot.
+2. Brings up Postgres and the web container (`docker compose --env-file
+   .env.self-host …`), which **applies migrations on boot** and serves on
+   `http://localhost:3000`.
+
+Visit `http://localhost:3000`, sign up once (you're the owner), and add a
+connection. Other subcommands:
+
+```bash
+./bin/self-host down       # stop the stack (the Postgres data volume is kept)
+./bin/self-host upgrade    # pull newer images and restart
+```
+
+> **Secrets are persisted, not ephemeral.** `MIDPLANE_KMS_DEV_KEY_EU` encrypts
+> project DSNs at rest and `MIDPLANE_TOKEN_PEPPER_EU_V1` backs machine-token
+> verification. They live in `.env.self-host` and are reused on every boot —
+> regenerating either bricks every stored credential and token. Back up
+> `.env.self-host` and never rotate these once data exists.
+
+### Driving compose directly
+
+`bin/self-host` is a thin wrapper. If you'd rather run compose yourself, always
+pass `--env-file .env.self-host` — raw `docker compose` reads `.env`, so without
+the flag the secrets and the `POSTGRES_PORT` override are silently ignored:
+
+```bash
+docker compose --env-file .env.self-host -f docker-compose.self-host.yml up -d --wait
+docker compose --env-file .env.self-host -f docker-compose.self-host.yml down
+```
+
+The compose stack ships a published image
+(`ghcr.io/midplaneai/midplane-self-host:latest`) with a `build:` fallback, so a
+fork or an unpublished checkout builds `Dockerfile.self-host` locally instead.
+
+### Migrating as a separate step (optional)
+
+The web container migrates on boot, so you normally don't run migrations by
+hand. If you want them as a discrete step, the compose file ships a one-shot
+`migrate` service (behind a profile so it stays out of the default `up`):
+
+```bash
+docker compose --env-file .env.self-host -f docker-compose.self-host.yml \
+  --profile migrate run --rm migrate
+```
+
+### If host port 5432 is taken
+
+Set `POSTGRES_PORT` to a free port in `.env.self-host` and re-run
+`./bin/self-host up`. Because the script passes `--env-file .env.self-host`, the
+override actually takes effect (the web container reaches Postgres over the
+compose network regardless, so only your host mapping changes).
+
+## Run from source (contributors)
+
+The from-source path needs **Bun ≥ 1.3** and runs the app with `bun run dev`
+against the compose Postgres. Install dependencies first (a fresh clone has no
+`node_modules`):
+
+```bash
+bun install
+
+# 1. Configure — copy the example (or let ./bin/self-host up fill the secrets):
 cp .env.self-host.example .env.self-host
-# fill the three secrets:
 openssl rand -base64 32   # → BETTER_AUTH_SECRET
 openssl rand -hex 32      # → MIDPLANE_KMS_DEV_KEY_EU
 openssl rand -base64 32   # → MIDPLANE_TOKEN_PEPPER_EU_V1
-```
 
-## 2. Database
-
-```bash
-# If host port 5432 is busy, set POSTGRES_PORT in the environment and match it
-# in DATABASE_URL inside .env.self-host.
-docker compose -f docker-compose.self-host.yml up -d postgres
+# 2. Database — bring up Postgres and migrate:
+docker compose --env-file .env.self-host -f docker-compose.self-host.yml up -d postgres
 bun run migrate:self-host          # applies Drizzle migrations to DATABASE_URL
-```
 
-## 3. Build the engine binary
-
-The control plane exec's the compiled engine binary per connection (see the
-topology section). Compile it once:
-
-```bash
+# 3. Engine binary — the control plane exec's it per connection (see topology):
 bun run build:engine-binary        # → engine/dist/midplane
-```
-
-Then point the control plane at it (or put it on `PATH` as `midplane`):
-
-```bash
 export MIDPLANE_ENGINE_BIN="$PWD/engine/dist/midplane"
-```
 
-(The containerized image below bakes this in — this step is only for the
-run-on-host path.)
-
-## 4. Run the control plane
-
-```bash
+# 4. Run the control plane:
 bun --env-file=.env.self-host run dev          # http://localhost:3000
-# (production: `bun --filter '@midplane-cloud/web' build` then run the standalone
-#  server with the same env)
 ```
 
 On boot the app validates the self-host env, seeds the implicit org + customer
-the single tenant is keyed on, and starts. Visit `http://localhost:3000`, sign
-up once (you're the owner), and add a connection.
+the single tenant is keyed on, and starts.
+
+> The from-source `DATABASE_URL` points at `localhost:${POSTGRES_PORT:-5432}`
+> (the compose Postgres mapped to your host). The containerized `web` service
+> ignores that and talks to the in-network `postgres` service instead — so you
+> don't edit `DATABASE_URL` for the `bin/self-host` path.
 
 ## The engine topology (read this before deploying)
 
@@ -91,7 +133,7 @@ The engine idle-stops after 30 minutes and is torn down on connection delete.
 This means self-host needs **no Docker daemon, no Docker socket, no `docker`
 CLI in the image, and no host networking**. The only requirement is that the
 `midplane` binary is present where the control plane runs (`MIDPLANE_ENGINE_BIN`
-or on `PATH`).
+or on `PATH`). The self-host image bakes it at `/usr/local/bin/midplane`.
 
 > Why one process per connection: the engine binds exactly one set of databases
 > for its lifetime (it reads the policy file + DSN env vars once at boot), so a
@@ -99,41 +141,55 @@ or on `PATH`).
 > the cloud (Fly machines) and local-dev (Docker) backends use — only the
 > spawn *mechanism* differs.
 
-Two ways to run it:
+The single self-host image (`Dockerfile.self-host`) bundles both the control
+plane and the engine binary — one container is the whole deploy. The compose
+stack uses it; to build and run it directly:
 
-- **On the host** (steps 3–4 above): build the binary, set
-  `MIDPLANE_ENGINE_BIN`, run the control plane. The supported single-box setup;
-  also how local development works.
-- **Fully containerized** (one image, the whole deploy): `Dockerfile.self-host`
-  bundles both the control plane and the engine binary, so there is nothing to
-  mount or pull:
+```bash
+docker build -f Dockerfile.self-host -t midplane/self-host:local .
+# `localhost` inside the container is the container itself — point DATABASE_URL
+# at a host the container can reach (host.docker.internal on Docker Desktop):
+docker run --env-file .env.self-host \
+  -e DATABASE_URL='postgres://midplane:midplane@host.docker.internal:5432/midplane?sslmode=disable' \
+  -p 3000:3000 midplane/self-host:local
+```
 
-  ```bash
-  docker build -f Dockerfile.self-host -t midplane/self-host:local .
-  # `localhost` inside the container is the container itself, not your host —
-  # point DATABASE_URL at a host the container can reach (host.docker.internal
-  # on Docker Desktop):
-  docker run --env-file .env.self-host \
-    -e DATABASE_URL='postgres://midplane:midplane@host.docker.internal:5432/midplane?sslmode=disable' \
-    -p 3000:3000 midplane/self-host:local
-  ```
-
-  The binary is baked at `/usr/local/bin/midplane` (with `MIDPLANE_ENGINE_BIN`
-  preset), and `MIDPLANE_SELF_HOST=1` is set in the image. This works the same
-  on Linux and macOS — there is no host-networking or VM-socket caveat. The
-  engine runs in-container too, so the connection DSNs you add in the dashboard
-  follow the same rule: a `localhost` Postgres on your host is
-  `host.docker.internal` from inside (or put the DB on the same Docker network).
+The image runs migrations on boot (its entrypoint applies Drizzle migrations to
+`DATABASE_URL` before starting the web server; a failure aborts boot loudly), and
+`MIDPLANE_SELF_HOST=1` + `MIDPLANE_ENGINE_BIN` are preset. The engine runs
+in-container too, so the connection DSNs you add in the dashboard follow the same
+rule: a `localhost` Postgres on your host is `host.docker.internal` from inside
+(or put the DB on the same Docker network).
 
 The audit pipeline's internal bearer (`INDEXER_TOKEN`) is auto-provisioned at
 boot when unset: the engine is loopback-only, so the token never leaves the
 box, and audit reaches the dashboard out of the box without extra config.
 
+## Just the engine (no dashboard)
+
+The MIT query-path engine also ships on its own as the `midplane/midplane`
+Docker image — the lightest install for guarding a **single** database or a CI
+pipeline from a terminal, with no control plane, no dashboard, and no Postgres of
+its own:
+
+```bash
+curl -O https://raw.githubusercontent.com/midplaneai/midplane/main/engine/.env.example
+mv .env.example .env   # set DATABASE_URL (never pass -e DATABASE_URL=… — it leaks)
+docker run --env-file .env -p 8080:8080 -v midplane-audit:/data midplane/midplane:latest
+```
+
+The MCP endpoint comes up at `http://localhost:8080/mcp`; point your agent at it.
+Full setup — policy YAML, agent wiring, multi-database config — is in
+[`engine/README.md`](./engine/README.md) and at
+[midplane.ai/docs](https://midplane.ai/docs).
+
 ## Verified
 
 Run against a local Postgres on this branch:
 
-- Migrations apply via `migrate:self-host`.
+- The full migration chain applies on a **fresh** `postgres:16-alpine` in one
+  connection (`project_databases` exists, all journaled migrations recorded) —
+  gated in CI by `migrate-fresh.yml` / `scripts/check-fresh-migration.ts`.
 - The compiled engine binary (`bun run build:engine-binary`) boots `server`
   self-contained from a `node_modules`-free dir, becomes healthy on its loopback
   port, creates + migrates its `audit.db`, and exits cleanly on `SIGTERM` (no
@@ -149,8 +205,3 @@ Run against a local Postgres on this branch:
   <implicit id>` bind round-trips an audit row (no silent blank-log).
 - Full unit suite green (incl. `ProcessSpawner`); cloud behavior unchanged when
   `MIDPLANE_SELF_HOST` is unset.
-
-Not built in this session: the `Dockerfile.self-host` image (a full Next
-standalone + engine compile). The binary-compile, boot, and process-spawn paths
-it bundles are all verified above; the multi-stage image build itself is
-unbuilt here.

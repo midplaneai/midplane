@@ -66,19 +66,21 @@ install, multi-region, fully supported.
 ### Self-host
 
 The complete single-tenant app — dashboard, policy editor, audit log, agent-token
-issuance — keyless and uncapped, on your own Postgres + a local engine.
+issuance — keyless and uncapped, on your own Postgres + a local engine. Docker is
+the only prerequisite:
 
 ```bash
-cp .env.self-host.example .env.self-host         # fill 3 secrets
-docker compose -f docker-compose.self-host.yml up -d postgres
-bun run migrate:self-host
-bun run build:engine-binary
-export MIDPLANE_ENGINE_BIN="$PWD/engine/dist/midplane"
-bun --env-file=.env.self-host run dev            # http://localhost:3000
+git clone https://github.com/midplaneai/midplane && cd midplane
+./bin/self-host up                               # → http://localhost:3000
 ```
 
-Walkthrough, engine-spawn topology, and the single-image deploy:
-[midplane.ai/docs](https://midplane.ai/docs) (in-repo: [`SELF_HOST.md`](./SELF_HOST.md)).
+That generates secrets into `.env.self-host`, brings up Postgres + the web app,
+applies migrations on boot, and prints the dashboard URL — the first
+email+password signup becomes the owner.
+
+Running from source, the single-image deploy, the engine-spawn topology, and the
+full walkthrough: [midplane.ai/docs](https://midplane.ai/docs) (in-repo:
+[`SELF_HOST.md`](./SELF_HOST.md)).
 
 > The MIT query-path engine also ships as a standalone Docker image
 > (`midplane/midplane`) — for guarding a single database or a CI pipeline without

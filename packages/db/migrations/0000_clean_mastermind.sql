@@ -29,7 +29,15 @@ SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
-SELECT pg_catalog.set_config('search_path', '', false);
+-- pg_dump emits `set_config('search_path', '', false)` here so its own dump body
+-- can use fully schema-qualified names. But `false` (is_local=false) makes it a
+-- SESSION setting, and Drizzle's migrator runs every pending migration in ONE
+-- session: an empty search_path then breaks later migrations that reference
+-- unqualified names (e.g. 0001's `ALTER TABLE "project_databases"`), rolling the
+-- whole batch back on a fresh DB. All baseline objects below are `public.*`
+-- qualified, so pinning the path to `public` is safe here and keeps unqualified
+-- names in subsequent migrations resolving. Do NOT restore the empty value.
+SELECT pg_catalog.set_config('search_path', 'public', false);
 SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
