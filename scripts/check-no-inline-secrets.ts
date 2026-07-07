@@ -8,6 +8,10 @@
 // teaches readers the wrong pattern (they copy snippets). This scans tracked
 // docs/config/shell files and fails on any inline `-e <SECRET_VAR>=` in a command.
 //
+// Every command form docker accepts is covered (see FLAG_RE): `-e VAR=`,
+// `--env VAR=`, the equals-joined `-e=VAR=` / `--env=VAR=`, the attached
+// `-eVAR=`, and shell-quoted `-e 'VAR=…'` / `-e "VAR=…"`.
+//
 // Warning prose that names the anti-pattern is fine — but reword it so the literal
 // `-e <VAR>=` doesn't appear at all (a backtick-wrapped `-e` with no `VAR=` after
 // it is not a command and is not matched), rather than relying on the allowlist.
@@ -23,11 +27,17 @@ import { join } from "node:path";
 // *_SECRET, *_KEY*, *_PEPPER*, POSTGRES_PASSWORD (and DSN/TOKEN for good measure).
 const SECRET_VAR = /(SECRET|PASSWORD|PEPPER|KEY|TOKEN|DATABASE_URL|DSN)/;
 
-// The command shape we forbid: a `-e` / `--env` flag (at line start or after
-// whitespace — i.e. an actual command token, not a backtick-wrapped mention),
-// then a VAR, then `=`. The leading `(^|\s)` anchor is what lets warning prose
-// keep an inline-code `-e` reference without tripping the check.
-const FLAG_RE = /(?:^|\s)(?:-e|--env)\s+([A-Za-z_][A-Za-z0-9_]*)=/g;
+// The command shape we forbid: a `-e` / `--env` flag then a VAR then `=`, in any
+// form docker accepts for putting the value on the command line:
+//   -e VAR=…     --env VAR=…      (space-separated)
+//   -e=VAR=…     --env=VAR=…      (equals-joined)
+//   -eVAR=…                       (attached short flag — pflag shorthand)
+//   -e 'VAR=…'   -e "VAR=…"       (shell-quoted value)
+// The separator is `=` or whitespace or nothing; an optional quote may sit before
+// the VAR. The leading `(^|\s)` anchor is what keeps this from matching `-e`
+// inside `--env-file` or a backtick-wrapped `-e` mention in warning prose (the
+// char before `-e` there is `-` or a backtick, not whitespace/line-start).
+const FLAG_RE = /(?:^|\s)(?:-e|--env)(?:=|\s+)?(?:['"])?([A-Za-z_][A-Za-z0-9_]*)=/g;
 
 // Paths scanned by extension below would also sweep legitimate ephemeral CI
 // harnesses. These run against throwaway containers with generated test
