@@ -27,7 +27,7 @@ docker run -d \
   midplane/midplane:latest
 ```
 
-### Why not `-e DATABASE_URL=postgres://...` inline?
+### Why not pass the DSN inline with `-e`?
 
 The expanded credential ends up in `ps aux` (visible to any user on the host) and in your shell history. `--env-file` keeps the secret in a file you can `chmod 600`. Same reason we ship `.env.example` and gitignore `.env`.
 

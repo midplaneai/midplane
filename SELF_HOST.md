@@ -143,21 +143,22 @@ or on `PATH`). The self-host image bakes it at `/usr/local/bin/midplane`.
 
 The single self-host image (`Dockerfile.self-host`) bundles both the control
 plane and the engine binary — one container is the whole deploy. The compose
-stack uses it; to build and run it directly:
+stack uses it; to build and run it directly, first point `DATABASE_URL` in
+`.env.self-host` at a host the container can reach — `localhost` inside the
+container is the container itself, so use `host.docker.internal` (Docker Desktop)
+or a same-network hostname — then build and run it, reading the DSN and the
+generated secrets from the env file so nothing sensitive lands on the command
+line:
 
 ```bash
 docker build -f Dockerfile.self-host -t midplane/self-host:local .
-# `localhost` inside the container is the container itself — point DATABASE_URL
-# at a host the container can reach (host.docker.internal on Docker Desktop):
-docker run --env-file .env.self-host \
-  -e DATABASE_URL='postgres://midplane:midplane@host.docker.internal:5432/midplane?sslmode=disable' \
-  -p 3000:3000 midplane/self-host:local
+docker run --env-file .env.self-host -p 3000:3000 midplane/self-host:local
 ```
 
 The image runs migrations on boot (its entrypoint applies Drizzle migrations to
 `DATABASE_URL` before starting the web server; a failure aborts boot loudly), and
 `MIDPLANE_SELF_HOST=1` + `MIDPLANE_ENGINE_BIN` are preset. The engine runs
-in-container too, so the connection DSNs you add in the dashboard follow the same
+in-container too, so the project DSNs you add in the dashboard follow the same
 rule: a `localhost` Postgres on your host is `host.docker.internal` from inside
 (or put the DB on the same Docker network).
 
@@ -174,7 +175,7 @@ its own:
 
 ```bash
 curl -O https://raw.githubusercontent.com/midplaneai/midplane/main/engine/.env.example
-mv .env.example .env   # set DATABASE_URL (never pass -e DATABASE_URL=… — it leaks)
+mv .env.example .env   # set DATABASE_URL in the file, never inline — an inline value leaks to ps/history
 docker run --env-file .env -p 8080:8080 -v midplane-audit:/data midplane/midplane:latest
 ```
 

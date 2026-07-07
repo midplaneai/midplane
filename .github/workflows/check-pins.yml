@@ -32,3 +32,8 @@ jobs:
       # (git grep), same cheap-on-every-PR posture as the pin drift check.
       - name: connection→project rename drift
         run: ./scripts/check-connection-rename.sh
+      # Guards the "no secret on the command line" docs promise: fails if any
+      # runnable snippet passes a DSN/password inline via `-e VAR=` instead of
+      # an env file. Dependency-free, same cheap-on-every-PR posture.
+      - name: no inline -e secrets in docs/commands
+        run: bun run check:no-inline-secrets
