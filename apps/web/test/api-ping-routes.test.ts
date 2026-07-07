@@ -141,7 +141,7 @@ describe("POST /api/projects/test-dsn", () => {
   it("passes the guarded ping result through verbatim", async () => {
     pingGuardedMock = vi.fn(async () => ({
       ok: false,
-      error: "Could not connect. Check the host, port, and that the database accepts projects from the internet.",
+      error: "Could not connect. Check the host, port, and that the database accepts connections from the internet.",
     }));
     const { POST } = await loadTestDsnRoute();
     const res = await POST(jsonRequest({ dsn: GOOD_DSN }));

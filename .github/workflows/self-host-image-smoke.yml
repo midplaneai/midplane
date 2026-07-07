@@ -1,0 +1,122 @@
+name: self-host-image-smoke
+
+# End-to-end regression gate for a fresh containerized self-host install, run
+# against the BUILT image (Dockerfile.self-host) — not from-source under dev.
+#
+# The bug this exists to catch (P0): the Next.js instrumentation hook seeds the
+# implicit customer row at boot, but instrumentation is ONLY discovered by
+# `next build` when it lives at apps/web/src/instrumentation.ts (src/ layout).
+# From-source dev (Turbopack) tolerates a root-level file, so every from-source
+# e2e passed while the published image shipped no compiled instrumentation.js —
+# register() never ran, the customer row was never seeded, and the very first
+# signup 403'd with "already has an owner" on an empty DB. Bricked, silently.
+#
+# This job boots the real image via the shipped compose stack and asserts the
+# behavior a fresh installer sees:
+#   (a) the `region.boot` log line is present  → instrumentation.js compiled and
+#       register() ran. This is the DIRECT guard: if instrumentation regresses
+#       back to the package root it vanishes from the standalone output and this
+#       fails — even though the gate's self-heal would still let signup succeed.
+#   (b) POST /api/auth/sign-up/email returns 200 → first signup becomes owner.
+#   (c) the implicit customers row exists with owner_email set.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/db/**"
+      - "Dockerfile.self-host"
+      - "docker-compose.self-host.yml"
+      - ".env.self-host.example"
+      - "docker/self-host-entrypoint.sh"
+      - "bin/self-host"
+      - ".github/workflows/self-host-image-smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/db/**"
+      - "Dockerfile.self-host"
+      - "docker-compose.self-host.yml"
+      - ".env.self-host.example"
+      - "docker/self-host-entrypoint.sh"
+      - "bin/self-host"
+      - ".github/workflows/self-host-image-smoke.yml"
+
+jobs:
+  image-smoke:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE: docker compose --env-file .env.self-host -f docker-compose.self-host.yml
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Fresh install as a fresh clone would: generate the three secrets
+      # bin/self-host fills, which are the only vars the compose file requires via
+      # interpolation (everything else — DATABASE_URL, MIDPLANE_SELF_HOST, the KMS
+      # mode — is set inline in the compose `environment:` block, and the rest have
+      # defaults). Written fresh (no duplicate keys) so compose interpolation is
+      # unambiguous. amd64-only build here (the runner arch) — the multi-arch image
+      # is the publish workflow's job; this only needs to boot and serve.
+      - name: Seed .env.self-host with generated secrets
+        run: |
+          {
+            echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)"
+            echo "MIDPLANE_KMS_DEV_KEY_EU=$(openssl rand -hex 32)"
+            echo "MIDPLANE_TOKEN_PEPPER_EU_V1=$(openssl rand -base64 32)"
+          } > .env.self-host
+
+      # `compose build` tags the built image with the service's `image:` value
+      # (ghcr.io/…/midplane-self-host:latest), so the later `up` finds it present
+      # locally and neither pulls the published (old) image nor rebuilds.
+      - name: Build the self-host image
+        run: $COMPOSE build web
+
+      - name: Bring the stack up (postgres + web), wait healthy
+        run: $COMPOSE up -d --wait --wait-timeout 240
+
+      # (a) instrumentation.js compiled and register() ran. This is the guard
+      # that fails if instrumentation regresses out of the standalone output.
+      - name: Assert region.boot log line (instrumentation ran)
+        run: |
+          logs="$($COMPOSE logs web)"
+          echo "$logs"
+          echo "$logs" | grep -q '"event":"region.boot"' \
+            || { echo "::error::no region.boot log — instrumentation.js missing from the built image (is instrumentation.ts under apps/web/src/?)"; exit 1; }
+          echo "$logs" | grep -q '"region":"self-host"' \
+            || { echo "::error::region.boot present but region is not 'self-host'"; exit 1; }
+
+      # (b) the first signup becomes the owner (200), on an empty DB. Origin is set
+      # to the configured BETTER_AUTH_URL so Better Auth's origin check passes.
+      - name: Assert first signup returns 200
+        run: |
+          code="$(curl -sS -o /tmp/signup.json -w '%{http_code}' \
+            -X POST http://localhost:3000/api/auth/sign-up/email \
+            -H 'content-type: application/json' \
+            -H 'origin: http://localhost:3000' \
+            -d '{"name":"Smoke Owner","email":"smoke-owner@example.com","password":"smoke-password-123"}')"
+          echo "HTTP $code"; cat /tmp/signup.json || true
+          [ "$code" = "200" ] || { echo "::error::first signup returned $code, expected 200"; exit 1; }
+
+      # (c) the implicit customer row exists and the signup claimed ownership.
+      - name: Assert implicit customer row is seeded and owned
+        run: |
+          owner="$($COMPOSE exec -T postgres \
+            psql -U midplane -d midplane -tAc \
+            "SELECT owner_email FROM customers WHERE id = '00000000000000000000000000';")"
+          owner="$(echo "$owner" | tr -d '[:space:]')"
+          echo "owner_email=[$owner]"
+          [ "$owner" = "smoke-owner@example.com" ] \
+            || { echo "::error::implicit customer row missing or unclaimed (owner_email=[$owner])"; exit 1; }
+
+      - name: Dump logs on failure
+        if: failure()
+        run: $COMPOSE logs
+
+      - name: Tear down
+        if: always()
+        run: $COMPOSE down -v

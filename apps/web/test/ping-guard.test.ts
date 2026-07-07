@@ -235,4 +235,16 @@ describe("pingGuardEnabled", () => {
     expect(pingGuardEnabled({ NODE_ENV: "development" })).toBe(false);
     expect(pingGuardEnabled({})).toBe(false);
   });
+
+  it("defaults OFF in self-host (single-tenant, in-network DSN), but honors PING_GUARD=on", () => {
+    // Self-host sets NODE_ENV=production; without the self-host branch the guard
+    // would be ON and block the in-network postgres:5432 DSN the engine reaches.
+    expect(
+      pingGuardEnabled({ MIDPLANE_SELF_HOST: "1", NODE_ENV: "production" }),
+    ).toBe(false);
+    // An operator can still opt back in explicitly.
+    expect(
+      pingGuardEnabled({ MIDPLANE_SELF_HOST: "1", PING_GUARD: "on" }),
+    ).toBe(true);
+  });
 });

@@ -18,6 +18,18 @@ let selectResults: unknown[][] = [];
 let claimResult: unknown[] = [];
 let inserts: unknown[] = [];
 
+// The gate's defense-in-depth self-heal dynamically imports customer.ts and
+// calls ensureImplicitCustomer() ONLY when the implicit customer row is absent
+// (a never-seeded DB). Stub it so the seed is observable and doesn't pull
+// customer.ts's real transaction/insert graph; a test that wants the retry to
+// succeed has the stub flip `claimResult` to a winning row.
+const { ensureImplicitCustomerMock } = vi.hoisted(() => ({
+  ensureImplicitCustomerMock: vi.fn(async () => {}),
+}));
+vi.mock("../src/lib/customer.ts", () => ({
+  ensureImplicitCustomer: ensureImplicitCustomerMock,
+}));
+
 vi.mock("@midplane-cloud/db", async () => {
   const real =
     await vi.importActual<typeof import("@midplane-cloud/db")>(
@@ -58,6 +70,8 @@ beforeEach(() => {
   selectResults = [];
   claimResult = [];
   inserts = [];
+  ensureImplicitCustomerMock.mockReset();
+  ensureImplicitCustomerMock.mockImplementation(async () => {});
 });
 
 afterEach(() => {
@@ -83,8 +97,10 @@ describe("enforceSelfHostSignupGate", () => {
   });
 
   it("an uninvited second signup is rejected (owner already claimed)", async () => {
-    // No invite, and the atomic claim updates zero rows (owner is taken).
-    selectResults = [[]];
+    // No invite; the atomic claim updates zero rows (owner is taken). The row is
+    // PRESENT (existence probe returns it), so the self-heal must NOT reseed —
+    // this is a real second-owner attempt, not an empty DB.
+    selectResults = [[], [{ id: "cust" }]];
     claimResult = [];
     const { enforceSelfHostSignupGate } = await import(
       "../src/lib/self-host-gate.ts"
@@ -92,16 +108,18 @@ describe("enforceSelfHostSignupGate", () => {
     await expect(
       enforceSelfHostSignupGate("stranger@evil.com"),
     ).rejects.toThrow(/already has an owner/);
+    expect(ensureImplicitCustomerMock).not.toHaveBeenCalled();
   });
 
   it("an expired or already-used invite does NOT open the gate", async () => {
     // Candidates exist but none is pending+unexpired → falls through to the
-    // claim, which (owner taken) rejects.
+    // claim, which (owner taken, row present) rejects without reseeding.
     selectResults = [
       [
         { status: "accepted", expiresAt: past },
         { status: "pending", expiresAt: past },
       ],
+      [{ id: "cust" }],
     ];
     claimResult = [];
     const { enforceSelfHostSignupGate } = await import(
@@ -110,6 +128,27 @@ describe("enforceSelfHostSignupGate", () => {
     await expect(
       enforceSelfHostSignupGate("expired@team.com"),
     ).rejects.toThrow(/already has an owner/);
+    expect(ensureImplicitCustomerMock).not.toHaveBeenCalled();
+  });
+
+  it("self-heals a never-seeded row: seeds once, then the first signup claims owner", async () => {
+    // The P0: instrumentation never seeded the implicit customer, so the first
+    // claim finds no row and the existence probe comes back EMPTY. The gate must
+    // seed (ensureImplicitCustomer) and retry the claim — turning a bricked
+    // instance into "first request seeds" — rather than 403 on an empty DB.
+    selectResults = [[], []]; // no invite; existence probe → absent
+    claimResult = []; // first claim: zero rows (row missing)
+    // The seed makes the row exist + unclaimed, so the retry claim wins.
+    ensureImplicitCustomerMock.mockImplementation(async () => {
+      claimResult = [{ ownerEmail: "founder@team.com" }];
+    });
+    const { enforceSelfHostSignupGate } = await import(
+      "../src/lib/self-host-gate.ts"
+    );
+    await expect(
+      enforceSelfHostSignupGate("founder@team.com"),
+    ).resolves.toBeUndefined();
+    expect(ensureImplicitCustomerMock).toHaveBeenCalledTimes(1);
   });
 
   it("the first signup still becomes owner (claim succeeds)", async () => {
