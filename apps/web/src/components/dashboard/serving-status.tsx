@@ -45,6 +45,7 @@ export function ServingStatus({
   pausedAt,
   databaseCount,
   cursor,
+  now,
   testDatabase,
   canManage,
   labelClassName,
@@ -53,6 +54,12 @@ export function ServingStatus({
   pausedAt: Date | null;
   databaseCount: number;
   cursor: { lastIndexedAt: Date | null; lastErrorAt: Date | null };
+  /** A single render-time clock passed from the server so the time-sensitive
+   *  audit state (grace-window crossing, "Xm ago") is identical across SSR and
+   *  client hydration. Without it, a `new Date()` in this client render would
+   *  drift from the server's and flip the audit line on load near the grace
+   *  boundary — a hydration mismatch. See format.ts's injectable `now`. */
+  now: Date;
   /** A database name to wake+verify. null hides the Test connection action. */
   testDatabase: string | null;
   canManage: boolean;
@@ -61,14 +68,14 @@ export function ServingStatus({
   labelClassName?: string;
 }) {
   const { state, reason } = resolveServing({ pausedAt, databaseCount });
-  const audit = resolveAuditHealth(cursor);
+  const audit = resolveAuditHealth(cursor, now);
 
   // "As of" timestamp — when the audit log last synced successfully. For a
   // delayed log it doubles as how far behind we are; idle has none. (Not the
   // error time: the indexer re-stamps that to ~now on every failed poll, so it
   // would read "just now" while the log is actually minutes behind.)
   const auditDetail = cursor.lastIndexedAt
-    ? formatRelative(cursor.lastIndexedAt)
+    ? formatRelative(cursor.lastIndexedAt, now)
     : null;
 
   // Testing wakes a real engine, so it's only offered where it's meaningful:

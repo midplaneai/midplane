@@ -1021,6 +1021,10 @@ export default async function ProjectWorkspace({
           pausedAt={conn.pausedAt}
           databaseCount={databases.length}
           cursor={cursor}
+          // Request-time clock from this server render, so the audit line's
+          // grace-window state and relative time hydrate identically on the
+          // client (no boundary flip). See ServingStatus's `now`.
+          now={new Date()}
           testDatabase={selectedName}
           canManage={canManage}
         />

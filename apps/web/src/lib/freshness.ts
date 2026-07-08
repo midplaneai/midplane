@@ -166,16 +166,19 @@ export function resolveAuditHealth(
 ): AuditHealth {
   const inError =
     lastErrorAt != null && (!lastIndexedAt || lastErrorAt > lastIndexedAt);
-  if (inError && lastIndexedAt) {
-    // In error, but ride out a transient one: only "delayed" once the last
-    // good drain is older than the grace window.
+  if (inError) {
+    // Erroring with no successful drain ever → a first-use outage (e.g. a
+    // misconfigured indexer). Surface it now instead of hiding it as "idle":
+    // the project already has query activity that isn't reaching the audit
+    // log. There's no success to measure a grace window from, so no ride-out.
+    if (!lastIndexedAt) return "error";
+    // Otherwise ride out a transient blip: only "delayed" once the last good
+    // drain is older than the grace window.
     const behindMs = now.getTime() - lastIndexedAt.getTime();
     return behindMs >= AUDIT_DELAY_GRACE_MS ? "error" : "current";
   }
-  // Never drained → "no activity yet" is the honest, calm read even if the
-  // first drains are erroring: there's no audit data to be behind on, and the
-  // operator-facing error detail still lives in lastError / the logs. We also
-  // can't measure "for a while" here (no successful drain to date from).
+  // Never drained AND never errored → a genuine not-yet: no agent has queried,
+  // so there is no audit data to be behind on.
   if (!lastIndexedAt) return "idle";
   return "current";
 }

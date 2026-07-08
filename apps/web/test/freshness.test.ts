@@ -198,15 +198,16 @@ describe("resolveAuditHealth — secondary audit-drain line", () => {
     ).toBe("error");
   });
 
-  it("is idle (not delayed) when erroring before the first successful drain", () => {
-    // No successful drain to date from — for the owner popover "no activity
-    // yet" is the honest, calm read; the error detail stays in logs.
+  it("is error (a first-use outage) when erroring before the first successful drain", () => {
+    // No successful drain ever + already erroring → surface it now, don't hide
+    // it as "no activity yet". There's real query activity not reaching the
+    // audit log, and no success to measure a grace window from.
     expect(
       resolveAuditHealth(
         { lastIndexedAt: null, lastErrorAt: new Date(NOW.getTime() - 60_000) },
         NOW,
       ),
-    ).toBe("idle");
+    ).toBe("error");
   });
 
   it("is current when a good drain superseded an older error", () => {
