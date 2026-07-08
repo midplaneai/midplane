@@ -134,6 +134,9 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
           the databases this agent should reach. Works with Cursor, Claude Code,
           VS Code, Claude Desktop, ChatGPT, and any other MCP client.
         </p>
+        <p className="mt-1.5 text-[11px] text-subtle">
+          Connect as many agents as you like — unlimited on every plan.
+        </p>
       </div>
 
       {/* The endpoint URL itself — always visible + copyable (not a secret). */}

@@ -4,7 +4,7 @@ Implemented and live on the hosted product. Billing runs on the **@better-auth/s
 
 ## Principles
 
-1. **Structural limits, not volume.** Counting queries doesn't bind on real agent usage — an agent reasons between calls, so a heavy individual does ~15k queries/mo and a 5-person team does ~75k/mo. Volume gates would only trigger for customers already big enough to be paying for other reasons. Gate on the things that scale with the customer's actual use of the product: projects, agent identities, teammates.
+1. **Structural limits, not volume.** Counting queries doesn't bind on real agent usage — an agent reasons between calls, so a heavy individual does ~15k queries/mo and a 5-person team does ~75k/mo. Volume gates would only trigger for customers already big enough to be paying for other reasons. Gate on the things that scale with the customer's actual use of the product: projects, machine tokens (headless credentials), and teammates. Interactive agents (OAuth clients a person signs into — Claude, Cursor, ChatGPT) are the adoption surface, not a metered resource: connect as many as you want on every tier.
 2. **Don't paywall the core.** Policy enforcement, audit logging, and credential isolation are the product. They're available on every tier. Tiers differ in how much of each you get and which compliance affordances are wired up.
 3. **No vaporware in the matrix.** If it isn't shipped, it isn't a row. Custom asks (BYOK, SAML, dedicated region, custom retention) go through a "talk to us" path until they're built and sold.
 4. **Each tier transition has two triggers.** A volume reason ("we grew") and a feature reason ("compliance asked"). Either alone closes a deal; together they close it faster.
@@ -15,7 +15,8 @@ Implemented and live on the hosted product. Billing runs on the **@better-auth/s
 |---|---|---|---|
 | **Price** | $0 | **$49/mo** | **$399/mo** |
 | Projects | 1 | 10 | unlimited |
-| MCP tokens | 5 | 50 | unlimited |
+| Interactive agents (Claude, Cursor, ChatGPT) | unlimited | unlimited | unlimited |
+| Machine tokens (CI, backend, headless) | 5 | 50 | unlimited |
 | Seats | 1 | 10 | unlimited |
 | Audit retention | 7 days | 30 days | 90 days |
 | Policy engine (allow/deny/warn) | ✓ | ✓ | ✓ |
@@ -28,17 +29,17 @@ Implemented and live on the hosted product. Billing runs on the **@better-auth/s
 
 ## Upgrade triggers
 
-- **Free → Pro**: the second of anything — second app, second agent identity, second teammate. Or "I need to see last week's audit log."
-- **Pro → Team**: SSO ask from the security team, longer audit retention (90 days vs Pro's 30), or outgrowing Pro's caps on projects, tokens, or seats.
+- **Free → Pro**: the second of anything — second project or second teammate. Or "I need to see last week's audit log." (Interactive agents don't factor in — they're unlimited on Free.)
+- **Pro → Team**: SSO ask from the security team, longer audit retention (90 days vs Pro's 30), or outgrowing Pro's caps on projects, machine tokens, or seats.
 - **Team → custom**: BYOK requirement, dedicated region, SOC2/HIPAA artifact request, or any contract clause that doesn't fit the standard plan.
 
 The Pro → Team transition is intentionally a *compliance/team-process* moment, not a counter incrementing. SSO is the canonical trigger.
 
 ## Why these numbers
 
-**Free: 1 project / 5 tokens / 1 seat.** The binding walls are project (1), retention (7 days), seat (1), and SSO — the moments a customer feels anyway (their second project, their second teammate, their security team's first ask). Tokens are deliberately *not* one of those walls. A token is the value metric — an agent identity — so capping it at 1 would (a) make zero-downtime rotation impossible (rotation is mint-new → cut over → revoke-old, which needs a spare slot) and (b) hide the headline demo: many agents on one project, each with its own row in the audit log. Five tokens sells that story on the free tier without leaking the things people actually pay for, because projects/retention/seats/SSO still gate the upgrade.
+**Free: 1 project / unlimited interactive agents / 5 machine tokens / 1 seat.** The binding walls are project (1), retention (7 days), seat (1), and SSO — the moments a customer feels anyway (their second project, their second teammate, their security team's first ask). Neither agents nor machine tokens is one of those walls. The headline demo — many agents on one project, each with its own row in the audit log — runs on interactive agents, which are unlimited on every tier, so the free tier tells that story in full. Machine tokens (static credentials for headless automation) get 5: enough to wire a couple of backend services and still hold a spare slot for zero-downtime rotation (mint-new → cut over → revoke-old). Projects, retention, seats, and SSO still gate the upgrade.
 
-**Pro: 10 projects / 50 tokens / 10 seats at $49/mo** sits in the middle of the dev-infra Pro band. Tokens run 5× the project count because usage is many-agents-per-database, not one — and the token cap should never be the thing that forces a Pro→Team upgrade (that's a capability/compliance moment, not a counter). Comparables:
+**Pro: 10 projects / 50 machine tokens / 10 seats at $49/mo** sits in the middle of the dev-infra Pro band. Machine tokens run 5× the project count because a project often has several backend services wired to it — and the machine-token cap should never be the thing that forces a Pro→Team upgrade (that's a capability/compliance moment, not a counter). Comparables:
 
 | Product | Pro / mo |
 |---|---|
@@ -57,6 +58,7 @@ $29 reads "hobby-tier" for a compliance-positioned product; the indie/post-MVP b
 
 ## What we deliberately did not gate
 
+- **Interactive agents.** Connect as many OAuth clients (Claude, Cursor, ChatGPT) as you want on any tier. An agent is the adoption surface, not a metered resource, and capping it would fight the product's own least-privilege story — a cap nudges credential sharing, the exact thing the product exists to prevent. Only headless machine tokens count.
 - **Query volume.** Agent traffic doesn't bind on volume at any realistic individual or small-team scale. Keeping queries unmetered (subject to a fair-use abuse cap) avoids training customers that midplane is a metering product when it's actually a safety product.
 - **Regions.** Pick eu or us at signup; both are available to everyone. Active-active across both regions is a custom ask.
 - **Audit log export.** CSV/JSON export of the filtered log is on every tier, clamped to the tier's retention window — exporting your own audit trail isn't a paywall. Streaming/SIEM delivery (S3 / Datadog / Splunk webhooks) isn't built yet; it slots into Team when it lands.
@@ -71,7 +73,7 @@ To prevent a single free customer from driving infrastructure cost, the free tie
 
 - **`customers.plan` is the entitlement source of truth.** A text enum (`free` | `pro` | `team`) on the `customers` row, written ONLY by the @better-auth/stripe plugin's subscription-lifecycle hooks — the plugin owns `/api/auth/stripe/webhook` (signature-verified), and `resolvePlan()` (`apps/web/src/lib/plan.ts`) reads the column per-request, defaulting to Free. The status→tier map is pure (`planFromSubscription`): `active` / `trialing` grant the tier, everything else (`past_due`, `canceled`, `unpaid`, `incomplete`, `paused`) → Free, so a replayed webhook is a no-op. Pricing is **flat per org**: each tier is a plain Stripe `priceId` (no `seatPriceId`), billed as one fixed-quantity-1 subscription per org regardless of member count; self-serve Checkout + the Customer Portal are the plugin's hosted surfaces, so we wire no custom checkout UI.
 - **Caps are a code map, not data.** `CAPS` in `plan.ts` maps each tier → `{ projects, tokens, auditRetentionDays, sso, seats }`. The subscription only resolves the tier — "10 projects" isn't something Stripe can answer — so we map tier → caps here and count rows in Postgres ourselves.
-- **Enforcement points.** Project create and MCP-token mint each take a `SELECT … FOR UPDATE` on the `customers` row, then count usable rows under that lock (race-safe), throwing `PlanLimitError` over-cap. It surfaces as a **402** `{error:'plan_limit',…}` on the JSON API and an inline upgrade CTA on browser forms. A pure pre-flight layer (`projectCreateBlock` + `getPlanUsage`) hides doomed forms and shows `N / M` usage, but never replaces the locked check.
+- **Enforcement points.** Project create and machine-token mint each take a `SELECT … FOR UPDATE` on the `customers` row, then count usable rows under that lock (race-safe), throwing `PlanLimitError` over-cap. Only `kind='url'` machine tokens count (`countUsableTokens`); interactive-agent (OAuth) rows mint through a separate, uncapped path, so connecting an agent never trips the cap. It surfaces as a **402** `{error:'plan_limit',…}` on the JSON API and an inline upgrade CTA on browser forms. A pure pre-flight layer (`projectCreateBlock` + `getPlanUsage`) hides doomed forms and shows `N / M` usage, but never replaces the locked check.
 - **Seats are our membership cap, not a billing metric.** `CAPS.seats` (1 / 10 / ∞) bounds org members per tier, enforced on the invite/accept path via Better Auth `organization.membershipLimit` → `seatCapForOrg` (`lib/seats.ts`). It's fully decoupled from Stripe — the price is flat per org, so the cap only limits head count; it never changes the bill. (Going per-seat later is one field: re-add `seatPriceId` to the plan config.)
 - **Audit retention is a query-time visibility clamp, not storage deletion.** The `lib/audit.ts` read helpers (and `lib/projects.ts` last-query freshness) take a `retentionDays` and clamp the `since` bound to the tier window. Old rows persist; storage pruning is a follow-up in `TODOS.md`.
 - **Founder / internal override is the `customers.plan_override` column, not an env var.** `resolvePlan()` reads `plan_override` (set it to `free` / `pro` / `team`); a valid value BEATS the subscription-backed `plan` in either direction — force `team` to test unlimited, or `free` to exercise the capped UI on a paying account.
