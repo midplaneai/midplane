@@ -207,7 +207,7 @@ function ProjectCard({
   pauseAction: (formData: FormData) => Promise<void>;
   resumeAction: (formData: FormData) => Promise<void>;
 }) {
-  const { project: c, databases, cursor, activeTokens } = row;
+  const { project: c, databases, activeTokens } = row;
   const label = projectLabel(c);
 
   // Project-level "last query" = the most recent across its databases.
@@ -242,8 +242,7 @@ function ProjectCard({
               <LiveProjectFreshness
                 projectId={c.id}
                 initialPausedAt={c.pausedAt}
-                initialLastIndexedAt={cursor.lastIndexedAt}
-                initialLastErrorAt={cursor.lastErrorAt}
+                initialDatabaseCount={databases.length}
               />
               {/* Pause/resume + the row menu (delete) are owner/admin only —
                   a member sees the freshness state but no management controls.
@@ -370,8 +369,6 @@ function ProjectCard({
               database={db}
               initialLastQueryAt={db.lastQueryAt}
               initialPausedAt={c.pausedAt}
-              initialLastIndexedAt={cursor.lastIndexedAt}
-              initialLastErrorAt={cursor.lastErrorAt}
             />
           ))}
         </ul>
