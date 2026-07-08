@@ -24,7 +24,7 @@ import { ExposureScan } from "@/components/projects/exposure-scan";
 import { MaskedPreviewPanel } from "@/components/projects/masked-preview-panel";
 import { TestPolicyPanel } from "@/components/projects/test-policy-panel";
 import { TestReachabilityButton } from "@/components/projects/test-reachability-button";
-import { FreshnessDot } from "@/components/dashboard/freshness-dot";
+import { ServingStatus } from "@/components/dashboard/serving-status";
 import { RenameProjectInline } from "@/components/dashboard/rename-project-inline";
 import { DeleteProjectButton } from "@/components/delete-project-button";
 import { PauseProjectButton } from "@/components/projects/pause-project-button";
@@ -67,7 +67,6 @@ import {
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
 import { projectLabel, formatRelative } from "@/lib/format";
-import { resolveFreshness, FRESHNESS_LABELS } from "@/lib/freshness";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { pingDsnGuarded } from "@/lib/ping-guard";
 import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
@@ -171,12 +170,10 @@ export default async function ProjectWorkspace({
     );
   }
 
-  // Pause is a project-level override of the freshness dot: a paused
-  // project reads amber/"Paused" regardless of indexer state (see
-  // resolveFreshness — the same shared override the dashboard applies), and
-  // the rail header (visible from every pane) exposes one-click Resume.
+  // `paused` gates the Resume affordance in the rail header. The serving
+  // status headline, the demoted audit-log line, and a manual "Test
+  // connection" (wake) all live in the <ServingStatus> popover below.
   const paused = conn.pausedAt != null;
-  const railFreshness = resolveFreshness(cursor, conn.pausedAt);
   const dbNames = databases.map((d) => d.name);
 
   // Which database the per-DB panes target. Trust ?db only if it names a db
@@ -1018,11 +1015,19 @@ export default async function ProjectWorkspace({
       <div className="text-sm font-medium leading-snug tracking-tight text-foreground break-words">
         {label}
       </div>
-      <div className="mt-1.5 flex items-center gap-1.5">
-        <FreshnessDot state={railFreshness} />
-        <span className="text-xs capitalize text-muted-foreground">
-          {FRESHNESS_LABELS[railFreshness]}
-        </span>
+      <div className="mt-1.5">
+        <ServingStatus
+          projectId={conn.id}
+          pausedAt={conn.pausedAt}
+          databaseCount={databases.length}
+          cursor={cursor}
+          // Request-time clock from this server render, so the audit line's
+          // grace-window state and relative time hydrate identically on the
+          // client (no boundary flip). See ServingStatus's `now`.
+          now={new Date()}
+          testDatabase={selectedName}
+          canManage={canManage}
+        />
       </div>
       {paused && canManage ? (
         // Resume lives in the rail header so it's one click from any pane,

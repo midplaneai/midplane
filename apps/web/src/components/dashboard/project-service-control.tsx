@@ -20,8 +20,8 @@ import { useProjectFreshness } from "@/components/dashboard/freshness-provider";
 // health dots would be a fat-finger outage risk).
 //
 // Paused state is read live from the freshness provider so this stays in
-// lockstep with the pill (same source — see resolveFreshness), falling back
-// to the server-rendered initial until the first poll lands. Pause cuts off
+// lockstep with the serving pill (same source — see resolveServing), falling
+// back to the server-rendered initial until the first poll lands. Pause cuts off
 // live agent traffic, so it's gated by a confirm; Resume only restores
 // service, so it's one click. Both reuse the dashboard's pause/resume
 // Server Actions (teardown + audit + PostHog).
