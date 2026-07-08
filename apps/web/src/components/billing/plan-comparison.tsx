@@ -48,7 +48,14 @@ const ROWS: readonly Row[] = [
     ),
   },
   { label: "projects", cell: (p) => cap(CAPS[p].projects) },
-  { label: "mcp tokens", cell: (p) => cap(CAPS[p].tokens) },
+  // Interactive agents (OAuth: Claude, Cursor, ChatGPT) are uncapped on every
+  // plan — they're the adoption surface, not a metered resource. Hardcoded
+  // "Unlimited" because there is deliberately no CAP for them: only headless
+  // machine tokens (kind='url') consume a slot (see lib/tokens.ts
+  // countUsableTokens). Keep this row ABOVE machine tokens so the generous,
+  // uncapped line reads first.
+  { label: "interactive agents", cell: () => "Unlimited" },
+  { label: "machine tokens", cell: (p) => cap(CAPS[p].tokens) },
   { label: "seats", cell: (p) => cap(CAPS[p].seats) },
   {
     label: "audit retention",

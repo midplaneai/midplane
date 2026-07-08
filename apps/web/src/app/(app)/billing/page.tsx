@@ -189,7 +189,11 @@ export default async function BillingPage() {
               <UsageMeter
                 rows={[
                   { label: "projects", used: usage.projects, cap: caps.projects },
-                  { label: "mcp tokens", used: usage.tokens, cap: caps.tokens },
+                  {
+                    label: "machine tokens",
+                    used: usage.tokens,
+                    cap: caps.tokens,
+                  },
                   {
                     label: "seats",
                     used: seats.members + seats.pending,
@@ -215,6 +219,11 @@ export default async function BillingPage() {
               </BillingActionsProvider>
 
               <div className="border-t border-card pt-5 text-sm text-muted-foreground">
+                <p className="mb-3">
+                  Connect as many interactive agents (Claude, Cursor, ChatGPT)
+                  as you want — on every plan. Only machine tokens for headless
+                  automation (CI, backend services) are metered.
+                </p>
                 {canCheckout ? (
                   <p>
                     Pro and Team are billed at a flat monthly price; checkout and
