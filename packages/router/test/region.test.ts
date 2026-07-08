@@ -42,6 +42,30 @@ describe("mintMcpUrl", () => {
     const url = mintMcpUrl("eu", "tok_abc", {} as NodeJS.ProcessEnv);
     expect(url).toBe("http://localhost:3000/mcp/tok_abc");
   });
+
+  it("derives the origin from BETTER_AUTH_URL in self-host (remapped port)", () => {
+    const url = mintMcpUrl("eu", "mp_live_xyz", {
+      MIDPLANE_SELF_HOST: "1",
+      BETTER_AUTH_URL: "http://localhost:3210",
+    } as NodeJS.ProcessEnv);
+    expect(url).toBe("http://localhost:3210/mcp/mp_live_xyz");
+  });
+
+  it("strips a trailing slash from BETTER_AUTH_URL in self-host", () => {
+    const url = mintMcpUrl("eu", "mp_live_xyz", {
+      MIDPLANE_SELF_HOST: "1",
+      BETTER_AUTH_URL: "https://midplane.example.com/",
+    } as NodeJS.ProcessEnv);
+    expect(url).toBe("https://midplane.example.com/mcp/mp_live_xyz");
+  });
+
+  it("ignores BETTER_AUTH_URL when NOT self-host (cloud stays per-region)", () => {
+    const url = mintMcpUrl("eu", "tok_abc", {
+      BETTER_AUTH_URL: "https://eu.midplane.ai",
+      MIDPLANE_PUBLIC_HOST_EU: "eu.midplane.ai",
+    } as NodeJS.ProcessEnv);
+    expect(url).toBe("https://eu.midplane.ai/mcp/tok_abc");
+  });
 });
 
 describe("mcpGenericUrl", () => {
@@ -55,5 +79,13 @@ describe("mcpGenericUrl", () => {
   it("produces http://localhost:3000/mcp in dev", () => {
     const url = mcpGenericUrl("eu", {} as NodeJS.ProcessEnv);
     expect(url).toBe("http://localhost:3000/mcp");
+  });
+
+  it("derives the origin from BETTER_AUTH_URL in self-host (remapped port)", () => {
+    const url = mcpGenericUrl("eu", {
+      MIDPLANE_SELF_HOST: "1",
+      BETTER_AUTH_URL: "http://localhost:3210",
+    } as NodeJS.ProcessEnv);
+    expect(url).toBe("http://localhost:3210/mcp");
   });
 });

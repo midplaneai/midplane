@@ -60,6 +60,15 @@ fill_if_empty() {
   fi
 }
 
+# The host port the dashboard is published on. Mirrors the compose default of
+# ${WEB_PORT:-3000}: an uncommented, non-empty WEB_PORT= line in $ENV_FILE wins,
+# otherwise 3000. Read after `up` so the printed URL matches a remapped port.
+web_port() {
+  val=$(grep -E '^[[:space:]]*WEB_PORT=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | cut -d= -f2- | tr -d '[:space:]')
+  [ -n "$val" ] && echo "$val" || echo 3000
+}
+
 ensure_env() {
   if [ ! -f "$ENV_FILE" ]; then
     if [ ! -f "$EXAMPLE" ]; then
@@ -85,7 +94,7 @@ cmd_up() {
   echo "starting the self-host stack…"
   compose up -d --wait
   echo
-  echo "Midplane self-host is up → http://localhost:3000"
+  echo "Midplane self-host is up → http://localhost:$(web_port)"
   echo "The first email + password signup becomes the owner."
 }
 

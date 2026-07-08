@@ -80,12 +80,21 @@ docker compose --env-file .env.self-host -f docker-compose.self-host.yml \
   --profile migrate run --rm migrate
 ```
 
-### If host port 5432 is taken
+### If a host port is taken (5432 or 3000)
 
-Set `POSTGRES_PORT` to a free port in `.env.self-host` and re-run
-`./bin/self-host up`. Because the script passes `--env-file .env.self-host`, the
-override actually takes effect (the web container reaches Postgres over the
-compose network regardless, so only your host mapping changes).
+Both published host ports are overridable in `.env.self-host`; the containers'
+internal ports are unchanged, so only the host mapping moves.
+
+- **Postgres (5432).** Set `POSTGRES_PORT` to a free port. The web container
+  reaches Postgres over the compose network regardless, so nothing else changes.
+- **Web dashboard (3000).** Set `WEB_PORT` to a free port (e.g. a Next dev
+  server already owns 3000). Also set `BETTER_AUTH_URL` to match — e.g.
+  `WEB_PORT=3210` and `BETTER_AUTH_URL=http://localhost:3210` — so the auth
+  cookies and the dashboard's displayed MCP URL point at the port you actually
+  reach. `./bin/self-host up` prints the resolved URL.
+
+Re-run `./bin/self-host up` after editing. Because the script passes
+`--env-file .env.self-host`, the overrides actually take effect.
 
 ## Run from source (contributors)
 

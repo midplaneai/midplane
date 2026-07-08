@@ -49,7 +49,11 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      # Host port is overridable (like POSTGRES_PORT) for when 3000 is taken —
+      # set WEB_PORT in .env.self-host. The container still listens on 3000; set
+      # BETTER_AUTH_URL to match the host port so links (incl. the MCP URL) are
+      # correct.
+      - "${WEB_PORT:-3000}:3000"
     environment:
       MIDPLANE_SELF_HOST: "1"
       # In-network Postgres — NOT localhost (that's the container itself). This
@@ -63,6 +67,11 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?missing — run ./bin/self-host up (fills .env.self-host)}
       MIDPLANE_KMS_DEV_KEY_EU: ${MIDPLANE_KMS_DEV_KEY_EU:?missing — run ./bin/self-host up (fills .env.self-host)}
       MIDPLANE_TOKEN_PEPPER_EU_V1: ${MIDPLANE_TOKEN_PEPPER_EU_V1:?missing — run ./bin/self-host up (fills .env.self-host)}
+      # Optional master secret for column masking. Unset by default (masking
+      # off); set it in .env.self-host to enable the Exposure scan + masked
+      # preview. Passed through here so setting it in the env file actually
+      # reaches the container — required once any column mask is declared.
+      MIDPLANE_MASK_SALT_MASTER: ${MIDPLANE_MASK_SALT_MASTER:-}
     healthcheck:
       # bun is on PATH in the image; any HTTP response (even a redirect) means the
       # server is listening. Generous start_period covers migrations + Next boot.
