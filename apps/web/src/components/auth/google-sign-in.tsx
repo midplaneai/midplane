@@ -16,9 +16,14 @@ import { authClient } from "@/lib/auth-client";
 export function GoogleSignIn({
   redirectTo = "/dashboard",
   label = "Continue with Google",
+  divider = true,
 }: {
   redirectTo?: string;
   label?: string;
+  // The "or" separator above the button. On by default (the button sits below a
+  // password form); the identifier-first flow turns it off when Google is the
+  // sole method, so it reads as the primary action, not an alternative.
+  divider?: boolean;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -39,12 +44,14 @@ export function GoogleSignIn({
   }
 
   return (
-    <div className="mt-8">
-      <div className="mb-6 flex items-center gap-4">
-        <span className="h-px flex-1 bg-border" />
-        <span className="text-xs lowercase text-muted-foreground">or</span>
-        <span className="h-px flex-1 bg-border" />
-      </div>
+    <div className={divider ? "mt-8" : ""}>
+      {divider && (
+        <div className="mb-6 flex items-center gap-4">
+          <span className="h-px flex-1 bg-border" />
+          <span className="text-xs lowercase text-muted-foreground">or</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      )}
 
       <Button
         type="button"

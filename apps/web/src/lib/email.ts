@@ -143,3 +143,56 @@ export async function sendOrgInvitationEmail(args: {
 
   await sendEmail({ to: args.to, subject, html, text });
 }
+
+/** Send a password-reset email. Wired into Better Auth's sendResetPassword
+ *  callback (lib/auth.ts), which only registers it when isEmailConfigured() —
+ *  self-host / keyless dev have no Resend, so no reset email is offered there.
+ *  `resetUrl` is Better Auth's signed, time-boxed link; clicking it verifies the
+ *  token then lands the user on /reset-password?token=… to set a new password. */
+export async function sendPasswordResetEmail(args: {
+  to: string;
+  resetUrl: string;
+}): Promise<void> {
+  const subject = "Reset your Midplane password";
+
+  const text = [
+    "We received a request to reset the password for your Midplane account.",
+    "",
+    "Reset your password:",
+    args.resetUrl,
+    "",
+    "This link expires in 1 hour and can be used once.",
+    "If you didn't request this, you can ignore this email — your password won't change.",
+  ].join("\n");
+
+  const html = `<!doctype html>
+<html>
+  <body style="margin:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111111;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:0 auto;padding:40px 24px;">
+      <tr><td>
+        <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
+          We received a request to reset the password for your Midplane account.
+        </p>
+        <p style="margin:0 0 28px;">
+          <a href="${args.resetUrl}"
+             style="display:inline-block;background:#111111;color:#ffffff;text-decoration:none;font-size:14px;font-weight:500;padding:12px 20px;border-radius:6px;">
+            Reset password
+          </a>
+        </p>
+        <p style="font-size:13px;line-height:1.6;color:#666666;margin:0 0 8px;">
+          Or paste this link into your browser:
+        </p>
+        <p style="font-size:12px;line-height:1.6;color:#666666;word-break:break-all;margin:0 0 28px;">
+          <a href="${args.resetUrl}" style="color:#666666;">${args.resetUrl}</a>
+        </p>
+        <p style="font-size:12px;line-height:1.6;color:#999999;margin:0;border-top:1px solid #eeeeee;padding-top:16px;">
+          This link expires in 1 hour and can be used once. If you didn't request
+          this, you can ignore this email — your password won't change.
+        </p>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+
+  await sendEmail({ to: args.to, subject, html, text });
+}

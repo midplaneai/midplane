@@ -10,8 +10,10 @@ import * as authSchema from "@midplane-cloud/db/auth-schema";
 
 import { buildStripePlugins } from "./billing";
 import { getEeAuthPlugins } from "./ee-plugins";
+import { isEmailConfigured, sendPasswordResetEmail } from "./email";
 import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
+import { APEX_HOST, REGION_HOST } from "./region-routing";
 import { seatCapForOrg } from "./seats";
 import { googleAuthEnabled } from "./social-auth";
 import {
@@ -32,6 +34,46 @@ import { handleBeforeUserDelete } from "./workspace";
 // bootRegion()/getDb() only run when a request actually reaches /api/auth/*,
 // never at `next build` or module-eval (getDb throws when DATABASE_URL_<REGION>
 // is unset, which is the normal state during build and in some dev/test runs).
+// Every first-party origin a browser can send auth requests from. Better Auth's
+// origin check (CSRF) rejects any request whose Origin isn't trusted with
+// "Invalid origin". Left unset it trusts ONLY the single BETTER_AUTH_URL origin
+// — which is wrong here because one image answers on SEVERAL hosts: the EU app
+// serves both the apex (app.midplane.ai) and its regional subdomain
+// (eu.app.midplane.ai), so whichever host isn't BETTER_AUTH_URL would be
+// rejected (a sign-in from eu.app.midplane.ai failing "Invalid origin"). We
+// enumerate from the same host constants the region router uses, so there's one
+// source of truth. Self-host serves a single host and trusts only its own.
+function trustedAuthOrigins(): string[] {
+  const origins = new Set<string>();
+  const base = process.env.BETTER_AUTH_URL;
+  if (base) {
+    try {
+      origins.add(new URL(base).origin);
+    } catch {
+      // assertBootEnv already requires BETTER_AUTH_URL to be set; a malformed
+      // value surfaces there, not here.
+    }
+  }
+  // Self-host is single-host: nothing beyond its own origin to trust.
+  if (isSelfHost()) return [...origins];
+
+  // Cloud: the apex picker and BOTH regional dashboards are first-party hosts a
+  // browser legitimately posts auth from (the EU app answers on the apex too).
+  origins.add(`https://${APEX_HOST}`);
+  for (const host of Object.values(REGION_HOST)) {
+    origins.add(`https://${host}`);
+  }
+  // MCP endpoint hosts (agents authenticate here; discovery may be fetched
+  // cross-origin). First-party, so trusting them is safe and defensive.
+  for (const host of [
+    process.env.MIDPLANE_PUBLIC_HOST_EU,
+    process.env.MIDPLANE_PUBLIC_HOST_US,
+  ]) {
+    if (host) origins.add(`https://${host}`);
+  }
+  return [...origins];
+}
+
 function createAuth() {
   return betterAuth({
     appName: "midplane",
@@ -42,11 +84,46 @@ function createAuth() {
     // https://eu.app.midplane.ai), self-host to its host — the same value
     // Better Auth already used for cookies/callbacks, now pinned explicitly.
     baseURL: process.env.BETTER_AUTH_URL,
+    // Trust every first-party host this image serves (apex + regional
+    // subdomains), not just BETTER_AUTH_URL — see trustedAuthOrigins.
+    trustedOrigins: trustedAuthOrigins(),
     database: drizzleAdapter(getDb(bootRegion()), {
       provider: "pg",
       schema: { ...authSchema },
     }),
-    emailAndPassword: { enabled: true },
+    emailAndPassword: {
+      enabled: true,
+      // A password reset mints a fresh credential; drop every other live
+      // session so a leaked/forgotten one can't outlive the reset.
+      revokeSessionsOnPasswordReset: true,
+      // "Forgot password" by email. Registered ONLY when this build can send
+      // email (cloud + Resend) — self-host / keyless dev have no SMTP, so no
+      // reset is offered and the UI gates on isEmailConfigured() the same way
+      // (same hygiene as the Google/Stripe/ee conditionals). requestPasswordReset
+      // returns a uniform success whether or not the email exists, so the send
+      // is best-effort: a Resend outage must not turn that into an error the
+      // caller can distinguish (which would leak existence).
+      ...(isEmailConfigured()
+        ? {
+            sendResetPassword: async ({
+              user: resetUser,
+              url,
+            }: {
+              user: { email: string };
+              url: string;
+            }) => {
+              try {
+                await sendPasswordResetEmail({
+                  to: resetUser.email,
+                  resetUrl: url,
+                });
+              } catch (err) {
+                console.error("password reset email failed", err);
+              }
+            },
+          }
+        : {}),
+    },
     // Self-service account deletion (account page → danger zone). Better Auth
     // verifies intent first — a password for credential users, or a fresh
     // session otherwise — then calls beforeDelete BEFORE removing the user row.

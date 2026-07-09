@@ -1,9 +1,9 @@
 import "server-only";
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { getDb } from "@midplane-cloud/db";
-import { user } from "@midplane-cloud/db/auth-schema";
+import { account, user } from "@midplane-cloud/db/auth-schema";
 
 import { bootRegion } from "./region-context";
 import { otherRegion, type RoutableRegion } from "./region-routing";
@@ -47,4 +47,53 @@ export async function resolveSignInRegionOnApex(
 ): Promise<RoutableRegion> {
   const here: RoutableRegion = bootRegion() === "us" ? "us" : "eu";
   return (await emailExistsInThisRegion(email)) ? here : otherRegion(here);
+}
+
+/** Which sign-in methods an email's account actually has, in THIS region.
+ *  Drives the identifier-first sign-in UI: once we know the email we render
+ *  only the methods that account can use — a user who signed up with Google
+ *  never sees a password field they never set, and a password user isn't
+ *  offered a Google button that would fork a second identity.
+ *
+ *  Better Auth stores one `account` row per linked method: providerId
+ *  `credential` = an email/password account, `google` = a linked Google
+ *  identity (an account can have both). `exists` is keyed off the user row so
+ *  an account with only some other provider (e.g. SSO) still reports existing
+ *  and the UI can fall back to a generic form rather than a dead end.
+ *
+ *  Region-resident, same as emailExistsInThisRegion: an account that signs in
+ *  here IS in this region, so a single-region lookup is complete. Callers that
+ *  expose this to unauthenticated input MUST rate-limit — it's an existence +
+ *  method oracle (see components/auth/signin-discovery.ts). */
+export interface SignInMethods {
+  /** An account with this email exists in this region. */
+  exists: boolean;
+  /** Has an email/password credential (providerId = "credential"). */
+  hasPassword: boolean;
+  /** Has a linked Google identity (providerId = "google"). */
+  hasGoogle: boolean;
+}
+
+export async function getSignInMethods(email: string): Promise<SignInMethods> {
+  const normalized = email.trim().toLowerCase();
+  const none: SignInMethods = {
+    exists: false,
+    hasPassword: false,
+    hasGoogle: false,
+  };
+  if (!normalized) return none;
+  // LEFT JOIN so a user with zero account rows still returns one row (exists),
+  // and a user with several returns one row per linked provider.
+  const rows = await getDb(bootRegion())
+    .select({ providerId: account.providerId })
+    .from(user)
+    .leftJoin(account, eq(account.userId, user.id))
+    .where(sql`lower(${user.email}) = ${normalized}`);
+  if (rows.length === 0) return none;
+  const providers = new Set(rows.map((r) => r.providerId).filter(Boolean));
+  return {
+    exists: true,
+    hasPassword: providers.has("credential"),
+    hasGoogle: providers.has("google"),
+  };
 }
