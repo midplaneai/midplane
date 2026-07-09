@@ -28,11 +28,6 @@ export type Plan = "free" | "pro" | "team";
 export interface PlanCaps {
   /** Max projects. Infinity = unlimited (Team). */
   projects: number;
-  /** Max databases PER PROJECT (the only per-project cap — everything else
-   *  counts across the customer). Bounds how far "stuff every environment
-   *  into one project" can substitute for a second project; the isolation
-   *  pitch (own MCP URL / policy / tokens) does the rest. Infinity = Team. */
-  databases: number;
   /** Max total USABLE MCP tokens (agent identities) across all the
    *  customer's projects. The per-project default token counts.
    *  Infinity = unlimited (Team). See decision D8. */
@@ -63,15 +58,11 @@ export const CAPS: Record<Plan, PlanCaps> = {
   // Free stays gated on projects (1) / retention (7d) / seats (1) / SSO, so
   // a generous token count there sells the multi-agent story without
   // cannibalizing Pro.
-  // Databases (per project): 2 on Free — enough to experience the multi-DB
-  // tabs honestly (the one-app app-DB + analytics-DB pair) without letting a
-  // whole fleet of environments ride one free project. The second PROJECT
-  // stays the primary Free→Pro trigger; this cap only stops the workaround.
-  // Pro gets 10 per project (mirrors the token posture: roomy enough that it
-  // is never the Pro→Team forcing axis — that transition is compliance-led).
+  // Databases are NOT here: the per-project database ceiling is a fixed
+  // structural bound (MAX_DATABASES_PER_PROJECT below), identical on every
+  // tier, so it's not a billing lever and never appears on /billing.
   free: {
     projects: 1,
-    databases: 2,
     tokens: 5,
     auditRetentionDays: 7,
     sso: false,
@@ -79,7 +70,6 @@ export const CAPS: Record<Plan, PlanCaps> = {
   },
   pro: {
     projects: 10,
-    databases: 10,
     tokens: 50,
     auditRetentionDays: 30,
     sso: false,
@@ -87,7 +77,6 @@ export const CAPS: Record<Plan, PlanCaps> = {
   },
   team: {
     projects: Infinity,
-    databases: Infinity,
     tokens: Infinity,
     // Team retention EXCEEDS Pro (90 vs 30): audit history is what the
     // compliance buyer at this tier actually pays for, so the premium tier
@@ -123,12 +112,36 @@ export const PLAN_PRICING: Record<Plan, { amount: string; period: string }> = {
  *  even if MIDPLANE_EE were set. */
 export const SELF_HOST_CAPS: PlanCaps = {
   projects: Infinity,
-  databases: Infinity,
   tokens: Infinity,
   auditRetentionDays: Infinity,
   sso: false,
   seats: Infinity,
 };
+
+/** Fixed per-project database ceiling. NOT a plan lever — identical on every
+ *  cloud tier, so it lives OUTSIDE CAPS and never appears on /billing.
+ *
+ *  Adding a database spawns no new container: all of a project's databases
+ *  share one per-project engine machine (see the router spawner —
+ *  spawner-{fly,docker}.ts key the machine on projectId), so database COUNT is
+ *  not a compute-cost axis. This bound only exists for the per-DB machinery
+ *  that DOES grow with it — a KMS key, an encrypted DSN, an indexer cursor,
+ *  scope-grant rows, policy-YAML size, plus slots in the OAuth consent screen
+ *  and the database-strip tabs. Past ~this many, the product's isolation model
+ *  wants a second PROJECT (its own MCP URL / policy / tokens), not a wider one.
+ *  10 sits comfortably above every realistic single-project shape (app DB +
+ *  analytics + replica + a couple service DBs) while reading as a safety valve
+ *  rather than a limit. */
+export const MAX_DATABASES_PER_PROJECT = 10;
+
+/** The per-project database ceiling for the active deployment. Self-host is
+ *  uncapped core (your DB, your infra), so it returns Infinity — which makes
+ *  the Number.isFinite() guard at the enforcement site skip the count entirely,
+ *  exactly as the old SELF_HOST_CAPS.databases = Infinity did. Cloud returns
+ *  the fixed structural bound. */
+export function maxDatabasesPerProject(): number {
+  return isSelfHost() ? Infinity : MAX_DATABASES_PER_PROJECT;
+}
 
 /** Thrown by createProject / createToken when a plan cap is hit. Caught
  *  at the call sites and translated to a 402 (JSON API) or inline upgrade
@@ -136,12 +149,25 @@ export const SELF_HOST_CAPS: PlanCaps = {
  *  the typed-error idiom (DuplicateTokenName, LastDatabaseProtected). */
 export class PlanLimitError extends Error {
   constructor(
-    public readonly resource: "projects" | "databases" | "tokens",
+    public readonly resource: "projects" | "tokens",
     public readonly limit: number,
     public readonly plan: Plan,
   ) {
     super(`plan limit reached: ${resource} (limit ${limit}) on plan ${plan}`);
     this.name = "PlanLimitError";
+  }
+}
+
+/** Thrown by addDatabase when a project is already at the fixed structural
+ *  per-project database ceiling (MAX_DATABASES_PER_PROJECT). Deliberately
+ *  distinct from PlanLimitError: this cap is NOT plan-related — it's identical
+ *  on every tier, so the remedy is "create another project," never "upgrade."
+ *  Call sites render it as a structural message (409), never a 402 / upgrade
+ *  CTA. Mirrors the typed-error idiom (DuplicateTokenName, LastDatabaseProtected). */
+export class DatabaseLimitError extends Error {
+  constructor(public readonly limit: number) {
+    super(`project database limit reached (limit ${limit})`);
+    this.name = "DatabaseLimitError";
   }
 }
 
@@ -188,19 +214,22 @@ export function projectAddBlock(
   return null;
 }
 
-/** Whether the per-project database cap blocks adding ONE more database to a
- *  project right now.
+/** Whether the fixed per-project database ceiling blocks adding ONE more
+ *  database to a project right now.
  *
  *  Advisory UX only, like the two blocks above — addDatabase re-counts the
  *  project's children under the parent row lock and is the real enforcer.
- *  Callers use this to swap the "+ Add database" affordance for the upgrade
- *  CTA, never to skip that check. Returns the cap when full, else null. */
-export function databaseAddBlock(
-  usage: { databases: number },
-  caps: PlanCaps,
-): { limit: number } | null {
-  if (usage.databases >= caps.databases) {
-    return { limit: caps.databases };
+ *  Callers use this to swap the "+ Add database" affordance for a
+ *  "create another project" link, never to skip that check. Reads the fixed
+ *  structural bound (maxDatabasesPerProject) — NOT a plan cap — so it takes no
+ *  caps. Returns the cap when full (never on self-host, where it's Infinity),
+ *  else null. */
+export function databaseAddBlock(usage: {
+  databases: number;
+}): { limit: number } | null {
+  const limit = maxDatabasesPerProject();
+  if (usage.databases >= limit) {
+    return { limit };
   }
   return null;
 }
@@ -228,7 +257,7 @@ export function seatInviteBlock(
  *  the machine-readable shape is identical on both routes. */
 export function planLimitBody(err: PlanLimitError): {
   error: "plan_limit";
-  resource: "projects" | "databases" | "tokens";
+  resource: "projects" | "tokens";
   limit: number;
   plan: Plan;
   upgradeUrl: string;
