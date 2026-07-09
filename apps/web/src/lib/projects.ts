@@ -37,6 +37,8 @@ import {
   normalizeName,
   slugifyDatabaseName,
 } from "./project-name.ts";
+import { projectLabel } from "./format.ts";
+import { resolveFreshness, type Freshness } from "./freshness.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
 import { EVENT_TYPES } from "./audit.ts";
@@ -509,8 +511,55 @@ export async function listProjectOptions(
     .from(projects)
     .where(eq(projects.customerId, customer.id))
     .orderBy(desc(projects.createdAt));
-  // Label parity with projectLabel (lib/format): name, else id-prefix.
-  return rows.map((r) => ({ id: r.id, label: r.name ?? r.id.slice(0, 12) }));
+  return rows.map((r) => ({ id: r.id, label: projectLabel(r) }));
+}
+
+/** Usable machine-token count for the customer — the tokens half of
+ *  getPlanUsage, for pages that already know the project count from rows
+ *  they fetch anyway (the project workspace derives it from the switcher
+ *  rows instead of paying a second COUNT per render). */
+export async function getTokenUsage(customer: Customer): Promise<number> {
+  return countUsableTokens(getDb(customer.region), customer.id);
+}
+
+export interface ProjectSwitcherRow {
+  id: string;
+  /** Display label: the user's project name, else a stable id-prefix
+   *  (parity with projectLabel / listProjectOptions). */
+  label: string;
+  /** Resolved display state for the row's dot — paused override included,
+   *  same semantics as the rail header and the dashboard cards. */
+  freshness: Freshness;
+}
+
+/** The customer's projects with the light facts the rail-header switcher
+ *  needs (label + freshness dot) — the parents slice of
+ *  listDashboardProjects without children / tokens / last-query. One
+ *  query. Newest-first to match the dashboard list. */
+export async function listProjectSwitcherRows(
+  customer: Customer,
+): Promise<ProjectSwitcherRow[]> {
+  const db = getDb(customer.region);
+  const rows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      pausedAt: projects.pausedAt,
+      lastIndexedAt: indexerCursors.lastIndexedAt,
+      lastErrorAt: indexerCursors.lastErrorAt,
+    })
+    .from(projects)
+    .leftJoin(indexerCursors, eq(indexerCursors.projectId, projects.id))
+    .where(eq(projects.customerId, customer.id))
+    .orderBy(desc(projects.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    label: projectLabel(r),
+    freshness: resolveFreshness(
+      { lastIndexedAt: r.lastIndexedAt, lastErrorAt: r.lastErrorAt },
+      r.pausedAt,
+    ),
+  }));
 }
 
 // Update the user-supplied name on the parent project. Cosmetic — no
@@ -1403,16 +1452,22 @@ function isUniqueDbNameViolation(err: unknown): boolean {
 // YAML `databases:` block. Returns the new child id + project id.
 //
 // Throws DatabaseNameTaken if the name collides with an existing
-// sibling. Returns null when the project is unknown OR owned by
-// another customer (same leakage shape as createProject). The
-// dbName regex is enforced here even though the schema CHECK would
-// also catch it, so the caller gets a clean error before KMS spend.
+// sibling, and PlanLimitError when the project is already at the plan's
+// per-project database cap (counted under the same parent lock, so
+// concurrent adds can't overshoot). Returns null when the project is
+// unknown OR owned by another customer (same leakage shape as
+// createProject). The dbName regex is enforced here even though the
+// schema CHECK would also catch it, so the caller gets a clean error
+// before KMS spend.
 export async function addDatabase(
   customer: Customer,
   projectId: string,
   dbName: string,
   dsn: string,
   defaultAccess: AccessLevel,
+  // Resolved plan + caps for the org (from resolvePlan() at the call site) —
+  // caps.databases is the per-project ceiling enforced here.
+  entitlement: ResolvedPlan,
   deps: DatabaseMutationDeps,
 ): Promise<{ id: string; projectId: string } | null> {
   if (!isValidDatabaseName(dbName)) {
@@ -1460,6 +1515,21 @@ export async function addDatabase(
         .for("update")
         .limit(1);
       if (parent.length === 0) return null;
+
+      // Per-project database cap (plan.ts caps.databases). Counted under
+      // the parent FOR UPDATE lock above, so two concurrent adds can't
+      // both read "one below the cap" and overshoot. Infinity caps
+      // (Team / self-host) skip the count entirely.
+      const { caps, plan } = entitlement;
+      if (Number.isFinite(caps.databases)) {
+        const siblings = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(projectDatabases)
+          .where(eq(projectDatabases.projectId, projectId));
+        if (Number(siblings[0]?.count ?? 0) >= caps.databases) {
+          throw new PlanLimitError("databases", caps.databases, plan);
+        }
+      }
 
       // Pre-check sibling collision (cheap; the lock guarantees the
       // result holds until commit). The unique constraint

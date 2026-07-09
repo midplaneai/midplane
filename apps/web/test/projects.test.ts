@@ -21,6 +21,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ColumnMasksConfig } from "@midplane-cloud/db";
+// Static import is safe here: plan.ts is pure at module top (its only heavy
+// dependency, customer.ts, loads lazily inside resolvePlan, which these
+// tests never call).
+import { CAPS, PlanLimitError } from "../src/lib/plan.ts";
+
+// Entitlement threaded into addDatabase by most tests. Infinity databases
+// (Team) skips the per-project cap count entirely, keeping each test's
+// staged-select order unchanged; the cap-specific tests stage their own
+// finite-caps entitlement.
+const TEAM_ENTITLEMENT = { plan: "team" as const, caps: CAPS.team };
 
 interface DbCall {
   op: "delete" | "update" | "select" | "insert" | "execute";
@@ -497,6 +507,7 @@ describe("createProject plan caps", () => {
     // (1 usable token >= tokens cap of 1).
     const caps = {
       projects: 5,
+      databases: 10,
       tokens: 1,
       auditRetentionDays: 30,
       sso: false,
@@ -1953,6 +1964,7 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/analytics",
       "read",
+      TEAM_ENTITLEMENT,
       deps,
     );
 
@@ -1979,6 +1991,89 @@ describe("addDatabase", () => {
     expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
   });
 
+  it("throws PlanLimitError('databases') at the per-project cap, without inserting", async () => {
+    handle.setProjectsReturning([{ id: "conn-1" }]);
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent ownership + lock
+    handle.queueSelect([{ count: 2 }]); // sibling count → 2 >= 2 (Free cap)
+    const { addDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    const err = await addDatabase(
+      customer,
+      "conn-1",
+      "analytics",
+      "postgres://u:p@host:5432/db",
+      "read",
+      { plan: "free", caps: CAPS.free },
+      deps,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err.resource).toBe("databases");
+    expect(err.limit).toBe(2);
+    const insert = handle.calls.find(
+      (c) => c.op === "insert" && c.table === projectDatabases,
+    );
+    expect(insert, "no insert at the cap").toBeUndefined();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("skips the sibling count entirely on Infinity caps", async () => {
+    // Pins the Number.isFinite guard: a Team/self-host add issues exactly
+    // one project_databases select (the collision check) — an unexpected
+    // cap-count select would break the staged-select order AND this count.
+    handle.setProjectsReturning([{ id: "conn-1" }]);
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent lock
+    handle.queueSelect([]); // collision check
+    const { addDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    await addDatabase(
+      customer,
+      "conn-1",
+      "analytics",
+      "postgres://u:p@host:5432/db",
+      "read",
+      TEAM_ENTITLEMENT,
+      deps,
+    );
+
+    const dbSelects = handle.calls.filter(
+      (c) => c.op === "select" && c.table === projectDatabases,
+    );
+    expect(dbSelects, "only the collision check — no cap count").toHaveLength(
+      1,
+    );
+  });
+
+  it("counts siblings only on finite caps and passes under the cap", async () => {
+    handle.setProjectsReturning([{ id: "conn-1" }]);
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent ownership + lock
+    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 2 ✓
+    handle.queueSelect([]); // sibling-collision check returns empty
+    const { addDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    const result = await addDatabase(
+      customer,
+      "conn-1",
+      "analytics",
+      "postgres://u:p@host:5432/db",
+      "read",
+      { plan: "free", caps: CAPS.free },
+      deps,
+    );
+
+    expect(result?.projectId).toBe("conn-1");
+    const insert = handle.calls.find(
+      (c) => c.op === "insert" && c.table === projectDatabases,
+    );
+    expect(insert, "insert proceeds under the cap").toBeDefined();
+  });
+
   it("name collision: throws DatabaseNameTaken without inserting or invalidating", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
@@ -1996,6 +2091,7 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBeInstanceOf(DatabaseNameTaken);
@@ -2019,6 +2115,7 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/db",
       "read",
+      TEAM_ENTITLEMENT,
       deps,
     );
 
@@ -2041,6 +2138,7 @@ describe("addDatabase", () => {
         "Bad Name", // caps + space
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toThrow(/invalid database name/);
@@ -2073,6 +2171,7 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBeInstanceOf(DatabaseNameTaken);
@@ -2095,6 +2194,7 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBe(realFailure);
@@ -2401,6 +2501,74 @@ describe("getProjectWithFirstDatabase", () => {
 
     const result = await getProjectWithFirstDatabase(customer, "conn-1");
     expect(result).toBeNull();
+  });
+});
+
+// One flat select (projects LEFT JOIN indexer_cursors) → the switcher rows.
+// The fake ignores the join/order clauses, so we exercise the mapping layer:
+// label fallback + the resolveFreshness (paused-override) contract that the
+// rail dropdown's dots depend on.
+describe("listProjectSwitcherRows", () => {
+  it("maps name → label with the id-prefix fallback, and resolves live freshness", async () => {
+    handle.queueSelect([
+      {
+        id: "01HSWITCHNAMEDXXXXXXXXXXXX",
+        name: "prod",
+        pausedAt: null,
+        lastIndexedAt: new Date("2026-07-01T10:00:00Z"),
+        lastErrorAt: null,
+      },
+      {
+        id: "01HSWITCHUNNAMEDXXXXXXXXXX",
+        name: null, // never named → stable 12-char id prefix (projectLabel parity)
+        pausedAt: null,
+        lastIndexedAt: null, // never indexed, no error → still "live" (awaiting first query)
+        lastErrorAt: null,
+      },
+    ]);
+    const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
+
+    const rows = await listProjectSwitcherRows(customer);
+
+    expect(rows).toEqual([
+      { id: "01HSWITCHNAMEDXXXXXXXXXXXX", label: "prod", freshness: "live" },
+      {
+        id: "01HSWITCHUNNAMEDXXXXXXXXXX",
+        label: "01HSWITCHUNN",
+        freshness: "live",
+      },
+    ]);
+  });
+
+  it("paused overrides the indexer signal; a fresh error reads down", async () => {
+    handle.queueSelect([
+      {
+        id: "conn-paused",
+        name: "staging",
+        // Paused wins even over a healthy cursor — deliberate owner action.
+        pausedAt: new Date("2026-07-02T00:00:00Z"),
+        lastIndexedAt: new Date("2026-07-02T10:00:00Z"),
+        lastErrorAt: null,
+      },
+      {
+        id: "conn-down",
+        name: "broken",
+        pausedAt: null,
+        lastIndexedAt: new Date("2026-07-01T10:00:00Z"),
+        lastErrorAt: new Date("2026-07-01T11:00:00Z"), // error newer than drain
+      },
+    ]);
+    const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
+
+    const rows = await listProjectSwitcherRows(customer);
+
+    expect(rows.map((r) => r.freshness)).toEqual(["paused", "down"]);
+  });
+
+  it("returns [] for a customer with no projects", async () => {
+    handle.queueSelect([]);
+    const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
+    expect(await listProjectSwitcherRows(customer)).toEqual([]);
   });
 });
 

@@ -39,8 +39,13 @@ vi.mock("@/lib/projects", async () => {
   };
 });
 
+// No plan mock needed: addDatabaseFromForm resolves the entitlement with the
+// pure, sync resolvePlanFor(customer) — the fixture below carries no plan
+// columns, so it resolves to free deterministically.
+
 import { addDatabaseFromForm } from "../src/lib/database-form.ts";
 import { DatabaseNameTaken } from "../src/lib/projects.ts";
+import { CAPS, PlanLimitError } from "../src/lib/plan.ts";
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -101,6 +106,7 @@ describe("addDatabaseFromForm", () => {
       "analytics",
       VALID.dsn,
       "deny",
+      { plan: "free", caps: CAPS.free },
       { fake: "ctx" },
     );
   });
@@ -120,6 +126,15 @@ describe("addDatabaseFromForm", () => {
     });
     await expect(addDatabaseFromForm(customer, form(VALID))).rejects.toThrow(
       /"analytics" already exists/,
+    );
+  });
+
+  it("maps PlanLimitError to the inline-renderable upgrade message", async () => {
+    addDatabaseMock = vi.fn(async () => {
+      throw new PlanLimitError("databases", 2, "free");
+    });
+    await expect(addDatabaseFromForm(customer, form(VALID))).rejects.toThrow(
+      /free plan includes 2 databases per project/,
     );
   });
 
