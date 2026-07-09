@@ -6,7 +6,6 @@ import Link from "next/link";
 import { AddDatabaseSheet } from "@/components/projects/add-database-sheet";
 import { SectionLabel } from "@/components/ui/section-label";
 import { computeDbTabs } from "@/lib/db-tabs";
-import { UPGRADE_URL } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 // The headline of the Database pane: which database you're configuring,
@@ -26,18 +25,20 @@ export function DatabaseStrip({
   addAction,
   showAdd = true,
   atCap = false,
-  upgradeHref = UPGRADE_URL,
+  newProjectHref = "/projects/new",
 }: {
   databases: string[];
   current: string;
   projectId: string;
   addAction: (formData: FormData) => Promise<void>;
   showAdd?: boolean;
-  /** Plan's per-project database cap reached (advisory pre-flight — the add
-   *  path re-checks under a lock). Swaps the add affordance for the upgrade
-   *  link so the wall is visible BEFORE a filled-in form fails against it. */
+  /** Fixed per-project database ceiling reached (advisory pre-flight — the add
+   *  path re-checks under a lock). Swaps the add affordance for a "create
+   *  another project" link so the wall is visible BEFORE a filled-in form
+   *  fails against it. The ceiling is plan-independent, so the remedy is
+   *  another project, not an upgrade. */
   atCap?: boolean;
-  upgradeHref?: string;
+  newProjectHref?: string;
 }) {
   function go(name: string) {
     if (name === current) return;
@@ -107,10 +108,10 @@ export function DatabaseStrip({
         {showAdd ? (
           atCap ? (
             <Link
-              href={upgradeHref}
+              href={newProjectHref}
               className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-3 py-2 text-sm text-subtle transition-colors hover:border-border-strong hover:text-foreground"
             >
-              Upgrade to add more
+              Create another project to add more
               <ArrowUpRight
                 className="h-3.5 w-3.5"
                 strokeWidth={1.5}

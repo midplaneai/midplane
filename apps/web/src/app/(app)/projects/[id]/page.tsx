@@ -195,11 +195,11 @@ export default async function ProjectWorkspace({
   const paused = conn.pausedAt != null;
   const dbNames = databases.map((d) => d.name);
 
-  // Per-project database cap pre-flight: at the cap the strip swaps its
-  // "+ Add database" for the upgrade link (addDatabase re-checks under a
-  // lock — this only decides which affordance renders).
-  const dbAtCap =
-    databaseAddBlock({ databases: databases.length }, caps) !== null;
+  // Per-project database ceiling pre-flight: at the cap the strip swaps its
+  // "+ Add database" for a "create another project" link (addDatabase
+  // re-checks under a lock — this only decides which affordance renders). The
+  // ceiling is fixed and plan-independent, so this reads no caps.
+  const dbAtCap = databaseAddBlock({ databases: databases.length }) !== null;
 
   // Which database the per-DB panes target. Trust ?db only if it names a db
   // on this project; otherwise fall back to the first.
@@ -725,7 +725,7 @@ export default async function ProjectWorkspace({
         projectId={conn.id}
         addAction={addDatabaseAction}
         atCap={dbAtCap}
-        upgradeHref={UPGRADE_URL}
+        newProjectHref="/projects/new"
       />
       <div className="space-y-6">
       <div className="space-y-3">
@@ -850,7 +850,7 @@ export default async function ProjectWorkspace({
         addAction={addDatabaseAction}
         showAdd={canManage}
         atCap={dbAtCap}
-        upgradeHref={UPGRADE_URL}
+        newProjectHref="/projects/new"
       />
       {canManage ? (
         <div className="space-y-8">

@@ -24,13 +24,7 @@ import type { ColumnMasksConfig } from "@midplane-cloud/db";
 // Static import is safe here: plan.ts is pure at module top (its only heavy
 // dependency, customer.ts, loads lazily inside resolvePlan, which these
 // tests never call).
-import { CAPS, PlanLimitError } from "../src/lib/plan.ts";
-
-// Entitlement threaded into addDatabase by most tests. Infinity databases
-// (Team) skips the per-project cap count entirely, keeping each test's
-// staged-select order unchanged; the cap-specific tests stage their own
-// finite-caps entitlement.
-const TEAM_ENTITLEMENT = { plan: "team" as const, caps: CAPS.team };
+import { DatabaseLimitError } from "../src/lib/plan.ts";
 
 interface DbCall {
   op: "delete" | "update" | "select" | "insert" | "execute";
@@ -1990,6 +1984,7 @@ describe("addDatabase", () => {
   it("happy path: encrypts DSN, inserts child row, invalidates registry", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent ownership
+    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 10 ✓
     handle.queueSelect([]); // sibling-collision check returns empty
     const { addDatabase } = await import("../src/lib/projects.ts");
     const { projectDatabases } = await import("@midplane-cloud/db");
@@ -2001,7 +1996,6 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/analytics",
       "read",
-      TEAM_ENTITLEMENT,
       deps,
     );
 
@@ -2028,10 +2022,10 @@ describe("addDatabase", () => {
     expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
   });
 
-  it("throws PlanLimitError('databases') at the per-project cap, without inserting", async () => {
+  it("throws DatabaseLimitError at the fixed per-project ceiling, without inserting", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent ownership + lock
-    handle.queueSelect([{ count: 2 }]); // sibling count → 2 >= 2 (Free cap)
+    handle.queueSelect([{ count: 10 }]); // sibling count → 10 >= 10 (fixed ceiling)
     const { addDatabase } = await import("../src/lib/projects.ts");
     const { projectDatabases } = await import("@midplane-cloud/db");
     const deps = makeMutationDeps();
@@ -2042,53 +2036,58 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/db",
       "read",
-      { plan: "free", caps: CAPS.free },
       deps,
     ).catch((e) => e);
 
-    expect(err).toBeInstanceOf(PlanLimitError);
-    expect(err.resource).toBe("databases");
-    expect(err.limit).toBe(2);
+    // Structural cap (plan-independent) → DatabaseLimitError, NOT PlanLimitError.
+    expect(err).toBeInstanceOf(DatabaseLimitError);
+    expect(err.limit).toBe(10);
     const insert = handle.calls.find(
       (c) => c.op === "insert" && c.table === projectDatabases,
     );
-    expect(insert, "no insert at the cap").toBeUndefined();
+    expect(insert, "no insert at the ceiling").toBeUndefined();
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
 
-  it("skips the sibling count entirely on Infinity caps", async () => {
-    // Pins the Number.isFinite guard: a Team/self-host add issues exactly
-    // one project_databases select (the collision check) — an unexpected
-    // cap-count select would break the staged-select order AND this count.
-    handle.setProjectsReturning([{ id: "conn-1" }]);
-    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent lock
-    handle.queueSelect([]); // collision check
-    const { addDatabase } = await import("../src/lib/projects.ts");
-    const { projectDatabases } = await import("@midplane-cloud/db");
-    const deps = makeMutationDeps();
+  it("skips the sibling count entirely in self-host (uncapped — Infinity)", async () => {
+    // Pins the Number.isFinite guard: self-host resolves the ceiling to
+    // Infinity, so an add issues exactly one project_databases select (the
+    // collision check) — the cap-count select never fires.
+    const prev = process.env.MIDPLANE_SELF_HOST;
+    process.env.MIDPLANE_SELF_HOST = "1";
+    try {
+      handle.setProjectsReturning([{ id: "conn-1" }]);
+      handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent lock
+      handle.queueSelect([]); // collision check
+      const { addDatabase } = await import("../src/lib/projects.ts");
+      const { projectDatabases } = await import("@midplane-cloud/db");
+      const deps = makeMutationDeps();
 
-    await addDatabase(
-      customer,
-      "conn-1",
-      "analytics",
-      "postgres://u:p@host:5432/db",
-      "read",
-      TEAM_ENTITLEMENT,
-      deps,
-    );
+      await addDatabase(
+        customer,
+        "conn-1",
+        "analytics",
+        "postgres://u:p@host:5432/db",
+        "read",
+        deps,
+      );
 
-    const dbSelects = handle.calls.filter(
-      (c) => c.op === "select" && c.table === projectDatabases,
-    );
-    expect(dbSelects, "only the collision check — no cap count").toHaveLength(
-      1,
-    );
+      const dbSelects = handle.calls.filter(
+        (c) => c.op === "select" && c.table === projectDatabases,
+      );
+      expect(dbSelects, "only the collision check — no cap count").toHaveLength(
+        1,
+      );
+    } finally {
+      if (prev === undefined) delete process.env.MIDPLANE_SELF_HOST;
+      else process.env.MIDPLANE_SELF_HOST = prev;
+    }
   });
 
-  it("counts siblings only on finite caps and passes under the cap", async () => {
+  it("counts siblings on the finite (cloud) ceiling and passes under it", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent ownership + lock
-    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 2 ✓
+    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 10 ✓
     handle.queueSelect([]); // sibling-collision check returns empty
     const { addDatabase } = await import("../src/lib/projects.ts");
     const { projectDatabases } = await import("@midplane-cloud/db");
@@ -2100,7 +2099,6 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/db",
       "read",
-      { plan: "free", caps: CAPS.free },
       deps,
     );
 
@@ -2108,12 +2106,13 @@ describe("addDatabase", () => {
     const insert = handle.calls.find(
       (c) => c.op === "insert" && c.table === projectDatabases,
     );
-    expect(insert, "insert proceeds under the cap").toBeDefined();
+    expect(insert, "insert proceeds under the ceiling").toBeDefined();
   });
 
   it("name collision: throws DatabaseNameTaken without inserting or invalidating", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 10 ✓
     handle.queueSelect([{ id: "cdb-existing" }]); // sibling already owns the name
     const { addDatabase, DatabaseNameTaken } = await import(
       "../src/lib/projects.ts"
@@ -2128,7 +2127,6 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
-        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBeInstanceOf(DatabaseNameTaken);
@@ -2152,7 +2150,6 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/db",
       "read",
-      TEAM_ENTITLEMENT,
       deps,
     );
 
@@ -2175,7 +2172,6 @@ describe("addDatabase", () => {
         "Bad Name", // caps + space
         "postgres://u:p@host:5432/db",
         "read",
-        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toThrow(/invalid database name/);
@@ -2190,6 +2186,7 @@ describe("addDatabase", () => {
     // dashboard action keeps working under any future race.
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 10 ✓
     handle.queueSelect([]); // pre-check: no collision visible yet
     handle.failNextInsert({
       code: "23505",
@@ -2208,7 +2205,6 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
-        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBeInstanceOf(DatabaseNameTaken);
@@ -2218,6 +2214,7 @@ describe("addDatabase", () => {
   it("rethrows non-unique driver errors as-is", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 10 ✓
     handle.queueSelect([]);
     const realFailure = new Error("project terminated unexpectedly");
     handle.failNextInsert(realFailure);
@@ -2231,7 +2228,6 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
-        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBe(realFailure);

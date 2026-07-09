@@ -13,11 +13,14 @@ import type { Customer } from "@midplane-cloud/db";
 
 import {
   CAPS,
+  DatabaseLimitError,
+  MAX_DATABASES_PER_PROJECT,
   PLAN_PRICING,
   PlanLimitError,
   SELF_HOST_CAPS,
   UPGRADE_URL,
   databaseAddBlock,
+  maxDatabasesPerProject,
   planLimitBody,
   projectAddBlock,
   projectCreateBlock,
@@ -60,7 +63,6 @@ describe("CAPS", () => {
   it("encodes the PRICING.md tiers exactly", () => {
     expect(CAPS.free).toEqual({
       projects: 1,
-      databases: 2,
       tokens: 5,
       auditRetentionDays: 7,
       sso: false,
@@ -68,7 +70,6 @@ describe("CAPS", () => {
     });
     expect(CAPS.pro).toEqual({
       projects: 10,
-      databases: 10,
       tokens: 50,
       auditRetentionDays: 30,
       sso: false,
@@ -76,7 +77,6 @@ describe("CAPS", () => {
     });
     expect(CAPS.team).toEqual({
       projects: Infinity,
-      databases: Infinity,
       tokens: Infinity,
       auditRetentionDays: 90,
       sso: true,
@@ -188,7 +188,6 @@ describe("resolvePlan in self-host (MIDPLANE_SELF_HOST=1)", () => {
     expect(caps).toEqual(SELF_HOST_CAPS);
     // Uncapped: count >= cap is never true; Infinity retention = no clamp.
     expect(caps.projects).toBe(Infinity);
-    expect(caps.databases).toBe(Infinity);
     expect(caps.tokens).toBe(Infinity);
     expect(caps.auditRetentionDays).toBe(Infinity);
     expect(caps.seats).toBe(Infinity);
@@ -233,27 +232,35 @@ describe("projectCreateBlock", () => {
 });
 
 describe("databaseAddBlock", () => {
-  it("returns null while the project has room (Free: 1 of 2 databases)", () => {
-    expect(databaseAddBlock({ databases: 1 }, CAPS.free)).toBeNull();
+  // The ceiling is a FIXED structural bound, identical on every plan (no caps
+  // arg) — see maxDatabasesPerProject.
+  it("returns null while the project has room (below the ceiling)", () => {
+    expect(
+      databaseAddBlock({ databases: MAX_DATABASES_PER_PROJECT - 1 }),
+    ).toBeNull();
   });
 
-  it("flags the cap when the project is full (Free: 2 of 2)", () => {
-    expect(databaseAddBlock({ databases: 2 }, CAPS.free)).toEqual({
-      limit: 2,
+  it("flags the ceiling when the project is full", () => {
+    expect(databaseAddBlock({ databases: MAX_DATABASES_PER_PROJECT })).toEqual({
+      limit: MAX_DATABASES_PER_PROJECT,
     });
   });
 
-  it("never blocks on unlimited (Infinity) caps", () => {
-    expect(databaseAddBlock({ databases: 999_999 }, CAPS.team)).toBeNull();
-    expect(databaseAddBlock({ databases: 999_999 }, SELF_HOST_CAPS)).toBeNull();
+  it("still blocks when usage already exceeds the ceiling", () => {
+    expect(
+      databaseAddBlock({ databases: MAX_DATABASES_PER_PROJECT + 5 }),
+    ).toEqual({ limit: MAX_DATABASES_PER_PROJECT });
   });
 
-  it("still blocks when usage already exceeds the cap (post-downgrade)", () => {
-    // Pro→Free downgrade leaves a project holding more databases than Free
-    // allows (we never claw back); the pre-flight must keep blocking adds.
-    expect(databaseAddBlock({ databases: 5 }, CAPS.free)).toEqual({
-      limit: 2,
-    });
+  it("never blocks in self-host (uncapped — Infinity)", () => {
+    const prev = process.env.MIDPLANE_SELF_HOST;
+    process.env.MIDPLANE_SELF_HOST = "1";
+    try {
+      expect(databaseAddBlock({ databases: 999_999 })).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.MIDPLANE_SELF_HOST;
+      else process.env.MIDPLANE_SELF_HOST = prev;
+    }
   });
 });
 
@@ -317,16 +324,38 @@ describe("PlanLimitError", () => {
 });
 
 describe("planLimitBody", () => {
-  it("serializes a databases-cap error to the shared 402 shape", () => {
-    // The resource union widened to include "databases" — the JSON API body
-    // must carry it through unchanged, same shape as projects/tokens.
-    const body = planLimitBody(new PlanLimitError("databases", 2, "free"));
+  it("serializes a plan-cap error to the shared 402 shape", () => {
+    // planLimitBody covers only genuine plan resources (projects / tokens);
+    // the per-project database ceiling is NOT one of them (it's plan-
+    // independent and never a 402 — see DatabaseLimitError below).
+    const body = planLimitBody(new PlanLimitError("projects", 1, "free"));
     expect(body).toEqual({
       error: "plan_limit",
-      resource: "databases",
-      limit: 2,
+      resource: "projects",
+      limit: 1,
       plan: "free",
       upgradeUrl: UPGRADE_URL,
     });
+  });
+});
+
+describe("DatabaseLimitError + maxDatabasesPerProject", () => {
+  it("carries only the (plan-independent) limit — no plan / resource", () => {
+    const err = new DatabaseLimitError(MAX_DATABASES_PER_PROJECT);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe("DatabaseLimitError");
+    expect(err.limit).toBe(MAX_DATABASES_PER_PROJECT);
+  });
+
+  it("applies the fixed ceiling on cloud, uncaps it in self-host", () => {
+    expect(maxDatabasesPerProject()).toBe(MAX_DATABASES_PER_PROJECT);
+    const prev = process.env.MIDPLANE_SELF_HOST;
+    process.env.MIDPLANE_SELF_HOST = "1";
+    try {
+      expect(maxDatabasesPerProject()).toBe(Infinity);
+    } finally {
+      if (prev === undefined) delete process.env.MIDPLANE_SELF_HOST;
+      else process.env.MIDPLANE_SELF_HOST = prev;
+    }
   });
 });

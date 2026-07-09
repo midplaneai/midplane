@@ -48,7 +48,10 @@ const ROWS: readonly Row[] = [
     ),
   },
   { label: "projects", cell: (p) => cap(CAPS[p].projects) },
-  { label: "databases per project", cell: (p) => cap(CAPS[p].databases) },
+  // The per-project database ceiling is a fixed structural bound
+  // (MAX_DATABASES_PER_PROJECT), identical on every tier, so it is NOT a plan
+  // differentiator and deliberately has no row here — surfaced in-context at
+  // add-database time instead.
   // Interactive agents (OAuth: Claude, Cursor, ChatGPT) are uncapped on every
   // plan — they're the adoption surface, not a metered resource. Hardcoded
   // "Unlimited" because there is deliberately no CAP for them: only headless

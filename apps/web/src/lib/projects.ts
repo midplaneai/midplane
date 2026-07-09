@@ -39,7 +39,12 @@ import {
 } from "./project-name.ts";
 import { projectLabel } from "./format.ts";
 import { resolveServing, type ServingState } from "./freshness.ts";
-import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
+import {
+  DatabaseLimitError,
+  maxDatabasesPerProject,
+  PlanLimitError,
+  type ResolvedPlan,
+} from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
 import { EVENT_TYPES } from "./audit.ts";
 import {
@@ -1465,22 +1470,20 @@ function isUniqueDbNameViolation(err: unknown): boolean {
 // YAML `databases:` block. Returns the new child id + project id.
 //
 // Throws DatabaseNameTaken if the name collides with an existing
-// sibling, and PlanLimitError when the project is already at the plan's
-// per-project database cap (counted under the same parent lock, so
-// concurrent adds can't overshoot). Returns null when the project is
-// unknown OR owned by another customer (same leakage shape as
-// createProject). The dbName regex is enforced here even though the
-// schema CHECK would also catch it, so the caller gets a clean error
-// before KMS spend.
+// sibling, and DatabaseLimitError when the project is already at the fixed
+// structural per-project database ceiling (counted under the same parent
+// lock, so concurrent adds can't overshoot). That ceiling is plan-independent
+// (maxDatabasesPerProject) — NOT a plan cap — so this takes no entitlement.
+// Returns null when the project is unknown OR owned by another customer (same
+// leakage shape as createProject). The dbName regex is enforced here even
+// though the schema CHECK would also catch it, so the caller gets a clean
+// error before KMS spend.
 export async function addDatabase(
   customer: Customer,
   projectId: string,
   dbName: string,
   dsn: string,
   defaultAccess: AccessLevel,
-  // Resolved plan + caps for the org (from resolvePlan() at the call site) —
-  // caps.databases is the per-project ceiling enforced here.
-  entitlement: ResolvedPlan,
   deps: DatabaseMutationDeps,
 ): Promise<{ id: string; projectId: string } | null> {
   if (!isValidDatabaseName(dbName)) {
@@ -1529,18 +1532,19 @@ export async function addDatabase(
         .limit(1);
       if (parent.length === 0) return null;
 
-      // Per-project database cap (plan.ts caps.databases). Counted under
-      // the parent FOR UPDATE lock above, so two concurrent adds can't
-      // both read "one below the cap" and overshoot. Infinity caps
-      // (Team / self-host) skip the count entirely.
-      const { caps, plan } = entitlement;
-      if (Number.isFinite(caps.databases)) {
+      // Fixed structural per-project database ceiling
+      // (plan.ts maxDatabasesPerProject) — the same on every plan, so it's
+      // NOT a billing lever. Counted under the parent FOR UPDATE lock above,
+      // so two concurrent adds can't both read "one below the cap" and
+      // overshoot. Infinity (self-host) skips the count entirely.
+      const dbLimit = maxDatabasesPerProject();
+      if (Number.isFinite(dbLimit)) {
         const siblings = await tx
           .select({ count: sql<number>`count(*)::int` })
           .from(projectDatabases)
           .where(eq(projectDatabases.projectId, projectId));
-        if (Number(siblings[0]?.count ?? 0) >= caps.databases) {
-          throw new PlanLimitError("databases", caps.databases, plan);
+        if (Number(siblings[0]?.count ?? 0) >= dbLimit) {
+          throw new DatabaseLimitError(dbLimit);
         }
       }
 
