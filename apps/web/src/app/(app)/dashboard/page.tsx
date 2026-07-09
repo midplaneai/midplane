@@ -29,7 +29,8 @@ import {
 import { currentCustomer } from "@/lib/customer";
 import { assertManager, isManager } from "@/lib/org-auth";
 import { projectLabel, formatRelative } from "@/lib/format";
-import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
+import { projectAddBlock, resolvePlan, UPGRADE_URL } from "@/lib/plan";
+import { wantsProjectList } from "@/lib/routes";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { getPostHog } from "@/lib/posthog";
 import { cn } from "@/lib/utils";
@@ -43,7 +44,7 @@ import { cn } from "@/lib/utils";
 export default async function Dashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ setup?: string | string[] }>;
+  searchParams: Promise<{ setup?: string | string[]; list?: string | string[] }>;
 }) {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup");
@@ -51,7 +52,13 @@ export default async function Dashboard({
   // An older create flow redirected to /dashboard?setup=<id> to auto-open
   // the agent setup sheet. New projects now land on the project's Connect
   // tab instead. Strip the stale param if a bookmarked URL still carries it.
-  void searchParams;
+  //
+  // ?list=1 is the explicit "show me the list" intent: it skips the
+  // single-project bounce below so the list — with its N / cap counter and
+  // create/upgrade CTA — stays reachable from the breadcrumb even when the
+  // account holds exactly one project.
+  const { list } = await searchParams;
+  const wantList = wantsProjectList(list);
 
   // Owner/admin can add, pause, and delete projects; a member operates them
   // (connects agents, runs queries) but sees no management controls.
@@ -66,8 +73,10 @@ export default async function Dashboard({
   // D1 (plan-design-review): a single-project customer skips the one-row list
   // and lands on the project itself — the container stays invisible until there
   // is more than one. An empty default project renders its own setup hero (see
-  // the projects/[id] empty state).
-  if (rows.length === 1) {
+  // the projects/[id] empty state). ?list=1 (the breadcrumb's explicit intent)
+  // bypasses the bounce; without it a single-project account could never see
+  // the list at all.
+  if (rows.length === 1 && !wantList) {
     redirect(`/projects/${rows[0]!.project.id}`);
   }
 
@@ -77,8 +86,16 @@ export default async function Dashboard({
   // only fires when rows is non-empty, so it never collides with the
   // empty-state branch below.
   const projectLimit = caps.projects;
+  // A projects-cap block is advisory-cleared when a reusable EMPTY project
+  // exists: createProject attaches the first database to it without consuming
+  // a slot (the same clearing /projects/new applies), so the CTA must stay
+  // "New project" — a fresh Free workspace reaching this list via ?list=1
+  // would otherwise see an upgrade wall for a create that succeeds. The rows
+  // already carry each project's databases, so this costs no extra query.
+  const hasReusableEmpty = rows.some((r) => r.databases.length === 0);
   const atProjectLimit =
-    Number.isFinite(projectLimit) && rows.length >= projectLimit;
+    projectAddBlock({ projects: rows.length }, caps) !== null &&
+    !hasReusableEmpty;
 
   return (
     <>

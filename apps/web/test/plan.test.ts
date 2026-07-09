@@ -16,9 +16,14 @@ import {
   PLAN_PRICING,
   PlanLimitError,
   SELF_HOST_CAPS,
+  UPGRADE_URL,
+  databaseAddBlock,
+  planLimitBody,
+  projectAddBlock,
   projectCreateBlock,
   hasEntitlement,
   resolvePlan,
+  resolvePlanFor,
 } from "../src/lib/plan.ts";
 
 // currentCustomer is reassigned per-test through a getter so each test can
@@ -55,6 +60,7 @@ describe("CAPS", () => {
   it("encodes the PRICING.md tiers exactly", () => {
     expect(CAPS.free).toEqual({
       projects: 1,
+      databases: 2,
       tokens: 5,
       auditRetentionDays: 7,
       sso: false,
@@ -62,6 +68,7 @@ describe("CAPS", () => {
     });
     expect(CAPS.pro).toEqual({
       projects: 10,
+      databases: 10,
       tokens: 50,
       auditRetentionDays: 30,
       sso: false,
@@ -69,6 +76,7 @@ describe("CAPS", () => {
     });
     expect(CAPS.team).toEqual({
       projects: Infinity,
+      databases: Infinity,
       tokens: Infinity,
       auditRetentionDays: 90,
       sso: true,
@@ -180,6 +188,7 @@ describe("resolvePlan in self-host (MIDPLANE_SELF_HOST=1)", () => {
     expect(caps).toEqual(SELF_HOST_CAPS);
     // Uncapped: count >= cap is never true; Infinity retention = no clamp.
     expect(caps.projects).toBe(Infinity);
+    expect(caps.databases).toBe(Infinity);
     expect(caps.tokens).toBe(Infinity);
     expect(caps.auditRetentionDays).toBe(Infinity);
     expect(caps.seats).toBe(Infinity);
@@ -223,6 +232,79 @@ describe("projectCreateBlock", () => {
   });
 });
 
+describe("databaseAddBlock", () => {
+  it("returns null while the project has room (Free: 1 of 2 databases)", () => {
+    expect(databaseAddBlock({ databases: 1 }, CAPS.free)).toBeNull();
+  });
+
+  it("flags the cap when the project is full (Free: 2 of 2)", () => {
+    expect(databaseAddBlock({ databases: 2 }, CAPS.free)).toEqual({
+      limit: 2,
+    });
+  });
+
+  it("never blocks on unlimited (Infinity) caps", () => {
+    expect(databaseAddBlock({ databases: 999_999 }, CAPS.team)).toBeNull();
+    expect(databaseAddBlock({ databases: 999_999 }, SELF_HOST_CAPS)).toBeNull();
+  });
+
+  it("still blocks when usage already exceeds the cap (post-downgrade)", () => {
+    // Pro→Free downgrade leaves a project holding more databases than Free
+    // allows (we never claw back); the pre-flight must keep blocking adds.
+    expect(databaseAddBlock({ databases: 5 }, CAPS.free)).toEqual({
+      limit: 2,
+    });
+  });
+});
+
+describe("projectAddBlock", () => {
+  it("returns null while the org has room (Pro: 3 of 10)", () => {
+    expect(projectAddBlock({ projects: 3 }, CAPS.pro)).toBeNull();
+  });
+
+  it("flags the cap when the org is full (Free: 1 of 1)", () => {
+    expect(projectAddBlock({ projects: 1 }, CAPS.free)).toEqual({ limit: 1 });
+  });
+
+  it("never blocks on unlimited (Infinity) caps", () => {
+    expect(projectAddBlock({ projects: 999_999 }, CAPS.team)).toBeNull();
+    expect(projectAddBlock({ projects: 999_999 }, SELF_HOST_CAPS)).toBeNull();
+  });
+});
+
+describe("resolvePlanFor (sync twin — customer already in hand)", () => {
+  it("defaults to free with no customer / no plan columns", () => {
+    expect(resolvePlanFor(null)).toEqual({ plan: "free", caps: CAPS.free });
+    expect(resolvePlanFor({})).toEqual({ plan: "free", caps: CAPS.free });
+  });
+
+  it("resolves the subscription-backed plan", () => {
+    expect(resolvePlanFor(customerWith(null, "pro"))).toEqual({
+      plan: "pro",
+      caps: CAPS.pro,
+    });
+  });
+
+  it("plan_override BEATS the subscription in either direction", () => {
+    expect(resolvePlanFor(customerWith("team", "free")).plan).toBe("team");
+    expect(resolvePlanFor(customerWith("free", "team")).plan).toBe("free");
+  });
+
+  it("returns uncapped caps in self-host, ignoring the customer row", () => {
+    const prev = process.env.MIDPLANE_SELF_HOST;
+    process.env.MIDPLANE_SELF_HOST = "1";
+    try {
+      expect(resolvePlanFor(customerWith(null, "free"))).toEqual({
+        plan: "team",
+        caps: SELF_HOST_CAPS,
+      });
+    } finally {
+      if (prev === undefined) delete process.env.MIDPLANE_SELF_HOST;
+      else process.env.MIDPLANE_SELF_HOST = prev;
+    }
+  });
+});
+
 describe("PlanLimitError", () => {
   it("carries resource, limit, and plan for call-site translation", () => {
     const err = new PlanLimitError("projects", 1, "free");
@@ -231,5 +313,20 @@ describe("PlanLimitError", () => {
     expect(err.resource).toBe("projects");
     expect(err.limit).toBe(1);
     expect(err.plan).toBe("free");
+  });
+});
+
+describe("planLimitBody", () => {
+  it("serializes a databases-cap error to the shared 402 shape", () => {
+    // The resource union widened to include "databases" — the JSON API body
+    // must carry it through unchanged, same shape as projects/tokens.
+    const body = planLimitBody(new PlanLimitError("databases", 2, "free"));
+    expect(body).toEqual({
+      error: "plan_limit",
+      resource: "databases",
+      limit: 2,
+      plan: "free",
+      upgradeUrl: UPGRADE_URL,
+    });
   });
 });

@@ -1,9 +1,12 @@
 "use client";
 
-import { Database } from "lucide-react";
+import { ArrowUpRight, Database } from "lucide-react";
+import Link from "next/link";
 
 import { AddDatabaseSheet } from "@/components/projects/add-database-sheet";
+import { SectionLabel } from "@/components/ui/section-label";
 import { computeDbTabs } from "@/lib/db-tabs";
+import { UPGRADE_URL } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 // The headline of the Database pane: which database you're configuring,
@@ -22,12 +25,19 @@ export function DatabaseStrip({
   projectId,
   addAction,
   showAdd = true,
+  atCap = false,
+  upgradeHref = UPGRADE_URL,
 }: {
   databases: string[];
   current: string;
   projectId: string;
   addAction: (formData: FormData) => Promise<void>;
   showAdd?: boolean;
+  /** Plan's per-project database cap reached (advisory pre-flight — the add
+   *  path re-checks under a lock). Swaps the add affordance for the upgrade
+   *  link so the wall is visible BEFORE a filled-in form fails against it. */
+  atCap?: boolean;
+  upgradeHref?: string;
 }) {
   function go(name: string) {
     if (name === current) return;
@@ -40,9 +50,7 @@ export function DatabaseStrip({
 
   return (
     <div className="mb-7">
-      <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-subtle">
-        Database
-      </p>
+      <SectionLabel className="mb-2">Database</SectionLabel>
       <div className="flex flex-wrap items-center gap-2">
         {visible.map((name) => {
           const isCurrent = name === current;
@@ -97,7 +105,21 @@ export function DatabaseStrip({
           </details>
         ) : null}
         {showAdd ? (
-          <AddDatabaseSheet projectId={projectId} addAction={addAction} />
+          atCap ? (
+            <Link
+              href={upgradeHref}
+              className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-3 py-2 text-sm text-subtle transition-colors hover:border-border-strong hover:text-foreground"
+            >
+              Upgrade to add more
+              <ArrowUpRight
+                className="h-3.5 w-3.5"
+                strokeWidth={1.5}
+                aria-hidden
+              />
+            </Link>
+          ) : (
+            <AddDatabaseSheet projectId={projectId} addAction={addAction} />
+          )
         ) : null}
       </div>
     </div>

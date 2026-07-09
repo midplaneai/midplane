@@ -24,11 +24,12 @@ import {
   slugifyDatabaseName,
 } from "@/lib/projects";
 import {
-  projectCreateBlock,
+  projectAddBlock,
   PlanLimitError,
   resolvePlan,
   UPGRADE_URL,
 } from "@/lib/plan";
+import { PROJECTS_LIST_HREF } from "@/lib/routes";
 import { getPostHog } from "@/lib/posthog";
 
 export default async function NewProject() {
@@ -43,26 +44,29 @@ export default async function NewProject() {
   // Pre-flight the plan cap so a capped user sees the upgrade path BEFORE
   // pasting a DSN — not after submitting a form that's doomed to fail. This
   // is advisory; createAction still runs the authoritative locked check (it
-  // catches the concurrent-tab race this unlocked read can't). Mirrors the
-  // resource the action would throw on, so the messaging is consistent.
+  // catches the concurrent-tab race this unlocked read can't). The web flow
+  // is OAuth-first and mints NO default token (createAction passes
+  // mintDefaultToken=false, and createProject skips the token-cap check when
+  // not minting) — so ONLY the project cap gates this form. Gating on
+  // projectCreateBlock here used to wall off token-capped orgs whose create
+  // would have succeeded.
   const { caps, plan } = await resolvePlan();
   // A projects-cap block is cleared when the customer has a reusable empty
-  // project: createProject attaches the first DB + token to it without consuming
-  // a new slot, so the DSN form must stay open (a tokens-cap block still
-  // stands). Without this, a fresh Free customer (auto-seeded Default, 1/1) is
-  // wrongly told they're at their project limit and can't add a first database.
-  const rawBlock = projectCreateBlock(await getPlanUsage(customer), caps);
+  // project: createProject attaches the first DB to it without consuming a
+  // new slot, so the DSN form must stay open. Without this, a fresh Free
+  // customer (auto-seeded Default, 1/1) is wrongly told they're at their
+  // project limit and can't add a first database.
+  const usage = await getPlanUsage(customer);
+  const rawBlock = projectAddBlock({ projects: usage.projects }, caps);
   const block =
-    rawBlock?.resource === "projects" && (await hasEmptyProject(customer))
-      ? null
-      : rawBlock;
+    rawBlock && (await hasEmptyProject(customer)) ? null : rawBlock;
 
   return (
     <>
       <Topbar>
         <Breadcrumb
           items={[
-            { label: "Projects", href: "/dashboard" },
+            { label: "Projects", href: PROJECTS_LIST_HREF },
             { label: "New" },
           ]}
         />
@@ -96,32 +100,15 @@ export default async function NewProject() {
             />
           ) : block ? (
             <EmptyState
-              title={
-                block.resource === "projects"
-                  ? "You've reached your plan's project limit"
-                  : "You've reached your plan's token limit"
-              }
+              title="You've reached your plan's project limit"
               description={
-                block.resource === "projects" ? (
-                  <>
-                    The {plan} plan includes{" "}
-                    <strong className="font-medium text-foreground">
-                      {block.limit}{" "}
-                      {block.limit === 1 ? "project" : "projects"}
-                    </strong>
-                    . Upgrade to add more, or delete one you no longer use.
-                  </>
-                ) : (
-                  <>
-                    The {plan} plan includes{" "}
-                    <strong className="font-medium text-foreground">
-                      {block.limit}{" "}
-                      {block.limit === 1 ? "agent token" : "agent tokens"}
-                    </strong>
-                    , and a new project mints another. Upgrade, or revoke a
-                    token you no longer use.
-                  </>
-                )
+                <>
+                  The {plan} plan includes{" "}
+                  <strong className="font-medium text-foreground">
+                    {block.limit} {block.limit === 1 ? "project" : "projects"}
+                  </strong>
+                  . Upgrade to add more, or delete one you no longer use.
+                </>
               }
               action={
                 <div className="flex items-center gap-3">

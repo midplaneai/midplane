@@ -21,6 +21,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ColumnMasksConfig } from "@midplane-cloud/db";
+// Static import is safe here: plan.ts is pure at module top (its only heavy
+// dependency, customer.ts, loads lazily inside resolvePlan, which these
+// tests never call).
+import { CAPS, PlanLimitError } from "../src/lib/plan.ts";
+
+// Entitlement threaded into addDatabase by most tests. Infinity databases
+// (Team) skips the per-project cap count entirely, keeping each test's
+// staged-select order unchanged; the cap-specific tests stage their own
+// finite-caps entitlement.
+const TEAM_ENTITLEMENT = { plan: "team" as const, caps: CAPS.team };
 
 interface DbCall {
   op: "delete" | "update" | "select" | "insert" | "execute";
@@ -497,6 +507,7 @@ describe("createProject plan caps", () => {
     // (1 usable token >= tokens cap of 1).
     const caps = {
       projects: 5,
+      databases: 10,
       tokens: 1,
       auditRetentionDays: 30,
       sso: false,
@@ -571,6 +582,43 @@ describe("createProject plan caps", () => {
       inserts.some((c) => c.table === mcpTokens),
       "no default token row when mintDefaultToken=false",
     ).toBe(false);
+  });
+
+  it("succeeds WITHOUT any pepper configured when mintDefaultToken=false (codex P2)", async () => {
+    // The OAuth-first web flow mints no token, so it must not depend on the
+    // token-pepper KMS material at all — a region with no pepper configured
+    // used to fail the create before the flag was even consulted.
+    const prevPepper = process.env.MIDPLANE_TOKEN_PEPPER_EU_V1;
+    delete process.env.MIDPLANE_TOKEN_PEPPER_EU_V1;
+    try {
+      const { createProject } = await import("../src/lib/projects.ts");
+      const { CAPS } = await import("../src/lib/plan.ts");
+      const { projectDatabases, projects: projectsTable } = await import(
+        "@midplane-cloud/db"
+      );
+      handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+      handle.queueSelect([]); // empty-project detection → none → create-new path
+      handle.queueSelect([]); // project count → 0 < 1 ✓
+      const result = await createProject(
+        customer,
+        DSN,
+        null,
+        "read",
+        ACTOR,
+        { plan: "free", caps: CAPS.free },
+        false,
+      );
+      expect(result.defaultTokenPlaintext).toBeNull();
+      const inserts = handle.calls.filter((c) => c.op === "insert");
+      expect(inserts.some((c) => c.table === projectsTable)).toBe(true);
+      expect(inserts.some((c) => c.table === projectDatabases)).toBe(true);
+    } finally {
+      if (prevPepper === undefined) {
+        delete process.env.MIDPLANE_TOKEN_PEPPER_EU_V1;
+      } else {
+        process.env.MIDPLANE_TOKEN_PEPPER_EU_V1 = prevPepper;
+      }
+    }
   });
 
   it("reuses the customer's empty project instead of creating a second one (D7-A)", async () => {
@@ -1953,6 +2001,7 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/analytics",
       "read",
+      TEAM_ENTITLEMENT,
       deps,
     );
 
@@ -1979,6 +2028,89 @@ describe("addDatabase", () => {
     expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
   });
 
+  it("throws PlanLimitError('databases') at the per-project cap, without inserting", async () => {
+    handle.setProjectsReturning([{ id: "conn-1" }]);
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent ownership + lock
+    handle.queueSelect([{ count: 2 }]); // sibling count → 2 >= 2 (Free cap)
+    const { addDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    const err = await addDatabase(
+      customer,
+      "conn-1",
+      "analytics",
+      "postgres://u:p@host:5432/db",
+      "read",
+      { plan: "free", caps: CAPS.free },
+      deps,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err.resource).toBe("databases");
+    expect(err.limit).toBe(2);
+    const insert = handle.calls.find(
+      (c) => c.op === "insert" && c.table === projectDatabases,
+    );
+    expect(insert, "no insert at the cap").toBeUndefined();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("skips the sibling count entirely on Infinity caps", async () => {
+    // Pins the Number.isFinite guard: a Team/self-host add issues exactly
+    // one project_databases select (the collision check) — an unexpected
+    // cap-count select would break the staged-select order AND this count.
+    handle.setProjectsReturning([{ id: "conn-1" }]);
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent lock
+    handle.queueSelect([]); // collision check
+    const { addDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    await addDatabase(
+      customer,
+      "conn-1",
+      "analytics",
+      "postgres://u:p@host:5432/db",
+      "read",
+      TEAM_ENTITLEMENT,
+      deps,
+    );
+
+    const dbSelects = handle.calls.filter(
+      (c) => c.op === "select" && c.table === projectDatabases,
+    );
+    expect(dbSelects, "only the collision check — no cap count").toHaveLength(
+      1,
+    );
+  });
+
+  it("counts siblings only on finite caps and passes under the cap", async () => {
+    handle.setProjectsReturning([{ id: "conn-1" }]);
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // parent ownership + lock
+    handle.queueSelect([{ count: 1 }]); // sibling count → 1 < 2 ✓
+    handle.queueSelect([]); // sibling-collision check returns empty
+    const { addDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    const result = await addDatabase(
+      customer,
+      "conn-1",
+      "analytics",
+      "postgres://u:p@host:5432/db",
+      "read",
+      { plan: "free", caps: CAPS.free },
+      deps,
+    );
+
+    expect(result?.projectId).toBe("conn-1");
+    const insert = handle.calls.find(
+      (c) => c.op === "insert" && c.table === projectDatabases,
+    );
+    expect(insert, "insert proceeds under the cap").toBeDefined();
+  });
+
   it("name collision: throws DatabaseNameTaken without inserting or invalidating", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
@@ -1996,6 +2128,7 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBeInstanceOf(DatabaseNameTaken);
@@ -2019,6 +2152,7 @@ describe("addDatabase", () => {
       "analytics",
       "postgres://u:p@host:5432/db",
       "read",
+      TEAM_ENTITLEMENT,
       deps,
     );
 
@@ -2041,6 +2175,7 @@ describe("addDatabase", () => {
         "Bad Name", // caps + space
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toThrow(/invalid database name/);
@@ -2073,6 +2208,7 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBeInstanceOf(DatabaseNameTaken);
@@ -2095,6 +2231,7 @@ describe("addDatabase", () => {
         "analytics",
         "postgres://u:p@host:5432/db",
         "read",
+        TEAM_ENTITLEMENT,
         deps,
       ),
     ).rejects.toBe(realFailure);
@@ -2401,6 +2538,72 @@ describe("getProjectWithFirstDatabase", () => {
 
     const result = await getProjectWithFirstDatabase(customer, "conn-1");
     expect(result).toBeNull();
+  });
+});
+
+// One grouped select (projects LEFT JOIN project_databases, count per row)
+// → the switcher rows. The fake ignores the join/group/order clauses, so we
+// exercise the mapping layer: label fallback + the resolveServing (Axis 1,
+// serving readiness) contract the rail dropdown's headline dots depend on —
+// never audit-drain health (see lib/freshness.ts's two-axis note).
+describe("listProjectSwitcherRows", () => {
+  it("maps name → label with the id-prefix fallback, and resolves ready", async () => {
+    handle.queueSelect([
+      {
+        id: "01HSWITCHNAMEDXXXXXXXXXXXX",
+        name: "prod",
+        pausedAt: null,
+        databaseCount: 2,
+      },
+      {
+        id: "01HSWITCHUNNAMEDXXXXXXXXXX",
+        name: null, // never named → stable 12-char id prefix (projectLabel parity)
+        pausedAt: null,
+        databaseCount: 1,
+      },
+    ]);
+    const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
+
+    const rows = await listProjectSwitcherRows(customer);
+
+    expect(rows).toEqual([
+      { id: "01HSWITCHNAMEDXXXXXXXXXXXX", label: "prod", serving: "ready" },
+      {
+        id: "01HSWITCHUNNAMEDXXXXXXXXXX",
+        label: "01HSWITCHUNN",
+        serving: "ready",
+      },
+    ]);
+  });
+
+  it("paused wins over broken; zero databases reads broken", async () => {
+    handle.queueSelect([
+      {
+        id: "conn-paused",
+        name: "staging",
+        // Paused wins even over a database-less project — deliberate owner
+        // action, Resume is the unambiguous next step.
+        pausedAt: new Date("2026-07-02T00:00:00Z"),
+        databaseCount: 0,
+      },
+      {
+        id: "conn-empty",
+        name: "empty",
+        pausedAt: null,
+        databaseCount: 0, // nothing for the engine to bind → broken
+      },
+    ]);
+    const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
+
+    const rows = await listProjectSwitcherRows(customer);
+
+    expect(rows.map((r) => r.serving)).toEqual(["paused", "broken"]);
+  });
+
+  it("returns [] for a customer with no projects", async () => {
+    handle.queueSelect([]);
+    const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
+    expect(await listProjectSwitcherRows(customer)).toEqual([]);
   });
 });
 

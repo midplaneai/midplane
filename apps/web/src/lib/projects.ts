@@ -37,6 +37,8 @@ import {
   normalizeName,
   slugifyDatabaseName,
 } from "./project-name.ts";
+import { projectLabel } from "./format.ts";
+import { resolveServing, type ServingState } from "./freshness.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
 import { EVENT_TYPES } from "./audit.ts";
@@ -265,14 +267,22 @@ export async function createProject(
   // default" and push the org over its token cap. (The map is cached after
   // the first load per region; rotation adds kids and we pick the first as
   // the active write-side kid.)
-  const peppers = await loadPepperFromKms(customer.region, process.env);
-  const firstPepperKid = peppers.keys().next().value as string | undefined;
-  if (!firstPepperKid) {
-    throw new Error(
-      `no pepper available for region '${customer.region}' — token mint cannot proceed`,
-    );
-  }
-  const pepperBuf = peppers.get(firstPepperKid)!;
+  //
+  // Only when a token will actually be minted: the OAuth-first web flow
+  // (mintDefaultToken=false) needs no token material, so a region with no
+  // pepper configured must not fail a create that only encrypts a DSN.
+  const mintMaterial = mintDefaultToken
+    ? await (async () => {
+        const peppers = await loadPepperFromKms(customer.region, process.env);
+        const kid = peppers.keys().next().value as string | undefined;
+        if (!kid) {
+          throw new Error(
+            `no pepper available for region '${customer.region}' — token mint cannot proceed`,
+          );
+        }
+        return { kid, pepper: peppers.get(kid)! };
+      })()
+    : null;
   const expiresAt = new Date(Date.now() + NINETY_DAYS_MS);
 
   const db = getDb(customer.region);
@@ -359,8 +369,9 @@ export async function createProject(
       tableAccess,
     });
     // OAuth-first (web) flow: no auto-minted token — the user connects an agent
-    // over OAuth, or mints a machine token explicitly later.
-    if (!mintDefaultToken) return null;
+    // over OAuth, or mints a machine token explicitly later. (mintMaterial is
+    // non-null whenever mintDefaultToken is true; the guard carries both.)
+    if (!mintDefaultToken || !mintMaterial) return null;
     // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
     // race). This is the project's FIRST token — an empty (reused or new)
     // project has none, so the "default" name can't collide; ownership is
@@ -375,7 +386,7 @@ export async function createProject(
         expiresAt,
         env: tokenEnvFromConfig(process.env),
       },
-      { kid: firstPepperKid, pepper: pepperBuf },
+      mintMaterial,
     );
     return minted.plaintext;
   });
@@ -509,8 +520,59 @@ export async function listProjectOptions(
     .from(projects)
     .where(eq(projects.customerId, customer.id))
     .orderBy(desc(projects.createdAt));
-  // Label parity with projectLabel (lib/format): name, else id-prefix.
-  return rows.map((r) => ({ id: r.id, label: r.name ?? r.id.slice(0, 12) }));
+  return rows.map((r) => ({ id: r.id, label: projectLabel(r) }));
+}
+
+/** Usable machine-token count for the customer — the tokens half of
+ *  getPlanUsage, for pages that already know the project count from rows
+ *  they fetch anyway (the project workspace derives it from the switcher
+ *  rows instead of paying a second COUNT per render). */
+export async function getTokenUsage(customer: Customer): Promise<number> {
+  return countUsableTokens(getDb(customer.region), customer.id);
+}
+
+export interface ProjectSwitcherRow {
+  id: string;
+  /** Display label: the user's project name, else a stable id-prefix
+   *  (parity with projectLabel / listProjectOptions). */
+  label: string;
+  /** Serving-readiness headline state for the row's dot (ready / paused /
+   *  broken) — the switcher is a fleet of headline dots, so it renders
+   *  Axis 1, never audit-drain health (see lib/freshness.ts). */
+  serving: ServingState;
+}
+
+/** The customer's projects with the light facts the rail-header switcher
+ *  needs (label + serving dot) — the parents slice of
+ *  listDashboardProjects without tokens / last-query / cursor detail. One
+ *  grouped query (database count feeds resolveServing). Newest-first to
+ *  match the dashboard list. */
+export async function listProjectSwitcherRows(
+  customer: Customer,
+): Promise<ProjectSwitcherRow[]> {
+  const db = getDb(customer.region);
+  const rows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      pausedAt: projects.pausedAt,
+      databaseCount: sql<number>`count(${projectDatabases.id})::int`,
+    })
+    .from(projects)
+    .leftJoin(projectDatabases, eq(projectDatabases.projectId, projects.id))
+    .where(eq(projects.customerId, customer.id))
+    // projects.id is the PK, so the non-aggregated columns are functionally
+    // dependent and Postgres accepts the single-column GROUP BY.
+    .groupBy(projects.id)
+    .orderBy(desc(projects.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    label: projectLabel(r),
+    serving: resolveServing({
+      pausedAt: r.pausedAt,
+      databaseCount: Number(r.databaseCount ?? 0),
+    }).state,
+  }));
 }
 
 // Update the user-supplied name on the parent project. Cosmetic — no
@@ -1403,16 +1465,22 @@ function isUniqueDbNameViolation(err: unknown): boolean {
 // YAML `databases:` block. Returns the new child id + project id.
 //
 // Throws DatabaseNameTaken if the name collides with an existing
-// sibling. Returns null when the project is unknown OR owned by
-// another customer (same leakage shape as createProject). The
-// dbName regex is enforced here even though the schema CHECK would
-// also catch it, so the caller gets a clean error before KMS spend.
+// sibling, and PlanLimitError when the project is already at the plan's
+// per-project database cap (counted under the same parent lock, so
+// concurrent adds can't overshoot). Returns null when the project is
+// unknown OR owned by another customer (same leakage shape as
+// createProject). The dbName regex is enforced here even though the
+// schema CHECK would also catch it, so the caller gets a clean error
+// before KMS spend.
 export async function addDatabase(
   customer: Customer,
   projectId: string,
   dbName: string,
   dsn: string,
   defaultAccess: AccessLevel,
+  // Resolved plan + caps for the org (from resolvePlan() at the call site) —
+  // caps.databases is the per-project ceiling enforced here.
+  entitlement: ResolvedPlan,
   deps: DatabaseMutationDeps,
 ): Promise<{ id: string; projectId: string } | null> {
   if (!isValidDatabaseName(dbName)) {
@@ -1460,6 +1528,21 @@ export async function addDatabase(
         .for("update")
         .limit(1);
       if (parent.length === 0) return null;
+
+      // Per-project database cap (plan.ts caps.databases). Counted under
+      // the parent FOR UPDATE lock above, so two concurrent adds can't
+      // both read "one below the cap" and overshoot. Infinity caps
+      // (Team / self-host) skip the count entirely.
+      const { caps, plan } = entitlement;
+      if (Number.isFinite(caps.databases)) {
+        const siblings = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(projectDatabases)
+          .where(eq(projectDatabases.projectId, projectId));
+        if (Number(siblings[0]?.count ?? 0) >= caps.databases) {
+          throw new PlanLimitError("databases", caps.databases, plan);
+        }
+      }
 
       // Pre-check sibling collision (cheap; the lock guarantees the
       // result holds until commit). The unique constraint

@@ -12,6 +12,7 @@ import {
 } from "@/lib/projects";
 import type { Customer } from "@midplane-cloud/db";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { PlanLimitError, resolvePlanFor } from "@/lib/plan";
 
 // Shared body of the add-database server action. The project
 // workspace's Database pane posts the AddDatabaseForm (via AddDatabaseSheet);
@@ -60,6 +61,9 @@ export async function addDatabaseFromForm(
       : "read";
 
   const ctx = getMcpProxyContext();
+  // Sync resolution from the customer already in hand — resolvePlan() would
+  // re-resolve the session + re-read the customers row on every submit.
+  const entitlement = resolvePlanFor(customer);
   try {
     const result = await addDatabase(
       customer,
@@ -67,12 +71,21 @@ export async function addDatabaseFromForm(
       dbName,
       dsn,
       defaultAccess,
+      entitlement,
       ctx,
     );
     if (!result) notFound();
   } catch (err) {
     if (err instanceof DatabaseNameTaken) {
       throw new Error(`A database named "${err.takenName}" already exists.`);
+    }
+    if (err instanceof PlanLimitError) {
+      // Normally unreachable through the UI — the DatabaseStrip swaps the
+      // add affordance for the upgrade CTA at the cap — but the authoritative
+      // check still needs a renderable message for races / stale pages.
+      throw new Error(
+        `Your ${err.plan} plan includes ${err.limit} databases per project. Upgrade on the Billing page to add more.`,
+      );
     }
     throw err;
   }
