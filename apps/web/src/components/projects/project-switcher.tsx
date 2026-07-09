@@ -3,7 +3,7 @@
 import { ArrowUpRight, Check, ChevronsUpDown, Plus } from "lucide-react";
 import Link from "next/link";
 
-import { FreshnessDot } from "@/components/dashboard/freshness-dot";
+import { StatusDot } from "@/components/dashboard/status-dot";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SectionLabel } from "@/components/ui/section-label";
+import { SERVING_COLORS, SERVING_LABELS } from "@/lib/freshness";
 import type { ProjectSwitcherRow } from "@/lib/projects";
 import { UPGRADE_URL } from "@/lib/routes";
 
@@ -94,7 +95,12 @@ export function ProjectSwitcher({
                 title={p.label}
                 className="gap-2"
               >
-                <FreshnessDot state={p.freshness} />
+                {/* Serving-readiness headline dot (Axis 1) — quiet (no
+                    pulse) inside a menu of many rows. */}
+                <StatusDot
+                  colorClass={SERVING_COLORS[p.serving]}
+                  label={SERVING_LABELS[p.serving]}
+                />
                 <span className="min-w-0 flex-1 truncate">{p.label}</span>
                 {p.id === currentId ? (
                   <Check

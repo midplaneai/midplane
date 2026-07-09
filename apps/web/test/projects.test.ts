@@ -2541,26 +2541,25 @@ describe("getProjectWithFirstDatabase", () => {
   });
 });
 
-// One flat select (projects LEFT JOIN indexer_cursors) → the switcher rows.
-// The fake ignores the join/order clauses, so we exercise the mapping layer:
-// label fallback + the resolveFreshness (paused-override) contract that the
-// rail dropdown's dots depend on.
+// One grouped select (projects LEFT JOIN project_databases, count per row)
+// → the switcher rows. The fake ignores the join/group/order clauses, so we
+// exercise the mapping layer: label fallback + the resolveServing (Axis 1,
+// serving readiness) contract the rail dropdown's headline dots depend on —
+// never audit-drain health (see lib/freshness.ts's two-axis note).
 describe("listProjectSwitcherRows", () => {
-  it("maps name → label with the id-prefix fallback, and resolves live freshness", async () => {
+  it("maps name → label with the id-prefix fallback, and resolves ready", async () => {
     handle.queueSelect([
       {
         id: "01HSWITCHNAMEDXXXXXXXXXXXX",
         name: "prod",
         pausedAt: null,
-        lastIndexedAt: new Date("2026-07-01T10:00:00Z"),
-        lastErrorAt: null,
+        databaseCount: 2,
       },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         name: null, // never named → stable 12-char id prefix (projectLabel parity)
         pausedAt: null,
-        lastIndexedAt: null, // never indexed, no error → still "live" (awaiting first query)
-        lastErrorAt: null,
+        databaseCount: 1,
       },
     ]);
     const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
@@ -2568,38 +2567,37 @@ describe("listProjectSwitcherRows", () => {
     const rows = await listProjectSwitcherRows(customer);
 
     expect(rows).toEqual([
-      { id: "01HSWITCHNAMEDXXXXXXXXXXXX", label: "prod", freshness: "live" },
+      { id: "01HSWITCHNAMEDXXXXXXXXXXXX", label: "prod", serving: "ready" },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         label: "01HSWITCHUNN",
-        freshness: "live",
+        serving: "ready",
       },
     ]);
   });
 
-  it("paused overrides the indexer signal; a fresh error reads down", async () => {
+  it("paused wins over broken; zero databases reads broken", async () => {
     handle.queueSelect([
       {
         id: "conn-paused",
         name: "staging",
-        // Paused wins even over a healthy cursor — deliberate owner action.
+        // Paused wins even over a database-less project — deliberate owner
+        // action, Resume is the unambiguous next step.
         pausedAt: new Date("2026-07-02T00:00:00Z"),
-        lastIndexedAt: new Date("2026-07-02T10:00:00Z"),
-        lastErrorAt: null,
+        databaseCount: 0,
       },
       {
-        id: "conn-down",
-        name: "broken",
+        id: "conn-empty",
+        name: "empty",
         pausedAt: null,
-        lastIndexedAt: new Date("2026-07-01T10:00:00Z"),
-        lastErrorAt: new Date("2026-07-01T11:00:00Z"), // error newer than drain
+        databaseCount: 0, // nothing for the engine to bind → broken
       },
     ]);
     const { listProjectSwitcherRows } = await import("../src/lib/projects.ts");
 
     const rows = await listProjectSwitcherRows(customer);
 
-    expect(rows.map((r) => r.freshness)).toEqual(["paused", "down"]);
+    expect(rows.map((r) => r.serving)).toEqual(["paused", "broken"]);
   });
 
   it("returns [] for a customer with no projects", async () => {

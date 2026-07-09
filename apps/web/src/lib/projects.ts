@@ -38,7 +38,7 @@ import {
   slugifyDatabaseName,
 } from "./project-name.ts";
 import { projectLabel } from "./format.ts";
-import { resolveFreshness, type Freshness } from "./freshness.ts";
+import { resolveServing, type ServingState } from "./freshness.ts";
 import { PlanLimitError, type ResolvedPlan } from "./plan.ts";
 import { tokenEnvFromConfig } from "./token-env.ts";
 import { EVENT_TYPES } from "./audit.ts";
@@ -536,15 +536,17 @@ export interface ProjectSwitcherRow {
   /** Display label: the user's project name, else a stable id-prefix
    *  (parity with projectLabel / listProjectOptions). */
   label: string;
-  /** Resolved display state for the row's dot — paused override included,
-   *  same semantics as the rail header and the dashboard cards. */
-  freshness: Freshness;
+  /** Serving-readiness headline state for the row's dot (ready / paused /
+   *  broken) — the switcher is a fleet of headline dots, so it renders
+   *  Axis 1, never audit-drain health (see lib/freshness.ts). */
+  serving: ServingState;
 }
 
 /** The customer's projects with the light facts the rail-header switcher
- *  needs (label + freshness dot) — the parents slice of
- *  listDashboardProjects without children / tokens / last-query. One
- *  query. Newest-first to match the dashboard list. */
+ *  needs (label + serving dot) — the parents slice of
+ *  listDashboardProjects without tokens / last-query / cursor detail. One
+ *  grouped query (database count feeds resolveServing). Newest-first to
+ *  match the dashboard list. */
 export async function listProjectSwitcherRows(
   customer: Customer,
 ): Promise<ProjectSwitcherRow[]> {
@@ -554,20 +556,22 @@ export async function listProjectSwitcherRows(
       id: projects.id,
       name: projects.name,
       pausedAt: projects.pausedAt,
-      lastIndexedAt: indexerCursors.lastIndexedAt,
-      lastErrorAt: indexerCursors.lastErrorAt,
+      databaseCount: sql<number>`count(${projectDatabases.id})::int`,
     })
     .from(projects)
-    .leftJoin(indexerCursors, eq(indexerCursors.projectId, projects.id))
+    .leftJoin(projectDatabases, eq(projectDatabases.projectId, projects.id))
     .where(eq(projects.customerId, customer.id))
+    // projects.id is the PK, so the non-aggregated columns are functionally
+    // dependent and Postgres accepts the single-column GROUP BY.
+    .groupBy(projects.id)
     .orderBy(desc(projects.createdAt));
   return rows.map((r) => ({
     id: r.id,
     label: projectLabel(r),
-    freshness: resolveFreshness(
-      { lastIndexedAt: r.lastIndexedAt, lastErrorAt: r.lastErrorAt },
-      r.pausedAt,
-    ),
+    serving: resolveServing({
+      pausedAt: r.pausedAt,
+      databaseCount: Number(r.databaseCount ?? 0),
+    }).state,
   }));
 }
 

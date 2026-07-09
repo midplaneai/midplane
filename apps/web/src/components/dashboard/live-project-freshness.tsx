@@ -1,38 +1,43 @@
 "use client";
 
-import { FreshnessDot } from "@/components/dashboard/freshness-dot";
+import { StatusDot } from "@/components/dashboard/status-dot";
 import { useProjectFreshness } from "@/components/dashboard/freshness-provider";
-import { resolveFreshness, FRESHNESS_LABELS } from "@/lib/freshness";
+import {
+  resolveServing,
+  SERVING_COLORS,
+  SERVING_LABELS,
+} from "@/lib/freshness";
 
-// Project-level freshness pill (dot + UPPERCASE label) rendered in
-// the project header. Reads the live cursor + paused state from the
-// polling provider, falling back to the server-rendered initial values
-// when the provider hasn't seen its first poll yet (i.e. immediately
-// after page load). A paused project reads "paused" (amber) — see
-// resolveFreshness — regardless of the indexer cursor.
+// Project-level serving-readiness pill (dot + label) in the dashboard project
+// header. Answers "will this project serve an MCP query" — ready / paused /
+// action needed — NOT whether the audit indexer is current. Reads live
+// pausedAt + database count from the polling provider, falling back to the
+// server-rendered initial values until the first poll. A paused project reads
+// "paused" (amber); a project with no databases reads "action needed" (the
+// card below it says why). A project whose indexer is erroring still serves,
+// so it reads "ready" here — see resolveServing.
 
 export function LiveProjectFreshness({
   projectId,
   initialPausedAt,
-  initialLastIndexedAt,
-  initialLastErrorAt,
+  initialDatabaseCount,
 }: {
   projectId: string;
   initialPausedAt: Date | null;
-  initialLastIndexedAt: Date | null;
-  initialLastErrorAt: Date | null;
+  initialDatabaseCount: number;
 }) {
   const live = useProjectFreshness(projectId);
-  const cursor = live?.cursor ?? {
-    lastIndexedAt: initialLastIndexedAt,
-    lastErrorAt: initialLastErrorAt,
-  };
   const pausedAt = live ? live.pausedAt : initialPausedAt;
-  const state = resolveFreshness(cursor, pausedAt);
+  const databaseCount = live ? live.databases.size : initialDatabaseCount;
+  const { state } = resolveServing({ pausedAt, databaseCount });
   return (
     <span className="flex items-center gap-1.5 font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle">
-      <FreshnessDot state={state} />
-      {FRESHNESS_LABELS[state]}
+      <StatusDot
+        colorClass={SERVING_COLORS[state]}
+        pulse={state === "ready"}
+        label={SERVING_LABELS[state]}
+      />
+      {SERVING_LABELS[state]}
     </span>
   );
 }
