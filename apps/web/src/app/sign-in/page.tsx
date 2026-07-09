@@ -16,10 +16,8 @@ import {
   verifyEmailHint,
 } from "@/lib/region-routing";
 import { isSelfHost } from "@/lib/self-host";
-import {
-  getSignInMethods,
-  resolveSignInRegionOnApex,
-} from "@/lib/signin-routing";
+import { rateLimitedSignInMethods } from "@/lib/signin-methods";
+import { resolveSignInRegionOnApex } from "@/lib/signin-routing";
 import { googleAuthEnabled } from "@/lib/social-auth";
 
 // Only allow same-origin relative redirects (no open redirect via ?redirect).
@@ -69,8 +67,11 @@ export default async function SignInPage({
   // account actually has so we open straight on the method step and render only
   // the relevant ones (a Google-only user never sees a password field). Cold
   // visits with no hint do this after the email step, via the server action.
+  // Goes through the SAME per-IP rate limit as the server action: the signed
+  // hint is mintable for any email via the apex form, so this SSR path must not
+  // be an unthrottled way to enumerate accounts by scraping the response.
   const initialMethods = initialEmail
-    ? await getSignInMethods(initialEmail)
+    ? await rateLimitedSignInMethods(initialEmail)
     : null;
   return (
     <main className="flex min-h-screen flex-col">
