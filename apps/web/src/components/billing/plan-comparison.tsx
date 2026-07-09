@@ -48,6 +48,7 @@ const ROWS: readonly Row[] = [
     ),
   },
   { label: "projects", cell: (p) => cap(CAPS[p].projects) },
+  { label: "databases per project", cell: (p) => cap(CAPS[p].databases) },
   // Interactive agents (OAuth: Claude, Cursor, ChatGPT) are uncapped on every
   // plan — they're the adoption surface, not a metered resource. Hardcoded
   // "Unlimited" because there is deliberately no CAP for them: only headless

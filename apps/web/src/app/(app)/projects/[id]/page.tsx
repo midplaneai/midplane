@@ -19,6 +19,7 @@ import {
   type ProjectSection,
 } from "@/components/projects/project-sections";
 import { DatabaseStrip } from "@/components/projects/database-strip";
+import { ProjectSwitcher } from "@/components/projects/project-switcher";
 import { DeleteDatabaseButton } from "@/components/projects/delete-database-button";
 import { ExposureScan } from "@/components/projects/exposure-scan";
 import { MaskedPreviewPanel } from "@/components/projects/masked-preview-panel";
@@ -36,6 +37,7 @@ import { RotateCredentialSheet } from "@/components/projects/rotate-credential-s
 import { AgentList } from "@/components/tokens/agent-list";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { SectionLabel } from "@/components/ui/section-label";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import Link from "next/link";
@@ -48,7 +50,8 @@ import {
   getProjectHomeData,
   getProjectWithDatabase,
   getProjectWithDatabaseAndCredential,
-  getPlanUsage,
+  getTokenUsage,
+  listProjectSwitcherRows,
   maskConfigAddsMasking,
   isValidDatabaseName,
   isValidDsn,
@@ -70,7 +73,13 @@ import { projectLabel, formatRelative } from "@/lib/format";
 import { resolveFreshness, FRESHNESS_LABELS } from "@/lib/freshness";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { pingDsnGuarded } from "@/lib/ping-guard";
-import { resolvePlan, UPGRADE_URL } from "@/lib/plan";
+import {
+  databaseAddBlock,
+  projectAddBlock,
+  resolvePlan,
+  UPGRADE_URL,
+} from "@/lib/plan";
+import { PROJECTS_LIST_HREF } from "@/lib/routes";
 import { getPostHog } from "@/lib/posthog";
 import {
   checkRateLimit,
@@ -131,10 +140,14 @@ export default async function ProjectWorkspace({
       : "connect";
 
   const { plan, caps } = await resolvePlan();
-  const [home, agents, usage] = await Promise.all([
+  // Token usage is its own light COUNT; the project count comes free from
+  // the switcher rows below (getPlanUsage here would re-COUNT projects the
+  // page already fetches on every render).
+  const [home, agents, tokensUsed, switcherRows] = await Promise.all([
     getProjectHomeData(customer, id, caps.auditRetentionDays),
     listProjectAgents(customer, id),
-    getPlanUsage(customer),
+    getTokenUsage(customer),
+    listProjectSwitcherRows(customer),
   ]);
   if (!home) notFound();
   const { project: conn, databases, cursor } = home;
@@ -153,7 +166,10 @@ export default async function ProjectWorkspace({
       <>
         <Topbar>
           <Breadcrumb
-            items={[{ label: "Projects", href: "/dashboard" }, { label }]}
+            items={[
+              { label: "Projects", href: PROJECTS_LIST_HREF },
+              { label },
+            ]}
           />
         </Topbar>
         <PageContainer>
@@ -179,6 +195,12 @@ export default async function ProjectWorkspace({
   const railFreshness = resolveFreshness(cursor, conn.pausedAt);
   const dbNames = databases.map((d) => d.name);
 
+  // Per-project database cap pre-flight: at the cap the strip swaps its
+  // "+ Add database" for the upgrade link (addDatabase re-checks under a
+  // lock — this only decides which affordance renders).
+  const dbAtCap =
+    databaseAddBlock({ databases: databases.length }, caps) !== null;
+
   // Which database the per-DB panes target. Trust ?db only if it names a db
   // on this project; otherwise fall back to the first.
   const selectedName =
@@ -191,7 +213,7 @@ export default async function ProjectWorkspace({
   const selDb = selResult?.database ?? null;
 
   const tokenLimit =
-    Number.isFinite(caps.tokens) && usage.tokens >= caps.tokens
+    Number.isFinite(caps.tokens) && tokensUsed >= caps.tokens
       ? { limit: caps.tokens, plan, upgradeUrl: UPGRADE_URL }
       : undefined;
 
@@ -702,12 +724,12 @@ export default async function ProjectWorkspace({
         current={selDb.name}
         projectId={conn.id}
         addAction={addDatabaseAction}
+        atCap={dbAtCap}
+        upgradeHref={UPGRADE_URL}
       />
       <div className="space-y-6">
       <div className="space-y-3">
-        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-          Policy
-        </span>
+        <SectionLabel>Policy</SectionLabel>
       <section className={CARD}>
         <h2 className="text-base font-medium text-foreground">
           Table permissions
@@ -771,9 +793,7 @@ export default async function ProjectWorkspace({
       />
 
       <div className="space-y-2 pt-2">
-        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-          Actions
-        </span>
+        <SectionLabel>Actions</SectionLabel>
         <div className="flex flex-wrap items-center gap-2">
           <RenameDatabaseControl
             projectId={conn.id}
@@ -829,13 +849,13 @@ export default async function ProjectWorkspace({
         projectId={conn.id}
         addAction={addDatabaseAction}
         showAdd={canManage}
+        atCap={dbAtCap}
+        upgradeHref={UPGRADE_URL}
       />
       {canManage ? (
         <div className="space-y-8">
           <div className="space-y-3">
-            <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-              PII exposure
-            </span>
+            <SectionLabel>PII exposure</SectionLabel>
             {/* key remounts on ?db switch so the fetched scan tracks the selected db */}
             <ExposureScan
               key={selDb.name}
@@ -854,9 +874,7 @@ export default async function ProjectWorkspace({
               real read-only SELECT through the engine and see the agent's-eye
               (masked) rows, or the fail-closed rejection. */}
           <div className="space-y-3">
-            <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-subtle">
-              Masked preview
-            </span>
+            <SectionLabel>Masked preview</SectionLabel>
             <MaskedPreviewPanel
               key={selDb.name}
               projectId={conn.id}
@@ -1013,12 +1031,29 @@ export default async function ProjectWorkspace({
     </div>
   );
 
+  // The project's identity doubles as the project switcher — the chevron
+  // teaches that the account can hold more than one project even while it
+  // holds exactly one (the dashboard auto-opens a single project, so this
+  // is the only always-visible multi-project affordance). The quota line +
+  // create/upgrade row live in the dropdown, next to where the container
+  // concept forms.
+  const atProjectCap =
+    projectAddBlock({ projects: switcherRows.length }, caps) !== null;
+  const projectQuotaLine = Number.isFinite(caps.projects)
+    ? `${plan} plan · ${switcherRows.length}/${caps.projects} projects`
+    : null;
+
   const railHeader = (
     <div>
-      <div className="text-sm font-medium leading-snug tracking-tight text-foreground break-words">
-        {label}
-      </div>
-      <div className="mt-1.5 flex items-center gap-1.5">
+      <ProjectSwitcher
+        projects={switcherRows}
+        currentId={conn.id}
+        canManage={canManage}
+        atCap={atProjectCap}
+        quotaLine={projectQuotaLine}
+        upgradeHref={UPGRADE_URL}
+      />
+      <div className="mt-2 flex items-center gap-1.5">
         <FreshnessDot state={railFreshness} />
         <span className="text-xs capitalize text-muted-foreground">
           {FRESHNESS_LABELS[railFreshness]}
@@ -1047,7 +1082,10 @@ export default async function ProjectWorkspace({
     <>
       <Topbar>
         <Breadcrumb
-          items={[{ label: "Projects", href: "/dashboard" }, { label }]}
+          items={[
+            { label: "Projects", href: PROJECTS_LIST_HREF },
+            { label },
+          ]}
         />
       </Topbar>
       <PageContainer>
