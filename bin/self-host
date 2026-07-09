@@ -60,13 +60,162 @@ fill_if_empty() {
   fi
 }
 
+# Set KEY=VALUE in $ENV_FILE, whether the key ships commented (`# KEY=...`),
+# empty (`KEY=`), or already set — uncomments/replaces the FIRST matching line
+# in place, or appends if the key is absent. awk builds the line so URL and
+# base64 characters survive verbatim (no sed delimiter games), and the narrow
+# `KEY=` anchor never disturbs the base64 secret lines.
+set_env_key() {
+  key="$1"
+  val="$2"
+  if grep -Eq "^[[:space:]]*#?[[:space:]]*${key}=" "$ENV_FILE"; then
+    awk -v k="$key" -v v="$val" '
+      !seen && $0 ~ ("^[[:space:]]*#?[[:space:]]*" k "=") {
+        print k "=" v; seen = 1; next
+      }
+      { print }
+    ' "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+  fi
+}
+
+# The explicitly-set host port: an uncommented, non-empty WEB_PORT= line in
+# $ENV_FILE, or empty if it's unset (still commented — the fresh-file default).
+explicit_web_port() {
+  grep -E '^[[:space:]]*WEB_PORT=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | cut -d= -f2- | tr -d '[:space:]'
+}
+
 # The host port the dashboard is published on. Mirrors the compose default of
-# ${WEB_PORT:-3000}: an uncommented, non-empty WEB_PORT= line in $ENV_FILE wins,
-# otherwise 3000. Read after `up` so the printed URL matches a remapped port.
+# ${WEB_PORT:-3000}: an explicit WEB_PORT wins, otherwise 3000. Read after `up`
+# so the printed URL matches an auto-selected or remapped port.
 web_port() {
-  val=$(grep -E '^[[:space:]]*WEB_PORT=' "$ENV_FILE" 2>/dev/null | tail -n1 \
-    | cut -d= -f2- | tr -d '[:space:]')
+  val=$(explicit_web_port)
   [ -n "$val" ] && echo "$val" || echo 3000
+}
+
+# True when the user (or a previous auto-select) pinned WEB_PORT. A pinned port
+# is honored exactly and never auto-moved — moving it would invalidate live
+# sessions and the MCP URLs agents already hold.
+web_port_is_set() {
+  [ -n "$(explicit_web_port)" ]
+}
+
+# The configured BETTER_AUTH_URL (drives cookie domain, OAuth callbacks, and the
+# MCP URL shown to agents — so it must always name the published host port).
+better_auth_url() {
+  grep -E '^[[:space:]]*BETTER_AUTH_URL=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | cut -d= -f2- | tr -d '[:space:]'
+}
+
+# True if compose's output names a host-port bind conflict — the ONLY retryable
+# failure. Matched case-insensitively against the variants Docker/Compose emit
+# across platforms (Linux userland-proxy, macOS/Windows Docker Desktop).
+is_port_conflict() {
+  grep -Eiq 'address already in use|port is already allocated|ports are not available'
+}
+
+# Actionable message for a bind conflict we won't auto-resolve. Names BOTH knobs
+# because they must move together: a port that disagrees with BETTER_AUTH_URL
+# boots but hands agents a dead MCP URL and breaks cookies. $1 is the subject
+# clause, e.g. "port 3000 (WEB_PORT) is" or "ports 3000-3010 (WEB_PORT) are".
+port_conflict_message() {
+  echo "error: $1 already in use. Set WEB_PORT and BETTER_AUTH_URL in $ENV_FILE to a" >&2
+  echo "       free port (they must match), then re-run ./bin/self-host up." >&2
+  echo "       (Driving \`docker compose … up\` yourself? Choose a free port directly.)" >&2
+}
+
+# Run `compose up -d --wait`, optionally overriding WEB_PORT / BETTER_AUTH_URL
+# for this attempt (pass "" to leave either at its env-file value). Streams
+# compose's own output live AND captures it so a failure can be classified. The
+# real bind is the free-port test — a conflict fails fast at container start,
+# before the healthcheck, so probing is cheap. Sets:
+#   CU_RC  — compose's real exit code (captured before the tee pipeline)
+#   CU_ERR — the streamed output, for is_port_conflict
+compose_up_wait() {
+  _port="$1"
+  _auth="$2"
+  _errfile=$(mktemp)
+  _rcfile=$(mktemp)
+  # Left side of the pipe is a subshell: `set +e` and the exports stay local
+  # (WEB_PORT/BETTER_AUTH_URL never leak to the parent), and echoing $? right
+  # after compose captures its real exit — the pipeline's own status is tee's.
+  {
+    set +e
+    [ -n "$_port" ] && export WEB_PORT="$_port"
+    [ -n "$_auth" ] && export BETTER_AUTH_URL="$_auth"
+    compose up -d --wait 2>&1 1>/dev/null
+    echo $? > "$_rcfile"
+  } | tee "$_errfile" >&2
+  CU_RC=$(cat "$_rcfile" 2>/dev/null || echo 1)
+  CU_ERR=$(cat "$_errfile" 2>/dev/null || echo)
+  rm -f "$_errfile" "$_rcfile"
+}
+
+# WEB_PORT is pinned — honor it exactly. On a bind conflict, refuse to move it
+# silently (that would strand existing sessions + agent MCP configs): surface
+# the actionable message and exit non-zero. Any other failure surfaces as-is.
+explicit_up() {
+  echo "starting the self-host stack (port $(web_port))…"
+  compose_up_wait "" ""
+  if [ "$CU_RC" -eq 0 ]; then
+    return 0
+  fi
+  if printf '%s\n' "$CU_ERR" | is_port_conflict; then
+    port_conflict_message "port $(web_port) (WEB_PORT) is"
+    exit 1
+  fi
+  echo "error: \`compose up\` failed (exit $CU_RC); see the output above." >&2
+  exit "$CU_RC"
+}
+
+# WEB_PORT is unset (fresh-file default) — auto-select. Prefer 3000, then ascend
+# to a small cap so the conventional port keeps working in the common case and
+# no doc that says "localhost:3000" is made wrong by a random high port. Persist
+# the winner (WEB_PORT, plus BETTER_AUTH_URL when we still own its default) so
+# later boots read the same port and stay stable.
+autoselect_up() {
+  cap=3010
+  cur_auth=$(better_auth_url)
+  # Only rewrite BETTER_AUTH_URL if it's still the shipped default; a customized
+  # value (proxy/hostname) is the user's — leave it, and warn instead.
+  rewrite_auth=0
+  case "$cur_auth" in
+    http://localhost:3000 | "") rewrite_auth=1 ;;
+  esac
+
+  candidate=3000
+  while [ "$candidate" -le "$cap" ]; do
+    if [ "$rewrite_auth" -eq 1 ]; then
+      auth_env="http://localhost:$candidate"
+    else
+      auth_env="$cur_auth"
+    fi
+    echo "starting the self-host stack (trying port $candidate)…"
+    compose_up_wait "$candidate" "$auth_env"
+    if [ "$CU_RC" -eq 0 ]; then
+      set_env_key WEB_PORT "$candidate"
+      if [ "$rewrite_auth" -eq 1 ]; then
+        set_env_key BETTER_AUTH_URL "http://localhost:$candidate"
+        echo "  persisted WEB_PORT=$candidate + BETTER_AUTH_URL=http://localhost:$candidate to $ENV_FILE"
+      else
+        echo "  persisted WEB_PORT=$candidate to $ENV_FILE"
+        echo "  note: BETTER_AUTH_URL is customized ($cur_auth) and was left as-is —" >&2
+        echo "        confirm it resolves to the published host port $candidate." >&2
+      fi
+      return 0
+    fi
+    if printf '%s\n' "$CU_ERR" | is_port_conflict; then
+      echo "  port $candidate is in use; trying $((candidate + 1))…"
+      candidate=$((candidate + 1))
+      continue
+    fi
+    echo "error: \`compose up\` failed (exit $CU_RC); see the output above." >&2
+    exit "$CU_RC"
+  done
+  port_conflict_message "ports 3000-$cap (WEB_PORT) are"
+  exit 1
 }
 
 ensure_env() {
@@ -91,8 +240,13 @@ cmd_up() {
   # or before the image is published. A pull miss is non-fatal — `up` then builds
   # from the compose `build:` block.
   compose pull 2>/dev/null || echo "  (image pull skipped — building from source)"
-  echo "starting the self-host stack…"
-  compose up -d --wait
+  # Pinned WEB_PORT → honor it (fail loudly on conflict). Unset → auto-select a
+  # free port and persist it. Both keep BETTER_AUTH_URL aligned with the port.
+  if web_port_is_set; then
+    explicit_up
+  else
+    autoselect_up
+  fi
   echo
   echo "Midplane self-host is up → http://localhost:$(web_port)"
   echo "The first email + password signup becomes the owner."
