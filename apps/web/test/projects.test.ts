@@ -584,6 +584,43 @@ describe("createProject plan caps", () => {
     ).toBe(false);
   });
 
+  it("succeeds WITHOUT any pepper configured when mintDefaultToken=false (codex P2)", async () => {
+    // The OAuth-first web flow mints no token, so it must not depend on the
+    // token-pepper KMS material at all — a region with no pepper configured
+    // used to fail the create before the flag was even consulted.
+    const prevPepper = process.env.MIDPLANE_TOKEN_PEPPER_EU_V1;
+    delete process.env.MIDPLANE_TOKEN_PEPPER_EU_V1;
+    try {
+      const { createProject } = await import("../src/lib/projects.ts");
+      const { CAPS } = await import("../src/lib/plan.ts");
+      const { projectDatabases, projects: projectsTable } = await import(
+        "@midplane-cloud/db"
+      );
+      handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+      handle.queueSelect([]); // empty-project detection → none → create-new path
+      handle.queueSelect([]); // project count → 0 < 1 ✓
+      const result = await createProject(
+        customer,
+        DSN,
+        null,
+        "read",
+        ACTOR,
+        { plan: "free", caps: CAPS.free },
+        false,
+      );
+      expect(result.defaultTokenPlaintext).toBeNull();
+      const inserts = handle.calls.filter((c) => c.op === "insert");
+      expect(inserts.some((c) => c.table === projectsTable)).toBe(true);
+      expect(inserts.some((c) => c.table === projectDatabases)).toBe(true);
+    } finally {
+      if (prevPepper === undefined) {
+        delete process.env.MIDPLANE_TOKEN_PEPPER_EU_V1;
+      } else {
+        process.env.MIDPLANE_TOKEN_PEPPER_EU_V1 = prevPepper;
+      }
+    }
+  });
+
   it("reuses the customer's empty project instead of creating a second one (D7-A)", async () => {
     const { createProject } = await import("../src/lib/projects.ts");
     const { CAPS } = await import("../src/lib/plan.ts");

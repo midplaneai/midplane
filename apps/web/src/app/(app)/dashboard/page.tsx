@@ -86,8 +86,16 @@ export default async function Dashboard({
   // only fires when rows is non-empty, so it never collides with the
   // empty-state branch below.
   const projectLimit = caps.projects;
+  // A projects-cap block is advisory-cleared when a reusable EMPTY project
+  // exists: createProject attaches the first database to it without consuming
+  // a slot (the same clearing /projects/new applies), so the CTA must stay
+  // "New project" — a fresh Free workspace reaching this list via ?list=1
+  // would otherwise see an upgrade wall for a create that succeeds. The rows
+  // already carry each project's databases, so this costs no extra query.
+  const hasReusableEmpty = rows.some((r) => r.databases.length === 0);
   const atProjectLimit =
-    projectAddBlock({ projects: rows.length }, caps) !== null;
+    projectAddBlock({ projects: rows.length }, caps) !== null &&
+    !hasReusableEmpty;
 
   return (
     <>

@@ -267,14 +267,22 @@ export async function createProject(
   // default" and push the org over its token cap. (The map is cached after
   // the first load per region; rotation adds kids and we pick the first as
   // the active write-side kid.)
-  const peppers = await loadPepperFromKms(customer.region, process.env);
-  const firstPepperKid = peppers.keys().next().value as string | undefined;
-  if (!firstPepperKid) {
-    throw new Error(
-      `no pepper available for region '${customer.region}' — token mint cannot proceed`,
-    );
-  }
-  const pepperBuf = peppers.get(firstPepperKid)!;
+  //
+  // Only when a token will actually be minted: the OAuth-first web flow
+  // (mintDefaultToken=false) needs no token material, so a region with no
+  // pepper configured must not fail a create that only encrypts a DSN.
+  const mintMaterial = mintDefaultToken
+    ? await (async () => {
+        const peppers = await loadPepperFromKms(customer.region, process.env);
+        const kid = peppers.keys().next().value as string | undefined;
+        if (!kid) {
+          throw new Error(
+            `no pepper available for region '${customer.region}' — token mint cannot proceed`,
+          );
+        }
+        return { kid, pepper: peppers.get(kid)! };
+      })()
+    : null;
   const expiresAt = new Date(Date.now() + NINETY_DAYS_MS);
 
   const db = getDb(customer.region);
@@ -361,8 +369,9 @@ export async function createProject(
       tableAccess,
     });
     // OAuth-first (web) flow: no auto-minted token — the user connects an agent
-    // over OAuth, or mints a machine token explicitly later.
-    if (!mintDefaultToken) return null;
+    // over OAuth, or mints a machine token explicitly later. (mintMaterial is
+    // non-null whenever mintDefaultToken is true; the guard carries both.)
+    if (!mintDefaultToken || !mintMaterial) return null;
     // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
     // race). This is the project's FIRST token — an empty (reused or new)
     // project has none, so the "default" name can't collide; ownership is
@@ -377,7 +386,7 @@ export async function createProject(
         expiresAt,
         env: tokenEnvFromConfig(process.env),
       },
-      { kid: firstPepperKid, pepper: pepperBuf },
+      mintMaterial,
     );
     return minted.plaintext;
   });

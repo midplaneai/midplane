@@ -51,6 +51,7 @@ import {
   getProjectWithDatabase,
   getProjectWithDatabaseAndCredential,
   getTokenUsage,
+  hasEmptyProject,
   listProjectSwitcherRows,
   maskConfigAddsMasking,
   isValidDatabaseName,
@@ -143,12 +144,14 @@ export default async function ProjectWorkspace({
   // Token usage is its own light COUNT; the project count comes free from
   // the switcher rows below (getPlanUsage here would re-COUNT projects the
   // page already fetches on every render).
-  const [home, agents, tokensUsed, switcherRows] = await Promise.all([
-    getProjectHomeData(customer, id, caps.auditRetentionDays),
-    listProjectAgents(customer, id),
-    getTokenUsage(customer),
-    listProjectSwitcherRows(customer),
-  ]);
+  const [home, agents, tokensUsed, switcherRows, reusableEmpty] =
+    await Promise.all([
+      getProjectHomeData(customer, id, caps.auditRetentionDays),
+      listProjectAgents(customer, id),
+      getTokenUsage(customer),
+      listProjectSwitcherRows(customer),
+      hasEmptyProject(customer),
+    ]);
   if (!home) notFound();
   const { project: conn, databases, cursor } = home;
   if (agents === null) notFound();
@@ -1037,8 +1040,13 @@ export default async function ProjectWorkspace({
   // is the only always-visible multi-project affordance). The quota line +
   // create/upgrade row live in the dropdown, next to where the container
   // concept forms.
+  // Cap block advisory-cleared when a reusable EMPTY project exists —
+  // createProject attaches the first database to it without consuming a
+  // slot, so "New project" still succeeds (mirrors /projects/new and the
+  // dashboard list).
   const atProjectCap =
-    projectAddBlock({ projects: switcherRows.length }, caps) !== null;
+    projectAddBlock({ projects: switcherRows.length }, caps) !== null &&
+    !reusableEmpty;
   const projectQuotaLine = Number.isFinite(caps.projects)
     ? `${plan} plan · ${switcherRows.length}/${caps.projects} projects`
     : null;
