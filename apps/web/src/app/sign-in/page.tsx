@@ -2,13 +2,12 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { GoogleSignIn } from "@/components/auth/google-sign-in";
-import { SignInForm } from "@/components/auth/sign-in-form";
-import { SsoSignIn } from "@/components/auth/sso-sign-in";
+import { SignInFlow } from "@/components/auth/sign-in-flow";
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { isEmailConfigured } from "@/lib/email";
 import { eeBuildEnabled } from "@/lib/plan";
 import {
   APEX_HOST,
@@ -17,6 +16,7 @@ import {
   verifyEmailHint,
 } from "@/lib/region-routing";
 import { isSelfHost } from "@/lib/self-host";
+import { rateLimitedSignInMethods } from "@/lib/signin-methods";
 import { resolveSignInRegionOnApex } from "@/lib/signin-routing";
 import { googleAuthEnabled } from "@/lib/social-auth";
 
@@ -49,7 +49,7 @@ export default async function SignInPage({
     return <ApexSignInRouter redirectTo={redirectTo} />;
   }
 
-  // Regional / dev / self-host: the real email+password form. Prefill the email
+  // Regional / dev / self-host: the identifier-first sign-in. Prefill the email
   // when the apex router redirected here with a valid signed hint.
   const initialEmail = (await verifyEmailHint(e)) ?? "";
   // SSO is an ee build feature; the "Continue with SSO" entry shows only when
@@ -60,23 +60,36 @@ export default async function SignInPage({
   // Google shows only when this build was given OAuth creds (self-host / keyless
   // dev get none unless they set them). Same gate as the server auth config.
   const googleEnabled = googleAuthEnabled();
+  // "Forgot password" is only offered when this build can send email — same
+  // gate as the sendResetPassword wiring in lib/auth.ts.
+  const resetEnabled = isEmailConfigured();
+  // When the apex router forwarded a verified email, discover which methods that
+  // account actually has so we open straight on the method step and render only
+  // the relevant ones (a Google-only user never sees a password field). Cold
+  // visits with no hint do this after the email step, via the server action.
+  // Goes through the SAME per-IP rate limit as the server action: the signed
+  // hint is mintable for any email via the apex form, so this SSR path must not
+  // be an unthrottled way to enumerate accounts by scraping the response.
+  const initialMethods = initialEmail
+    ? await rateLimitedSignInMethods(initialEmail)
+    : null;
   return (
     <main className="flex min-h-screen flex-col">
       <header className="border-b border-border px-10 py-5">
         <BrandLockup />
       </header>
       <div className="flex flex-1 items-center justify-center px-4 py-12">
-        <div className="w-full max-w-[400px]">
-          <SignInForm
-            redirectTo={redirectTo}
-            initialEmail={initialEmail}
-            // Cloud: "Create an account" goes through the region picker (region
-            // is permanent). Self-host has no picker — link straight to /sign-up.
-            createAccountHref={isSelfHost() ? "/sign-up" : "/signup"}
-          />
-          {googleEnabled && <GoogleSignIn redirectTo={redirectTo} />}
-          {ssoEnabled && <SsoSignIn redirectTo={redirectTo} />}
-        </div>
+        <SignInFlow
+          redirectTo={redirectTo}
+          initialEmail={initialEmail}
+          initialMethods={initialMethods}
+          googleEnabled={googleEnabled}
+          ssoEnabled={ssoEnabled}
+          resetEnabled={resetEnabled}
+          // Cloud: "Create an account" goes through the region picker (region is
+          // permanent). Self-host has no picker — link straight to /sign-up.
+          createAccountHref={isSelfHost() ? "/sign-up" : "/signup"}
+        />
       </div>
     </main>
   );

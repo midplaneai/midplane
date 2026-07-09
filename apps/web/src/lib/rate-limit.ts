@@ -43,6 +43,21 @@ export function previewKey(customerId: string, projectId: string): string {
   return `preview:${customerId}:${projectId}`;
 }
 
+// Identifier-first sign-in discovery (getSignInMethods) is an unauthenticated
+// existence + method oracle: given an email it reveals whether an account
+// exists and how it signs in. Keyed by client IP so one host can't sweep the
+// user table to enumerate accounts; a generous per-minute budget still lets a
+// real person mistype and retry. Per-process, same caveat as the rest of this
+// file — a horizontally-scaled deploy moves this to a shared store.
+export const SIGNIN_DISCOVERY_RATE_LIMIT = {
+  limit: 20,
+  windowMs: 60_000,
+} as const;
+
+export function signinDiscoveryKey(ip: string): string {
+  return `signin-discovery:${ip}`;
+}
+
 export interface RateLimitOptions {
   /** Max requests per window. */
   limit: number;
