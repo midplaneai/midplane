@@ -14,13 +14,25 @@
 // path via Better Auth organization.membershipLimit (lib/seats.ts) — which is
 // otherwise a single static number, not per-plan.
 
+import { UPGRADE_URL } from "./routes.ts";
 import { isSelfHost } from "./self-host.ts";
+
+// Re-exported for this module's existing server-side callers; the constant
+// LIVES in routes.ts (pure) so client components can import it without
+// pulling this module's graph (resolvePlan dynamically imports customer.ts,
+// which reaches the Node-only db driver).
+export { UPGRADE_URL };
 
 export type Plan = "free" | "pro" | "team";
 
 export interface PlanCaps {
   /** Max projects. Infinity = unlimited (Team). */
   projects: number;
+  /** Max databases PER PROJECT (the only per-project cap — everything else
+   *  counts across the customer). Bounds how far "stuff every environment
+   *  into one project" can substitute for a second project; the isolation
+   *  pitch (own MCP URL / policy / tokens) does the rest. Infinity = Team. */
+  databases: number;
   /** Max total USABLE MCP tokens (agent identities) across all the
    *  customer's projects. The per-project default token counts.
    *  Infinity = unlimited (Team). See decision D8. */
@@ -51,10 +63,31 @@ export const CAPS: Record<Plan, PlanCaps> = {
   // Free stays gated on projects (1) / retention (7d) / seats (1) / SSO, so
   // a generous token count there sells the multi-agent story without
   // cannibalizing Pro.
-  free: { projects: 1, tokens: 5, auditRetentionDays: 7, sso: false, seats: 1 },
-  pro: { projects: 10, tokens: 50, auditRetentionDays: 30, sso: false, seats: 10 },
+  // Databases (per project): 2 on Free — enough to experience the multi-DB
+  // tabs honestly (the one-app app-DB + analytics-DB pair) without letting a
+  // whole fleet of environments ride one free project. The second PROJECT
+  // stays the primary Free→Pro trigger; this cap only stops the workaround.
+  // Pro gets 10 per project (mirrors the token posture: roomy enough that it
+  // is never the Pro→Team forcing axis — that transition is compliance-led).
+  free: {
+    projects: 1,
+    databases: 2,
+    tokens: 5,
+    auditRetentionDays: 7,
+    sso: false,
+    seats: 1,
+  },
+  pro: {
+    projects: 10,
+    databases: 10,
+    tokens: 50,
+    auditRetentionDays: 30,
+    sso: false,
+    seats: 10,
+  },
   team: {
     projects: Infinity,
+    databases: Infinity,
     tokens: Infinity,
     // Team retention EXCEEDS Pro (90 vs 30): audit history is what the
     // compliance buyer at this tier actually pays for, so the premium tier
@@ -90,6 +123,7 @@ export const PLAN_PRICING: Record<Plan, { amount: string; period: string }> = {
  *  even if MIDPLANE_EE were set. */
 export const SELF_HOST_CAPS: PlanCaps = {
   projects: Infinity,
+  databases: Infinity,
   tokens: Infinity,
   auditRetentionDays: Infinity,
   sso: false,
@@ -102,7 +136,7 @@ export const SELF_HOST_CAPS: PlanCaps = {
  *  the typed-error idiom (DuplicateTokenName, LastDatabaseProtected). */
 export class PlanLimitError extends Error {
   constructor(
-    public readonly resource: "projects" | "tokens",
+    public readonly resource: "projects" | "databases" | "tokens",
     public readonly limit: number,
     public readonly plan: Plan,
   ) {
@@ -139,6 +173,38 @@ export function projectCreateBlock(
   return null;
 }
 
+/** Whether the project cap blocks creating ONE more project right now —
+ *  the projects-only advisory twin of projectCreateBlock, for surfaces that
+ *  don't mint a default token (the OAuth-first web flow) and so shouldn't
+ *  factor the token slot in. Advisory UX only — createProject re-counts
+ *  under the customers-row lock. */
+export function projectAddBlock(
+  usage: { projects: number },
+  caps: PlanCaps,
+): { limit: number } | null {
+  if (usage.projects >= caps.projects) {
+    return { limit: caps.projects };
+  }
+  return null;
+}
+
+/** Whether the per-project database cap blocks adding ONE more database to a
+ *  project right now.
+ *
+ *  Advisory UX only, like the two blocks above — addDatabase re-counts the
+ *  project's children under the parent row lock and is the real enforcer.
+ *  Callers use this to swap the "+ Add database" affordance for the upgrade
+ *  CTA, never to skip that check. Returns the cap when full, else null. */
+export function databaseAddBlock(
+  usage: { databases: number },
+  caps: PlanCaps,
+): { limit: number } | null {
+  if (usage.databases >= caps.databases) {
+    return { limit: caps.databases };
+  }
+  return null;
+}
+
 /** Whether the seat cap blocks inviting (or adding) ONE more member right now.
  *
  *  Counts current members PLUS pending invites against the plan's seat cap, so a
@@ -157,16 +223,12 @@ export function seatInviteBlock(
   return null;
 }
 
-/** Where a capped user goes to upgrade. Relative so it resolves on whichever
- *  regional host served the request. */
-export const UPGRADE_URL = "/billing";
-
 /** JSON body for a 402 Payment Required when a plan cap is hit (decision D5).
  *  Shared by POST /api/projects and POST /api/projects/[id]/tokens so
  *  the machine-readable shape is identical on both routes. */
 export function planLimitBody(err: PlanLimitError): {
   error: "plan_limit";
-  resource: "projects" | "tokens";
+  resource: "projects" | "databases" | "tokens";
   limit: number;
   plan: Plan;
   upgradeUrl: string;
@@ -202,8 +264,21 @@ export async function resolvePlan(): Promise<ResolvedPlan> {
   }
   const { currentCustomer } = await import("./customer.ts");
   const customer = await currentCustomer();
-  // plan_override is the manual lever and wins over the subscription; absent it,
-  // the subscription-backed plan applies; absent a customer row, free.
+  return resolvePlanFor(customer);
+}
+
+/** Resolve plan + caps from a customer row already in hand — the sync twin
+ *  of resolvePlan() for callers whose caller resolved the customer (server
+ *  actions receive it as a parameter), so enforcement doesn't re-resolve the
+ *  session and re-read the customers row per submit. Same order: self-host
+ *  (uncapped) → plan_override (the manual lever, BEATS the subscription) →
+ *  subscription-backed plan → free. */
+export function resolvePlanFor(
+  customer: { plan?: Plan | null; planOverride?: Plan | null } | null,
+): ResolvedPlan {
+  if (isSelfHost()) {
+    return { plan: "team", caps: SELF_HOST_CAPS };
+  }
   const plan: Plan = customer?.planOverride ?? customer?.plan ?? "free";
   return { plan, caps: CAPS[plan] };
 }
