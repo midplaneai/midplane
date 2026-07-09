@@ -21,6 +21,8 @@
 // Intentionally minimal — does not import the db client (cf. /api/health
 // design rationale: no DB touch in the liveness path).
 
+import type { Instrumentation } from "next";
+
 import { assertBootEnv } from "./lib/assert-boot-env.ts";
 import { isSelfHost } from "./lib/self-host.ts";
 
@@ -93,3 +95,52 @@ export async function register() {
     }
   }
 }
+
+// Next.js request-error hook — fires for every error thrown in a route handler,
+// server action, or server component render. Next CATCHES these before they
+// reach the process-level uncaughtException handler that posthog-node's
+// enableExceptionAutocapture installs, so without this hook the bulk of
+// production 500s never become PostHog $exception issues. Autocapture stays on
+// for genuine process crashes; the two paths are disjoint (no double-capture).
+//
+// nodejs-guarded + dynamic import for the same reason register() guards its db
+// and ee imports: posthog-node pulls Node-only builtins (fs/os) and must never
+// enter the Edge bundle. onRequestError runs in whichever runtime threw, so an
+// Edge/middleware error is skipped here (posthog-node can't run there) — an
+// accepted gap; route handlers, actions, and RSC render in nodejs.
+//
+// Must never throw — it runs inside Next's error path, so everything is wrapped
+// and the client is best-effort. captureException routes through the same
+// before_send scrubber as every other event (see ./lib/posthog.ts), so the
+// request path/method attached below are sanitized like any other property.
+export const onRequestError: Instrumentation.onRequestError = async (
+  error,
+  request,
+  context,
+) => {
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  try {
+    const { getPostHog } = await import("./lib/posthog.ts");
+    const posthog = getPostHog();
+    if (!posthog) return;
+    posthog.captureException(error, undefined, {
+      path: request.path,
+      method: request.method,
+      router_kind: context.routerKind,
+      route_path: context.routePath,
+      route_type: context.routeType,
+      render_source: context.renderSource,
+      revalidate_reason: context.revalidateReason,
+      region: process.env.MIDPLANE_REGION,
+    });
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "posthog.capture_exception_failed",
+        reason: err instanceof Error ? err.message : String(err),
+        ts: new Date().toISOString(),
+      }),
+    );
+  }
+};
