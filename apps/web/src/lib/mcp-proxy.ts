@@ -38,6 +38,7 @@ import {
   previewQuery,
   ProcessSpawner,
   pushPolicy as pushPolicyHelper,
+  safeErrorDetail,
   type DryRunOutcome,
   type DryRunRequest,
   type PreviewOutcome,
@@ -49,6 +50,9 @@ import {
 import { getDb, type DatabaseEntry } from "@midplane-cloud/db";
 import { makeKmsContext } from "@midplane-cloud/kms";
 
+import { captureError, makeCaptureThrottle } from "./analytics.ts";
+import { getPostHog } from "./posthog.ts";
+import { queryDecidedEvents } from "./query-analytics.ts";
 import { bootRegion } from "./region-context.ts";
 import { isSelfHost } from "./self-host.ts";
 
@@ -155,20 +159,53 @@ export function getMcpProxyContext(): McpProxyContext {
 
   let indexer: Indexer | null = null;
   if (indexerToken) {
+    // Indexer onError fires per 5s tick while an engine is unreachable —
+    // throttle the PostHog capture per (project, phase) so a persistent
+    // outage is one issue-refresh every 5 min, not 60 events a minute.
+    const shouldCaptureDrainError = makeCaptureThrottle(5 * 60 * 1000);
     indexer = new Indexer({
       db,
       registry,
       indexerToken,
       onError: (err, ctx) => {
         // Audit indexing failures are operationally significant but not
-        // fatal — log via console for now; the dashboard staleness banner
-        // is the user-visible signal.
+        // fatal — the dashboard staleness banner is the user-visible
+        // signal; console + (throttled) PostHog are the operator's.
         console.error(
           "[indexer]",
           ctx.phase,
           ctx.projectId.slice(0, 8),
           err,
         );
+        if (shouldCaptureDrainError(`${ctx.projectId}:${ctx.phase}`)) {
+          // Synthesized via safeErrorDetail: a write-phase failure wraps a
+          // raw postgres driver error whose text can quote statement
+          // fragments — db-error.ts's bright line applies to trackers too.
+          captureError(
+            "indexer.drain_failed",
+            new Error(safeErrorDetail(err)),
+            {
+              properties: { project_id: ctx.projectId, phase: ctx.phase },
+            },
+          );
+        }
+      },
+      // The query-path core-value event: mirror freshly indexed DECIDED
+      // rows into PostHog. The proxy never parses the engine stream, so
+      // this post-commit hook is the only live decision boundary the
+      // control plane has (launch-analytics spec §4). Self-host: no
+      // POSTHOG env → getPostHog() is null → pure no-op.
+      onIndexed: (rows, ctx) => {
+        const posthog = getPostHog();
+        if (!posthog) return;
+        for (const event of queryDecidedEvents(rows, ctx)) {
+          try {
+            posthog.capture(event);
+          } catch {
+            // Per-event: one bad enqueue must not drop the REST of the
+            // batch — there is no replay path once the cursor advanced.
+          }
+        }
       },
     });
     indexer.start();
