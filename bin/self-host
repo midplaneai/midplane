@@ -102,6 +102,15 @@ web_port_is_set() {
   [ -n "$(explicit_web_port)" ]
 }
 
+# The host port Postgres is published on. Mirrors compose's ${POSTGRES_PORT:-5432}.
+# Used only to name the right knob when a bind conflict is Postgres's, not the
+# dashboard's — the auto-select loop never touches this port.
+postgres_port() {
+  val=$(grep -E '^[[:space:]]*POSTGRES_PORT=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | cut -d= -f2- | tr -d '[:space:]')
+  [ -n "$val" ] && echo "$val" || echo 5432
+}
+
 # The configured BETTER_AUTH_URL (drives cookie domain, OAuth callbacks, and the
 # MCP URL shown to agents — so it must always name the published host port).
 better_auth_url() {
@@ -109,11 +118,50 @@ better_auth_url() {
     | cut -d= -f2- | tr -d '[:space:]'
 }
 
-# True if compose's output names a host-port bind conflict — the ONLY retryable
-# failure. Matched case-insensitively against the variants Docker/Compose emit
-# across platforms (Linux userland-proxy, macOS/Windows Docker Desktop).
+# True if compose's output names a host-port bind conflict. Matched
+# case-insensitively against the variants Docker/Compose emit across platforms
+# (Linux userland-proxy, macOS/Windows Docker Desktop). This says a port is
+# taken, NOT which one — a `compose up` binds both Postgres and the dashboard,
+# so the caller must confirm WHICH port before blaming WEB_PORT.
 is_port_conflict() {
   grep -Eiq 'address already in use|port is already allocated|ports are not available'
+}
+
+# True if $2 (compose output) reports a bind conflict specifically on port $1.
+# Compose always names the offending host port (e.g. "Bind for 0.0.0.0:5432
+# failed"), so a Postgres-port collision does NOT match the web candidate — the
+# WEB_PORT retry never chases a POSTGRES_PORT conflict (only the web port ascends).
+is_conflict_on_port() {
+  printf '%s\n' "$2" | is_port_conflict || return 1
+  printf '%s\n' "$2" | grep -Eq ":$1"'([^0-9]|$)'
+}
+
+# The first host port named in a bind-conflict error (digits after a host:port
+# colon), or empty. Best-effort, for naming an unexpected offender in a message.
+conflict_port() {
+  printf '%s\n' "$1" | grep -Eo ':[0-9]{2,5}' | head -n1 | tr -d ':'
+}
+
+# Classify a failed `compose up` that is NOT a conflict on the web port we
+# control, and exit. A POSTGRES_PORT collision gets its own message (no
+# BETTER_AUTH_URL coupling — 5432 doesn't touch the dashboard URL); any other
+# bind conflict names the offending port; anything else surfaces compose's own
+# error verbatim. Never returns.
+report_non_web_failure() {
+  if printf '%s\n' "$CU_ERR" | is_port_conflict; then
+    _pg=$(postgres_port)
+    if is_conflict_on_port "$_pg" "$CU_ERR"; then
+      echo "error: host port $_pg (POSTGRES_PORT) is already in use. Set POSTGRES_PORT in" >&2
+      echo "       $ENV_FILE to a free port, then re-run ./bin/self-host up." >&2
+      exit 1
+    fi
+    _other=$(conflict_port "$CU_ERR")
+    echo "error: host port ${_other:-(named above)} is already in use. Free it, or change the" >&2
+    echo "       matching *_PORT in $ENV_FILE, then re-run ./bin/self-host up." >&2
+    exit 1
+  fi
+  echo "error: \`compose up\` failed (exit $CU_RC); see the output above." >&2
+  exit "$CU_RC"
 }
 
 # Actionable message for a bind conflict we won't auto-resolve. Names BOTH knobs
@@ -162,12 +210,11 @@ explicit_up() {
   if [ "$CU_RC" -eq 0 ]; then
     return 0
   fi
-  if printf '%s\n' "$CU_ERR" | is_port_conflict; then
+  if is_conflict_on_port "$(web_port)" "$CU_ERR"; then
     port_conflict_message "port $(web_port) (WEB_PORT) is"
     exit 1
   fi
-  echo "error: \`compose up\` failed (exit $CU_RC); see the output above." >&2
-  exit "$CU_RC"
+  report_non_web_failure
 }
 
 # WEB_PORT is unset (fresh-file default) — auto-select. Prefer 3000, then ascend
@@ -206,13 +253,13 @@ autoselect_up() {
       fi
       return 0
     fi
-    if printf '%s\n' "$CU_ERR" | is_port_conflict; then
+    if is_conflict_on_port "$candidate" "$CU_ERR"; then
       echo "  port $candidate is in use; trying $((candidate + 1))…"
       candidate=$((candidate + 1))
       continue
     fi
-    echo "error: \`compose up\` failed (exit $CU_RC); see the output above." >&2
-    exit "$CU_RC"
+    # Not a conflict on the web port (e.g. POSTGRES_PORT) — don't chase it.
+    report_non_web_failure
   done
   port_conflict_message "ports 3000-$cap (WEB_PORT) are"
   exit 1
