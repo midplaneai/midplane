@@ -12,25 +12,42 @@ export function getPostHog(): PostHog | null {
   const host = process.env.POSTHOG_HOST;
   if (!apiKey || !host) return null;
 
-  if (!_client) {
-    _client = new PostHog(apiKey, {
-      host,
-      // Server-side exception tracking. This is the control plane ONLY — the
-      // OSS engine (Bun, compiled binary, MIT, self-hosted) never imports
-      // posthog and must not phone home; its telemetry is governed separately
-      // by engine/TELEMETRY.md.
-      enableExceptionAutocapture: true,
-      // Mandatory PII/secret floor on EVERY outbound event. Without this,
-      // autocaptured exceptions can carry the plaintext DSN, masking salt,
-      // token peppers, or session bearers to a third party — the exact data
-      // this product exists to protect. See ./posthog-scrub.ts.
-      before_send: scrubPostHogEvent,
-      // Code-variable (local-variable) capture is left OFF on purpose: it would
-      // snapshot locals like `dsn`/`salt` into stack frames. Do not enable it
-      // without extending the scrubber's mask coverage first.
-    });
+  try {
+    if (!_client) {
+      _client = new PostHog(apiKey, {
+        host,
+        // Server-side exception tracking. This is the control plane ONLY —
+        // the OSS engine (Bun, compiled binary, MIT, self-hosted) never
+        // imports posthog and must not phone home; its telemetry is governed
+        // separately by engine/TELEMETRY.md.
+        enableExceptionAutocapture: true,
+        // Mandatory PII/secret floor on EVERY outbound event. Without this,
+        // autocaptured exceptions can carry the plaintext DSN, masking salt,
+        // token peppers, or session bearers to a third party — the exact data
+        // this product exists to protect. See ./posthog-scrub.ts.
+        before_send: scrubPostHogEvent,
+        // Code-variable (local-variable) capture is left OFF on purpose: it
+        // would snapshot locals like `dsn`/`salt` into stack frames. Do not
+        // enable it without extending the scrubber's mask coverage first.
+        //
+        // Queue headroom: the audit Indexer's onIndexed hook can enqueue a
+        // 500-row page of query_decided events in one synchronous burst when
+        // draining a backlog. The default maxQueueSize (1000) would evict the
+        // OLDEST queued events on overflow — including $exception captures
+        // from the same incident that produced the backlog. Size for bursts.
+        maxQueueSize: 10_000,
+      });
+    }
+    return _client;
+  } catch (err) {
+    // Analytics must NEVER take down a product path. Capture sites run
+    // in-band on success paths (project create, token mint) — a throwing
+    // client constructor here would 500 a request AFTER its durable write,
+    // e.g. stranding a show-once token plaintext that was never delivered.
+    // Fail to null (uncached, so a transient fault can recover) and log.
+    console.error("[posthog] client init failed (analytics disabled)", err);
+    return null;
   }
-  return _client;
 }
 
 // Residual / ops notes (not enforced in code):

@@ -164,4 +164,29 @@ describe("scrubPostHogEvent — non-goals / footguns", () => {
     const bare = { distinctId: "u", event: "x" } as Ev;
     expect(scrubPostHogEvent(bare)).toBe(bare);
   });
+
+  it("leaves the query_decided property set intact (no key collides with SENSITIVE_KEY)", () => {
+    // The launch-analytics core event's whitelisted shape: ids, enums, and
+    // counts only. Pinned so a future scrubber key-pattern addition (e.g. a
+    // broader `token` match) can't silently null the query-path analytics.
+    const properties = {
+      decision: "deny",
+      policy_rule: "table_access",
+      statement_type: "SELECT",
+      dialect: "postgres",
+      tables_touched_count: 2,
+      database: "main",
+      agent_name: "claude-code",
+      agent_version: "1.2.3",
+      intent_source: "mcp_meta",
+      audit_id: "01HXROW0000000000000000001",
+      query_id: "q-1",
+      mcp_token_id: "01HXTOK0000000000000000000",
+      project_id: "01HXPRJ0000000000000000000",
+      customer_id: "01HXCUS0000000000000000000",
+      region: "eu",
+    };
+    const out = scrubPostHogEvent(ev({ ...properties }, "query_decided"));
+    expect(props(out)).toEqual(properties);
+  });
 });

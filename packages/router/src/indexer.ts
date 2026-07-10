@@ -86,6 +86,22 @@ export interface IndexerOptions {
       phase: "fetch" | "write" | "retention";
     },
   ) => void;
+  /** Post-commit hook: called once per successfully written batch with the
+   *  rows the INSERT actually landed — rows deduped by onConflictDoNothing
+   *  (a re-delivered page, a second indexer racing the same cursor during
+   *  a bluegreen overlap, a re-drain after cursor loss) never reach the
+   *  callback, so downstream consumers get at-most-once per audit row.
+   *  This is the only place the control plane holds engine query events
+   *  (DECIDED/EXECUTED/FAILED) in a variable, so it's where the web app
+   *  mirrors them into product analytics — this package stays
+   *  analytics-free by design (the callback owner brings its own client).
+   *  Best-effort: a throwing callback is swallowed so it can never wedge
+   *  the drain loop or trip recordError after a write that actually
+   *  committed. */
+  onIndexed?: (
+    rows: readonly ContainerAuditRow[],
+    ctx: { projectId: string; customerId: string; region: Region },
+  ) => void;
 }
 
 export interface ContainerAuditRow {
@@ -168,6 +184,7 @@ export class Indexer {
         },
       ) => void)
     | undefined;
+  private readonly onIndexed: IndexerOptions["onIndexed"];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private retentionTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRetentionAt = 0;
@@ -211,6 +228,7 @@ export class Indexer {
     this.fetchFn = opts.fetch ?? fetch;
     this.nowFn = opts.now ?? Date.now;
     this.onError = opts.onError;
+    this.onIndexed = opts.onIndexed;
   }
 
   start(): void {
@@ -401,6 +419,9 @@ export class Indexer {
       extantTokenIds = new Set(tokenRows.map((r) => r.id));
     }
 
+    // Rows the INSERT actually landed this drain (conflict-skipped rows
+    // excluded) — the onIndexed at-most-once source of truth.
+    let insertedIds = new Set<string>();
     await this.db.transaction(async (tx) => {
       // Bind RLS so the INSERT passes the audit_events_index policy after
       // 0004_force_rls. Without this, the policy's USING clause
@@ -410,7 +431,7 @@ export class Indexer {
         drizzleSql.raw(`SET LOCAL app.customer_id = '${customerId}'`),
       );
       if (valid.length > 0) {
-        await tx
+        const landed = await tx
           .insert(auditEventsIndex)
           .values(
             valid.map((row) => ({
@@ -450,7 +471,11 @@ export class Indexer {
                   : null,
             })),
           )
-          .onConflictDoNothing({ target: auditEventsIndex.id });
+          .onConflictDoNothing({ target: auditEventsIndex.id })
+          // Which rows actually landed vs. were conflict-skipped — feeds
+          // the onIndexed at-most-once guarantee (see IndexerOptions).
+          .returning({ id: auditEventsIndex.id });
+        insertedIds = new Set(landed.map((r) => r.id));
       }
 
       // Cursor write. Two paths:
@@ -518,6 +543,33 @@ export class Indexer {
     // inside ERROR_STAMP_MIN_MS stamps the NEW outage immediately
     // instead of staying green for up to a minute (codex review P2).
     this.lastErrorStampMs.delete(projectId);
+
+    // Post-commit only: a callback firing before the transaction lands
+    // would report rows that a rollback could still un-write. Filtered to
+    // the rows that actually inserted — a concurrent indexer racing the
+    // same cursor (bluegreen deploy overlap, second web instance) loses
+    // the ON CONFLICT and must not double-emit downstream. Consuming each
+    // id from the set also collapses duplicate ids WITHIN one page (a
+    // buggy/hostile engine could repeat a ULID; ON CONFLICT lands it once,
+    // so the callback must see it once).
+    if (this.onIndexed && insertedIds.size > 0) {
+      const insertedRows = valid.filter(
+        (r) => insertedIds.has(r.id) && insertedIds.delete(r.id),
+      );
+      try {
+        this.onIndexed(insertedRows, { projectId, customerId, region });
+      } catch (err) {
+        // Swallowed on purpose — see IndexerOptions.onIndexed. Letting this
+        // bubble would hit indexOne's catch, stamp a drain error for a
+        // write that succeeded, and abort the in-tick backlog loop. But
+        // never SILENTLY: a permanently-throwing consumer would otherwise
+        // zero its downstream (e.g. query analytics) with no signal at all.
+        console.warn(
+          `[indexer] onIndexed callback threw for project ${projectId.slice(0, 8)} (drain unaffected):`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
   }
 
   /** Best-effort: stamp last_error / last_error_at on the project's
