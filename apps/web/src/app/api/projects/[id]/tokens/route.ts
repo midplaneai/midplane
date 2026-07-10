@@ -20,6 +20,7 @@ import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 import { currentCustomer } from "@/lib/customer";
 import { requireManagerRest } from "@/lib/org-auth";
 import { PlanLimitError, planLimitBody, resolvePlan } from "@/lib/plan";
+import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 import { tokenEnvFromConfig } from "@/lib/token-env";
 import {
@@ -190,6 +191,7 @@ export async function POST(
       expires_in_days: parsed.data.expiresInDays,
       source: "api",
     },
+    groups: analyticsGroups({ customerId: customer.id, projectId: id }),
   });
 
   return Response.json(

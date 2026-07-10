@@ -1,6 +1,7 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { analyticsGroups, groupIdentifyOrganization } from "@/lib/analytics";
 import { getAuth } from "@/lib/auth";
 import { getOrgContext } from "@/lib/org-context";
 import { getPostHog } from "@/lib/posthog";
@@ -213,12 +214,20 @@ async function pickRegionAuthed(formData: FormData) {
         $set_once: { signup_region: customer.region },
       },
     });
+    // Register the org group at birth so every later event's group
+    // attribution resolves; plan is refreshed by the Stripe sync
+    // (billing.ts) from here on.
+    groupIdentifyOrganization(customer.id, {
+      plan: customer.plan ?? "free",
+      region: customer.region,
+    });
     posthog.capture({
       distinctId: userId,
       event: "signup_completed",
       properties: {
         region: customer.region,
       },
+      groups: analyticsGroups({ customerId: customer.id }),
     });
   }
   redirect("/dashboard");

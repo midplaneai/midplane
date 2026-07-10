@@ -5,12 +5,18 @@ import { nextCookies } from "better-auth/next-js";
 import { mcp, organization } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
 
-import { getDb } from "@midplane-cloud/db";
+import { customers, getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
 
+import {
+  analyticsGroups,
+  captureError,
+  redactForCapture,
+} from "./analytics";
 import { buildStripePlugins } from "./billing";
 import { getEeAuthPlugins } from "./ee-plugins";
 import { isEmailConfigured, sendPasswordResetEmail } from "./email";
+import { getPostHog } from "./posthog";
 import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
 import { APEX_HOST, REGION_HOST } from "./region-routing";
@@ -109,7 +115,7 @@ function createAuth() {
               user: resetUser,
               url,
             }: {
-              user: { email: string };
+              user: { id?: string; email: string };
               url: string;
             }) => {
               try {
@@ -119,6 +125,20 @@ function createAuth() {
                 });
               } catch (err) {
                 console.error("password reset email failed", err);
+                // Swallowed BY DESIGN toward the caller (anti-enumeration),
+                // which makes this capture the only visibility a Resend
+                // outage gets. Redact the address (case-insensitively —
+                // providers echo it back normalized) — bare emails aren't
+                // in the scrubber's patterns.
+                const message = redactForCapture(
+                  err instanceof Error ? err.message : String(err),
+                  resetUser.email,
+                );
+                captureError(
+                  "auth.password_reset_email_failed",
+                  new Error(message),
+                  { distinctId: resetUser.id },
+                );
               }
             },
           }
@@ -271,6 +291,47 @@ function createAuth() {
             return orgId
               ? { data: { ...session, activeOrganizationId: orgId } }
               : undefined;
+          },
+          // Retention baseline: fires on every login, all methods (password,
+          // Google, SSO) — the app has no pageviews, so this is the human
+          // "came back" signal. Posthog-gated up front so self-host /
+          // keyless dev pay zero extra queries, and FIRE-AND-FORGET: Better
+          // Auth awaits after-hooks before the sign-in response returns, so
+          // the customers lookup must not serialize into login latency (and
+          // a failure must never break session creation).
+          after: async (session) => {
+            void (async () => {
+              // getPostHog() INSIDE the detached async scope: Better Auth
+              // awaits this hook before the sign-in response, so nothing
+              // throwable (even a client-constructor failure) may run on
+              // the synchronous part of the login path.
+              const posthog = getPostHog();
+              if (!posthog) return;
+              const orgId = (
+                session as { activeOrganizationId?: string | null }
+              ).activeOrganizationId;
+              // Org group key is customers.id (analytics.ts rationale); the
+              // session only carries the Better Auth orgId → one lookup.
+              let customerId: string | null = null;
+              if (orgId) {
+                const rows = await getDb(bootRegion())
+                  .select({ id: customers.id })
+                  .from(customers)
+                  .where(eq(customers.orgId, orgId))
+                  .limit(1);
+                customerId = rows[0]?.id ?? null;
+              }
+              posthog.capture({
+                distinctId: session.userId,
+                event: "signed_in",
+                properties: {
+                  region: isSelfHost() ? "self-host" : bootRegion(),
+                },
+                groups: analyticsGroups({ customerId }),
+              });
+            })().catch((err) => {
+              console.warn("signed_in capture failed (continuing)", err);
+            });
           },
         },
       },

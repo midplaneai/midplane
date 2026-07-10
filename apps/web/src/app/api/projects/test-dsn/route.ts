@@ -14,6 +14,7 @@ import { z } from "zod";
 import { isValidDsn } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
 import { pingDsnGuarded } from "@/lib/ping-guard";
+import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 import {
   checkRateLimit,
@@ -70,6 +71,7 @@ export async function POST(req: Request) {
         success: result.ok,
         source: "new_project_form",
       },
+      groups: analyticsGroups({ customerId: customer.id }),
     });
   }
 

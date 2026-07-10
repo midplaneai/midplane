@@ -11,6 +11,7 @@ import {
   user,
 } from "@midplane-cloud/db/auth-schema";
 
+import { captureError, redactForCapture } from "@/lib/analytics";
 import { getAuth } from "@/lib/auth";
 import { isEmailConfigured, sendOrgInvitationEmail } from "@/lib/email";
 import { getActorEmail } from "@/lib/org-context";
@@ -89,6 +90,18 @@ async function deliverInviteEmail(args: {
         error: e instanceof Error ? e.message : String(e),
       }),
     );
+    // The invitee never learns their email didn't arrive, so this capture is
+    // the only proactive signal a Resend outage produces. The provider error
+    // can echo the `to` address back (PII the scrubber doesn't pattern-match,
+    // often case-normalized) — redact it specifically before capture.
+    const message = redactForCapture(
+      e instanceof Error ? e.message : String(e),
+      args.to,
+    );
+    captureError("invite.email_failed", new Error(message), {
+      distinctId: args.inviterId,
+      properties: { org_id: args.orgId },
+    });
     return false;
   }
 }

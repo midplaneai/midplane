@@ -32,6 +32,7 @@ import { projectLabel, formatRelative } from "@/lib/format";
 import { projectAddBlock, resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { wantsProjectList } from "@/lib/routes";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 import { cn } from "@/lib/utils";
 
@@ -425,6 +426,10 @@ async function deleteAction(formData: FormData) {
           region: customer.region,
           source: "dashboard",
         },
+        groups: analyticsGroups({
+          customerId: customer.id,
+          projectId: deleted.id,
+        }),
       });
     }
   }
@@ -468,6 +473,10 @@ async function pauseAction(formData: FormData) {
         region: customer.region,
         source: "dashboard",
       },
+      groups: analyticsGroups({
+        customerId: customer.id,
+        projectId: result.id,
+      }),
     });
   }
   revalidatePath("/dashboard");
@@ -506,6 +515,10 @@ async function resumeAction(formData: FormData) {
         region: customer.region,
         source: "dashboard",
       },
+      groups: analyticsGroups({
+        customerId: customer.id,
+        projectId: result.id,
+      }),
     });
   }
   revalidatePath("/dashboard");
