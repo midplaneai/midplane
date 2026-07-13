@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
@@ -12,10 +13,16 @@ import { PageHeader } from "@/components/ui/page-header";
 import { RegionBadge } from "@/components/ui/region-badge";
 import {
   collectAdminStats,
+  parseMetric,
+  parseRange,
+  SERIES_METRICS,
+  SERIES_RANGES,
   type AdminStats,
   type DayCount,
   type RecentSignup,
   type RegionStats,
+  type SeriesMetric,
+  type SeriesRange,
   type WindowCounts,
 } from "@/lib/admin-stats";
 import { formatRelative } from "@/lib/format";
@@ -57,11 +64,27 @@ function statusVariant(status: string): "allow" | "warn" | "default" {
   return "default";
 }
 
-export default async function AdminPage() {
+// Human labels for the metric toggle. Audit rows are query-lifecycle events, so
+// the honest name is "query events" (config events are a rare minority).
+const METRIC_LABEL: Record<SeriesMetric, string> = {
+  signups: "signups",
+  users: "new users",
+  queries: "query events",
+};
+
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ metric?: string; range?: string }>;
+}) {
   const { userId } = await getOrgContext();
   if (!isStaffUserId(userId)) notFound();
 
-  const stats = await collectAdminStats(bootRegion());
+  const sp = await searchParams;
+  const metric = parseMetric(sp.metric);
+  const rangeDays = parseRange(sp.range);
+
+  const stats = await collectAdminStats(bootRegion(), { metric, rangeDays });
   const { totals } = stats;
 
   const mrr =
@@ -110,7 +133,7 @@ export default async function AdminPage() {
       </div>
 
       <div className="mt-6">
-        <GrowthCard stats={stats} />
+        <TimeSeriesCard stats={stats} metric={metric} rangeDays={rangeDays} />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
@@ -184,27 +207,75 @@ function StatTile({
   );
 }
 
-// --- growth over time --------------------------------------------------------
+// --- time series (metric + range switchable) ---------------------------------
 
-function GrowthCard({ stats }: { stats: AdminStats }) {
-  const { totals } = stats;
-  const newInWindow = stats.signupsByDay.reduce((n, d) => n + d.count, 0);
+function seriesHref(metric: SeriesMetric, rangeDays: number): string {
+  return `/admin?metric=${metric}&range=${rangeDays}`;
+}
+
+function TimeSeriesCard({
+  stats,
+  metric,
+  rangeDays,
+}: {
+  stats: AdminStats;
+  metric: SeriesMetric;
+  rangeDays: SeriesRange;
+}) {
+  const { totals, series } = stats;
+  const totalInWindow = series.points.reduce((n, d) => n + d.count, 0);
+  const tab =
+    "rounded-[3px] px-2 py-1 font-mono text-[11px] lowercase tracking-[0.04em] transition-colors";
+  const on = "bg-secondary text-foreground";
+  const off = "text-subtle hover:text-foreground";
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>signups · last {stats.signupWindowDays}d</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      {/* Custom header row (not CardHeader — which is flex-col) so the switches
+          sit inline with the title. Filters live in one row above the chart. */}
+      <div className="flex flex-col gap-3 p-6 pb-3 lg:flex-row lg:items-center lg:justify-between">
+        <CardTitle>
+          {METRIC_LABEL[metric]} · last {rangeDays}d
+        </CardTitle>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex items-center gap-1">
+            {SERIES_METRICS.map((m) => (
+              <Link
+                key={m}
+                href={seriesHref(m, rangeDays)}
+                className={cn(tab, m === metric ? on : off)}
+              >
+                {METRIC_LABEL[m]}
+              </Link>
+            ))}
+          </div>
+          <span className="text-subtle" aria-hidden>
+            ·
+          </span>
+          <div className="flex items-center gap-1">
+            {SERIES_RANGES.map((r) => (
+              <Link
+                key={r}
+                href={seriesHref(metric, r)}
+                className={cn(tab, r === rangeDays ? on : off)}
+              >
+                {r}d
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
+      <CardContent className="space-y-4 pt-3">
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-2xl tabular-nums text-foreground">
-            {newInWindow}
+            {totalInWindow.toLocaleString("en-US")}
           </span>
           <span className="font-mono text-[11px] lowercase tracking-[0.04em] text-subtle">
-            new customers · {totals.customers} all-time
+            {METRIC_LABEL[metric]} in {rangeDays}d
           </span>
         </div>
 
-        <SignupsChart data={stats.signupsByDay} />
+        <SeriesChart data={series.points} metric={metric} />
 
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-t border-border pt-4 sm:grid-cols-3">
           <Delta label="new customers" w={totals.newCustomers} />
@@ -225,20 +296,28 @@ function GrowthCard({ stats }: { stats: AdminStats }) {
 }
 
 // Server-rendered daily bar chart — no client charting lib, matching the
-// mono/minimal aesthetic. Container is fixed-height + items-stretch so each
-// column is full height and the inner bar's height % resolves against it.
-function SignupsChart({ data }: { data: DayCount[] }) {
+// mono/minimal aesthetic (square marks, per the radius-0 system). Container is
+// fixed-height + items-stretch so each column is full height and the inner
+// bar's height % resolves against it. Single series → brand hue, no legend
+// (the title names it). Native title = per-bar hover.
+function SeriesChart({
+  data,
+  metric,
+}: {
+  data: DayCount[];
+  metric: SeriesMetric;
+}) {
   const max = Math.max(1, ...data.map((d) => d.count));
   const first = data[0]?.day;
   const last = data[data.length - 1]?.day;
   return (
     <div>
-      <div className="flex h-20 items-stretch gap-px">
+      <div className="flex h-24 items-stretch gap-[2px]">
         {data.map((d) => (
           <div
             key={d.day}
             className="group flex flex-1 items-end"
-            title={`${d.day}: ${d.count} signup${d.count === 1 ? "" : "s"}`}
+            title={`${d.day}: ${d.count} ${METRIC_LABEL[metric]}`}
           >
             <div
               className={cn(
@@ -253,7 +332,7 @@ function SignupsChart({ data }: { data: DayCount[] }) {
         ))}
       </div>
       <div className="mt-1.5 flex justify-between border-t border-border pt-1.5 font-mono text-[10px] text-subtle">
-        {/* MM-DD endpoints — enough to anchor the axis without labeling all 30 */}
+        {/* MM-DD endpoints anchor the axis without labeling every day. */}
         <span>{first?.slice(5)}</span>
         <span>{last?.slice(5)}</span>
       </div>

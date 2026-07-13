@@ -17,7 +17,7 @@
 // Read-only + best-effort: this never writes, and a single failing query drops
 // its region to unreachable instead of 500-ing the whole page.
 
-import { and, count, eq, gte, sql } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
 
 import {
   auditEventsIndex,
@@ -42,12 +42,42 @@ const PLANS = ["free", "pro", "team"] as const;
 /** Activity window for the "are agents actually querying?" pulse. */
 const ACTIVITY_WINDOW_DAYS = 7;
 
-/** How many trailing days the signups sparkline spans. */
-const SIGNUP_SERIES_DAYS = 30;
+/** The switchable time-series metrics. `queries` reads the RLS-forced audit
+ *  index (per-customer scoped); the other two are cheap no-RLS reads. */
+export const SERIES_METRICS = ["signups", "users", "queries"] as const;
+export type SeriesMetric = (typeof SERIES_METRICS)[number];
 
-/** UTC calendar-day key ("YYYY-MM-DD") — the bucket for the signups series. */
+/** The offered date-range switches, in trailing days. */
+export const SERIES_RANGES = [7, 30, 90] as const;
+export type SeriesRange = (typeof SERIES_RANGES)[number];
+
+const DEFAULT_METRIC: SeriesMetric = "signups";
+const DEFAULT_RANGE: SeriesRange = 30;
+
+/** Parse a metric query param, falling back to the default on anything unknown. */
+export function parseMetric(raw: string | undefined): SeriesMetric {
+  return SERIES_METRICS.includes(raw as SeriesMetric)
+    ? (raw as SeriesMetric)
+    : DEFAULT_METRIC;
+}
+
+/** Parse a range query param (e.g. "30" or "30d"), falling back to the default. */
+export function parseRange(raw: string | undefined): SeriesRange {
+  const n = Number(String(raw ?? "").replace(/d$/, ""));
+  return (SERIES_RANGES as readonly number[]).includes(n)
+    ? (n as SeriesRange)
+    : DEFAULT_RANGE;
+}
+
+/** UTC calendar-day key ("YYYY-MM-DD") — the bucket for the daily series. */
 function dayKeyUTC(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+/** Group-by key that buckets a timestamptz column into its UTC calendar day,
+ *  matching dayKeyUTC on the JS side so region merges line up exactly. */
+function utcDayExpr(col: unknown) {
+  return sql<string>`to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`;
 }
 
 /** Crockford-alphabet ULID shape — same guard lib/audit.ts uses before it
@@ -55,11 +85,20 @@ function dayKeyUTC(d: Date): string {
  *  customers.id is always a ULID, but we re-check defensively before inlining. */
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
-/** One bucket of the trailing daily signups series. */
+/** One bucket of a trailing daily series. */
 export interface DayCount {
   /** UTC "YYYY-MM-DD". */
   day: string;
   count: number;
+}
+
+/** The selected time-series: a filled, ordered daily count for one metric over
+ *  a trailing range. */
+export interface SeriesResult {
+  metric: SeriesMetric;
+  rangeDays: number;
+  /** Filled + ordered oldest→newest, length = rangeDays, merged across regions. */
+  points: DayCount[];
 }
 
 /** Rolling counts at the three windows the growth tiles render. */
@@ -117,8 +156,8 @@ export interface RegionStats {
   pendingCancels: number;
   /** Trials ending within the next 7 days (conversion / churn watch). */
   trialsEndingSoon: number;
-  /** Sparse daily signup counts within the trailing SIGNUP_SERIES_DAYS. */
-  signupsByDay: DayCount[];
+  /** Sparse daily counts for the SELECTED metric over the selected range. */
+  seriesByDay: DayCount[];
 }
 
 export interface AdminStats {
@@ -150,10 +189,8 @@ export interface AdminStats {
     pendingCancels: number;
     trialsEndingSoon: number;
   };
-  /** Trailing daily signups, filled + ordered oldest→newest, length =
-   *  signupWindowDays. Merged across reachable regions. */
-  signupsByDay: DayCount[];
-  signupWindowDays: number;
+  /** The selected metric's daily series (filled), driven by ?metric + ?range. */
+  series: SeriesResult;
   recentSignups: RecentSignup[];
 }
 
@@ -171,7 +208,10 @@ function shortError(err: unknown): string {
 /** Collect stats for one region, or a fully-zeroed unreachable stub. getDb()
  *  throws synchronously when the region's DSN is unset (the locality guard);
  *  a live-but-unreachable DB throws at await time. Both land here. */
-async function collectRegionStats(region: Region): Promise<RegionStats> {
+async function collectRegionStats(
+  region: Region,
+  series: { metric: SeriesMetric; rangeDays: number },
+): Promise<RegionStats> {
   const empty: Omit<RegionStats, "region" | "reachable" | "error"> = {
     customers: 0,
     users: 0,
@@ -191,7 +231,7 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
     agentsSeen: { d1: 0, d7: 0 },
     pendingCancels: 0,
     trialsEndingSoon: 0,
-    signupsByDay: [],
+    seriesByDay: [],
   };
 
   try {
@@ -204,7 +244,7 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
     const d7 = new Date(now - 7 * day);
     const d30 = new Date(now - 30 * day);
     const in7d = new Date(now + 7 * day);
-    const seriesFrom = now - SIGNUP_SERIES_DAYS * day;
+    const seriesFrom = new Date(now - series.rangeDays * day);
 
     // Customer rows carry both plan axes and the signup timeline. At current
     // (pre-launch) scale fetching all of them and reducing in JS is cheaper to
@@ -246,29 +286,32 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
         .from(subscriptionTable)
         .groupBy(subscriptionTable.status),
       // New users by created_at (customers/orgs are computed from the rows we
-      // already fetched; users need their own windowed count). FILTER is a
-      // single index-friendly pass over the small user table.
+      // already fetched; users need their own windowed count). The date bounds
+      // go through drizzle's gte() — NOT a bare `${date}` in the sql template —
+      // so each Date is encoded with the column's timestamp type. A raw Date
+      // embed has no column context and postgres.js's prepare:false path (Neon
+      // pgbouncer) throws "string argument ... Received an instance of Date".
       db
         .select({
-          d1: sql<number>`count(*) filter (where ${user.createdAt} >= ${d1})::int`,
-          d7: sql<number>`count(*) filter (where ${user.createdAt} >= ${d7})::int`,
-          d30: sql<number>`count(*) filter (where ${user.createdAt} >= ${d30})::int`,
+          d1: sql<number>`count(*) filter (where ${gte(user.createdAt, d1)})::int`,
+          d7: sql<number>`count(*) filter (where ${gte(user.createdAt, d7)})::int`,
+          d30: sql<number>`count(*) filter (where ${gte(user.createdAt, d30)})::int`,
         })
         .from(user),
       // Agents SEEN: kind='url' tokens with a recent last_used_at. Usage
       // recency, not the "usable" activeAgents count.
       db
         .select({
-          d1: sql<number>`count(*) filter (where ${mcpTokens.lastUsedAt} >= ${d1})::int`,
-          d7: sql<number>`count(*) filter (where ${mcpTokens.lastUsedAt} >= ${d7})::int`,
+          d1: sql<number>`count(*) filter (where ${gte(mcpTokens.lastUsedAt, d1)})::int`,
+          d7: sql<number>`count(*) filter (where ${gte(mcpTokens.lastUsedAt, d7)})::int`,
         })
         .from(mcpTokens)
         .where(eq(mcpTokens.kind, "url")),
       // Churn watch: entitled subs set to cancel, and trials ending ≤7d.
       db
         .select({
-          pendingCancels: sql<number>`count(*) filter (where ${subscriptionTable.cancelAtPeriodEnd} = true and ${subscriptionTable.status} in ('active','trialing'))::int`,
-          trialsEndingSoon: sql<number>`count(*) filter (where ${subscriptionTable.trialEnd} is not null and ${subscriptionTable.trialEnd} >= now() and ${subscriptionTable.trialEnd} < ${in7d})::int`,
+          pendingCancels: sql<number>`count(*) filter (where ${and(eq(subscriptionTable.cancelAtPeriodEnd, true), inArray(subscriptionTable.status, ["active", "trialing"]))})::int`,
+          trialsEndingSoon: sql<number>`count(*) filter (where ${and(isNotNull(subscriptionTable.trialEnd), gte(subscriptionTable.trialEnd, new Date(now)), lt(subscriptionTable.trialEnd, in7d))})::int`,
         })
         .from(subscriptionTable),
       // audit_events_index is the ONLY RLS table here (FORCE ROW LEVEL
@@ -304,10 +347,8 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
     const billingPlanCounts = zeroPlanRecord();
     const planCounts = zeroPlanRecord();
     const compedCounts = zeroPlanRecord();
-    // New-customer windows + the daily signup series come from the rows we
-    // already fetched — no extra query. Bucket by UTC day for the series.
+    // New-customer windows come from the rows we already fetched — no query.
     const newCustomers: WindowCounts = { d1: 0, d7: 0, d30: 0 };
-    const signupBuckets = new Map<string, number>();
     for (const c of customerRows) {
       const billing = (c.plan ?? "free") as Plan;
       const effective = (c.planOverride ?? c.plan ?? "free") as Plan;
@@ -319,13 +360,17 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
       if (t >= d30.getTime()) newCustomers.d30 += 1;
       if (t >= d7.getTime()) newCustomers.d7 += 1;
       if (t >= d1.getTime()) newCustomers.d1 += 1;
-      if (t >= seriesFrom) {
-        const k = dayKeyUTC(c.createdAt);
-        signupBuckets.set(k, (signupBuckets.get(k) ?? 0) + 1);
-      }
     }
-    const signupsByDay: DayCount[] = [...signupBuckets.entries()].map(
-      ([day, count]) => ({ day, count }),
+
+    // Only the SELECTED metric's series is computed — the `queries` path scans
+    // the RLS audit index (per-customer), so we never pay for it unless it's on
+    // screen. `signups` reuses the rows already fetched (free); `users` runs one
+    // grouped read; `queries` runs the scoped daily aggregate.
+    const seriesByDay = await collectSeriesByDay(
+      db,
+      series.metric,
+      seriesFrom,
+      customerRows,
     );
 
     const subscriptionStatusCounts: Record<string, number> = {};
@@ -365,11 +410,75 @@ async function collectRegionStats(region: Region): Promise<RegionStats> {
       agentsSeen,
       pendingCancels,
       trialsEndingSoon,
-      signupsByDay,
+      seriesByDay,
     };
   } catch (err) {
     return { region, reachable: false, error: shortError(err), ...empty };
   }
+}
+
+/** Sparse daily buckets for one metric since `from`. `signups` reduces the
+ *  already-fetched customer rows (no query); `users` is one grouped read;
+ *  `queries` is the RLS-scoped daily audit aggregate. */
+async function collectSeriesByDay(
+  db: ReturnType<typeof getDb>,
+  metric: SeriesMetric,
+  from: Date,
+  customerRows: Array<{ id: string; createdAt: Date }>,
+): Promise<DayCount[]> {
+  if (metric === "signups") {
+    const b = new Map<string, number>();
+    const fromMs = from.getTime();
+    for (const c of customerRows) {
+      if (c.createdAt.getTime() < fromMs) continue;
+      const k = dayKeyUTC(c.createdAt);
+      b.set(k, (b.get(k) ?? 0) + 1);
+    }
+    return [...b.entries()].map(([day, count]) => ({ day, count }));
+  }
+
+  if (metric === "users") {
+    const dayExpr = utcDayExpr(user.createdAt);
+    const rows = await db
+      .select({ day: dayExpr, c: count() })
+      .from(user)
+      .where(gte(user.createdAt, from))
+      .groupBy(dayExpr);
+    return rows.map((r) => ({ day: r.day, count: Number(r.c) }));
+  }
+
+  // queries: daily audit-event counts, per-customer scoped (same RLS reason as
+  // collectAuditActivity) then merged by day. One grouped read per customer.
+  return collectAuditDailySeries(
+    db,
+    customerRows.map((c) => c.id),
+    from,
+  );
+}
+
+async function collectAuditDailySeries(
+  db: ReturnType<typeof getDb>,
+  customerIds: string[],
+  from: Date,
+): Promise<DayCount[]> {
+  if (customerIds.length === 0) return [];
+  const dayExpr = utcDayExpr(auditEventsIndex.ts);
+  return db.transaction(async (tx) => {
+    const buckets = new Map<string, number>();
+    for (const id of customerIds) {
+      if (!ULID_RE.test(id)) continue;
+      await tx.execute(sql.raw(`SET LOCAL app.customer_id = '${id}'`));
+      const rows = await tx
+        .select({ day: dayExpr, c: count() })
+        .from(auditEventsIndex)
+        .where(gte(auditEventsIndex.ts, from))
+        .groupBy(dayExpr);
+      for (const r of rows) {
+        buckets.set(r.day, (buckets.get(r.day) ?? 0) + Number(r.c));
+      }
+    }
+    return [...buckets.entries()].map(([day, count]) => ({ day, count }));
+  });
 }
 
 /** 7-day activity from the audit index, summed across customers.
@@ -425,8 +534,13 @@ function addPlanRecords(
  *  host's pinned region for the "partial view" note; totals sum only reachable
  *  regions. `bootRegion` is injected so the caller owns the region-context
  *  import (keeps this module free of the request-scope seam). */
-export async function collectAdminStats(hostRegion: Region): Promise<AdminStats> {
-  const perRegion = await Promise.all(REGIONS.map(collectRegionStats));
+export async function collectAdminStats(
+  hostRegion: Region,
+  opts: { metric: SeriesMetric; rangeDays: SeriesRange },
+): Promise<AdminStats> {
+  const perRegion = await Promise.all(
+    REGIONS.map((r) => collectRegionStats(r, opts)),
+  );
 
   const totals: AdminStats["totals"] = {
     customers: 0,
@@ -449,8 +563,8 @@ export async function collectAdminStats(hostRegion: Region): Promise<AdminStats>
     trialsEndingSoon: 0,
   };
 
-  // Merged sparse day→count map for the signups series (reachable regions).
-  const signupBuckets = new Map<string, number>();
+  // Merged sparse day→count map for the selected metric (reachable regions).
+  const seriesBuckets = new Map<string, number>();
 
   for (const r of perRegion) {
     if (!r.reachable) continue;
@@ -477,8 +591,8 @@ export async function collectAdminStats(hostRegion: Region): Promise<AdminStats>
       totals.subscriptionStatusCounts[status] =
         (totals.subscriptionStatusCounts[status] ?? 0) + c;
     }
-    for (const { day, count } of r.signupsByDay) {
-      signupBuckets.set(day, (signupBuckets.get(day) ?? 0) + count);
+    for (const { day, count } of r.seriesByDay) {
+      seriesBuckets.set(day, (seriesBuckets.get(day) ?? 0) + count);
     }
   }
   totals.payingCustomers =
@@ -493,10 +607,10 @@ export async function collectAdminStats(hostRegion: Region): Promise<AdminStats>
   // Fill the series to a dense, ordered oldest→newest axis so the chart renders
   // gaps as empty bars (not skipped days). Anchored on generatedAt (UTC days).
   const day = 24 * 60 * 60 * 1000;
-  const signupsByDay: DayCount[] = [];
-  for (let i = SIGNUP_SERIES_DAYS - 1; i >= 0; i--) {
+  const points: DayCount[] = [];
+  for (let i = opts.rangeDays - 1; i >= 0; i--) {
     const key = dayKeyUTC(new Date(generatedAt.getTime() - i * day));
-    signupsByDay.push({ day: key, count: signupBuckets.get(key) ?? 0 });
+    points.push({ day: key, count: seriesBuckets.get(key) ?? 0 });
   }
 
   return {
@@ -506,8 +620,7 @@ export async function collectAdminStats(hostRegion: Region): Promise<AdminStats>
     perRegion,
     complete: perRegion.every((r) => r.reachable),
     totals,
-    signupsByDay,
-    signupWindowDays: SIGNUP_SERIES_DAYS,
+    series: { metric: opts.metric, rangeDays: opts.rangeDays, points },
     recentSignups,
   };
 }
