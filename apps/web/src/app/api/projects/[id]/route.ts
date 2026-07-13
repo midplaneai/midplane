@@ -31,6 +31,7 @@ import {
 import { currentCustomer } from "@/lib/customer";
 import { requireManagerRest } from "@/lib/org-auth";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
+import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 
 const RotateBody = z.object({
@@ -100,6 +101,10 @@ export async function PATCH(
         region: customer.region,
         source: "api",
       },
+      groups: analyticsGroups({
+        customerId: customer.id,
+        projectId: rotated.id,
+      }),
     });
   }
 
@@ -137,6 +142,10 @@ export async function DELETE(
         region: customer.region,
         source: "api",
       },
+      groups: analyticsGroups({
+        customerId: customer.id,
+        projectId: deleted.id,
+      }),
     });
   }
 

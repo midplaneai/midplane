@@ -56,10 +56,19 @@ import { member } from "@midplane-cloud/db/auth-schema";
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
 import { and, eq } from "drizzle-orm";
 
+import { captureError, makeCaptureThrottle } from "./analytics.ts";
 import { getMcpProxyContext } from "./mcp-proxy.ts";
 import { bootRegion } from "./region-context.ts";
 import { isSelfHost, SELF_HOST_CUSTOMER_ID } from "./self-host.ts";
 import { ensureOAuthAttributionToken } from "./tokens.ts";
+
+// MCP proxy failures are per-REQUEST, and agents retry aggressively — a
+// persistently broken project (or region-wide pepper misconfig) would
+// otherwise stream one $exception per request into PostHog, inflating cost
+// and crowding the shared event queue during the exact incident window.
+// One capture per (site, project) per window is plenty; console.error at
+// each site stays unthrottled as the full-fidelity log signal.
+const shouldCaptureProxyError = makeCaptureThrottle(5 * 60 * 1000);
 
 const HOP_BY_HOP = new Set([
   // The HTTP/1.1 hop-by-hop header (RFC 7230) — NOT the product "project"
@@ -180,8 +189,13 @@ export async function proxyMcp(
     peppers = await getPeppers();
   } catch (err) {
     // Pepper misconfig is a deploy-time error, not a per-request one;
-    // surface as a 500 with no token-existence information.
+    // surface as a 500 with no token-existence information. Captured to
+    // PostHog: this 500s EVERY MCP request and never throws, so nothing
+    // else would ever see it (launch-analytics spec §5).
     console.error("[proxyMcp] pepper load failed", err);
+    if (shouldCaptureProxyError("proxy.pepper_load_failed:region")) {
+      captureError("proxy.pepper_load_failed", err);
+    }
     return Response.json(
       { ok: false, error: "service_misconfigured" },
       { status: 500 },
@@ -529,6 +543,27 @@ async function forwardResolved(
       customerId: project.customerId,
     });
     if (!decrypt.ok) {
+      // KMS/decrypt failure: the customer's agent is fully down and this
+      // path previously produced NO signal at all — not even a console
+      // line (launch-analytics spec §5, the one silent 5xx).
+      console.error(
+        `forwardResolved: credential_unavailable for project ${project.id} (db=${cdb.id})`,
+      );
+      if (shouldCaptureProxyError(`proxy.credential_unavailable:${project.id}`)) {
+        captureError(
+          "proxy.credential_unavailable",
+          new Error("DSN decrypt failed at spawn"),
+          {
+            distinctId: tokenId,
+            personProfile: false,
+            properties: {
+              project_id: project.id,
+              customer_id: project.customerId,
+              project_database_id: cdb.id,
+            },
+          },
+        );
+      }
       return Response.json(
         {
           jsonrpc: "2.0",
@@ -558,7 +593,27 @@ async function forwardResolved(
       guardrails = parseGuardrailsOrThrow(cdb.guardrails);
       columnMasks = parseColumnMasksOrThrow(cdb.columnMasks);
     } catch (err) {
+      // The full validator error goes to the console ONLY: parse*OrThrow
+      // messages embed customer schema identifiers in their path segments
+      // (`tables.<name>`, `<table>.<col>`), and the scrubber does not
+      // redact schema names. The capture gets a synthesized message — the
+      // site tag + ids below already locate the bad row.
       console.error("invalid policy at spawn", err);
+      if (shouldCaptureProxyError(`proxy.invalid_policy_at_spawn:${project.id}`)) {
+        captureError(
+          "proxy.invalid_policy_at_spawn",
+          new Error("stored policy failed validation at spawn"),
+          {
+            distinctId: tokenId,
+            personProfile: false,
+            properties: {
+              project_id: project.id,
+              customer_id: project.customerId,
+              project_database_id: cdb.id,
+            },
+          },
+        );
+      }
       return Response.json(
         {
           jsonrpc: "2.0",
@@ -597,6 +652,22 @@ async function forwardResolved(
       console.error(
         `forwardResolved: project ${project.id} has column_masks but MIDPLANE_MASK_SALT_MASTER is unset — refusing to spawn (masking would be unenforceable)`,
       );
+      if (shouldCaptureProxyError(`proxy.mask_salt_missing:${project.id}`)) {
+        captureError(
+          "proxy.mask_salt_missing",
+          new Error(
+            "MIDPLANE_MASK_SALT_MASTER unset with column_masks declared",
+          ),
+          {
+            distinctId: tokenId,
+            personProfile: false,
+            properties: {
+              project_id: project.id,
+              customer_id: project.customerId,
+            },
+          },
+        );
+      }
       return Response.json(
         {
           jsonrpc: "2.0",
@@ -619,8 +690,20 @@ async function forwardResolved(
     });
   } catch (err) {
     // Opaque class only: a spawn failure can wrap a Postgres connect error
-    // carrying the DB host/user/name. See router/db-error.ts.
+    // carrying the DB host/user/name. See router/db-error.ts. The capture
+    // gets a SYNTHESIZED error for the same reason — the raw stack could
+    // embed identifiers the scrubber's URL patterns don't cover.
     console.error("spawn failed:", safeErrorDetail(err));
+    if (shouldCaptureProxyError(`proxy.spawn_failed:${project.id}`)) {
+      captureError("proxy.spawn_failed", new Error(safeErrorDetail(err)), {
+        distinctId: tokenId,
+        personProfile: false,
+        properties: {
+          project_id: project.id,
+          customer_id: project.customerId,
+        },
+      });
+    }
     return Response.json(
       {
         jsonrpc: "2.0",
@@ -648,9 +731,24 @@ async function forwardResolved(
     res = await fetch(upstreamUrl, init);
   } catch (err) {
     // Container may have been killed externally. Drop registry entry so the
-    // next request respawns.
+    // next request respawns. Synthesized error for the capture — same
+    // rationale as the spawn site above.
     await ctx.registry.invalidate(project.id).catch(() => undefined);
     console.error("proxy fetch failed:", safeErrorDetail(err));
+    if (shouldCaptureProxyError(`proxy.upstream_fetch_failed:${project.id}`)) {
+      captureError(
+        "proxy.upstream_fetch_failed",
+        new Error(safeErrorDetail(err)),
+        {
+          distinctId: tokenId,
+          personProfile: false,
+          properties: {
+            project_id: project.id,
+            customer_id: project.customerId,
+          },
+        },
+      );
+    }
     return Response.json(
       {
         jsonrpc: "2.0",

@@ -15,6 +15,7 @@ import { z } from "zod";
 
 import { currentCustomer } from "@/lib/customer";
 import { requireManagerRest } from "@/lib/org-auth";
+import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 import { revokeToken } from "@/lib/tokens";
 
@@ -92,6 +93,7 @@ export async function DELETE(
       reason,
       source: "api",
     },
+    groups: analyticsGroups({ customerId: customer.id, projectId: id }),
   });
 
   return Response.json({ id: result.id });

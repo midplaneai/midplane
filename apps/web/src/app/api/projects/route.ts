@@ -4,6 +4,7 @@ import { ACCESS_LEVELS } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { createProject, isValidDatabaseName } from "@/lib/projects";
+import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
 import { currentCustomer } from "@/lib/customer";
 import { requireManagerRest } from "@/lib/org-auth";
 import { PlanLimitError, planLimitBody, resolvePlan } from "@/lib/plan";
@@ -102,6 +103,7 @@ export async function POST(req: Request) {
   }
   const mcpUrl = mintMcpUrl(customer.region, defaultTokenPlaintext, process.env);
 
+  groupIdentifyProject(id, { region: customer.region });
   getPostHog()?.capture({
     distinctId: userId,
     event: "project_created",
@@ -111,6 +113,21 @@ export async function POST(req: Request) {
       default_access: parsed.data.default_access ?? "read",
       source: "api",
     },
+    groups: analyticsGroups({ customerId: customer.id, projectId: id }),
+  });
+  // The request's DSN became the project's first database — mirror the
+  // dashboard flow's activation event (see projects/new).
+  getPostHog()?.capture({
+    distinctId: userId,
+    event: "database_added",
+    properties: {
+      project_id: id,
+      region: customer.region,
+      default_access: parsed.data.default_access ?? "read",
+      source: "api",
+      via: "project_create",
+    },
+    groups: analyticsGroups({ customerId: customer.id, projectId: id }),
   });
 
   return Response.json({ id, mcpUrl, region: customer.region }, { status: 201 });

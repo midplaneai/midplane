@@ -190,6 +190,8 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
     let stagedRows: unknown[] = [];
     let mode: "nothing" | "update" | "none" = "none";
 
+    let returningRequested = false;
+
     const chain = {
       values(rows: unknown[] | unknown) {
         stagedRows = Array.isArray(rows) ? rows : [rows];
@@ -203,13 +205,27 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
         mode = "update";
         return chain;
       },
-      then(onFulfilled: () => unknown) {
-        commit();
-        return Promise.resolve().then(onFulfilled);
+      returning(_sel?: unknown) {
+        returningRequested = true;
+        return chain;
+      },
+      then(
+        onFulfilled?: (v: unknown) => unknown,
+        onRejected?: (e: unknown) => unknown,
+      ) {
+        const landed = commit();
+        return Promise.resolve(returningRequested ? landed : undefined).then(
+          onFulfilled,
+          onRejected,
+        );
       },
     };
 
-    function commit(): void {
+    // Returns the rows that actually landed — the fake's RETURNING payload,
+    // mirroring Postgres: with ON CONFLICT DO NOTHING, RETURNING only emits
+    // rows the statement actually inserted (pre-existing ids are skipped).
+    function commit(): Array<{ id: string }> {
+      const landed: Array<{ id: string }> = [];
       if (table === auditEventsIndex) {
         state.inserts.push({ table: "audit", rows: stagedRows, mode });
         for (const r of stagedRows as Array<{
@@ -219,6 +235,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
         }>) {
           if (state.auditRows.find((x) => x.id === r.id)) continue;
           state.auditRows.push(r);
+          landed.push({ id: r.id });
         }
       } else if (table === indexerCursors) {
         state.inserts.push({ table: "cursor", rows: stagedRows, mode });
@@ -265,6 +282,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
       }
       stagedRows = [];
       mode = "none";
+      return landed;
     }
 
     return chain;
@@ -1285,5 +1303,133 @@ describe("Indexer error recording", () => {
     expect(cursor.lastErrorAt).toBeNull();
     expect(cursor.lastId).toBe("01HX0000000000000000000002");
     expect(cursor.lastIndexedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe("Indexer onIndexed", () => {
+  it("invokes onIndexed post-commit with the schema-valid rows and drain context", async () => {
+    const { db, registry } = await buildHarness();
+    const decided = row("01HX0000000000000000000001", {
+      event_type: "DECIDED",
+      payload: { decision: "ALLOW", statement_type: "SELECT" },
+    });
+    const invalid = row("01HX0000000000000000000002", {
+      // schema-invalid: unknown event_type — dropped by isValidAuditRow,
+      // so it must NOT reach the callback either.
+      event_type: "BOGUS" as ContainerAuditRow["event_type"],
+    });
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ rows: [decided, invalid], next_cursor: null }),
+    ) as unknown as typeof fetch;
+
+    const onIndexed = vi.fn();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onIndexed,
+    });
+    await ix.tick();
+
+    expect(onIndexed).toHaveBeenCalledTimes(1);
+    const [rows, ctx] = onIndexed.mock.calls[0] as [
+      ContainerAuditRow[],
+      { projectId: string; customerId: string; region: string },
+    ];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(decided.id);
+    expect(ctx).toEqual({
+      projectId: TEST_CONN_A,
+      customerId: TEST_CUST_A,
+      region: "eu",
+    });
+  });
+
+  it("excludes conflict-skipped rows from onIndexed (at-most-once on re-drains)", async () => {
+    const { db, state, registry } = await buildHarness();
+    const already = row("01HX0000000000000000000001", {
+      event_type: "DECIDED",
+      payload: { decision: "ALLOW" },
+    });
+    const fresh = row("01HX0000000000000000000002", {
+      event_type: "DECIDED",
+      payload: { decision: "DENY", policy_rule: "table_access", reason: "x" },
+    });
+    // Simulate a racing second indexer / re-delivered page: row 1 is
+    // already in audit_events_index, so its INSERT conflict-skips.
+    state.auditRows.push({
+      id: already.id,
+      customerId: TEST_CUST_A,
+      ts: new Date(already.ts),
+    });
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ rows: [already, fresh], next_cursor: null }),
+    ) as unknown as typeof fetch;
+    const onIndexed = vi.fn();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onIndexed,
+    });
+    await ix.tick();
+
+    expect(onIndexed).toHaveBeenCalledTimes(1);
+    const [rows] = onIndexed.mock.calls[0] as [ContainerAuditRow[]];
+    expect(rows.map((r) => r.id)).toEqual([fresh.id]);
+  });
+
+  it("does not invoke onIndexed when the write transaction fails", async () => {
+    const { db, registry } = await buildHarness({ failNextTxn: true });
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [row("01HX0000000000000000000001")],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const onIndexed = vi.fn();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onIndexed,
+    });
+    await ix.tick();
+    expect(onIndexed).not.toHaveBeenCalled();
+  });
+
+  it("a throwing onIndexed neither fails the drain nor reaches onError", async () => {
+    const { db, state, registry } = await buildHarness();
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        rows: [row("01HX0000000000000000000001")],
+        next_cursor: null,
+      }),
+    ) as unknown as typeof fetch;
+    const onError = vi.fn();
+    const ix = new Indexer({
+      db,
+      registry,
+      indexerToken: "t",
+      fetch: fetchFn,
+      onError,
+      onIndexed: () => {
+        throw new Error("analytics hook exploded");
+      },
+    });
+    await ix.tick();
+
+    // The write committed and the cursor advanced — the hook's failure is
+    // invisible to the drain (a bubbled throw would stamp a drain error
+    // for a write that succeeded).
+    const cursor = [...state.cursorsById.values()].find(
+      (c) => c.projectId === TEST_CONN_A,
+    );
+    expect(cursor?.lastId).toBe("01HX0000000000000000000001");
+    expect(cursor?.lastError ?? null).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
   });
 });

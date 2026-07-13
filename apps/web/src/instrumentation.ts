@@ -40,6 +40,25 @@ export async function register() {
   );
   assertBootEnv();
 
+  // Flush PostHog's buffered events on shutdown — posthog-node batches
+  // (flushAt/flushInterval), so without this the buffered tail (often the
+  // low-volume business events sitting below flushAt) is dropped on every
+  // deploy. BOTH signals on purpose: Fly's default kill_signal is SIGINT
+  // (neither web TOML overrides it), and Next.js handles SIGINT by
+  // draining + process.exit — a SIGTERM-only handler would simply never
+  // run in the hosted cloud. Best-effort with a short timeout inside the
+  // stop grace period; races Next's own shutdown, which is fine — a
+  // partial flush beats none. nodejs-only: posthog-node can't load on Edge.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const flushPosthog = () => {
+      void import("./lib/posthog.ts")
+        .then(({ getPostHog }) => getPostHog()?.shutdown(3_000))
+        .catch(() => undefined);
+    };
+    process.on("SIGTERM", flushPosthog);
+    process.on("SIGINT", flushPosthog);
+  }
+
   // Self-host: seed the implicit org + customer the single-tenant build binds
   // every customer_id-scoped transaction against, before the first request can
   // reach a bind. The NEXT_RUNTIME guard is REQUIRED: register() runs in both

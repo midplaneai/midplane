@@ -68,6 +68,7 @@ import {
   setIgnoredColumns,
   setTableAccess,
 } from "@/lib/projects";
+import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
 import { projectLabel, formatRelative } from "@/lib/format";
@@ -273,6 +274,10 @@ export default async function ProjectWorkspace({
             region: customer.region,
             source: "project_workspace",
           },
+          groups: analyticsGroups({
+            customerId: customer.id,
+            projectId: deleted.id,
+          }),
         });
       }
     }
@@ -325,6 +330,10 @@ export default async function ProjectWorkspace({
           region: customer.region,
           source: "project_workspace",
         },
+        groups: analyticsGroups({
+          customerId: customer.id,
+          projectId: result.id,
+        }),
       });
     }
     revalidatePath("/dashboard");
@@ -367,6 +376,10 @@ export default async function ProjectWorkspace({
           region: customer.region,
           source: "project_workspace",
         },
+        groups: analyticsGroups({
+          customerId: customer.id,
+          projectId: result.id,
+        }),
       });
     }
     revalidatePath("/dashboard");
@@ -377,8 +390,24 @@ export default async function ProjectWorkspace({
     "use server";
     const customer = await currentCustomer();
     if (!customer) redirect("/");
-    await assertManager();
+    const { userId } = await assertManager();
     const { projectId } = await addDatabaseFromForm(customer, formData);
+    if (userId) {
+      // groupIdentify too: this project may predate group analytics (or be
+      // the auto-seeded Default, which never passes a create call site).
+      groupIdentifyProject(projectId, { region: customer.region });
+      getPostHog()?.capture({
+        distinctId: userId,
+        event: "database_added",
+        properties: {
+          project_id: projectId,
+          region: customer.region,
+          source: "project_workspace",
+          via: "database_add",
+        },
+        groups: analyticsGroups({ customerId: customer.id, projectId }),
+      });
+    }
     revalidatePath(`/projects/${projectId}`);
     revalidatePath("/dashboard");
   }
@@ -591,6 +620,10 @@ export default async function ProjectWorkspace({
           region: customer.region,
           source: "project_workspace",
         },
+        groups: analyticsGroups({
+          customerId: customer.id,
+          projectId: rotated.id,
+        }),
       });
     }
   }

@@ -1,15 +1,17 @@
 import { stripe as stripePlugin } from "@better-auth/stripe";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import Stripe from "stripe";
 
-import { customers, getDb } from "@midplane-cloud/db";
+import { getDb } from "@midplane-cloud/db";
 import {
   member,
   subscription as subscriptionTable,
 } from "@midplane-cloud/db/auth-schema";
 
+import { analyticsGroups, groupIdentifyOrganization } from "./analytics.ts";
 import { isOwnerRole } from "./org-roles.ts";
 import type { Plan } from "./plan.ts";
+import { getPostHog } from "./posthog.ts";
 import { bootRegion } from "./region-context.ts";
 import { isSelfHost } from "./self-host.ts";
 
@@ -138,12 +140,38 @@ export function planFromSubscription(
 /** Write the resolved tier to customers.plan for an org. Idempotent state-set
  *  (UPDATE ... WHERE org_id), so a replayed event re-writes the same value with
  *  no observable change. A delivery for an org not in THIS regional DB updates
- *  zero rows — a harmless no-op (each org's customer row is region-resident). */
-export async function writeOrgPlan(orgId: string, plan: Plan): Promise<void> {
-  await getDb(bootRegion())
-    .update(customers)
-    .set({ plan })
-    .where(eq(customers.orgId, orgId));
+ *  zero rows — a harmless no-op (each org's customer row is region-resident).
+ *  Returns the updated customer's identity plus the PRIOR plan (null on the
+ *  zero-row no-op) so the sync hook can attribute analytics and distinguish a
+ *  real tier transition from a routine renewal/replay without a second read.
+ *  ONE atomic statement on purpose: Stripe does NOT serialize webhook
+ *  deliveries, so a separate read-then-write would let two concurrent
+ *  handlers both read the stale prior plan and both report the same
+ *  transition. The FOR UPDATE self-join serializes them — the loser reads
+ *  the winner's committed value as previous_plan and skips the capture. */
+export async function writeOrgPlan(
+  orgId: string,
+  plan: Plan,
+): Promise<{ id: string; region: string; previousPlan: Plan } | null> {
+  const rows = (await getDb(bootRegion()).execute(sql`
+    UPDATE customers c
+    SET plan = ${plan}
+    FROM (
+      SELECT id, plan AS previous_plan
+      FROM customers
+      WHERE org_id = ${orgId}
+      FOR UPDATE
+    ) prior
+    WHERE c.id = prior.id
+    RETURNING c.id AS id, c.region AS region, prior.previous_plan AS previous_plan
+  `)) as unknown as Array<{
+    id: string;
+    region: string;
+    previous_plan: Plan;
+  }>;
+  const row = rows[0];
+  if (!row) return null;
+  return { id: row.id, region: row.region, previousPlan: row.previous_plan };
 }
 
 /** Derive the tier from a subscription and persist it to customers.plan. Wired
@@ -155,7 +183,7 @@ async function syncOrgPlanFromSubscription(args: {
   status: string;
 }): Promise<void> {
   const plan = planFromSubscription(args.status, args.planName);
-  await writeOrgPlan(args.referenceId, plan);
+  const synced = await writeOrgPlan(args.referenceId, plan);
   console.log(
     JSON.stringify({
       level: "info",
@@ -166,6 +194,41 @@ async function syncOrgPlanFromSubscription(args: {
       resolvedPlan: plan,
     }),
   );
+  // Revenue signal (launch-analytics spec §4). Webhook context has no human
+  // user, so the event is group-scoped: distinctId is the org key with person
+  // processing off (no junk person profiles). The groupIdentify keeps `plan`
+  // current on the organization group — the property every other event's
+  // plan segmentation reads. Skipped on the zero-row cross-region no-op.
+  // try/caught: an analytics fault after the plan write must not fail the
+  // Stripe webhook response and trigger delivery retries.
+  if (synced) {
+    try {
+      groupIdentifyOrganization(synced.id, { plan, region: synced.region });
+      // Capture only on a real tier TRANSITION. onSubscriptionUpdate fires
+      // for every customer.subscription.updated — billing-period renewals,
+      // metadata edits — and webhook redelivery replays them; without this
+      // gate the "revenue signal" would emit a monthly false positive per
+      // paying org. The groupIdentify above stays unconditional (cheap,
+      // idempotent, and the repair path relies on it).
+      if (synced.previousPlan !== plan) {
+        getPostHog()?.capture({
+          distinctId: synced.id,
+          event: "subscription_changed",
+          properties: {
+            $process_person_profile: false,
+            stripe_status: args.status,
+            plan_name: args.planName ?? null,
+            previous_plan: synced.previousPlan,
+            resolved_plan: plan,
+            region: synced.region,
+          },
+          groups: analyticsGroups({ customerId: synced.id }),
+        });
+      }
+    } catch (err) {
+      console.warn("subscription_changed capture failed (continuing)", err);
+    }
+  }
 }
 
 // --- reconciliation / backfill ----------------------------------------------
@@ -191,7 +254,17 @@ export async function reconcileOrgPlan(orgId: string): Promise<Plan> {
   const plan = entitled
     ? planFromSubscription(entitled.status, entitled.plan)
     : "free";
-  await writeOrgPlan(orgId, plan);
+  const synced = await writeOrgPlan(orgId, plan);
+  // Keep the PostHog org group's `plan` current on the repair path too —
+  // reconciliation exists precisely for the case where the webhook (and so
+  // its groupIdentify) was missed. Best-effort, mirrors the sync hook.
+  if (synced) {
+    try {
+      groupIdentifyOrganization(synced.id, { plan, region: synced.region });
+    } catch {
+      // group refresh is advisory; the plan write above is what matters
+    }
+  }
   return plan;
 }
 

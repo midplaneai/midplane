@@ -14,8 +14,9 @@ import { getOrgContext } from "@/lib/org-context";
 import { revalidatePath } from "next/cache";
 
 import { loadPepperFromKms } from "@midplane-cloud/kms/pepper";
-import { mintMcpUrl } from "@midplane-cloud/router";
+import { mintMcpUrl, safeErrorDetail } from "@midplane-cloud/router";
 
+import { analyticsGroups, captureError } from "@/lib/analytics";
 import { currentCustomer } from "@/lib/customer";
 import { PlanLimitError, resolvePlan, UPGRADE_URL } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
@@ -92,8 +93,15 @@ export async function createTokenAction(
   const peppers = await loadPepperFromKms(customer.region, process.env);
   const firstKid = peppers.keys().next().value as string | undefined;
   if (!firstKid) {
+    // Region-wide token minting is down (KMS/config) — swallowed as a
+    // generic "internal" to the user, so capture is the only alert.
     console.error(
       `[createTokenAction] no pepper for region '${customer.region}'`,
+    );
+    captureError(
+      "tokens.pepper_missing",
+      new Error(`no pepper for region '${customer.region}'`),
+      { distinctId: userId, properties: { customer_id: customer.id } },
     );
     return { ok: false, error: "internal" };
   }
@@ -130,6 +138,16 @@ export async function createTokenAction(
         });
       } catch (err) {
         console.error("[createTokenAction] scope write failed; revoking", err);
+        // Synthesized: a Postgres constraint DETAIL embeds row VALUES
+        // (customer-chosen names) — same rule as the proxy capture sites.
+        captureError("tokens.scope_write_failed", new Error(safeErrorDetail(err)), {
+          distinctId: userId,
+          properties: {
+            project_id: projectId,
+            customer_id: customer.id,
+            token_id: result.id,
+          },
+        });
         await revokeToken(customer, projectId, result.id, {
           reason: "user_action",
           actorUserId: userId,
@@ -159,6 +177,7 @@ export async function createTokenAction(
         expires_in_days: input.expiresInDays,
         source: "dashboard",
       },
+      groups: analyticsGroups({ customerId: customer.id, projectId }),
     });
 
     return { ok: true, mcpUrl, id: result.id, name: trimmed };
@@ -173,6 +192,10 @@ export async function createTokenAction(
       return { ok: false, error: "plan_limit", limit: err.limit, upgradeUrl: UPGRADE_URL };
     }
     console.error("[createTokenAction] unexpected failure", err);
+    captureError("tokens.create_failed", new Error(safeErrorDetail(err)), {
+      distinctId: userId,
+      properties: { project_id: projectId, customer_id: customer.id },
+    });
     return { ok: false, error: "internal" };
   }
 }
@@ -217,11 +240,20 @@ export async function revokeTokenAction(
         region: customer.region,
         source: "dashboard",
       },
+      groups: analyticsGroups({ customerId: customer.id, projectId }),
     });
 
     return { ok: true, id: result.id };
   } catch (err) {
     console.error("[revokeTokenAction] unexpected failure", err);
+    captureError("tokens.revoke_failed", new Error(safeErrorDetail(err)), {
+      distinctId: userId,
+      properties: {
+        project_id: projectId,
+        customer_id: customer.id,
+        token_id: tokenId,
+      },
+    });
     return { ok: false, error: "internal" };
   }
 }

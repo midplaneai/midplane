@@ -30,6 +30,7 @@ import {
   UPGRADE_URL,
 } from "@/lib/plan";
 import { PROJECTS_LIST_HREF } from "@/lib/routes";
+import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 
 export default async function NewProject() {
@@ -208,6 +209,7 @@ async function createAction(
     throw err;
   }
 
+  groupIdentifyProject(id, { region: customer.region });
   getPostHog()?.capture({
     distinctId: userId,
     event: "project_created",
@@ -217,6 +219,22 @@ async function createAction(
       default_access: defaultAccess,
       source: "dashboard",
     },
+    groups: analyticsGroups({ customerId: customer.id, projectId: id }),
+  });
+  // createProject attaches the form's DSN as the project's first database
+  // (possibly onto the reused empty "Default" project) — the activation step
+  // between project_created and agent connect (launch-analytics spec §4).
+  getPostHog()?.capture({
+    distinctId: userId,
+    event: "database_added",
+    properties: {
+      project_id: id,
+      region: customer.region,
+      default_access: defaultAccess,
+      source: "dashboard",
+      via: "project_create",
+    },
+    groups: analyticsGroups({ customerId: customer.id, projectId: id }),
   });
 
   // Land on the project's Connect tab with a one-time "created" flag so the

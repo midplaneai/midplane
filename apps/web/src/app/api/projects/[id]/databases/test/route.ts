@@ -23,6 +23,7 @@ import { projects, getDb } from "@midplane-cloud/db";
 import { isValidDsn } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
 import { pingDsnGuarded } from "@/lib/ping-guard";
+import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 import {
   checkRateLimit,
@@ -107,6 +108,7 @@ export async function POST(
         region: customer.region,
         success: result.ok,
       },
+      groups: analyticsGroups({ customerId: customer.id, projectId: id }),
     });
   }
 

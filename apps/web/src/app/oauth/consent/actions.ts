@@ -11,8 +11,12 @@
 // selection IS the agent's whole grant set for this client — one credential is
 // bound to ONE project.
 
+import { safeErrorDetail } from "@midplane-cloud/router";
+
+import { analyticsGroups, captureError } from "@/lib/analytics";
 import { currentCustomer } from "@/lib/customer";
 import { getOrgContext } from "@/lib/org-context";
+import { getPostHog } from "@/lib/posthog";
 import { setOAuthGrants } from "@/lib/scope-grants";
 import { reactivateOAuthAttributionToken } from "@/lib/tokens";
 
@@ -56,9 +60,37 @@ export async function writeConsentGrants(
     // revoked state on the (project, client) attribution row the proxy gates on.
     // No-op the common first-consent case (no row yet / already active).
     await reactivateOAuthAttributionToken(customer, projectId, clientId);
+
+    // The OAuth-first connect moment — the web flow mints no default token,
+    // so token_created never sees interactive agents; this is the funnel
+    // step between project setup and the first query_decided.
+    // `granted: 0` is a real state (client approved, zero DBs → proxy 403s).
+    getPostHog()?.capture({
+      distinctId: userId,
+      event: "agent_connected",
+      properties: {
+        method: "oauth",
+        client_id: clientId,
+        project_id: projectId,
+        granted_databases: granted,
+        region: customer.region,
+      },
+      groups: analyticsGroups({ customerId: customer.id, projectId }),
+    });
+
     return { ok: true, granted };
   } catch (err) {
     console.error("[writeConsentGrants] failed", err);
+    // Synthesized: constraint DETAIL can embed row values — console keeps
+    // the raw error, the tracker gets the opaque class.
+    captureError("oauth.consent_grant_failed", new Error(safeErrorDetail(err)), {
+      distinctId: userId,
+      properties: {
+        client_id: clientId,
+        project_id: projectId,
+        customer_id: customer.id,
+      },
+    });
     return { ok: false, error: "internal" };
   }
 }
