@@ -14,6 +14,8 @@ import {
 // Mirrors the dashboard's per-project [⋯] menu. Used in the desktop sidebar
 // (bottom, next to the account) and the mobile top bar. The pages themselves
 // live on the marketing site (midplane.ai), so these are external links.
+// Help/support links deliberately do NOT live here — they're always visible
+// (helpLinksFor in the sidebar + mobile bar), not tucked behind a menu.
 export function LegalMenu() {
   return (
     <DropdownMenu>

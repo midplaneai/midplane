@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { helpLinksFor } from "@/components/layout/help-links";
 import { LegalMenu } from "@/components/layout/legal-menu";
 import { navItemsFor } from "@/components/layout/nav-items";
 import { UserMenuButton } from "@/components/layout/user-menu-button";
@@ -32,7 +33,7 @@ export function MobileNav({
         </div>
       </div>
       <nav
-        aria-label="Workspace"
+        aria-label="Workspace and help"
         className="flex items-center gap-1 overflow-x-auto px-2 pb-1"
       >
         {navItemsFor({ selfHost, role }).map((item) => {
@@ -61,6 +62,27 @@ export function MobileNav({
               />
               {item.label}
             </Link>
+          );
+        })}
+        {/* Help links ride the same strip, after the workspace items — on
+            narrow screens they may start off-screen and scroll into view (the
+            strip scrolls horizontally). No active state — they're external. */}
+        {helpLinksFor({ selfHost }).map((item) => {
+          const Icon = item.icon;
+          return (
+            <a
+              key={item.href}
+              href={item.href}
+              {...(item.newTab ? { target: "_blank", rel: "noreferrer" } : {})}
+              className="inline-flex items-center gap-1.5 whitespace-nowrap border-b-[3px] border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Icon
+                aria-hidden
+                className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
+                strokeWidth={1.5}
+              />
+              {item.label}
+            </a>
           );
         })}
       </nav>
