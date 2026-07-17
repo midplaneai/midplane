@@ -13,6 +13,7 @@ import { mcpGenericUrl } from "@midplane-cloud/router";
 import { fetchColumnTypes } from "@/lib/scan-pii-columns";
 
 import { ProjectRail } from "@/components/projects/project-rail";
+import { ConnectLiveStatus } from "@/components/projects/connect-live-status";
 import { OAuthConnectGuide } from "@/components/projects/oauth-connect-guide";
 import {
   PROJECT_SECTIONS,
@@ -69,6 +70,10 @@ import {
   setTableAccess,
 } from "@/lib/projects";
 import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
+import {
+  getConnectStatus,
+  serializeConnectStatus,
+} from "@/lib/connect-status";
 import { currentCustomer } from "@/lib/customer";
 import { addDatabaseFromForm } from "@/lib/database-form";
 import { projectLabel, formatRelative } from "@/lib/format";
@@ -144,13 +149,14 @@ export default async function ProjectWorkspace({
   // Token usage is its own light COUNT; the project count comes free from
   // the switcher rows below (getPlanUsage here would re-COUNT projects the
   // page already fetches on every render).
-  const [home, agents, tokensUsed, switcherRows, reusableEmpty] =
+  const [home, agents, tokensUsed, switcherRows, reusableEmpty, connectStatus] =
     await Promise.all([
       getProjectHomeData(customer, id, caps.auditRetentionDays),
       listProjectAgents(customer, id),
       getTokenUsage(customer),
       listProjectSwitcherRows(customer),
       hasEmptyProject(customer),
+      getConnectStatus(customer, id),
     ]);
   if (!home) notFound();
   const { project: conn, databases, cursor } = home;
@@ -934,6 +940,18 @@ export default async function ProjectWorkspace({
           Project created. Connect your first agent below — point it at the URL
           and sign in.
         </div>
+      ) : null}
+
+      {/* Live confirmation: waiting → agent connected → decision-aware first
+          query. Server-rendered initial state, then a light poll — this is
+          the funnel's activation surface (support-onboarding Day 2). The
+          audit link is manager-only (the audit log page is owner/admin). */}
+      {connectStatus ? (
+        <ConnectLiveStatus
+          projectId={conn.id}
+          initial={serializeConnectStatus(connectStatus)}
+          auditHref={canManage ? `/audit?project=${conn.id}` : null}
+        />
       ) : null}
 
       {/* The connect card owns the "how to connect" instructions (OAuth URL +
