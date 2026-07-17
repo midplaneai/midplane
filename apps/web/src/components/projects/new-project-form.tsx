@@ -23,11 +23,17 @@ const initialState: NewProjectFormState = {};
 
 export function NewProjectForm({
   action,
+  sampleDsn,
 }: {
   action: (
     prev: NewProjectFormState,
     formData: FormData,
   ) => Promise<NewProjectFormState>;
+  /** DSN of the hosted read-only sample database (MIDPLANE_SAMPLE_DSN).
+   *  Null/absent hides the affordance. Effectively public by design — the
+   *  role is read-only + resource-capped, so shipping it to the client is
+   *  fine (see scripts/sample-db/). */
+  sampleDsn?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(action, initialState);
   // Remount key for TestDsnButton — editing the DSN clears a stale
@@ -127,6 +133,34 @@ export function NewProjectForm({
           a least-privilege role. Midplane enforces the access level you pick
           below; defense-in-depth at the DB layer still matters.
         </p>
+        {sampleDsn ? (
+          dsn === sampleDsn ? (
+            <p className="text-xs text-muted-foreground">
+              That&apos;s our sample database — a read-only mock-SaaS dataset
+              (customers, subscriptions, invoices) we host so you can try
+              Midplane without connecting your own Postgres. Ask your agent
+              something like &quot;what&apos;s monthly revenue by plan?&quot;
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              No Postgres handy?{" "}
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => {
+                  setDsn(sampleDsn);
+                  // A pre-filled DSN invalidates a prior "✓ reachable" the
+                  // same way typing does.
+                  setTestVersion((v) => v + 1);
+                }}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                Try with our sample database
+              </button>{" "}
+              — a read-only demo dataset we host.
+            </p>
+          )
+        ) : null}
       </div>
       <fieldset className="space-y-3" disabled={pending}>
         <legend className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-foreground">

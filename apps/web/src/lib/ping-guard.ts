@@ -185,7 +185,20 @@ export async function pingDsnGuarded(
   deps: PingGuardDeps = {},
 ): Promise<PingDsnResult> {
   const ping = deps.ping ?? pingDsn;
-  if (!pingGuardEnabled(deps.env)) return ping(dsn);
+  const env = deps.env ?? process.env;
+  if (!pingGuardEnabled(env)) return ping(dsn);
+
+  // Operator-blessed exemption: the hosted sample database. Its DSN is
+  // deployment config (MIDPLANE_SAMPLE_DSN), not user input, and the
+  // private posture (Fly 6PN, .internal → fdaa::/ULA) deliberately lives in
+  // address space the guard blocks — without this, every Test-connection on
+  // the DSN the product itself pre-fills returns the generic failure.
+  // EXACT match only; anything else, one character off included, is vetted
+  // like any user DSN. Not an SSRF hole: the operator chose the value, and
+  // the probe target is our own demo box.
+  if (env.MIDPLANE_SAMPLE_DSN && dsn === env.MIDPLANE_SAMPLE_DSN) {
+    return ping(dsn);
+  }
 
   const vetted = await vetDsnHost(dsn, deps);
   if (!vetted.ok) return { ok: false, error: GENERIC_PING_ERROR };

@@ -1,0 +1,44 @@
+# Sample database — small always-on Fly Machine running plain Postgres 16.
+# See README.md "Hosting" for why this over managed/serverless options.
+#
+# Deploy with ./deploy.sh (handles passwords, volume, IP posture, and printing
+# the DSN + wiring commands). A bare `fly deploy` works too once the secrets and
+# volume exist, but note it does not manage IP posture — deploy.sh does.
+app = "midplane-sample-db"
+primary_region = "fra"   # EU, colocated with midplane-web-eu; one instance serves both regions
+
+[build]
+
+[env]
+  # PGDATA in a subdir so the volume-root lost+found doesn't block first-boot init.
+  PGDATA = "/var/lib/postgresql/data/pgdata"
+  POSTGRES_DB = "sample"
+  POSTGRES_USER = "postgres"
+
+[mounts]
+  source = "sample_pgdata"
+  destination = "/var/lib/postgresql/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# Raw TCP passthrough on 5432 — NO tls handler, because Postgres speaks its own
+# SSL protocol (the self-signed cert in the image handles sslmode=require).
+# Always-on: autostop off + min 1, so 6PN/.internal traffic (which the proxy
+# never sees) can't cause the machine to idle-stop. Whether the DB is reachable
+# publicly is governed by whether deploy.sh allocates an IP, not by this block.
+[[services]]
+  protocol = "tcp"
+  internal_port = 5432
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 5432
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "30s"

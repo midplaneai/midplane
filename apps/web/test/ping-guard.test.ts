@@ -134,6 +134,37 @@ describe("pingDsnGuarded", () => {
     expect(ping).not.toHaveBeenCalled();
   });
 
+  it("exempts the exact operator-configured sample DSN (private 6PN posture)", async () => {
+    const sample =
+      "postgres://midplane_sample:pw@midplane-sample-db.internal:5432/sample?sslmode=require";
+    const ping = vi.fn(async () => ({ ok: true })) as never;
+    const lookup = lookupReturning(["fdaa:0:1::1"]); // would be blocked
+    const result = await pingDsnGuarded(sample, {
+      ping,
+      lookup,
+      env: { ...GUARD_ON, MIDPLANE_SAMPLE_DSN: sample },
+    });
+    expect(result).toEqual({ ok: true });
+    // Dialed directly, no vetting, no host override.
+    expect(ping).toHaveBeenCalledWith(sample);
+  });
+
+  it("a near-miss of the sample DSN is vetted like any user DSN", async () => {
+    const sample =
+      "postgres://midplane_sample:pw@midplane-sample-db.internal:5432/sample?sslmode=require";
+    const ping = vi.fn(async () => {
+      throw new Error("guard failed: the driver was reached");
+    }) as never;
+    const lookup = lookupReturning(["fdaa:0:1::1"]);
+    const result = await pingDsnGuarded(`${sample}&x=1`, {
+      ping,
+      lookup,
+      env: { ...GUARD_ON, MIDPLANE_SAMPLE_DSN: sample },
+    });
+    expect(result).toEqual({ ok: false, error: GENERIC_PING_ERROR });
+    expect(ping).not.toHaveBeenCalled();
+  });
+
   it("dials the vetted IP with SNI pinned to the hostname for TLS DSNs", async () => {
     const ping = vi.fn(async () => ({ ok: true })) as never;
     const lookup = lookupReturning(["52.10.0.5"]);
