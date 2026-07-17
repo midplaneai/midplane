@@ -47,6 +47,9 @@ import { cn } from "@/lib/utils";
 // Self-host is uncapped with no billing, so it gets its own minimal surface.
 
 const SALES_EMAIL = "sales@midplane.ai";
+// Public appointment-booking link (Google Calendar) — a captured meeting
+// beats a cold email for high-intent enterprise buyers.
+const SALES_CALL_URL = "https://calendar.app.google/NaSZgsxq9ptBYrLy6";
 
 // Display + comparison order, and a rank so the CTA loop can tell "above the
 // current plan" (offer an upgrade) from "below" (no CTA — downgrade via Manage
@@ -301,15 +304,28 @@ function enterpriseCard() {
           Advanced security, compliance, and deployment options for larger
           organizations — including SOC&nbsp;2 and HIPAA support.
         </p>
-        <a
-          href={`mailto:${SALES_EMAIL}`}
-          className={cn(
-            buttonVariants({ variant: "outline", size: "sm" }),
-            "text-foreground",
-          )}
-        >
-          Contact sales
-        </a>
+        <div className="flex flex-wrap items-center gap-3">
+          <a
+            href={`mailto:${SALES_EMAIL}`}
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "text-foreground",
+            )}
+          >
+            Contact sales
+          </a>
+          <a
+            href={SALES_CALL_URL}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "text-foreground",
+            )}
+          >
+            Book a call
+          </a>
+        </div>
       </CardContent>
     </Card>
   );
