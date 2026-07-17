@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
+import { supportMailto } from "@/lib/support";
 
 // Self-serve billing controls, split one-button-per-component so they can sit in
 // the plan-comparison table cells (one CTA per plan column). Thin wrappers over
@@ -109,16 +110,28 @@ function useBillingActions(): BillingActionState {
  *  like portal-configuration ids, price ids, and subscription-item ids, which
  *  read as unprofessional at best and aid probing at worst. The raw error is
  *  logged to the console instead, so it's still there for debugging. Keyed off
- *  the action so the copy points at the right thing. */
+ *  the action so the copy points at the right thing. Messages are complete
+ *  sentences — ActionError appends its own "contact support" sentence. */
 function friendlyBillingError(key: string): string {
   if (key.startsWith("upgrade")) {
-    return "We couldn't start that plan change. Please try again — if it keeps happening, contact support.";
+    return "We couldn't start that plan change. Please try again.";
   }
-  return "We couldn't open billing. Please try again — if it keeps happening, contact support.";
+  return "We couldn't open billing. Please try again.";
 }
 
 function ActionError({ message }: { message: string }) {
-  return <p className="text-[11px] leading-tight text-destructive">{message}</p>;
+  return (
+    <p className="text-[11px] leading-tight text-destructive">
+      {message} If it keeps happening,{" "}
+      <a
+        href={supportMailto({ subject: "Billing problem" })}
+        className="underline underline-offset-2"
+      >
+        contact support
+      </a>
+      .
+    </p>
+  );
 }
 
 export function UpgradeButton({

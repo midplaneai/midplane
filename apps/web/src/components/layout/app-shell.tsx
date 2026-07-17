@@ -1,3 +1,4 @@
+import { helpLinksFor } from "@/components/layout/help-links";
 import { LegalMenu } from "@/components/layout/legal-menu";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
@@ -60,13 +61,42 @@ export function AppShell({
             </div>
           </>
         )}
-        <div className="mt-auto flex items-center gap-2 border-t border-border px-[18px] py-[7px]">
-          <div className="min-w-0 flex-1">
-            <UserMenuButton />
+        <div className="mt-auto">
+          {/* Always-visible help links, pinned above the account row — Docs
+              and a path to a human on every screen, not tucked in a menu. */}
+          <nav aria-label="Help" className="space-y-1 py-2">
+            <div className="px-[18px] pb-1 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
+              help
+            </div>
+            {helpLinksFor({ selfHost }).map((item) => {
+              const Icon = item.icon;
+              return (
+                <a
+                  key={item.href}
+                  href={item.href}
+                  {...(item.newTab
+                    ? { target: "_blank", rel: "noreferrer" }
+                    : {})}
+                  className="flex items-center gap-2.5 px-[18px] py-[7px] text-sm text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Icon
+                    aria-hidden
+                    className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
+                    strokeWidth={1.5}
+                  />
+                  {item.label}
+                </a>
+              );
+            })}
+          </nav>
+          <div className="flex items-center gap-2 border-t border-border px-[18px] py-[7px]">
+            <div className="min-w-0 flex-1">
+              <UserMenuButton />
+            </div>
+            {/* Imprint / Privacy / Terms tucked behind a [⋯] menu — keeps the
+                § 5 TMG Imprint reachable in-app without spending a footer row. */}
+            <LegalMenu />
           </div>
-          {/* Imprint / Privacy / Terms tucked behind a [⋯] menu — keeps the
-              § 5 TMG Imprint reachable in-app without spending a footer row. */}
-          <LegalMenu />
         </div>
       </aside>
       <main className="min-w-0">

@@ -2,6 +2,9 @@
 // (and so client components can import the literal without pulling in anything
 // Node-only). Keep these in sync with the published docs site.
 
+/** Docs home — the entry point linked from the in-app Help menu. */
+export const DOCS_HOME_URL = "https://midplane.ai/docs";
+
 /** "Connect your agent" — the canonical guide for pointing an MCP client at
  *  Midplane (endpoint, OAuth sign-in, per-client setup). */
 export const DOCS_CONNECT_AGENT_URL =

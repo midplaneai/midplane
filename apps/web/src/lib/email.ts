@@ -1,4 +1,5 @@
 import { isSelfHost } from "./self-host.ts";
+import { SUPPORT_EMAIL } from "./support.ts";
 
 // Transactional email via Resend (https://resend.com).
 //
@@ -65,6 +66,9 @@ async function sendEmail(args: {
     body: JSON.stringify({
       from: env.from,
       to: args.to,
+      // Replies to any transactional send reach a human, not the void — the
+      // From is a send-only address (e.g. invites@).
+      reply_to: SUPPORT_EMAIL,
       subject: args.subject,
       html: args.html,
       text: args.text,

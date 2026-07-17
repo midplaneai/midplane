@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { analyticsGroups, groupIdentifyOrganization } from "@/lib/analytics";
 import { getAuth } from "@/lib/auth";
-import { getOrgContext } from "@/lib/org-context";
+import { sendLoopsEvent } from "@/lib/loops";
 import { getPostHog } from "@/lib/posthog";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
@@ -14,6 +14,7 @@ import { RegionBadge } from "@/components/ui/region-badge";
 import { RegionFlag } from "@/components/ui/region-flag";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
+import { ensureDefaultProject } from "@/lib/projects";
 import { bootRegion } from "@/lib/region-context";
 import { isSelfHost } from "@/lib/self-host";
 import { suggestWorkspaceName } from "@/lib/workspace-name";
@@ -180,8 +181,20 @@ async function pickRegionAuthed(formData: FormData) {
       ? workspaceName.trim().slice(0, 100)
       : "";
 
-  const { userId } = await getOrgContext();
-  const customer = await upsertCustomerRegion(region, orgName || undefined);
+  // Direct session read (not getOrgContext): the identity seam carries only
+  // ids, and the Loops contact below wants the user's NAME for the welcome
+  // greeting. Mirrors the page component's own getSession above.
+  const session = await getAuth().api.getSession({ headers: await headers() });
+  const userId = session?.user.id ?? null;
+  const firstName = session?.user.name?.trim().split(/\s+/)[0] || undefined;
+  // `created` = this call inserted the customer row. /signup stays reachable
+  // for an existing customer (public route), so once-per-customer onboarding
+  // side effects below key off it — a re-submit must not re-fire the funnel
+  // event or the welcome email.
+  const { customer, created } = await upsertCustomerRegion(
+    region,
+    orgName || undefined,
+  );
 
   // Set the signed region cookie alongside the DB write — this is the routing
   // fast-path the middleware reads to send the user to their regional subdomain
@@ -221,15 +234,51 @@ async function pickRegionAuthed(formData: FormData) {
       plan: customer.plan ?? "free",
       region: customer.region,
     });
-    posthog.capture({
-      distinctId: userId,
-      event: "signup_completed",
-      properties: {
+    if (created) {
+      posthog.capture({
+        distinctId: userId,
+        event: "signup_completed",
+        properties: {
+          region: customer.region,
+        },
+        groups: analyticsGroups({ customerId: customer.id }),
+      });
+    }
+  }
+
+  // Founder welcome email: one Loops event at workspace creation, mirroring
+  // signup_completed (invited teammates joining an existing workspace never
+  // pass through here — this is an evaluator email, not a lifecycle blast).
+  // Gated on `created` so an existing customer re-submitting the public
+  // /signup form can't re-trigger it. Cloud-only and env-gated inside
+  // sendLoopsEvent; never throws and times out fast, so a Loops outage can't
+  // block the user's very first action.
+  if (created) {
+    await sendLoopsEvent({
+      email: customer.email,
+      ...(userId ? { userId } : {}),
+      eventName: "signup",
+      // Persisted contact properties (not event properties): region so future
+      // sends can segment (e.g. an EU-only announcement), firstName so the
+      // welcome template can greet by name (Loops falls back when absent).
+      contactProperties: {
         region: customer.region,
+        ...(firstName ? { firstName } : {}),
       },
-      groups: analyticsGroups({ customerId: customer.id }),
+      // Deterministic per user: a double-submit race through this action
+      // can't double-fire the event within Loops' 24h dedup window.
+      ...(userId ? { idempotencyKey: `signup-${userId}` } : {}),
     });
   }
+
+  // Seed the customer's empty Default project (D6/D7-A) so they land on a
+  // ready project. Runs AFTER the created-gated side effects above: seeding is
+  // idempotent and heals on a retry pass; the once-per-customer effects don't,
+  // so nothing fallible may sit between the INSERT and them. Accepted residual
+  // window: a process crash in the milliseconds between the INSERT committing
+  // and the sends — welcome email lost, not user data.
+  await ensureDefaultProject(customer.id, customer.region);
+
   redirect("/dashboard");
 }
 

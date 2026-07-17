@@ -80,7 +80,7 @@ To prevent a single free customer from driving infrastructure cost, the free tie
 - **Seats are our membership cap, not a billing metric.** `CAPS.seats` (1 / 10 / ∞) bounds org members per tier, enforced on the invite/accept path via Better Auth `organization.membershipLimit` → `seatCapForOrg` (`lib/seats.ts`). It's fully decoupled from Stripe — the price is flat per org, so the cap only limits head count; it never changes the bill. (Going per-seat later is one field: re-add `seatPriceId` to the plan config.)
 - **Audit retention is a query-time visibility clamp, not storage deletion.** The `lib/audit.ts` read helpers (and `lib/projects.ts` last-query freshness) take a `retentionDays` and clamp the `since` bound to the tier window. Old rows persist; storage pruning is a follow-up in `TODOS.md`.
 - **Founder / internal override is the `customers.plan_override` column, not an env var.** `resolvePlan()` reads `plan_override` (set it to `free` / `pro` / `team`); a valid value BEATS the subscription-backed `plan` in either direction — force `team` to test unlimited, or `free` to exercise the capped UI on a paying account.
-- **Enterprise contact path** is `mailto:info@midplane.ai?subject=Enterprise` (the landing-page Enterprise card), not a form.
+- **Enterprise contact path** is `mailto:info@midplane.ai?subject=Enterprise` on the landing-page Enterprise card; the in-app `/billing` Enterprise card offers sales@midplane.ai plus a [book-a-call link](https://calendar.app.google/NaSZgsxq9ptBYrLy6). No forms.
 
 ## Still TODO (not yet a row, per principle 3)
 
