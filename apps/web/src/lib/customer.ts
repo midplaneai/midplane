@@ -131,10 +131,16 @@ export async function ensureImplicitCustomer(): Promise<void> {
 // Race-safe: INSERT ... ON CONFLICT DO NOTHING means concurrent submits for
 // the same org can't both succeed — one wins, the other returns no rows from
 // .returning(), and we fall back to SELECT to fetch what the winner inserted.
+//
+// `created` reports whether THIS call inserted the customer row. /signup is a
+// public route and an existing customer can re-submit the form, so onboarding
+// side effects that must fire exactly once per customer (the signup_completed
+// funnel event, the Loops welcome email) key off `created`, not off reaching
+// this function.
 export async function upsertCustomerRegion(
   region: Region,
   orgName?: string,
-): Promise<Customer> {
+): Promise<{ customer: Customer; created: boolean }> {
   // We seed customers.email from the human who first picked the region — used
   // for receipts and the customers row.
   const email = await getActorEmail();
@@ -191,12 +197,14 @@ export async function upsertCustomerRegion(
     customer = winner;
   }
 
-  // Seed the customer's empty Default project on first onboarding (D6/D7-A) so
-  // they land on a ready project instead of creating a container first.
-  // Idempotent + race-safe; a no-op for a returning user who already has one.
-  await ensureDefaultProject(customer.id, customer.region);
+  // Deliberately NOT seeding the Default project here: the caller runs its
+  // once-per-customer side effects (funnel event, welcome email) right after
+  // this returns, and those key off `created`. If seeding ran first and threw,
+  // the user's retry would see created=false and silently lose them forever —
+  // seeding is idempotent and heals on retry; the created-gated effects don't.
+  // The signup action calls ensureDefaultProject after its side effects.
 
-  return customer;
+  return { customer, created: Boolean(winner) };
 }
 
 // Resolve the user's organization, creating it on first onboarding. Idempotent
