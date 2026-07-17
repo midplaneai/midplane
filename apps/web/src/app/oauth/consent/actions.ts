@@ -11,6 +11,10 @@
 // selection IS the agent's whole grant set for this client — one credential is
 // bound to ONE project.
 
+import { and, eq } from "drizzle-orm";
+
+import { getDb } from "@midplane-cloud/db";
+import { oauthApplication } from "@midplane-cloud/db/auth-schema";
 import { safeErrorDetail } from "@midplane-cloud/router";
 
 import { analyticsGroups, captureError } from "@/lib/analytics";
@@ -18,7 +22,7 @@ import { currentCustomer } from "@/lib/customer";
 import { getOrgContext } from "@/lib/org-context";
 import { getPostHog } from "@/lib/posthog";
 import { setOAuthGrants } from "@/lib/scope-grants";
-import { reactivateOAuthAttributionToken } from "@/lib/tokens";
+import { ensureConsentAttributionToken } from "@/lib/tokens";
 
 export type ConsentGrantResult =
   | { ok: true; granted: number }
@@ -49,6 +53,24 @@ export async function writeConsentGrants(
   const { userId } = await getOrgContext();
   if (!userId) return { ok: false, error: "unauthenticated" };
 
+  // clientId is free text with no FK — require a registered (DCR) OAuth
+  // application, and not an operator-disabled one, before writing grants or
+  // minting the attribution row: a direct call with a fabricated or disabled
+  // id must not create phantom "agent" rows in the agent list / dashboard
+  // counts. The consent page only ever submits real ids; this is the
+  // tamper-path backstop.
+  const knownClient = await getDb(customer.region)
+    .select({ clientId: oauthApplication.clientId })
+    .from(oauthApplication)
+    .where(
+      and(
+        eq(oauthApplication.clientId, clientId),
+        eq(oauthApplication.disabled, false),
+      ),
+    )
+    .limit(1);
+  if (knownClient.length === 0) return { ok: false, error: "bad_request" };
+
   try {
     const granted = await setOAuthGrants(customer, {
       clientId,
@@ -56,10 +78,16 @@ export async function writeConsentGrants(
       projectId,
       selections,
     });
-    // Re-approving a previously-revoked agent must restore its access: clear the
-    // revoked state on the (project, client) attribution row the proxy gates on.
-    // No-op the common first-consent case (no row yet / already active).
-    await reactivateOAuthAttributionToken(customer, projectId, clientId);
+    // Mint (or restore) the (project, client) attribution row at consent time —
+    // the Connect pane's live status reads it as "agent connected", and a
+    // zero-database grant leaves no other durable trace (no scope rows, and the
+    // proxy's lazy mint never runs because the credential resolves no project).
+    // Also clears the revoked state on re-approval of a revoked agent.
+    await ensureConsentAttributionToken(customer, {
+      projectId,
+      clientId,
+      userId,
+    });
 
     // The OAuth-first connect moment — the web flow mints no default token,
     // so token_created never sees interactive agents; this is the funnel

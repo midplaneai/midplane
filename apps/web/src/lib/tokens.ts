@@ -18,7 +18,7 @@
 //   - Best-effort audit emission separate from the durable mutation:
 //     audit writes can fail without rolling back the mint/revoke.
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
@@ -756,7 +756,7 @@ export async function ensureOAuthAttributionToken(
 
   // The row's status is returned so the proxy can gate on it — a revoked OAuth
   // agent must be denied even though its grants still resolve. Mint-or-GET does
-  // NOT reactivate a revoked row; re-consent does that (reactivateOAuthAttributionToken).
+  // NOT reactivate a revoked row; re-consent does that (ensureConsentAttributionToken).
   const existing = await findExisting();
   if (existing[0]) return { id: existing[0].id, status: existing[0].status };
 
@@ -787,34 +787,129 @@ export async function ensureOAuthAttributionToken(
   }
 }
 
-/** Reactivate a revoked OAuth attribution row on re-consent. When a user
- *  revokes an interactive agent we flip its (project, client) attribution row to
- *  status='revoked', and the proxy denies it (ensureOAuthAttributionToken returns
- *  the revoked status). Re-approving the same client through the consent flow
- *  must restore access — so the consent action calls this to clear the revoked
- *  state for the row it just re-granted. Ownership-scoped (only within a project
- *  this customer owns) and a no-op when there's no revoked row to restore. */
-export async function reactivateOAuthAttributionToken(
+/** Consent-time attribution mint: ensure the (project, client) OAuth
+ *  attribution row exists and is active, at the moment the consent picker
+ *  writes its grant set. The proxy still mints lazily on first use
+ *  (ensureOAuthAttributionToken above) — this makes the agent visible to the
+ *  dashboard (Connect pane live status, agent list, dashboard agent count)
+ *  BEFORE its first request. It is also the ONLY durable trace of a
+ *  zero-database consent: `granted: 0` writes no scope-grant rows and the
+ *  agent's requests never reach the proxy's lazy mint (no resolvable
+ *  project), so without this row the Connect pane could never distinguish
+ *  "approved with nothing granted" from "no agent yet".
+ *
+ *  Ownership-scoped: a foreign/tampered projectId is a silent no-op (the
+ *  grant write already dropped those selections). Also clears a prior
+ *  revocation — a user revoking an interactive agent flips this row to
+ *  status='revoked' and the proxy denies it; re-approving the same client
+ *  through the consent flow must restore access. */
+export async function ensureConsentAttributionToken(
   customer: Customer,
-  projectId: string,
-  clientId: string,
+  args: { projectId: string; clientId: string; userId: string },
 ): Promise<void> {
   const db = getDb(customer.region);
   const owned = await db
     .select({ id: projects.id })
     .from(projects)
     .where(
-      and(eq(projects.id, projectId), eq(projects.customerId, customer.id)),
+      and(
+        eq(projects.id, args.projectId),
+        eq(projects.customerId, customer.id),
+      ),
     )
     .limit(1);
   if (owned.length === 0) return;
+  await ensureOAuthAttributionToken(db, args);
+  // Rebind cleanup: setOAuthGrants is replace-all per customer, so consenting
+  // this client onto THIS project just removed its grants from any other
+  // project it was bound to. An attribution row left active there would keep
+  // reading "connected" (agent list, dashboard counts, the Connect pane's
+  // connected_no_databases warning) for an agent the proxy can no longer
+  // resolve to that project. Revoke ONLY rows with zero surviving grants —
+  // a teammate binding the same client to another project (grants are keyed
+  // client+user) keeps that project's row untouched.
+  const siblings = await db
+    .select({ id: mcpTokens.id, projectId: mcpTokens.projectId })
+    .from(mcpTokens)
+    .innerJoin(projects, eq(projects.id, mcpTokens.projectId))
+    .where(
+      and(
+        eq(projects.customerId, customer.id),
+        ne(mcpTokens.projectId, args.projectId),
+        eq(mcpTokens.clientId, args.clientId),
+        eq(mcpTokens.kind, "oauth"),
+        eq(mcpTokens.status, "active"),
+      ),
+    );
+  if (siblings.length > 0) {
+    const stillGranted = await db
+      .selectDistinct({ projectId: projectDatabases.projectId })
+      .from(mcpScopeGrants)
+      .innerJoin(
+        projectDatabases,
+        eq(projectDatabases.id, mcpScopeGrants.projectDatabaseId),
+      )
+      .where(
+        and(
+          eq(mcpScopeGrants.clientId, args.clientId),
+          inArray(
+            projectDatabases.projectId,
+            siblings.map((s) => s.projectId),
+          ),
+        ),
+      );
+    const keep = new Set(stillGranted.map((r) => r.projectId));
+    const stale = siblings.filter((s) => !keep.has(s.projectId));
+    if (stale.length > 0) {
+      await db
+        .update(mcpTokens)
+        .set({
+          status: "revoked",
+          revokedAt: new Date(),
+          revokedReason: "rebound to another project at consent",
+        })
+        .where(
+          inArray(
+            mcpTokens.id,
+            stale.map((s) => s.id),
+          ),
+        );
+      // Same audit posture as every other revoke path: an agent vanishing
+      // from a project must leave a TOKEN_REVOKED trail saying why.
+      // Best-effort — the durable revoke above must not roll back on an
+      // audit write failure.
+      for (const s of stale) {
+        try {
+          await emitTokenAuditRow(customer, {
+            projectId: s.projectId,
+            mcpTokenId: s.id,
+            eventType: "TOKEN_REVOKED",
+            payload: {
+              project_id: s.projectId,
+              token_id: s.id,
+              client_id: args.clientId,
+              reason: "rebound to another project at consent",
+            },
+            actorUserId: args.userId,
+          });
+        } catch (err) {
+          console.error(
+            "[ensureConsentAttributionToken] TOKEN_REVOKED audit write failed",
+            err,
+          );
+        }
+      }
+    }
+  }
+  // Mint-or-GET never reactivates (the proxy gates on revoked rows); the
+  // re-consent path here explicitly restores a previously-revoked agent.
   await db
     .update(mcpTokens)
     .set({ status: "active", revokedAt: null, revokedReason: null })
     .where(
       and(
-        eq(mcpTokens.projectId, projectId),
-        eq(mcpTokens.clientId, clientId),
+        eq(mcpTokens.projectId, args.projectId),
+        eq(mcpTokens.clientId, args.clientId),
         eq(mcpTokens.kind, "oauth"),
         eq(mcpTokens.status, "revoked"),
       ),

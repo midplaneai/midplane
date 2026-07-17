@@ -52,6 +52,9 @@ function makeFakeDb(): FakeDbHandle {
         table = t;
         return chain;
       },
+      innerJoin(_t: unknown, _c: unknown) {
+        return chain;
+      },
       where(c: unknown) {
         whereValue = c;
         return chain;
@@ -105,6 +108,9 @@ function makeFakeDb(): FakeDbHandle {
 
   const makeRoot = () => ({
     select(_fields?: unknown) {
+      return startSelect();
+    },
+    selectDistinct(_fields?: unknown) {
       return startSelect();
     },
     insert(t: unknown) {
@@ -680,12 +686,41 @@ describe("ensureOAuthAttributionToken", () => {
   });
 });
 
-describe("reactivateOAuthAttributionToken", () => {
-  it("clears the revoked state when the project is owned (re-consent restore)", async () => {
+describe("ensureConsentAttributionToken", () => {
+  const args = {
+    projectId: "conn-1",
+    clientId: "CLIENTABCDEFGH1234",
+    userId: "user_oauth_1",
+  };
+
+  it("mints the attribution row at consent when absent (zero-DB grants leave no other trace)", async () => {
     handle.queueSelect([{ id: "conn-1" }]); // ownership hit
-    const { reactivateOAuthAttributionToken } = await import("../src/lib/tokens.ts");
+    handle.queueSelect([]); // findExisting miss → mint
     const { mcpTokens } = await import("@midplane-cloud/db");
-    await reactivateOAuthAttributionToken(customer, "conn-1", "CLIENTABCDEFGH1234");
+    const { ensureConsentAttributionToken } = await import(
+      "../src/lib/tokens.ts"
+    );
+    await ensureConsentAttributionToken(customer, args);
+    const insert = handle.calls.find(
+      (c) => c.op === "insert" && c.table === mcpTokens,
+    );
+    expect(insert).toBeDefined();
+    const row = insert!.set as Record<string, unknown>;
+    expect(row.kind).toBe("oauth");
+    expect(row.projectId).toBe(args.projectId);
+    expect(row.clientId).toBe(args.clientId);
+    expect(row.createdByUserId).toBe(args.userId);
+  });
+
+  it("clears the revoked state on re-consent (existing row, no new insert)", async () => {
+    handle.queueSelect([{ id: "conn-1" }]); // ownership hit
+    handle.queueSelect([{ id: "tok-rev", status: "revoked" }]); // findExisting hit
+    const { mcpTokens } = await import("@midplane-cloud/db");
+    const { ensureConsentAttributionToken } = await import(
+      "../src/lib/tokens.ts"
+    );
+    await ensureConsentAttributionToken(customer, args);
+    expect(handle.calls.some((c) => c.op === "insert")).toBe(false);
     const upd = handle.calls.find(
       (c) => c.op === "update" && c.table === mcpTokens,
     );
@@ -696,10 +731,54 @@ describe("reactivateOAuthAttributionToken", () => {
     expect(set.revokedReason).toBeNull();
   });
 
-  it("is a no-op when the project is not owned (no update issued)", async () => {
+  it("is a no-op when the project is not owned (no insert, no update)", async () => {
     handle.queueSelect([]); // ownership miss
-    const { reactivateOAuthAttributionToken } = await import("../src/lib/tokens.ts");
-    await reactivateOAuthAttributionToken(customer, "conn-foreign", "client");
+    const { ensureConsentAttributionToken } = await import(
+      "../src/lib/tokens.ts"
+    );
+    await ensureConsentAttributionToken(customer, {
+      ...args,
+      projectId: "conn-foreign",
+    });
+    expect(handle.calls.some((c) => c.op === "insert")).toBe(false);
     expect(handle.calls.some((c) => c.op === "update")).toBe(false);
+  });
+
+  it("rebind: revokes this client's grant-less active row on another project", async () => {
+    handle.queueSelect([{ id: "conn-b" }]); // ownership hit (target project B)
+    handle.queueSelect([{ id: "tok-b", status: "active" }]); // findExisting on B
+    handle.queueSelect([{ id: "tok-a", projectId: "conn-a" }]); // active sibling on A
+    handle.queueSelect([]); // no surviving grants for the client on A
+    const { ensureConsentAttributionToken } = await import(
+      "../src/lib/tokens.ts"
+    );
+    await ensureConsentAttributionToken(customer, args);
+    const revoke = handle.calls.find(
+      (c) =>
+        c.op === "update" &&
+        (c.set as Record<string, unknown>)?.status === "revoked",
+    );
+    expect(revoke).toBeDefined();
+    expect((revoke!.set as Record<string, unknown>).revokedReason).toMatch(
+      /rebound/,
+    );
+  });
+
+  it("rebind: a sibling row whose project still has grants (teammate binding) survives", async () => {
+    handle.queueSelect([{ id: "conn-b" }]); // ownership hit
+    handle.queueSelect([{ id: "tok-b", status: "active" }]); // findExisting on B
+    handle.queueSelect([{ id: "tok-a", projectId: "conn-a" }]); // active sibling on A
+    handle.queueSelect([{ projectId: "conn-a" }]); // a teammate's grants still bind A
+    const { ensureConsentAttributionToken } = await import(
+      "../src/lib/tokens.ts"
+    );
+    await ensureConsentAttributionToken(customer, args);
+    expect(
+      handle.calls.some(
+        (c) =>
+          c.op === "update" &&
+          (c.set as Record<string, unknown>)?.status === "revoked",
+      ),
+    ).toBe(false);
   });
 });
