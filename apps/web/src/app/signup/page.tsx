@@ -77,8 +77,8 @@ export default async function RegionPicker() {
           </h1>
           <p className="text-sm text-muted-foreground">
             {userId
-              ? "Your audit log and encrypted credentials live in this region. It's fixed to the region you signed up on and can't be changed later."
-              : "Your audit log and encrypted credentials live in this region. This choice is permanent — we can't move an account between regions."}
+              ? "Your audit log and encrypted credentials are stored only in this region — a data-residency guarantee, set to where you signed up. Because nothing is copied across regions, it can't change later."
+              : "Your audit log and encrypted credentials are stored only in the region you pick — a data-residency guarantee, not a server preference. Because nothing is copied across regions, the choice can't change later. Pick the region closest to your database."}
           </p>
         </div>
 
@@ -110,7 +110,7 @@ export default async function RegionPicker() {
                   <RegionFlag region={appRegion} />
                   <RegionBadge region={appRegion} />
                   <span className="text-sm text-muted-foreground">
-                    {REGION_LABELS[appRegion]} — permanent.
+                    {REGION_LABELS[appRegion]} — your data stays here.
                   </span>
                 </div>
               </div>

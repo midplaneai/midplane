@@ -27,6 +27,20 @@ export function pingTestKey(customerId: string): string {
   return `test-dsn:${customerId}`;
 }
 
+// Connect-pane live-status poll: the client ticks every ~4s (15s once
+// decayed) per open pane, so the per-customer budget must absorb several
+// open tabs plus page loads — 120/min ≈ 8 concurrent fast pollers. A 429
+// just skips a tick client-side (the next one retries), so the limit
+// degrades to slower updates, never a broken pane.
+export const CONNECT_STATUS_RATE_LIMIT = {
+  limit: 120,
+  windowMs: 60_000,
+} as const;
+
+export function connectStatusKey(customerId: string): string {
+  return `connect-status:${customerId}`;
+}
+
 export const DRY_RUN_RATE_LIMIT = { limit: 6, windowMs: 60_000 } as const;
 
 export function dryRunKey(customerId: string, projectId: string): string {

@@ -125,7 +125,14 @@ export default async function NewProject() {
               }
             />
           ) : (
-            <NewProjectForm action={createAction} />
+            <NewProjectForm
+              action={createAction}
+              // Hosted read-only demo dataset (support-onboarding Day 2, item
+              // 8) — the escape hatch for evaluators without a reachable
+              // Postgres. Unset (self-host, or not yet provisioned) hides the
+              // affordance. Provisioning lives in scripts/sample-db/.
+              sampleDsn={process.env.MIDPLANE_SAMPLE_DSN ?? null}
+            />
           )}
         </div>
       </PageContainer>
@@ -209,6 +216,14 @@ async function createAction(
     throw err;
   }
 
+  // Whether the evaluator took the hosted sample-database escape hatch
+  // instead of bringing their own Postgres — the funnel's BYO-Postgres
+  // constraint made measurable. False whenever the sample DSN isn't
+  // configured on this deployment.
+  const sampleDb = process.env.MIDPLANE_SAMPLE_DSN
+    ? dsn === process.env.MIDPLANE_SAMPLE_DSN
+    : false;
+
   groupIdentifyProject(id, { region: customer.region });
   getPostHog()?.capture({
     distinctId: userId,
@@ -218,6 +233,7 @@ async function createAction(
       region: customer.region,
       default_access: defaultAccess,
       source: "dashboard",
+      sample_database: sampleDb,
     },
     groups: analyticsGroups({ customerId: customer.id, projectId: id }),
   });
@@ -233,6 +249,7 @@ async function createAction(
       default_access: defaultAccess,
       source: "dashboard",
       via: "project_create",
+      sample_database: sampleDb,
     },
     groups: analyticsGroups({ customerId: customer.id, projectId: id }),
   });
