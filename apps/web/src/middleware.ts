@@ -76,7 +76,19 @@ export default async function middleware(
   req: NextRequest,
 ): Promise<NextResponse> {
   const url = new URL(req.url);
-  const host = url.host;
+  // Public host, NOT the internal listen host. Behind Fly (and any proxy that
+  // terminates TLS and forwards to the app over an internal origin), req.url and
+  // req.nextUrl carry that internal host — "localhost:3000" — so
+  // `new URL(req.url).host` is never "app.midplane.ai" on the apex. Left as the
+  // URL host, the `host === APEX_HOST` branch below silently never fires: the
+  // apex falls through to the regional auth-gate, which finds no session cookie
+  // (it's host-scoped to the regional subdomain) and bounces every route to
+  // /sign-in — so a user logged in on eu.app.midplane.ai looks logged out on
+  // app.midplane.ai. The public host survives in the Host header, the same
+  // source every server-side headers().get("host") read in the app already
+  // trusts (sign-in/page.tsx, signup/page.tsx, forgot/page.tsx). Fall back to
+  // the URL host for dev/tests, where the two agree.
+  const host = req.headers.get("host") ?? url.host;
   const { pathname } = url;
 
   // Self-host: one host, one DB, no region routing. Auth-protection only —
