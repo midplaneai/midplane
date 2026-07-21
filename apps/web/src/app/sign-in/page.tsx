@@ -7,6 +7,7 @@ import { BrandLockup } from "@/components/layout/brand-mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getAuth } from "@/lib/auth";
 import { isEmailConfigured } from "@/lib/email";
 import { eeBuildEnabled } from "@/lib/plan";
 import {
@@ -44,10 +45,20 @@ export default async function SignInPage({
   // a signed email hint to prefill. Middleware already sends apex users WITH a
   // region cookie straight to their subdomain, so this only renders for a cold
   // browser (the exact returning-user cookie-miss this fixes).
-  const host = (await headers()).get("host");
+  const h = await headers();
+  const host = h.get("host");
   if (!isSelfHost() && host === APEX_HOST) {
     return <ApexSignInRouter redirectTo={redirectTo} />;
   }
+
+  // Already signed in on this (regional / dev / self-host) host? Skip the form
+  // and send them where they were headed (default /dashboard) — a returning user
+  // shouldn't have to retype an email just to land back in the product. This is
+  // the only place a live session exists to check: the apex branch above never
+  // falls through here, and its session cookie is host-scoped to the regional
+  // subdomain (middleware already routes an authed apex visitor there).
+  const session = await getAuth().api.getSession({ headers: h });
+  if (session?.user.id) redirect(redirectTo);
 
   // Regional / dev / self-host: the identifier-first sign-in. Prefill the email
   // when the apex router redirected here with a valid signed hint.
