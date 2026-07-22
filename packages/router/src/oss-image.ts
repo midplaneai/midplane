@@ -18,7 +18,7 @@
 // re-resolve the digest (`docker buildx imagetools inspect midplane/midplane:<v>
 // --format '{{.Manifest.Digest}}'`), update the two fly configs, run
 // scripts/check-image-pin.ts.
-export const OSS_ENGINE_IMAGE = "midplane/midplane:0.14.0";
+export const OSS_ENGINE_IMAGE = "midplane/midplane:0.15.0";
 
 // GHCR mirror of the same engine artifact, published in lockstep by
 // engine-publish.yml (same build, two tags). When MIDPLANE_ENGINE_USE_GHCR=1
