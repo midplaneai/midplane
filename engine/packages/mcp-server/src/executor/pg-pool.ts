@@ -88,84 +88,54 @@ export const SET_LOCAL_SEARCH_PATH_SQL = `SET LOCAL search_path = ${PINNED_SEARC
   quoteSchemaIdentifier,
 ).join(", ")}`;
 
-export type PgSslOption = boolean | { rejectUnauthorized: boolean } | undefined;
-
-export interface PgConnectionConfig {
-  /** DSN with sslmode/ssl query params stripped when we set `ssl` explicitly. */
-  connectionString: string;
-  /** Explicit pg `ssl`, or undefined to leave the DSN/env to decide. */
-  ssl: PgSslOption;
-}
-
-// Build a node-postgres connection config that honors libpq's sslmode
-// semantics. node-postgres (via pg-connection-string) upgrades
-// sslmode=prefer|require|verify-ca to verify-full — it VERIFIES the server
-// certificate — which is STRICTER than the PostgreSQL spec. libpq's `require`
-// means "encrypt, but do NOT verify the certificate"; only verify-ca and
-// verify-full verify. That mismatch rejects every legitimate self-signed or
-// private-CA Postgres — including the hosted sample database (a self-signed
-// cert on a private 6PN box) — with an opaque "self signed certificate" the
-// moment an agent runs its first query.
+// Rewrite a DSN so node-postgres applies libpq's sslmode semantics.
 //
-// We must STRIP sslmode from the DSN, not just pass `ssl`: pg lets the parsed
-// connection string override an explicit `ssl` config option
-// (connection-parameters.js: `Object.assign(config, parse(connectionString))`),
-// so `ssl` alone is silently ignored. With sslmode removed, our explicit `ssl`
-// is the value pg uses.
+// node-postgres (via pg-connection-string) upgrades sslmode=prefer|require|
+// verify-ca to verify-full — it VERIFIES the server certificate — which is
+// STRICTER than the PostgreSQL spec. libpq's `require` means "encrypt, but do
+// NOT verify the certificate" (unless a root CA is supplied, in which case it
+// verifies against that CA, like verify-ca). That mismatch rejects every
+// legitimate self-signed / private-CA Postgres — including the hosted sample
+// database (a self-signed cert on a private 6PN box) — with an opaque
+// "self signed certificate" the moment an agent runs its first query.
 //
-//   disable                -> ssl:false                  (no TLS)
-//   allow|prefer|require    -> {rejectUnauthorized:false}  (encrypt, don't verify)
-//   no-verify               -> {rejectUnauthorized:false}
-//   verify-ca|verify-full   -> {rejectUnauthorized:true}   (encrypt AND verify)
+// pg-connection-string implements the correct libpq semantics behind an opt-in
+// `uselibpqcompat=true` flag (its own recommended migration path — the very
+// thing its deprecation warning tells you to use). Crucially, that path also
+// interprets sslrootcert/sslcert/sslkey correctly. A hand-rolled `ssl` object
+// cannot: pg rebuilds config.ssl from those cert params and overrides an
+// explicit `ssl`, so a DSN like `sslmode=require&sslrootcert=…` would ignore
+// our value. So we inject the flag and let the driver resolve TLS:
 //
-// A DSN with no sslmode (and an unparseable or unknown-mode DSN) is left
-// untouched (`ssl: undefined`), preserving today's behavior for connections
-// that don't name a mode.
-export function libpqSslConfig(dsn: string): PgConnectionConfig {
+//   disable                  -> no TLS
+//   prefer                   -> encrypt, don't verify
+//   require (no root CA)      -> encrypt, don't verify        <- the sample-DB fix
+//   require (+ sslrootcert)   -> verify against that CA (verify-ca)
+//   verify-ca | verify-full   -> verify the certificate
+//
+// We do NOT inject for sslmode=no-verify (a non-libpq extension the default
+// path already maps to no-verify), nor when the DSN names no sslmode; an
+// unparseable DSN passes through unchanged. All preserve today's behavior.
+export function libpqCompatDsn(dsn: string): string {
   let url: URL;
   try {
     url = new URL(dsn);
   } catch {
-    return { connectionString: dsn, ssl: undefined };
+    return dsn;
   }
   const sslmode = url.searchParams.get("sslmode");
-  if (!sslmode) return { connectionString: dsn, ssl: undefined };
-
-  let ssl: PgSslOption;
-  switch (sslmode) {
-    case "disable":
-      ssl = false;
-      break;
-    case "allow":
-    case "prefer":
-    case "require":
-    case "no-verify":
-      ssl = { rejectUnauthorized: false };
-      break;
-    case "verify-ca":
-    case "verify-full":
-      ssl = { rejectUnauthorized: true };
-      break;
-    default:
-      // Unknown mode — don't guess; hand pg the raw DSN unchanged.
-      return { connectionString: dsn, ssl: undefined };
-  }
-  // Strip both so the connection-string parser can't re-derive verify-full and
-  // override our explicit `ssl`. `ssl` alongside `sslmode` is redundant anyway.
-  url.searchParams.delete("sslmode");
-  url.searchParams.delete("ssl");
-  return { connectionString: url.toString(), ssl };
+  if (!sslmode || sslmode === "no-verify") return dsn;
+  url.searchParams.set("uselibpqcompat", "true");
+  return url.toString();
 }
 
 export class PgPoolExecutor implements Executor {
   private readonly pool: pg.Pool;
 
   constructor(opts: PgPoolExecutorOptions) {
-    const { connectionString, ssl } = libpqSslConfig(opts.databaseUrl);
     this.pool = new pg.Pool({
-      connectionString,
+      connectionString: libpqCompatDsn(opts.databaseUrl),
       max: opts.max ?? 10,
-      ...(ssl !== undefined ? { ssl } : {}),
     });
   }
 

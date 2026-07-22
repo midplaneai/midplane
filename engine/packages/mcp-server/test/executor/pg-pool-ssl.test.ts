@@ -2,112 +2,123 @@
 //
 // The engine connects to the customer/sample Postgres with node-postgres, which
 // upgrades sslmode=require to verify-full (it VERIFIES the server certificate).
-// libpq's `require` means "encrypt, don't verify"; only verify-ca/verify-full
-// verify. The hosted sample DB presents a self-signed cert, so before this fix
-// every agent query against it failed with a bare "self signed certificate".
+// libpq's `require` means "encrypt, don't verify" — unless a root CA is given,
+// in which case it verifies against that CA (like verify-ca). The hosted sample
+// DB presents a self-signed cert, so before this fix every agent query against
+// it failed with a bare "self signed certificate".
 //
-// libpqSslConfig() maps sslmode to an explicit pg `ssl` option AND strips
-// sslmode from the DSN. The strip is mandatory, not cosmetic: pg lets the
-// parsed connection string override an explicit `ssl` config, so `ssl` alone is
-// silently discarded (the "defeats pg's override" block below pins that).
+// libpqCompatDsn() injects `uselibpqcompat=true` so pg-connection-string applies
+// the correct libpq semantics — including for sslrootcert/sslcert/sslkey DSNs,
+// which a hand-rolled `ssl` object can't handle (pg rebuilds ssl from the cert
+// params and overrides an explicit ssl). The `effectiveSsl` assertions read the
+// TLS config pg actually resolves, so they'd catch a silent regression if the
+// driver ever stopped honoring the flag.
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import pg from "pg";
-import { libpqSslConfig } from "../../src/executor/pg-pool.ts";
+import { libpqCompatDsn } from "../../src/executor/pg-pool.ts";
 
 const SAMPLE_DSN =
   "postgres://midplane_sample:pw@midplane-sample-db.internal:5432/sample?sslmode=require";
 
-// The TLS setting pg actually resolves from a Client config, AFTER it merges
-// the parsed connection string over the explicit config — i.e. the value that
-// governs the real handshake, not just what we passed in.
-function effectiveSsl(config: pg.ClientConfig): unknown {
+// The TLS setting pg actually resolves from a Client config, AFTER it parses the
+// connection string — i.e. the value that governs the real handshake, not just
+// what the DSN literally said.
+function effectiveSsl(config: pg.ClientConfig): Record<string, unknown> | boolean | undefined {
   return (
-    new pg.Client(config) as unknown as { connectionParameters: { ssl: unknown } }
+    new pg.Client(config) as unknown as {
+      connectionParameters: { ssl: Record<string, unknown> | boolean | undefined };
+    }
   ).connectionParameters.ssl;
 }
 
-describe("libpqSslConfig — sslmode → pg ssl", () => {
-  test("require encrypts but does NOT verify (the sample-DB self-signed fix)", () => {
-    const { connectionString, ssl } = libpqSslConfig(SAMPLE_DSN);
-    expect(ssl).toEqual({ rejectUnauthorized: false });
-    expect(connectionString).not.toContain("sslmode");
-    // Everything else about the DSN survives untouched.
-    expect(connectionString).toBe(
-      "postgres://midplane_sample:pw@midplane-sample-db.internal:5432/sample",
+describe("libpqCompatDsn — DSN rewriting", () => {
+  test("adds uselibpqcompat=true while keeping the sslmode and the rest of the DSN", () => {
+    const out = libpqCompatDsn(SAMPLE_DSN);
+    expect(out).toContain("uselibpqcompat=true");
+    expect(out).toContain("sslmode=require");
+    expect(out).toContain("midplane_sample:pw@midplane-sample-db.internal:5432/sample");
+  });
+
+  test("preserves unrelated query params", () => {
+    const out = libpqCompatDsn(
+      "postgres://u:p@h:5432/db?application_name=midplane&sslmode=verify-full",
     );
+    expect(out).toContain("application_name=midplane");
+    expect(out).toContain("sslmode=verify-full");
+    expect(out).toContain("uselibpqcompat=true");
   });
 
-  test("prefer/allow/no-verify also encrypt without verifying", () => {
-    for (const mode of ["prefer", "allow", "no-verify"]) {
-      const { ssl } = libpqSslConfig(`postgres://u:p@h:5432/db?sslmode=${mode}`);
-      expect(ssl).toEqual({ rejectUnauthorized: false });
-    }
+  test("leaves sslmode=no-verify untouched (the default path already maps it right)", () => {
+    const dsn = "postgres://u:p@h:5432/db?sslmode=no-verify";
+    expect(libpqCompatDsn(dsn)).toBe(dsn);
   });
 
-  test("verify-ca/verify-full still verify the certificate", () => {
-    for (const mode of ["verify-ca", "verify-full"]) {
-      const { ssl } = libpqSslConfig(`postgres://u:p@h:5432/db?sslmode=${mode}`);
-      expect(ssl).toEqual({ rejectUnauthorized: true });
-    }
-  });
-
-  test("disable turns TLS off", () => {
-    const { ssl } = libpqSslConfig("postgres://u:p@h:5432/db?sslmode=disable");
-    expect(ssl).toBe(false);
-  });
-
-  test("other query params are preserved when sslmode is stripped", () => {
-    const { connectionString, ssl } = libpqSslConfig(
-      "postgres://u:p@h:5432/db?application_name=midplane&sslmode=require",
-    );
-    expect(ssl).toEqual({ rejectUnauthorized: false });
-    expect(connectionString).toContain("application_name=midplane");
-    expect(connectionString).not.toContain("sslmode");
-  });
-
-  test("a DSN with no sslmode is left untouched", () => {
+  test("leaves a DSN with no sslmode untouched", () => {
     const dsn = "postgres://u:p@h:5432/db";
-    const { connectionString, ssl } = libpqSslConfig(dsn);
-    expect(ssl).toBeUndefined();
-    expect(connectionString).toBe(dsn);
+    expect(libpqCompatDsn(dsn)).toBe(dsn);
   });
 
-  test("an unknown sslmode is passed through unchanged", () => {
-    const dsn = "postgres://u:p@h:5432/db?sslmode=banana";
-    const { connectionString, ssl } = libpqSslConfig(dsn);
-    expect(ssl).toBeUndefined();
-    expect(connectionString).toBe(dsn);
-  });
-
-  test("an unparseable DSN is passed through unchanged", () => {
+  test("passes an unparseable DSN through unchanged", () => {
     const kv = "host=h dbname=db sslmode=require";
-    const { connectionString, ssl } = libpqSslConfig(kv);
-    expect(ssl).toBeUndefined();
-    expect(connectionString).toBe(kv);
+    expect(libpqCompatDsn(kv)).toBe(kv);
   });
 });
 
-describe("libpqSslConfig defeats pg's connection-string override", () => {
-  test("without stripping, an explicit ssl is overridden back to verify (the bug)", () => {
-    // Passing ssl alongside sslmode=require: pg's parse() wins and forces `{}`
-    // (verify), which is exactly what rejects the self-signed sample cert. This
-    // documents WHY the helper strips sslmode — if anyone "simplifies" the fix
-    // to ssl-only, this captures the regression.
-    expect(
-      effectiveSsl({ connectionString: SAMPLE_DSN, ssl: { rejectUnauthorized: false } }),
-    ).toEqual({});
-  });
-
-  test("with the helper, the effective TLS is encrypt-without-verify", () => {
-    expect(effectiveSsl(libpqSslConfig(SAMPLE_DSN))).toEqual({
+describe("libpqCompatDsn — effective TLS pg resolves", () => {
+  test("require without a root CA encrypts but does NOT verify (the sample-DB fix)", () => {
+    expect(effectiveSsl({ connectionString: libpqCompatDsn(SAMPLE_DSN) })).toEqual({
       rejectUnauthorized: false,
     });
   });
 
-  test("with the helper, verify-full still resolves to a verifying connection", () => {
+  test("without the flag, require resolves to verify (the original bug)", () => {
+    // Raw sslmode=require -> pg forces ssl={} (rejectUnauthorized defaults true
+    // = verify), which is exactly what rejects the self-signed sample cert.
+    expect(effectiveSsl({ connectionString: SAMPLE_DSN })).toEqual({});
+  });
+
+  test("verify-full still verifies the certificate", () => {
+    // {} means verify (rejectUnauthorized defaults to true); the key point is it
+    // is NOT weakened to rejectUnauthorized:false.
+    const ssl = effectiveSsl({
+      connectionString: libpqCompatDsn("postgres://u:p@h:5432/db?sslmode=verify-full"),
+    }) as Record<string, unknown>;
+    expect(ssl.rejectUnauthorized).not.toBe(false);
+  });
+
+  test("disable turns TLS off", () => {
     expect(
-      effectiveSsl(libpqSslConfig("postgres://u:p@h:5432/db?sslmode=verify-full")),
-    ).toEqual({ rejectUnauthorized: true });
+      effectiveSsl({ connectionString: libpqCompatDsn("postgres://u:p@h:5432/db?sslmode=disable") }),
+    ).toBe(false);
+  });
+});
+
+// The reviewer's case: sslmode=require WITH a root CA must NOT collapse to naive
+// no-verify. libpq treats require+rootcert like verify-ca — verify the chain
+// against the given CA (hostname check skipped). A hand-rolled ssl object was
+// silently overridden by pg here; uselibpqcompat gets it right.
+describe("libpqCompatDsn — require + sslrootcert verifies against the CA", () => {
+  let tmp: string;
+  let caPath: string;
+
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "midplane-ssl-"));
+    caPath = join(tmp, "ca.pem");
+    writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n");
+  });
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  test("keeps CA verification (not bypassed to rejectUnauthorized:false)", () => {
+    const dsn = `postgres://u:p@h:5432/db?sslmode=require&sslrootcert=${caPath}`;
+    const ssl = effectiveSsl({ connectionString: libpqCompatDsn(dsn) }) as Record<string, unknown>;
+    expect(String(ssl.ca)).toContain("BEGIN CERTIFICATE");
+    // verify-ca semantics: verify the chain (rejectUnauthorized left at its
+    // default of true), skip the hostname check.
+    expect(ssl.rejectUnauthorized).not.toBe(false);
+    expect(typeof ssl.checkServerIdentity).toBe("function");
   });
 });
