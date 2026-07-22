@@ -10,6 +10,7 @@ export { DsnResolver } from "./decrypt.ts";
 export type { ResolveDsnDeps, ResolveDsnResult } from "./decrypt.ts";
 export {
   loadRegions,
+  mcpOrigin,
   mintMcpUrl,
   mcpProjectUrl,
   mcpGenericUrl,

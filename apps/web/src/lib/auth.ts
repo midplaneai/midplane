@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 
 import { customers, getDb } from "@midplane-cloud/db";
 import * as authSchema from "@midplane-cloud/db/auth-schema";
+import { mcpOrigin } from "@midplane-cloud/router";
 
 import {
   analyticsGroups,
@@ -81,6 +82,10 @@ function trustedAuthOrigins(): string[] {
 }
 
 function createAuth() {
+  // Pin this process's region ONCE. Used for the regional DB binding (below)
+  // and for the MCP-endpoint origin the mcp() plugin advertises as its OAuth
+  // protected-resource `resource` (see that plugin's config).
+  const region = bootRegion();
   return betterAuth({
     appName: "midplane",
     // The OAuth 2.1 issuer for the MCP plugin's discovery metadata. The mcp
@@ -93,7 +98,7 @@ function createAuth() {
     // Trust every first-party host this image serves (apex + regional
     // subdomains), not just BETTER_AUTH_URL — see trustedAuthOrigins.
     trustedOrigins: trustedAuthOrigins(),
-    database: drizzleAdapter(getDb(bootRegion()), {
+    database: drizzleAdapter(getDb(region), {
       provider: "pg",
       schema: { ...authSchema },
     }),
@@ -368,6 +373,21 @@ function createAuth() {
       // stay last to flush Set-Cookie from server-action auth flows.
       mcp({
         loginPage: "/sign-in",
+        // RFC 9728 protected-resource `resource`. Unset, Better Auth advertises
+        // the ISSUER origin (`new URL(BETTER_AUTH_URL).origin`, e.g.
+        // https://us.app.midplane.ai) in BOTH protected-resource routes (the
+        // plugin's /api/auth/.well-known/oauth-protected-resource and the root
+        // mirror via oAuthProtectedResourceMetadata) — but agents connect to the
+        // MCP-endpoint host (https://us.midplane.ai/mcp). A strict client (Claude
+        // Code SDK) validates the advertised resource against the URL it connected
+        // to and rejects the mismatch ("Protected resource … does not match
+        // expected …"). Advertise the MCP-endpoint ORIGIN instead — the one value
+        // that matches both /mcp and /mcp/<projectId> (clients accept the origin).
+        // mcpOrigin is the same source of truth every displayed MCP URL uses, so
+        // cloud (per-region host), self-host (BETTER_AUTH_URL), and dev
+        // (localhost:3000) all resolve correctly. authorization_servers stays the
+        // issuer origin — the auth server genuinely lives on the issuer host.
+        resource: mcpOrigin(region, process.env),
         oidcConfig: {
           // loginPage is also required on the OIDCOptions type; the plugin
           // overrides it with the top-level value, so keep them the same.

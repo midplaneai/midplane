@@ -144,6 +144,29 @@ test("OAuth: discovery → DCR → consent picker → token → query → audit 
   expect(tokenEndpoint, "discovery: token_endpoint").toBeTruthy();
   expect(registrationEndpoint, "discovery: registration_endpoint").toBeTruthy();
 
+  // 3b. Protected-resource metadata (RFC 9728). A strict MCP client (e.g. Claude
+  // Code) validates that the advertised `resource` matches the ORIGIN of the /mcp
+  // URL it connects to; advertising the OAuth-issuer host instead makes it reject
+  // the connection ("Protected resource … does not match expected …"). That was a
+  // prod-only defect — this single-host dev server serves issuer and MCP endpoint
+  // on the same origin, so the mismatch never reproduced here. Assert the
+  // invariant on BOTH routes (plugin + root mirror) so a regression in the mcp()
+  // plugin's `resource` option is caught by the live suite.
+  const mcpEndpointOrigin = new URL(`${baseURL}/mcp/${projectId}`).origin;
+  for (const prmPath of [
+    "/.well-known/oauth-protected-resource",
+    "/api/auth/.well-known/oauth-protected-resource",
+  ]) {
+    const prm = await (await request.get(`${baseURL}${prmPath}`)).json();
+    expect(prm.resource, `${prmPath}: resource == MCP endpoint origin`).toBe(
+      mcpEndpointOrigin,
+    );
+    expect(
+      prm.authorization_servers,
+      `${prmPath}: authorization_servers names the issuer`,
+    ).toContain(new URL(baseURL!).origin);
+  }
+
   // 4. Dynamic Client Registration — a public PKCE client.
   const dcr = await request.post(registrationEndpoint, {
     headers: { "content-type": "application/json" },
