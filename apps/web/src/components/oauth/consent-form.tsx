@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
+import { SectionLabel } from "@/components/ui/section-label";
 import {
   DbAccessControl,
   type ScopeDbAccess,
@@ -178,11 +179,11 @@ export function ConsentForm({
   const hasDbs = projects.length > 0;
   // With databases on offer but none granted, approving is the degenerate path
   // (the agent connects, then 403s on every query). Demote it visually — the
-  // filled primary style is reserved for approving an actual grant.
-  const zeroGrant = hasDbs && !mustPickProject && selectedCount === 0;
-
-  const eyebrow =
-    "font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle";
+  // filled primary style is reserved for approving an actual grant. Keyed on
+  // selectedDbs (not hasDbs): "chose nothing" earns the demotion, "nothing to
+  // choose" does not.
+  const zeroGrant =
+    selectedDbs.length > 0 && !mustPickProject && selectedCount === 0;
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -190,8 +191,8 @@ export function ConsentForm({
         <div className="w-full space-y-4 border border-border bg-card p-5">
           {projects.length > 1 ? (
             <div className="space-y-1.5">
-              <label htmlFor="consent-project" className={`block ${eyebrow}`}>
-                Project
+              <label htmlFor="consent-project">
+                <SectionLabel>Project</SectionLabel>
               </label>
               <select
                 id="consent-project"
@@ -200,7 +201,7 @@ export function ConsentForm({
                 onChange={(e) =>
                   setSelectedProjectId(e.target.value || null)
                 }
-                className="w-full border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-[hsl(var(--brand))] focus:outline-none disabled:opacity-50"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
               >
                 <option value="" disabled>
                   Choose a project…
@@ -217,8 +218,8 @@ export function ConsentForm({
             </div>
           ) : (
             <div className="flex items-baseline justify-between gap-3">
-              <span className={eyebrow}>Project</span>
-              <span className="font-mono text-sm text-foreground">
+              <SectionLabel>Project</SectionLabel>
+              <span className="min-w-0 truncate font-mono text-sm text-foreground">
                 {selectedProject?.projectName || selectedProject?.projectId}
               </span>
             </div>
@@ -227,7 +228,7 @@ export function ConsentForm({
           {selectedProject ? (
             <div className="space-y-3 border-t border-border pt-4">
               <div className="flex items-baseline justify-between">
-                <span className={eyebrow}>Database access</span>
+                <SectionLabel>Database access</SectionLabel>
                 {selectedDbs.length > 1 && (
                   <div className="flex gap-3 text-xs">
                     <button
@@ -254,7 +255,7 @@ export function ConsentForm({
                     key={db.projectDatabaseId}
                     className="flex items-center justify-between gap-3"
                   >
-                    <span className="font-mono text-sm text-foreground">
+                    <span className="min-w-0 truncate font-mono text-sm text-foreground">
                       {db.name}
                     </span>
                     <DbAccessControl
@@ -266,12 +267,7 @@ export function ConsentForm({
                   </div>
                 ))}
               </div>
-              {selectedDbs.length === 0 ? (
-                <p className="text-xs text-subtle">
-                  This project has no databases yet — approve now and grant
-                  access later.
-                </p>
-              ) : selectedCount === 0 ? (
+              {selectedCount === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   Nothing selected — the agent connects but can&apos;t query
                   anything until you grant access.
@@ -291,8 +287,8 @@ export function ConsentForm({
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          No databases yet — you can approve this agent now and grant access
-          later from the dashboard.
+          No databases yet — approve this agent now and grant access later by
+          re-running this flow.
         </p>
       )}
 
@@ -313,7 +309,9 @@ export function ConsentForm({
         </Button>
         <Button
           type="button"
-          variant={zeroGrant ? "outline" : "default"}
+          // secondary, not outline: the demoted approve must never be a visual
+          // twin of the adjacent Deny (opposite decisions on a consent screen).
+          variant={zeroGrant ? "secondary" : "default"}
           disabled={pending || mustPickProject}
           onClick={() => decide(true)}
           arrow={!zeroGrant}
@@ -324,7 +322,7 @@ export function ConsentForm({
               ? "Choose a project"
               : selectedCount > 0
                 ? `Allow access to ${selectedCount} database${selectedCount === 1 ? "" : "s"}`
-                : hasDbs
+                : zeroGrant
                   ? "Connect without database access"
                   : "Connect agent"}
         </Button>

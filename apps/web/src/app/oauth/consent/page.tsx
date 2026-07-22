@@ -1,5 +1,4 @@
 import { eq } from "drizzle-orm";
-import Image from "next/image";
 
 import { getDb } from "@midplane-cloud/db";
 import { oauthApplication } from "@midplane-cloud/db/auth-schema";
@@ -63,7 +62,18 @@ export default async function OAuthConsentPage({
       .limit(1);
     appName = rows[0]?.name ?? null;
   }
-  const displayName = appName || clientId || "An MCP client";
+  // Display-side hardening only (the stored name is untouched): DCR names are
+  // attacker-registered free text. Strip control/format chars (a bidi override
+  // would reverse the H1), collapse whitespace, and clamp the length so a
+  // multi-KB name can't blow out the hero.
+  const rawName = (appName || clientId || "An MCP client")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const nameChars = [...rawName];
+  const displayName =
+    (nameChars.length > 80 ? `${nameChars.slice(0, 79).join("")}…` : rawName) ||
+    "An MCP client";
   const email = await getActorEmail();
 
   const identityScopes = scopes.filter((s) => s in IDENTITY_COPY);
@@ -108,16 +118,14 @@ export default async function OAuthConsentPage({
                   self-supplied logo URL (tracking + spoofing surface). */}
               <div aria-hidden className="flex items-center gap-3">
                 <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary font-mono text-lg font-medium text-foreground">
-                  {displayName.charAt(0).toUpperCase()}
+                  {/* Spread, not charAt: an astral-plane first char must not
+                      render as a lone surrogate. */}
+                  {[...displayName][0]?.toUpperCase()}
                 </div>
                 <span className="font-mono text-sm text-subtle">→</span>
                 <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary">
-                  <Image
-                    src="/brand/icon-bare.svg"
-                    alt=""
-                    width={20}
-                    height={20}
-                  />
+                  {/* eslint-disable-next-line @next/next/no-img-element -- static 20px SVG: next/image never optimizes SVGs, so it would only add its client runtime to this route */}
+                  <img src="/brand/icon-bare.svg" alt="" width={20} height={20} />
                 </div>
               </div>
               <div className="space-y-1.5">
@@ -158,8 +166,12 @@ export default async function OAuthConsentPage({
                   Signed in as <span className="text-muted-foreground">{email}</span>
                 </p>
               )}
+              {/* Re-running the flow is the one path available in every role
+                  and state (Connect-tab revoke is manager-gated, and a
+                  zero-project approval has no Connect tab at all). */}
               <p className="text-xs text-subtle">
-                Revoke access any time from the project&apos;s Connect tab.
+                Change or revoke access any time from the project&apos;s
+                Connect tab, or by re-running this flow.
               </p>
             </div>
           </>
