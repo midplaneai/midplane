@@ -142,6 +142,12 @@ footers — the wordmark stands alone there. Inverted (`icon-inverted.svg`)
 and mono (`icon-mono.svg`) variants are available for dark close bands and
 single-colour print.
 
+The bare colon (`icon-bare.svg` — two blue dots, no frame) may additionally
+render in-page where an app-icon semantic is needed inside the product: the
+one approved use is the identity chip on the OAuth consent screen's
+agent → midplane handshake. It stays subject to the topbar/footer rule above
+and is not a general-purpose decoration.
+
 The previous four-quadrant window-mullion `.mark` glyph has been retired.
 
 ## Component Conventions

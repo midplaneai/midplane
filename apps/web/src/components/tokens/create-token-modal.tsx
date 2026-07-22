@@ -342,7 +342,7 @@ export function CreateTokenModal({
                         key={db.projectDatabaseId}
                         className="flex items-center justify-between gap-3"
                       >
-                        <span className="truncate font-mono text-sm text-foreground">
+                        <span className="min-w-0 truncate font-mono text-sm text-foreground">
                           {db.name}
                         </span>
                         <DbAccessControl
@@ -354,6 +354,7 @@ export function CreateTokenModal({
                               [db.projectDatabaseId]: v,
                             }))
                           }
+                          label={db.name}
                         />
                       </div>
                     ))}

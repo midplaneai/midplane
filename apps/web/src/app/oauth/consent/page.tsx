@@ -37,7 +37,7 @@ const IDENTITY_COPY: Record<string, string> = {
   openid: "confirm your identity",
   profile: "read your name and profile image",
   email: "read your email address",
-  offline_access: "stay connected without re-approving each time",
+  offline_access: "stay connected without re-approving",
 };
 
 export default async function OAuthConsentPage({
@@ -62,7 +62,18 @@ export default async function OAuthConsentPage({
       .limit(1);
     appName = rows[0]?.name ?? null;
   }
-  const displayName = appName || clientId || "An MCP client";
+  // Display-side hardening only (the stored name is untouched): DCR names are
+  // attacker-registered free text. Strip control/format chars (a bidi override
+  // would reverse the H1), collapse whitespace, and clamp the length so a
+  // multi-KB name can't blow out the hero.
+  const rawName = (appName || clientId || "An MCP client")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const nameChars = [...rawName];
+  const displayName =
+    (nameChars.length > 80 ? `${nameChars.slice(0, 79).join("")}…` : rawName) ||
+    "An MCP client";
   const email = await getActorEmail();
 
   const identityScopes = scopes.filter((s) => s in IDENTITY_COPY);
@@ -101,13 +112,24 @@ export default async function OAuthConsentPage({
         {ready && clientId ? (
           <>
             <div className="flex flex-col items-center gap-4 text-center">
-              {/* Neutral monogram — we deliberately don't render the client's
+              {/* Agent → Midplane handshake, so the grantor is in the
+                  composition, not just the header chrome. Neutral monogram for
+                  the agent — we deliberately don't render the client's
                   self-supplied logo URL (tracking + spoofing surface). */}
-              <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary font-mono text-lg font-medium text-foreground">
-                {displayName.charAt(0).toUpperCase()}
+              <div aria-hidden className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary font-mono text-lg font-medium text-foreground">
+                  {/* Spread, not charAt: an astral-plane first char must not
+                      render as a lone surrogate. */}
+                  {[...displayName][0]?.toUpperCase()}
+                </div>
+                <span className="font-mono text-sm text-subtle">→</span>
+                <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- static 20px SVG: next/image never optimizes SVGs, so it would only add its client runtime to this route */}
+                  <img src="/brand/icon-bare.svg" alt="" width={20} height={20} />
+                </div>
               </div>
               <div className="space-y-1.5">
-                <h1 className="text-xl font-semibold tracking-[-0.02em] text-foreground">
+                <h1 className="text-balance text-xl font-semibold tracking-[-0.02em] text-foreground">
                   Connect {displayName}?
                 </h1>
                 <p className="text-sm text-muted-foreground">
@@ -120,17 +142,6 @@ export default async function OAuthConsentPage({
               </div>
             </div>
 
-            {identityScopes.length > 0 && (
-              <p className="w-full text-xs text-muted-foreground">
-                It will also{" "}
-                {identityScopes
-                  .map((s) => IDENTITY_COPY[s])
-                  .join(", ")
-                  .replace(/, ([^,]*)$/, " and $1")}
-                .
-              </p>
-            )}
-
             <ConsentForm
               consentCode={consentCode!}
               clientId={clientId}
@@ -139,15 +150,28 @@ export default async function OAuthConsentPage({
               existing={existing}
             />
 
-            <div className="space-y-1 text-center">
+            <div className="max-w-[400px] space-y-1 text-center">
+              {identityScopes.length > 0 && (
+                <p className="text-xs text-subtle">
+                  It will also{" "}
+                  {identityScopes
+                    .map((s) => IDENTITY_COPY[s])
+                    .join(", ")
+                    .replace(/, ([^,]*)$/, " and $1")}
+                  .
+                </p>
+              )}
               {email && (
                 <p className="text-xs text-subtle">
                   Signed in as <span className="text-muted-foreground">{email}</span>
                 </p>
               )}
+              {/* Re-running the flow is the one path available in every role
+                  and state (Connect-tab revoke is manager-gated, and a
+                  zero-project approval has no Connect tab at all). */}
               <p className="text-xs text-subtle">
-                You can revoke access any time by pausing or deleting the
-                project, or re-running this flow.
+                Change or revoke access any time from the project&apos;s
+                Connect tab, or by re-running this flow.
               </p>
             </div>
           </>
