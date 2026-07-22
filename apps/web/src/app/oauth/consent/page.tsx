@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import Image from "next/image";
 
 import { getDb } from "@midplane-cloud/db";
 import { oauthApplication } from "@midplane-cloud/db/auth-schema";
@@ -37,7 +38,7 @@ const IDENTITY_COPY: Record<string, string> = {
   openid: "confirm your identity",
   profile: "read your name and profile image",
   email: "read your email address",
-  offline_access: "stay connected without re-approving each time",
+  offline_access: "stay connected without re-approving",
 };
 
 export default async function OAuthConsentPage({
@@ -101,13 +102,26 @@ export default async function OAuthConsentPage({
         {ready && clientId ? (
           <>
             <div className="flex flex-col items-center gap-4 text-center">
-              {/* Neutral monogram — we deliberately don't render the client's
+              {/* Agent → Midplane handshake, so the grantor is in the
+                  composition, not just the header chrome. Neutral monogram for
+                  the agent — we deliberately don't render the client's
                   self-supplied logo URL (tracking + spoofing surface). */}
-              <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary font-mono text-lg font-medium text-foreground">
-                {displayName.charAt(0).toUpperCase()}
+              <div aria-hidden className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary font-mono text-lg font-medium text-foreground">
+                  {displayName.charAt(0).toUpperCase()}
+                </div>
+                <span className="font-mono text-sm text-subtle">→</span>
+                <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary">
+                  <Image
+                    src="/brand/icon-bare.svg"
+                    alt=""
+                    width={20}
+                    height={20}
+                  />
+                </div>
               </div>
               <div className="space-y-1.5">
-                <h1 className="text-xl font-semibold tracking-[-0.02em] text-foreground">
+                <h1 className="text-balance text-xl font-semibold tracking-[-0.02em] text-foreground">
                   Connect {displayName}?
                 </h1>
                 <p className="text-sm text-muted-foreground">
@@ -120,17 +134,6 @@ export default async function OAuthConsentPage({
               </div>
             </div>
 
-            {identityScopes.length > 0 && (
-              <p className="w-full text-xs text-muted-foreground">
-                It will also{" "}
-                {identityScopes
-                  .map((s) => IDENTITY_COPY[s])
-                  .join(", ")
-                  .replace(/, ([^,]*)$/, " and $1")}
-                .
-              </p>
-            )}
-
             <ConsentForm
               consentCode={consentCode!}
               clientId={clientId}
@@ -139,15 +142,24 @@ export default async function OAuthConsentPage({
               existing={existing}
             />
 
-            <div className="space-y-1 text-center">
+            <div className="max-w-[400px] space-y-1 text-center">
+              {identityScopes.length > 0 && (
+                <p className="text-xs text-subtle">
+                  It will also{" "}
+                  {identityScopes
+                    .map((s) => IDENTITY_COPY[s])
+                    .join(", ")
+                    .replace(/, ([^,]*)$/, " and $1")}
+                  .
+                </p>
+              )}
               {email && (
                 <p className="text-xs text-subtle">
                   Signed in as <span className="text-muted-foreground">{email}</span>
                 </p>
               )}
               <p className="text-xs text-subtle">
-                You can revoke access any time by pausing or deleting the
-                project, or re-running this flow.
+                Revoke access any time from the project&apos;s Connect tab.
               </p>
             </div>
           </>
