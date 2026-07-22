@@ -238,7 +238,13 @@ export async function createProject(
   // and the row is inserted (or the reused empty project updated) with
   // is_sample = true so every usage count can exclude it.
   isSample: boolean = false,
-): Promise<{ id: string; defaultTokenPlaintext: string | null }> {
+): Promise<{
+  id: string;
+  defaultTokenPlaintext: string | null;
+  /** False only when an existing sample was reused instead of creating a new
+   *  project (the one-sample-per-customer short-circuit); true otherwise. */
+  created: boolean;
+}> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
     kms,
@@ -301,18 +307,50 @@ export async function createProject(
   // (the auto-seeded "Default") or, failing that, a newly inserted one.
   // Assigned inside the txn below.
   let resolvedProjectId = id;
-  const defaultTokenPlaintext = await db.transaction(async (tx) => {
+  // `created` is false only when an existing sample short-circuits the insert
+  // (see the one-sample-per-customer guard) — the caller uses it to skip
+  // double-firing the create/added analytics for a reused sample.
+  const { created, tokenPlaintext: defaultTokenPlaintext } =
+    await db.transaction(async (tx) => {
     // Plan caps (decisions D4/D8). Lock the customers row first so concurrent
     // creates for this org serialize and the counts can't drift before the
     // inserts. Infinity caps (Team) short-circuit each check — we never scan
     // an unlimited customer's project/token set.
-    if (Number.isFinite(caps.projects) || Number.isFinite(caps.tokens)) {
+    if (
+      Number.isFinite(caps.projects) ||
+      Number.isFinite(caps.tokens) ||
+      // Samples skip the cap checks below, but still need the lock so the
+      // one-sample-per-customer re-check that follows is race-safe.
+      isSample
+    ) {
       await tx
         .select({ id: customers.id })
         .from(customers)
         .where(eq(customers.id, customer.id))
         .for("update")
         .limit(1);
+    }
+    // One hosted sample per customer, enforced UNDER the lock: concurrent
+    // "Try the sample database" clicks serialize on the customers row above, so
+    // the second request sees the first's committed sample here and converges
+    // on it instead of inserting a duplicate. Returns the existing sample
+    // untouched — no second database or token. (A pre-transaction check would
+    // be a check-then-act race; this is the authoritative guard.)
+    if (isSample) {
+      const existingSample = await tx
+        .select({ id: projects.id })
+        .from(projects)
+        .where(
+          and(
+            eq(projects.customerId, customer.id),
+            eq(projects.isSample, true),
+          ),
+        )
+        .limit(1);
+      if (existingSample[0]) {
+        resolvedProjectId = existingSample[0].id;
+        return { created: false, tokenPlaintext: null };
+      }
     }
     // Reuse the customer's empty (database-less) project if one exists — the
     // auto-seeded "Default" (ensureDefaultProject), or any project with no
@@ -396,7 +434,8 @@ export async function createProject(
     // OAuth-first (web) flow: no auto-minted token — the user connects an agent
     // over OAuth, or mints a machine token explicitly later. (mintMaterial is
     // non-null whenever mintDefaultToken is true; the guard carries both.)
-    if (!mintDefaultToken || !mintMaterial) return null;
+    if (!mintDefaultToken || !mintMaterial)
+      return { created: true, tokenPlaintext: null };
     // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
     // race). This is the project's FIRST token — an empty (reused or new)
     // project has none, so the "default" name can't collide; ownership is
@@ -413,13 +452,14 @@ export async function createProject(
       },
       mintMaterial,
     );
-    return minted.plaintext;
+    return { created: true, tokenPlaintext: minted.plaintext };
   });
 
   // Best-effort TOKEN_CREATED audit, post-commit (matches createToken's
   // fail-soft posture — an audit hiccup must not undo the durable mint).
-  // Only when we actually minted a default token.
-  if (mintDefaultToken) {
+  // Only when we actually minted a default token (never on a reused-sample
+  // short-circuit, which mints nothing).
+  if (created && mintDefaultToken) {
     try {
       await emitTokenAuditRow(customer, {
         projectId: resolvedProjectId,
@@ -438,7 +478,7 @@ export async function createProject(
     }
   }
 
-  return { id: resolvedProjectId, defaultTokenPlaintext };
+  return { id: resolvedProjectId, defaultTokenPlaintext, created };
 }
 
 // Idempotently seed an empty "Default" project for a customer at onboarding so a
@@ -498,23 +538,6 @@ export async function hasEmptyProject(customer: Customer): Promise<boolean> {
 
 export function isValidDsn(s: unknown): s is string {
   return typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8;
-}
-
-/** The customer's existing hosted-sample project, if any. The "Try the sample
- *  database" flow (lib/sample-project.ts) is idempotent — a second click
- *  returns the existing sample rather than creating duplicates. Samples skip
- *  the project cap, so this one-sample-per-customer guard is what bounds them. */
-export async function findSampleProjectId(
-  customer: Customer,
-): Promise<string | null> {
-  const rows = await getDb(customer.region)
-    .select({ id: projects.id })
-    .from(projects)
-    .where(
-      and(eq(projects.customerId, customer.id), eq(projects.isSample, true)),
-    )
-    .limit(1);
-  return rows[0]?.id ?? null;
 }
 
 /** Read-only plan usage for pre-flight UX gating (current project +

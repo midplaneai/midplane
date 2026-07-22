@@ -113,7 +113,7 @@ export default async function NewProject() {
                 </>
               }
               action={
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-center gap-3">
                   <Link href={UPGRADE_URL}>
                     <Button size="sm">Upgrade your plan</Button>
                   </Link>
@@ -122,6 +122,12 @@ export default async function NewProject() {
                       Back to projects
                     </Button>
                   </Link>
+                  {/* The sample skips the project cap, so it stays reachable at
+                      the limit — otherwise a capped user with no reusable empty
+                      project hits a pure upgrade wall with no way to try it. */}
+                  {process.env.MIDPLANE_SAMPLE_DSN ? (
+                    <SampleProjectButton entry="new_cap" />
+                  ) : null}
                 </div>
               }
             />

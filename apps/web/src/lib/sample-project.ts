@@ -8,13 +8,21 @@ import { requireManager } from "@/lib/org-auth";
 import { getOrgContext } from "@/lib/org-context";
 import { PlanLimitError, resolvePlan } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
-import { createProject, findSampleProjectId } from "@/lib/projects";
+import { createProject } from "@/lib/projects";
 
 // Where the "Try the sample database" CTA was clicked — recorded on the funnel
 // events so we can see which surface converts evaluators onto the hosted
 // sample. `source` stays "dashboard" (the web channel, vs the API); this is a
 // finer-grained sub-dimension.
-const SAMPLE_ENTRIES = ["dashboard_empty", "project_empty", "new_form"] as const;
+const SAMPLE_ENTRIES = [
+  "dashboard_empty",
+  "project_empty",
+  "new_form",
+  // At-cap walls: the sample skips the project cap, so it stays offered where
+  // the "upgrade to add more" wall would otherwise be a dead end.
+  "dashboard_cap",
+  "new_cap",
+] as const;
 type SampleEntry = (typeof SAMPLE_ENTRIES)[number];
 
 /**
@@ -44,12 +52,6 @@ export async function createSampleProject(formData: FormData): Promise<void> {
   const gate = await requireManager();
   if ("error" in gate) redirect("/projects/new");
 
-  // Idempotent: one sample per customer. A second click (or a stale form)
-  // returns the existing sample's Connect pane instead of spawning duplicates
-  // — samples skip the project cap, so this is what bounds them.
-  const existingSample = await findSampleProjectId(customer);
-  if (existingSample) redirect(`/projects/${existingSample}?section=connect`);
-
   const entryRaw = formData.get("entry");
   const entry: SampleEntry =
     typeof entryRaw === "string" &&
@@ -59,11 +61,13 @@ export async function createSampleProject(formData: FormData): Promise<void> {
 
   const entitlement = await resolvePlan();
   let id: string;
+  let created: boolean;
   try {
     // OAuth-first (mintDefaultToken=false), read-only default access. name=null
     // → createProject derives the alias from the DSN's database ("sample").
-    // isSample=true badges the project and keeps it off the plan project cap.
-    ({ id } = await createProject(
+    // isSample=true badges the project and keeps it off the plan project cap;
+    // createProject also enforces one sample per customer under its row lock.
+    ({ id, created } = await createProject(
       customer,
       sampleDsn,
       null,
@@ -81,6 +85,11 @@ export async function createSampleProject(formData: FormData): Promise<void> {
     if (err instanceof PlanLimitError) redirect("/projects/new");
     throw err;
   }
+
+  // A sample already existed (repeat click, or a concurrent create that lost
+  // the one-sample race) — createProject returned it untouched. Skip the funnel
+  // events (nothing was created) and go straight to its Connect pane.
+  if (!created) redirect(`/projects/${id}?section=connect`);
 
   groupIdentifyProject(id, { region: customer.region });
   const properties = {

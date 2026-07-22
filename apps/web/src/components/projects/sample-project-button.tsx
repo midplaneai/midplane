@@ -40,7 +40,12 @@ export function SampleProjectButton({
   label = "Try the sample database",
 }: {
   /** Which surface the CTA sits on, recorded on the funnel events. */
-  entry: "dashboard_empty" | "project_empty" | "new_form";
+  entry:
+    | "dashboard_empty"
+    | "project_empty"
+    | "new_form"
+    | "dashboard_cap"
+    | "new_cap";
   variant?: "default" | "outline";
   size?: "sm" | "lg";
   label?: string;

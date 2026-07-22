@@ -133,11 +133,18 @@ export default async function Dashboard({
               {/* Members can't add projects — show the counter, hide the CTA. */}
               {canManage &&
                 (atProjectLimit ? (
-                  <Link href={UPGRADE_URL}>
-                    <Button size="sm" variant="outline">
-                      Upgrade to add more
-                    </Button>
-                  </Link>
+                  <>
+                    <Link href={UPGRADE_URL}>
+                      <Button size="sm" variant="outline">
+                        Upgrade to add more
+                      </Button>
+                    </Link>
+                    {/* The sample skips the project cap, so keep it offered at
+                        the limit instead of leaving only an upgrade wall. */}
+                    {process.env.MIDPLANE_SAMPLE_DSN ? (
+                      <SampleProjectButton entry="dashboard_cap" />
+                    ) : null}
+                  </>
                 ) : (
                   <Link href="/projects/new">
                     <Button size="sm">
