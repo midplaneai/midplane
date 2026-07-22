@@ -29,14 +29,22 @@ export function loadRegions(env: NodeJS.ProcessEnv): Record<Region, RegionConfig
 
 /** The public MCP origin (`<scheme>://<host>`, no path) for a region.
  *
- *  Single source of truth for every displayed MCP URL. In self-host there is no
+ *  Single source of truth for every displayed MCP URL AND for the RFC 9728
+ *  OAuth protected-resource `resource` the `mcp()` plugin advertises
+ *  (apps/web/src/lib/auth.ts). Both must name the host the agent CONNECTS to
+ *  (`<region>.midplane.ai`), never the OAuth issuer host (`<region>.app.midplane.ai`
+ *  = BETTER_AUTH_URL): a strict client validates the advertised resource against
+ *  its connect URL and rejects a mismatch. The origin (no `/mcp` path) is the one
+ *  value that matches both `/mcp` and `/mcp/<projectId>` (clients accept the origin).
+ *
+ *  In self-host there is no
  *  per-region public host: the deployment's canonical origin is defined once by
  *  BETTER_AUTH_URL (set correctly even when the container port is remapped or a
  *  reverse proxy sits in front). The regional MIDPLANE_PUBLIC_HOST_* vars are a
  *  cloud construct that defaults to localhost:3000 — deriving from it renders a
  *  broken URL on a remapped port. So self-host prefers BETTER_AUTH_URL; the
  *  multi-region cloud keeps its per-region publicHost, byte-for-byte unchanged. */
-function mcpOrigin(region: Region, env: NodeJS.ProcessEnv): string {
+export function mcpOrigin(region: Region, env: NodeJS.ProcessEnv): string {
   if (env.MIDPLANE_SELF_HOST === "1" && env.BETTER_AUTH_URL) {
     return env.BETTER_AUTH_URL.replace(/\/+$/, "");
   }

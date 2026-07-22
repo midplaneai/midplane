@@ -89,18 +89,28 @@ issues and validates tokens only against its own DB.
    curl -sI https://eu.midplane.ai/api/health   # 200 (proves the host routes here)
    ```
 
-3. **Protected-resource `resource` advertises the issuer host, not the MCP host
-   (minor, verify with a real client).** The `mcp()` plugin's `resource` option
-   is unset, so the RFC 9728 metadata names the issuer origin
-   (`eu.app.midplane.ai`) rather than the MCP-endpoint origin
-   (`eu.midplane.ai`). Current MCP clients (TS SDK) use the metadata mainly to
-   discover the auth server and are lenient about the `resource` field, so the
-   shipped flow works — but a strict client that validates resource-binding
-   could reject. If launch testing surfaces this, set
-   `mcp({ resource: \`https://\${MIDPLANE_PUBLIC_HOST}\`, … })` per app so the
-   advertised resource matches the endpoint the agent connects to. Left as a
-   documented recommendation (touches the live auth flow; verify against Claude
-   Code + Cursor before applying).
+3. **Protected-resource `resource` advertised the issuer host, not the MCP host.
+   FIXED.** The `mcp()` plugin's `resource` option was unset, so the RFC 9728
+   metadata named the issuer origin (`<region>.app.midplane.ai`) rather than the
+   MCP-endpoint origin (`<region>.midplane.ai`). Lenient clients (older TS SDK)
+   used the metadata only to discover the auth server and worked, but a strict
+   client that validates resource-binding rejected the connection — **Claude Code
+   surfaced exactly this**: `SDK auth failed: Protected resource
+   https://us.app.midplane.ai does not match expected https://us.midplane.ai/mcp
+   (or origin)`. **Fixed**: set `mcp({ resource: mcpOrigin(region, process.env), … })`
+   in `apps/web/src/lib/auth.ts`, reusing the `mcpOrigin` single source of truth
+   (`packages/router/src/region.ts`) so cloud (per-region host), self-host
+   (BETTER_AUTH_URL), and dev (localhost) all resolve correctly. The **origin**
+   (no `/mcp` path) is advertised deliberately — it's the one value that matches
+   both the region-wide `/mcp` and the per-project `/mcp/<projectId>` endpoints
+   (strict clients accept the resource OR its origin). `mcpOrigin` reads
+   `options.resource` in BOTH protected-resource routes (the plugin's own
+   `/api/auth/.well-known/oauth-protected-resource` and the root-mirror
+   `oAuthProtectedResourceMetadata`), so both now agree. `authorization_servers`
+   still names the issuer origin — correct, the auth server lives on the issuer
+   host. Regression guards: `mcpOrigin` unit tests in
+   `packages/router/test/region.test.ts` + a protected-resource assertion in
+   `e2e/mcp-oauth.live.e2e.ts`.
 
 ## Smoke checks (post-deploy, both regions)
 
@@ -115,5 +125,14 @@ curl -sD - -o /dev/null -X POST https://eu.midplane.ai/mcp/<anyConnId> \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
 #    → 401 with: WWW-Authenticate: Bearer resource_metadata="https://eu.app.midplane.ai/.well-known/oauth-protected-resource"
 
-# 3. End-to-end agent flow: covered by e2e/mcp-oauth.live.e2e.ts (E2E_LIVE=1).
+# 3. Protected-resource `resource` names the MCP-endpoint host, NOT the issuer
+#    (the Gap #3 fix — a strict client like Claude Code rejects a mismatch):
+curl -s https://eu.app.midplane.ai/.well-known/oauth-protected-resource | jq '.resource, .authorization_servers'
+#    resource            must equal https://eu.midplane.ai   (the MCP-endpoint origin)
+#    authorization_servers must equal ["https://eu.app.midplane.ai"] (the issuer)
+#    The root mirror on the MCP host must return the SAME body:
+curl -s https://eu.midplane.ai/.well-known/oauth-protected-resource | jq '.resource'
+#    → "https://eu.midplane.ai"
+
+# 4. End-to-end agent flow: covered by e2e/mcp-oauth.live.e2e.ts (E2E_LIVE=1).
 ```
