@@ -13,10 +13,13 @@ export function DbAccessControl({
   value,
   disabled,
   onChange,
+  label,
 }: {
   value: ScopeDbState;
   disabled?: boolean;
   onChange: (v: ScopeDbState) => void;
+  /** Database name, so each row's radiogroup announces which DB it scopes. */
+  label?: string;
 }) {
   const options: Array<{ v: ScopeDbState; label: string }> = [
     { v: "none", label: "No access" },
@@ -26,7 +29,7 @@ export function DbAccessControl({
   return (
     <div
       role="radiogroup"
-      aria-label="Database access"
+      aria-label={label ? `Database access for ${label}` : "Database access"}
       className="inline-flex divide-x divide-border overflow-hidden border border-border"
     >
       {options.map((o) => {
@@ -40,7 +43,7 @@ export function DbAccessControl({
             disabled={disabled}
             onClick={() => onChange(o.v)}
             className={[
-              "px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
+              "flex items-center px-3 py-1.5 text-[13px] transition-colors disabled:opacity-50",
               active
                 ? o.v === "write"
                   ? "bg-warn/15 font-medium text-warn"
@@ -50,6 +53,15 @@ export function DbAccessControl({
                 : "text-muted-foreground hover:bg-secondary/60",
             ].join(" ")}
           >
+            {/* Always-reserved dot slot so selection doesn't shift widths; the
+                dot is the non-color selected signal (matches badge dots). */}
+            <span
+              aria-hidden
+              className={[
+                "mr-1.5 inline-block h-1 w-1 rounded-full",
+                active ? "bg-current" : "bg-transparent",
+              ].join(" ")}
+            />
             {o.label}
           </button>
         );

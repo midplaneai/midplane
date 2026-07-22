@@ -354,6 +354,7 @@ export function CreateTokenModal({
                               [db.projectDatabaseId]: v,
                             }))
                           }
+                          label={db.name}
                         />
                       </div>
                     ))}
