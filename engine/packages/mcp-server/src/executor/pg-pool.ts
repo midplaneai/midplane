@@ -88,12 +88,53 @@ export const SET_LOCAL_SEARCH_PATH_SQL = `SET LOCAL search_path = ${PINNED_SEARC
   quoteSchemaIdentifier,
 ).join(", ")}`;
 
+// Rewrite a DSN so node-postgres applies libpq's sslmode semantics.
+//
+// node-postgres (via pg-connection-string) upgrades sslmode=prefer|require|
+// verify-ca to verify-full — it VERIFIES the server certificate — which is
+// STRICTER than the PostgreSQL spec. libpq's `require` means "encrypt, but do
+// NOT verify the certificate" (unless a root CA is supplied, in which case it
+// verifies against that CA, like verify-ca). That mismatch rejects every
+// legitimate self-signed / private-CA Postgres — including the hosted sample
+// database (a self-signed cert on a private 6PN box) — with an opaque
+// "self signed certificate" the moment an agent runs its first query.
+//
+// pg-connection-string implements the correct libpq semantics behind an opt-in
+// `uselibpqcompat=true` flag (its own recommended migration path — the very
+// thing its deprecation warning tells you to use). Crucially, that path also
+// interprets sslrootcert/sslcert/sslkey correctly. A hand-rolled `ssl` object
+// cannot: pg rebuilds config.ssl from those cert params and overrides an
+// explicit `ssl`, so a DSN like `sslmode=require&sslrootcert=…` would ignore
+// our value. So we inject the flag and let the driver resolve TLS:
+//
+//   disable                  -> no TLS
+//   prefer                   -> encrypt, don't verify
+//   require (no root CA)      -> encrypt, don't verify        <- the sample-DB fix
+//   require (+ sslrootcert)   -> verify against that CA (verify-ca)
+//   verify-ca | verify-full   -> verify the certificate
+//
+// We do NOT inject for sslmode=no-verify (a non-libpq extension the default
+// path already maps to no-verify), nor when the DSN names no sslmode; an
+// unparseable DSN passes through unchanged. All preserve today's behavior.
+export function libpqCompatDsn(dsn: string): string {
+  let url: URL;
+  try {
+    url = new URL(dsn);
+  } catch {
+    return dsn;
+  }
+  const sslmode = url.searchParams.get("sslmode");
+  if (!sslmode || sslmode === "no-verify") return dsn;
+  url.searchParams.set("uselibpqcompat", "true");
+  return url.toString();
+}
+
 export class PgPoolExecutor implements Executor {
   private readonly pool: pg.Pool;
 
   constructor(opts: PgPoolExecutorOptions) {
     this.pool = new pg.Pool({
-      connectionString: opts.databaseUrl,
+      connectionString: libpqCompatDsn(opts.databaseUrl),
       max: opts.max ?? 10,
     });
   }
