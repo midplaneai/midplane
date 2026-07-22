@@ -18,7 +18,7 @@ const NO_FACTS: ConnectFacts = {
   grantedDatabases: 0,
   urlTokenUsed: false,
   firstQuery: null,
-  queryCount: 0,
+  hasSecondQuery: false,
   lastQueryAt: null,
 };
 
@@ -95,7 +95,6 @@ describe("deriveConnectStatus", () => {
     expect(deriveConnectStatus(NO_FACTS)).toEqual({
       phase: "waiting",
       grantedDatabases: 0,
-      queryCount: 0,
       firstQuery: null,
       lastQuery: null,
     });
@@ -111,7 +110,6 @@ describe("deriveConnectStatus", () => {
     ).toEqual({
       phase: "connected",
       grantedDatabases: 2,
-      queryCount: 0,
       firstQuery: null,
       lastQuery: null,
     });
@@ -129,7 +127,6 @@ describe("deriveConnectStatus", () => {
     ).toEqual({
       phase: "connected_no_databases",
       grantedDatabases: 0,
-      queryCount: 0,
       firstQuery: null,
       lastQuery: null,
     });
@@ -163,7 +160,7 @@ describe("deriveConnectStatus", () => {
     expect(status.firstQuery).toBeNull();
   });
 
-  it("first_query carries the decision at exactly one query (allow and deny both)", () => {
+  it("first_query carries the decision when no second query exists (allow and deny both)", () => {
     const at = new Date("2026-07-17T10:00:00Z");
     for (const decision of ["allow", "deny"] as const) {
       const status = deriveConnectStatus({
@@ -171,13 +168,12 @@ describe("deriveConnectStatus", () => {
         oauthAgentPresent: true,
         grantedDatabases: 1,
         firstQuery: { decision, at },
-        queryCount: 1,
+        hasSecondQuery: false,
         lastQueryAt: at,
       });
       expect(status).toEqual({
         phase: "first_query",
         grantedDatabases: 1,
-        queryCount: 1,
         firstQuery: { decision, at },
         lastQuery: { at },
       });
@@ -192,23 +188,22 @@ describe("deriveConnectStatus", () => {
       oauthAgentPresent: true,
       grantedDatabases: 1,
       firstQuery: { decision: "allow", at: first },
-      queryCount: 4,
+      hasSecondQuery: true,
       lastQueryAt: last,
     });
     expect(status).toEqual({
       phase: "active",
       grantedDatabases: 1,
-      queryCount: 4,
       firstQuery: { decision: "allow", at: first },
       lastQuery: { at: last },
     });
   });
 
-  it("multiple queries but the first still undecided stays connected (decision leads)", () => {
+  it("a second query but the first still undecided stays connected (decision leads)", () => {
     const status = deriveConnectStatus({
       ...NO_FACTS,
       firstQuery: { decision: null, at: new Date("2026-07-17T10:00:00Z") },
-      queryCount: 3,
+      hasSecondQuery: true,
       lastQueryAt: new Date("2026-07-17T10:02:00Z"),
     });
     expect(status.phase).toBe("connected");
@@ -291,21 +286,18 @@ describe("serializeConnectStatus", () => {
       serializeConnectStatus({
         phase: "active",
         grantedDatabases: 1,
-        queryCount: 3,
         firstQuery: { decision: "deny", at },
         lastQuery: { at: last },
       }),
     ).toEqual({
       phase: "active",
       grantedDatabases: 1,
-      queryCount: 3,
       firstQuery: { decision: "deny", at: "2026-07-17T10:00:00.000Z" },
       lastQuery: { at: "2026-07-17T10:05:00.000Z" },
     });
     const waiting = serializeConnectStatus({
       phase: "waiting",
       grantedDatabases: 0,
-      queryCount: 0,
       firstQuery: null,
       lastQuery: null,
     });

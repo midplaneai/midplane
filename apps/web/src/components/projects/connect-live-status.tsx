@@ -9,12 +9,11 @@ import { formatRelative } from "@/lib/format";
 // Live confirmation strip for the project Connect pane (support-channels-
 // onboarding Day 2): "waiting for your agent…" → "agent connected" → the
 // decision-aware first-query confirmation → a live steady-state ("agent
-// connected · N queries · last query …"). Polls /api/projects/[id]/connect-
-// status (the freshness-provider pattern: pause while the tab is hidden or a
-// dialog is open, abort in-flight on unmount), fast while the user is wiring
-// their agent then decayed. It never freezes: the steady-state keeps polling
-// so the "last query" clock stays live instead of pinning to the first query
-// forever.
+// connected · last query …"). Polls /api/projects/[id]/connect-status (the
+// freshness-provider pattern: pause while the tab is hidden or a dialog is
+// open, abort in-flight on unmount), fast while the user is wiring their agent
+// then decayed. It never freezes: the steady-state keeps polling so the "last
+// query" clock stays live instead of pinning to the first query forever.
 //
 // Expected latency, by design: connect confirmation within one poll (~5s,
 // direct DB write at consent); first-query confirmation worst case ~10s
@@ -36,7 +35,6 @@ type Phase =
 export interface ConnectLiveStatusPayload {
   phase: Phase;
   grantedDatabases: number;
-  queryCount: number;
   firstQuery: { decision: "allow" | "deny"; at: string } | null;
   lastQuery: { at: string } | null;
 }
@@ -203,19 +201,15 @@ interface StatusView {
 
 function resolveView(status: ConnectLiveStatusPayload, now: Date): StatusView {
   // Steady-state: the project has queried more than once. Leave the first-query
-  // milestone behind for a live "connected · N queries · last query …" line
-  // that keeps ticking — never the frozen first-query banner.
+  // milestone behind for a live "connected · last query …" line that keeps
+  // ticking — never the frozen first-query banner.
   if (status.phase === "active" && status.lastQuery) {
-    const n = status.queryCount;
     return {
       dotClass: "text-[hsl(var(--allow))]",
       pulse: false,
       srLabel: "agent connected and querying",
       headline: "Agent connected",
-      sub: `${n} ${n === 1 ? "query" : "queries"} · last query ${formatRelative(
-        new Date(status.lastQuery.at),
-        now,
-      )}.`,
+      sub: `Last query ${formatRelative(new Date(status.lastQuery.at), now)}.`,
       auditLabel: "View the audit log",
     };
   }

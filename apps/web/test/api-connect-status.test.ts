@@ -65,7 +65,6 @@ describe("GET /api/projects/[id]/connect-status", () => {
     getConnectStatus.mockResolvedValue({
       phase: "active",
       grantedDatabases: 1,
-      queryCount: 3,
       firstQuery: {
         decision: "deny",
         at: new Date("2026-07-17T10:00:00Z"),
@@ -79,7 +78,6 @@ describe("GET /api/projects/[id]/connect-status", () => {
     await expect(res.json()).resolves.toEqual({
       phase: "active",
       grantedDatabases: 1,
-      queryCount: 3,
       firstQuery: { decision: "deny", at: "2026-07-17T10:00:00.000Z" },
       lastQuery: { at: "2026-07-17T10:05:00.000Z" },
     });
