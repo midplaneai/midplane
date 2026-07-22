@@ -232,7 +232,19 @@ export async function createProject(
   // unusable row burning a plan token slot. When false, `defaultTokenPlaintext`
   // is null and no token slot is consumed.
   mintDefaultToken: boolean = true,
-): Promise<{ id: string; defaultTokenPlaintext: string | null }> {
+  // Marks the project as the hosted read-only sample (the "Try the sample
+  // database" flow). A sample is badged in the UI and does NOT count against
+  // the plan's project cap: the locked cap check below is skipped when true,
+  // and the row is inserted (or the reused empty project updated) with
+  // is_sample = true so every usage count can exclude it.
+  isSample: boolean = false,
+): Promise<{
+  id: string;
+  defaultTokenPlaintext: string | null;
+  /** False only when an existing sample was reused instead of creating a new
+   *  project (the one-sample-per-customer short-circuit); true otherwise. */
+  created: boolean;
+}> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
     kms,
@@ -295,18 +307,50 @@ export async function createProject(
   // (the auto-seeded "Default") or, failing that, a newly inserted one.
   // Assigned inside the txn below.
   let resolvedProjectId = id;
-  const defaultTokenPlaintext = await db.transaction(async (tx) => {
+  // `created` is false only when an existing sample short-circuits the insert
+  // (see the one-sample-per-customer guard) — the caller uses it to skip
+  // double-firing the create/added analytics for a reused sample.
+  const { created, tokenPlaintext: defaultTokenPlaintext } =
+    await db.transaction(async (tx) => {
     // Plan caps (decisions D4/D8). Lock the customers row first so concurrent
     // creates for this org serialize and the counts can't drift before the
     // inserts. Infinity caps (Team) short-circuit each check — we never scan
     // an unlimited customer's project/token set.
-    if (Number.isFinite(caps.projects) || Number.isFinite(caps.tokens)) {
+    if (
+      Number.isFinite(caps.projects) ||
+      Number.isFinite(caps.tokens) ||
+      // Samples skip the cap checks below, but still need the lock so the
+      // one-sample-per-customer re-check that follows is race-safe.
+      isSample
+    ) {
       await tx
         .select({ id: customers.id })
         .from(customers)
         .where(eq(customers.id, customer.id))
         .for("update")
         .limit(1);
+    }
+    // One hosted sample per customer, enforced UNDER the lock: concurrent
+    // "Try the sample database" clicks serialize on the customers row above, so
+    // the second request sees the first's committed sample here and converges
+    // on it instead of inserting a duplicate. Returns the existing sample
+    // untouched — no second database or token. (A pre-transaction check would
+    // be a check-then-act race; this is the authoritative guard.)
+    if (isSample) {
+      const existingSample = await tx
+        .select({ id: projects.id })
+        .from(projects)
+        .where(
+          and(
+            eq(projects.customerId, customer.id),
+            eq(projects.isSample, true),
+          ),
+        )
+        .limit(1);
+      if (existingSample[0]) {
+        resolvedProjectId = existingSample[0].id;
+        return { created: false, tokenPlaintext: null };
+      }
     }
     // Reuse the customer's empty (database-less) project if one exists — the
     // auto-seeded "Default" (ensureDefaultProject), or any project with no
@@ -329,21 +373,34 @@ export async function createProject(
       resolvedProjectId = emptyProject[0].id;
       // Label the reused project with the first database's alias when it's
       // still unnamed or the auto-seed placeholder "Default" — a one-DB
-      // project reads coherently and stays renamable later.
-      if (
-        emptyProject[0].name === null ||
-        emptyProject[0].name === "Default"
-      ) {
+      // project reads coherently and stays renamable later. Also mark it as
+      // the sample when this is the sample flow, so a reused Default (the
+      // common first-run case) is badged + cap-excluded, not just a freshly
+      // inserted row.
+      const relabel =
+        emptyProject[0].name === null || emptyProject[0].name === "Default";
+      if (relabel || isSample) {
         await tx
           .update(projects)
-          .set({ name: dbAlias })
+          .set({
+            ...(relabel ? { name: dbAlias } : {}),
+            ...(isSample ? { isSample: true } : {}),
+          })
           .where(eq(projects.id, resolvedProjectId));
       }
-    } else if (Number.isFinite(caps.projects)) {
+    } else if (!isSample && Number.isFinite(caps.projects)) {
+      // Samples don't consume a project slot, so skip the cap check entirely
+      // for them; for a real project, count only non-sample projects against
+      // the cap.
       const existing = await tx
         .select({ id: projects.id })
         .from(projects)
-        .where(eq(projects.customerId, customer.id));
+        .where(
+          and(
+            eq(projects.customerId, customer.id),
+            eq(projects.isSample, false),
+          ),
+        );
       if (existing.length >= caps.projects) {
         throw new PlanLimitError("projects", caps.projects, plan);
       }
@@ -363,6 +420,7 @@ export async function createProject(
         customerId: customer.id,
         region: customer.region,
         name: dbAlias,
+        isSample,
       });
     }
     await tx.insert(projectDatabases).values({
@@ -376,7 +434,8 @@ export async function createProject(
     // OAuth-first (web) flow: no auto-minted token — the user connects an agent
     // over OAuth, or mints a machine token explicitly later. (mintMaterial is
     // non-null whenever mintDefaultToken is true; the guard carries both.)
-    if (!mintDefaultToken || !mintMaterial) return null;
+    if (!mintDefaultToken || !mintMaterial)
+      return { created: true, tokenPlaintext: null };
     // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
     // race). This is the project's FIRST token — an empty (reused or new)
     // project has none, so the "default" name can't collide; ownership is
@@ -393,13 +452,14 @@ export async function createProject(
       },
       mintMaterial,
     );
-    return minted.plaintext;
+    return { created: true, tokenPlaintext: minted.plaintext };
   });
 
   // Best-effort TOKEN_CREATED audit, post-commit (matches createToken's
   // fail-soft posture — an audit hiccup must not undo the durable mint).
-  // Only when we actually minted a default token.
-  if (mintDefaultToken) {
+  // Only when we actually minted a default token (never on a reused-sample
+  // short-circuit, which mints nothing).
+  if (created && mintDefaultToken) {
     try {
       await emitTokenAuditRow(customer, {
         projectId: resolvedProjectId,
@@ -418,7 +478,7 @@ export async function createProject(
     }
   }
 
-  return { id: resolvedProjectId, defaultTokenPlaintext };
+  return { id: resolvedProjectId, defaultTokenPlaintext, created };
 }
 
 // Idempotently seed an empty "Default" project for a customer at onboarding so a
@@ -496,7 +556,15 @@ export async function getPlanUsage(
     db
       .select({ count: sql<number>`count(*)::int` })
       .from(projects)
-      .where(eq(projects.customerId, customer.id)),
+      // Samples don't consume the project cap, so they're excluded from the
+      // usage count that gates the create form (projectAddBlock) and the
+      // "N of M" display — mirrors the locked check in createProject.
+      .where(
+        and(
+          eq(projects.customerId, customer.id),
+          eq(projects.isSample, false),
+        ),
+      ),
     countUsableTokens(db, customer.id),
   ]);
   return { projects: Number(connRows[0]?.count ?? 0), tokens };
@@ -545,6 +613,9 @@ export interface ProjectSwitcherRow {
    *  broken) — the switcher is a fleet of headline dots, so it renders
    *  Axis 1, never audit-drain health (see lib/freshness.ts). */
   serving: ServingState;
+  /** Hosted read-only sample project — badged in the switcher and excluded
+   *  from the header's project-quota line. */
+  isSample: boolean;
 }
 
 /** The customer's projects with the light facts the rail-header switcher
@@ -561,6 +632,7 @@ export async function listProjectSwitcherRows(
       id: projects.id,
       name: projects.name,
       pausedAt: projects.pausedAt,
+      isSample: projects.isSample,
       databaseCount: sql<number>`count(${projectDatabases.id})::int`,
     })
     .from(projects)
@@ -577,6 +649,7 @@ export async function listProjectSwitcherRows(
       pausedAt: r.pausedAt,
       databaseCount: Number(r.databaseCount ?? 0),
     }).state,
+    isSample: r.isSample,
   }));
 }
 

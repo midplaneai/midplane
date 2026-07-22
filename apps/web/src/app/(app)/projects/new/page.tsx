@@ -7,6 +7,7 @@ import {
   NewProjectForm,
   type NewProjectFormState,
 } from "@/components/projects/new-project-form";
+import { SampleProjectButton } from "@/components/projects/sample-project-button";
 import Link from "next/link";
 
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
@@ -112,7 +113,7 @@ export default async function NewProject() {
                 </>
               }
               action={
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-center gap-3">
                   <Link href={UPGRADE_URL}>
                     <Button size="sm">Upgrade your plan</Button>
                   </Link>
@@ -121,18 +122,35 @@ export default async function NewProject() {
                       Back to projects
                     </Button>
                   </Link>
+                  {/* The sample skips the project cap, so it stays reachable at
+                      the limit — otherwise a capped user with no reusable empty
+                      project hits a pure upgrade wall with no way to try it. */}
+                  {process.env.MIDPLANE_SAMPLE_DSN ? (
+                    <SampleProjectButton entry="new_cap" />
+                  ) : null}
                 </div>
               }
             />
           ) : (
-            <NewProjectForm
-              action={createAction}
-              // Hosted read-only demo dataset (support-onboarding Day 2, item
-              // 8) — the escape hatch for evaluators without a reachable
-              // Postgres. Unset (self-host, or not yet provisioned) hides the
-              // affordance. Provisioning lives in scripts/sample-db/.
-              sampleDsn={process.env.MIDPLANE_SAMPLE_DSN ?? null}
-            />
+            <>
+              <NewProjectForm action={createAction} />
+              {/* Escape hatch for evaluators without a reachable Postgres: the
+                  hosted read-only demo dataset (provisioning in
+                  scripts/sample-db/). One click creates the project
+                  server-side — the DSN never reaches the browser. Unset
+                  (self-host, or not yet provisioned) hides the affordance. */}
+              {process.env.MIDPLANE_SAMPLE_DSN ? (
+                <div className="mt-6 border-t border-dashed border-border pt-6 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    No Postgres handy? Try Midplane against a hosted read-only
+                    demo dataset — customers, subscriptions, invoices.
+                  </p>
+                  <div className="mt-3 flex justify-center">
+                    <SampleProjectButton entry="new_form" />
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
         </div>
       </PageContainer>

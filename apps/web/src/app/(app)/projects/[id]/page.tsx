@@ -13,6 +13,7 @@ import { mcpGenericUrl } from "@midplane-cloud/router";
 import { fetchColumnTypes } from "@/lib/scan-pii-columns";
 
 import { ProjectRail } from "@/components/projects/project-rail";
+import { SampleProjectButton } from "@/components/projects/sample-project-button";
 import { ConnectLiveStatus } from "@/components/projects/connect-live-status";
 import { OAuthConnectGuide } from "@/components/projects/oauth-connect-guide";
 import {
@@ -186,9 +187,17 @@ export default async function ProjectWorkspace({
             title="Add your first database"
             description="Paste a Postgres connection string to connect your agent to your data. We encrypt it at rest and mint your agent's access token."
             action={
-              <Link href="/projects/new">
-                <Button size="sm">Add a database</Button>
-              </Link>
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <Link href="/projects/new">
+                  <Button size="sm">Add a database</Button>
+                </Link>
+                {/* Owner/admin only, and only when the hosted sample is
+                    configured. One click creates a sample project server-side
+                    (the DSN never reaches the browser). */}
+                {canManage && process.env.MIDPLANE_SAMPLE_DSN ? (
+                  <SampleProjectButton entry="project_empty" />
+                ) : null}
+              </div>
             }
           />
         </PageContainer>
@@ -1092,11 +1101,15 @@ export default async function ProjectWorkspace({
   // createProject attaches the first database to it without consuming a
   // slot, so "New project" still succeeds (mirrors /projects/new and the
   // dashboard list).
+  // Samples are off the project cap (createProject / getPlanUsage exclude
+  // them), so the switcher's quota line and its at-cap gate count only real
+  // projects — the sample row still lists, just not against the limit.
+  const billableProjects = switcherRows.filter((r) => !r.isSample).length;
   const atProjectCap =
-    projectAddBlock({ projects: switcherRows.length }, caps) !== null &&
+    projectAddBlock({ projects: billableProjects }, caps) !== null &&
     !reusableEmpty;
   const projectQuotaLine = Number.isFinite(caps.projects)
-    ? `${plan} plan · ${switcherRows.length}/${caps.projects} projects`
+    ? `${plan} plan · ${billableProjects}/${caps.projects} projects`
     : null;
 
   const railHeader = (

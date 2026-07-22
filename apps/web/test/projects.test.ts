@@ -641,6 +641,75 @@ describe("createProject plan caps", () => {
   });
 });
 
+describe("createProject one sample per customer", () => {
+  const DSN = "postgres://u:p@host:5432/sample";
+  const ACTOR = "user_clerk-actor";
+
+  beforeEach(() => {
+    process.env.MIDPLANE_KMS_MODE = "env";
+  });
+
+  it("reuses an existing sample under the row lock instead of creating a duplicate", async () => {
+    const { createProject } = await import("../src/lib/projects.ts");
+    const { CAPS } = await import("../src/lib/plan.ts");
+    const { projects: projectsTable, projectDatabases } = await import(
+      "@midplane-cloud/db"
+    );
+    // Team caps are unlimited (Infinity/Infinity), so the customers-row lock is
+    // taken here ONLY because isSample=true — that lock is what serializes
+    // concurrent "Try the sample" clicks, making this re-check authoritative
+    // rather than a check-then-act race.
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE (isSample forces it)
+    handle.queueSelect([{ id: "existing-sample" }]); // one-sample re-check → FOUND
+    const result = await createProject(
+      customer,
+      DSN,
+      null,
+      "read",
+      ACTOR,
+      { plan: "team", caps: CAPS.team },
+      false, // mintDefaultToken
+      true, // isSample
+    );
+    // Converges on the existing sample; nothing new is written.
+    expect(result.id).toBe("existing-sample");
+    expect(result.created).toBe(false);
+    const inserts = handle.calls.filter((c) => c.op === "insert");
+    expect(
+      inserts.some((c) => c.table === projectsTable),
+      "no duplicate sample project inserted",
+    ).toBe(false);
+    expect(inserts.some((c) => c.table === projectDatabases)).toBe(false);
+  });
+
+  it("creates and marks the sample (is_sample) when the customer has none yet", async () => {
+    const { createProject } = await import("../src/lib/projects.ts");
+    const { CAPS } = await import("../src/lib/plan.ts");
+    const { projects: projectsTable, projectDatabases } = await import(
+      "@midplane-cloud/db"
+    );
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([]); // one-sample re-check → none
+    handle.queueSelect([]); // empty-project detection → none → insert new
+    const result = await createProject(
+      customer,
+      DSN,
+      null,
+      "read",
+      ACTOR,
+      { plan: "team", caps: CAPS.team },
+      false,
+      true,
+    );
+    expect(result.created).toBe(true);
+    const inserts = handle.calls.filter((c) => c.op === "insert");
+    const projectInsert = inserts.find((c) => c.table === projectsTable);
+    expect(projectInsert, "sample project inserted").toBeTruthy();
+    expect(projectInsert?.set).toMatchObject({ isSample: true });
+    expect(inserts.some((c) => c.table === projectDatabases)).toBe(true);
+  });
+});
+
 describe("ensureDefaultProject", () => {
   it("seeds one empty project (no DB, no token) and is idempotent", async () => {
     const { ensureDefaultProject } = await import("../src/lib/projects.ts");
@@ -2549,12 +2618,14 @@ describe("listProjectSwitcherRows", () => {
         id: "01HSWITCHNAMEDXXXXXXXXXXXX",
         name: "prod",
         pausedAt: null,
+        isSample: false,
         databaseCount: 2,
       },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         name: null, // never named → stable 12-char id prefix (projectLabel parity)
         pausedAt: null,
+        isSample: true, // hosted sample → flows through to the switcher badge
         databaseCount: 1,
       },
     ]);
@@ -2563,11 +2634,17 @@ describe("listProjectSwitcherRows", () => {
     const rows = await listProjectSwitcherRows(customer);
 
     expect(rows).toEqual([
-      { id: "01HSWITCHNAMEDXXXXXXXXXXXX", label: "prod", serving: "ready" },
+      {
+        id: "01HSWITCHNAMEDXXXXXXXXXXXX",
+        label: "prod",
+        serving: "ready",
+        isSample: false,
+      },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         label: "01HSWITCHUNN",
         serving: "ready",
+        isSample: true,
       },
     ]);
   });

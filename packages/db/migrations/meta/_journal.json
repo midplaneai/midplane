@@ -29,6 +29,13 @@
       "when": 1782380477222,
       "tag": "0003_great_lucky_pierre",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784726897835,
+      "tag": "0004_zippy_bloodaxe",
+      "breakpoints": true
     }
   ]
 }
