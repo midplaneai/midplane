@@ -19,3 +19,22 @@
 // --format '{{.Manifest.Digest}}'`), update the two fly configs, run
 // scripts/check-image-pin.ts.
 export const OSS_ENGINE_IMAGE = "midplane/midplane:0.14.0";
+
+// GHCR mirror of the same engine artifact, published in lockstep by
+// engine-publish.yml (same build, two tags). When MIDPLANE_ENGINE_USE_GHCR=1
+// the FlyMachineSpawner rewrites the engine ref to this (via ghcrEngineRef) so
+// Fly machine creates pull straight from ghcr.io instead of through Fly's Docker
+// Hub pull-through mirror (docker-hub-mirror.fly.io). That mirror has run out of
+// disk and 500'd on manifest writes ("no space left on device"), which surfaces
+// as a 400 on machine-create and 502s the very first (cold) spawn of a project —
+// the sample-DB connect path. ghcr.io is pulled directly, so it sidesteps the
+// broken mirror entirely.
+//
+// This constant is the GHCR ref for the DEFAULT pin; the spawner preserves
+// whatever tag was actually staged. Derived from OSS_ENGINE_IMAGE's tag so the
+// two never drift: bump the version in one place. The GHCR org is `midplaneai`
+// (the GitHub org), NOT the Docker Hub org `midplane` — spawner-fly.ts's
+// normalizeImageRef treats both as the same engine so adoption/staleness don't
+// churn across the source switch.
+const ENGINE_VERSION = OSS_ENGINE_IMAGE.split("@")[0]!.split(":")[1]!;
+export const OSS_ENGINE_IMAGE_GHCR = `ghcr.io/midplaneai/midplane:${ENGINE_VERSION}`;
