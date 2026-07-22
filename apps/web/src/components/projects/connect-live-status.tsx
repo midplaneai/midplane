@@ -4,13 +4,16 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { StatusDot } from "@/components/dashboard/status-dot";
+import { formatRelative } from "@/lib/format";
 
 // Live confirmation strip for the project Connect pane (support-channels-
 // onboarding Day 2): "waiting for your agent…" → "agent connected" → the
-// decision-aware first-query state. Polls /api/projects/[id]/connect-status
-// every few seconds (the freshness-provider pattern: pause while the tab is
-// hidden or a dialog is open, abort in-flight on unmount) and stops once the
-// terminal first-query state lands — after that the strip is static.
+// decision-aware first-query confirmation → a live steady-state ("agent
+// connected · last query …"). Polls /api/projects/[id]/connect-status (the
+// freshness-provider pattern: pause while the tab is hidden or a dialog is
+// open, abort in-flight on unmount), fast while the user is wiring their agent
+// then decayed. It never freezes: the steady-state keeps polling so the "last
+// query" clock stays live instead of pinning to the first query forever.
 //
 // Expected latency, by design: connect confirmation within one poll (~5s,
 // direct DB write at consent); first-query confirmation worst case ~10s
@@ -26,12 +29,14 @@ type Phase =
   | "waiting"
   | "connected"
   | "connected_no_databases"
-  | "first_query";
+  | "first_query"
+  | "active";
 
 export interface ConnectLiveStatusPayload {
   phase: Phase;
   grantedDatabases: number;
   firstQuery: { decision: "allow" | "deny"; at: string } | null;
+  lastQuery: { at: string } | null;
 }
 
 // Eager while the user is actively wiring their agent (the design doc's ~5s
@@ -55,13 +60,14 @@ export function ConnectLiveStatus({
   auditHref: string | null;
 }) {
   const [status, setStatus] = useState<ConnectLiveStatusPayload>(initial);
+  // Ticking clock for the steady-state "last query …" label, so the relative
+  // time advances between polls, not only when a fresh payload lands.
+  const [now, setNow] = useState(() => new Date());
   const inFlightRef = useRef<AbortController | null>(null);
   // Server-requested backoff (429 retry-after). One-shot: consumed by the
   // next scheduling decision, so the limiter actually sheds load instead of
   // every capped tab re-polling at full cadence forever.
   const retryAfterMsRef = useRef<number | null>(null);
-
-  const terminal = status.phase === "first_query";
 
   const poll = useCallback(async () => {
     if (typeof document !== "undefined" && document.hidden) return;
@@ -104,7 +110,6 @@ export function ConnectLiveStatus({
   }, [projectId]);
 
   useEffect(() => {
-    if (terminal) return; // first_query is final — nothing left to poll for
     let cancelled = false;
     let timer = 0;
     const mountedAt = Date.now();
@@ -130,9 +135,17 @@ export function ConnectLiveStatus({
       document.removeEventListener("visibilitychange", onVisibility);
       inFlightRef.current?.abort();
     };
-  }, [poll, terminal]);
+  }, [poll]);
 
-  const view = resolveView(status);
+  // Advance the relative-time clock every 30s, independent of polling (which
+  // decays to 15s and pauses when the tab is hidden). Cheap setState; the
+  // browser throttles the timer while the tab is hidden anyway.
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const view = resolveView(status, now);
 
   return (
     <section className="border border-border bg-card px-4 py-3">
@@ -149,7 +162,16 @@ export function ConnectLiveStatus({
         <div className="min-w-0 space-y-1">
           <p className="text-sm text-foreground">{view.headline}</p>
           {view.sub ? (
-            <p className="text-xs text-muted-foreground">{view.sub}</p>
+            // suppressHydrationWarning: the steady-state sub carries a relative
+            // "last query …" time whose server-render value can differ from the
+            // client's by the time hydration runs — a cosmetic minute-boundary
+            // delta the ticking clock corrects on the next frame.
+            <p
+              className="text-xs text-muted-foreground"
+              suppressHydrationWarning
+            >
+              {view.sub}
+            </p>
           ) : null}
           {view.auditLabel && auditHref ? (
             <p className="text-xs">
@@ -177,7 +199,20 @@ interface StatusView {
   auditLabel: string | null;
 }
 
-function resolveView(status: ConnectLiveStatusPayload): StatusView {
+function resolveView(status: ConnectLiveStatusPayload, now: Date): StatusView {
+  // Steady-state: the project has queried more than once. Leave the first-query
+  // milestone behind for a live "connected · last query …" line that keeps
+  // ticking — never the frozen first-query banner.
+  if (status.phase === "active" && status.lastQuery) {
+    return {
+      dotClass: "text-[hsl(var(--allow))]",
+      pulse: false,
+      srLabel: "agent connected and querying",
+      headline: "Agent connected",
+      sub: `Last query ${formatRelative(new Date(status.lastQuery.at), now)}.`,
+      auditLabel: "View the audit log",
+    };
+  }
   if (status.phase === "first_query" && status.firstQuery) {
     if (status.firstQuery.decision === "deny") {
       return {

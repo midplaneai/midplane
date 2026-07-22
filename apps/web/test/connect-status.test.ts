@@ -18,6 +18,8 @@ const NO_FACTS: ConnectFacts = {
   grantedDatabases: 0,
   urlTokenUsed: false,
   firstQuery: null,
+  hasSecondQuery: false,
+  lastQueryAt: null,
 };
 
 describe("classifyFirstQueryDecision", () => {
@@ -94,6 +96,7 @@ describe("deriveConnectStatus", () => {
       phase: "waiting",
       grantedDatabases: 0,
       firstQuery: null,
+      lastQuery: null,
     });
   });
 
@@ -104,7 +107,12 @@ describe("deriveConnectStatus", () => {
         oauthAgentPresent: true,
         grantedDatabases: 2,
       }),
-    ).toEqual({ phase: "connected", grantedDatabases: 2, firstQuery: null });
+    ).toEqual({
+      phase: "connected",
+      grantedDatabases: 2,
+      firstQuery: null,
+      lastQuery: null,
+    });
   });
 
   it("connected when a machine token has been used (no OAuth grant needed)", () => {
@@ -120,6 +128,7 @@ describe("deriveConnectStatus", () => {
       phase: "connected_no_databases",
       grantedDatabases: 0,
       firstQuery: null,
+      lastQuery: null,
     });
   });
 
@@ -151,7 +160,7 @@ describe("deriveConnectStatus", () => {
     expect(status.firstQuery).toBeNull();
   });
 
-  it("terminal first_query carries the decision (allow and deny both)", () => {
+  it("first_query carries the decision when no second query exists (allow and deny both)", () => {
     const at = new Date("2026-07-17T10:00:00Z");
     for (const decision of ["allow", "deny"] as const) {
       const status = deriveConnectStatus({
@@ -159,13 +168,45 @@ describe("deriveConnectStatus", () => {
         oauthAgentPresent: true,
         grantedDatabases: 1,
         firstQuery: { decision, at },
+        hasSecondQuery: false,
+        lastQueryAt: at,
       });
       expect(status).toEqual({
         phase: "first_query",
         grantedDatabases: 1,
         firstQuery: { decision, at },
+        lastQuery: { at },
       });
     }
+  });
+
+  it("graduates to active once a second query lands (live steady-state, not the frozen milestone)", () => {
+    const first = new Date("2026-07-17T10:00:00Z");
+    const last = new Date("2026-07-17T10:05:00Z");
+    const status = deriveConnectStatus({
+      ...NO_FACTS,
+      oauthAgentPresent: true,
+      grantedDatabases: 1,
+      firstQuery: { decision: "allow", at: first },
+      hasSecondQuery: true,
+      lastQueryAt: last,
+    });
+    expect(status).toEqual({
+      phase: "active",
+      grantedDatabases: 1,
+      firstQuery: { decision: "allow", at: first },
+      lastQuery: { at: last },
+    });
+  });
+
+  it("a second query but the first still undecided stays connected (decision leads)", () => {
+    const status = deriveConnectStatus({
+      ...NO_FACTS,
+      firstQuery: { decision: null, at: new Date("2026-07-17T10:00:00Z") },
+      hasSecondQuery: true,
+      lastQueryAt: new Date("2026-07-17T10:02:00Z"),
+    });
+    expect(status.phase).toBe("connected");
   });
 });
 
@@ -238,25 +279,29 @@ describe("getConnectStatus", () => {
 });
 
 describe("serializeConnectStatus", () => {
-  it("dates go out as ISO strings; null firstQuery survives", () => {
+  it("dates go out as ISO strings; null firstQuery/lastQuery survive", () => {
     const at = new Date("2026-07-17T10:00:00Z");
+    const last = new Date("2026-07-17T10:05:00Z");
     expect(
       serializeConnectStatus({
-        phase: "first_query",
+        phase: "active",
         grantedDatabases: 1,
         firstQuery: { decision: "deny", at },
+        lastQuery: { at: last },
       }),
     ).toEqual({
-      phase: "first_query",
+      phase: "active",
       grantedDatabases: 1,
       firstQuery: { decision: "deny", at: "2026-07-17T10:00:00.000Z" },
+      lastQuery: { at: "2026-07-17T10:05:00.000Z" },
     });
-    expect(
-      serializeConnectStatus({
-        phase: "waiting",
-        grantedDatabases: 0,
-        firstQuery: null,
-      }).firstQuery,
-    ).toBeNull();
+    const waiting = serializeConnectStatus({
+      phase: "waiting",
+      grantedDatabases: 0,
+      firstQuery: null,
+      lastQuery: null,
+    });
+    expect(waiting.firstQuery).toBeNull();
+    expect(waiting.lastQuery).toBeNull();
   });
 });
