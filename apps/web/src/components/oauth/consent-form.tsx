@@ -176,6 +176,13 @@ export function ConsentForm({
   }
 
   const hasDbs = projects.length > 0;
+  // With databases on offer but none granted, approving is the degenerate path
+  // (the agent connects, then 403s on every query). Demote it visually — the
+  // filled primary style is reserved for approving an actual grant.
+  const zeroGrant = hasDbs && !mustPickProject && selectedCount === 0;
+
+  const eyebrow =
+    "font-mono text-[11.5px] lowercase tracking-[0.04em] text-subtle";
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -183,10 +190,7 @@ export function ConsentForm({
         <div className="w-full space-y-4 border border-border bg-card p-5">
           {projects.length > 1 ? (
             <div className="space-y-1.5">
-              <label
-                htmlFor="consent-project"
-                className="text-sm font-medium text-foreground"
-              >
+              <label htmlFor="consent-project" className={`block ${eyebrow}`}>
                 Project
               </label>
               <select
@@ -208,45 +212,40 @@ export function ConsentForm({
                 ))}
               </select>
               <p className="text-xs text-subtle">
-                This agent connects to one project. Pick it, then choose its
-                databases below.
+                One agent credential connects to one project.
               </p>
             </div>
           ) : (
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">Project</p>
-              <p className="text-sm text-muted-foreground">
-                Connecting to{" "}
-                <span className="font-medium text-foreground">
-                  {selectedProject?.projectName || selectedProject?.projectId}
-                </span>
-                . Choose its databases below.
-              </p>
+            <div className="flex items-baseline justify-between gap-3">
+              <span className={eyebrow}>Project</span>
+              <span className="font-mono text-sm text-foreground">
+                {selectedProject?.projectName || selectedProject?.projectId}
+              </span>
             </div>
           )}
 
           {selectedProject ? (
-            <>
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-foreground">
-                  Choose which databases this agent can use
-                </p>
-                <div className="flex gap-3 text-xs">
-                  <button
-                    type="button"
-                    className="text-muted-foreground underline-offset-2 hover:underline"
-                    onClick={() => setAll("read")}
-                  >
-                    All read
-                  </button>
-                  <button
-                    type="button"
-                    className="text-subtle underline-offset-2 hover:underline"
-                    onClick={() => setAll("none")}
-                  >
-                    Clear
-                  </button>
-                </div>
+            <div className="space-y-3 border-t border-border pt-4">
+              <div className="flex items-baseline justify-between">
+                <span className={eyebrow}>Database access</span>
+                {selectedDbs.length > 1 && (
+                  <div className="flex gap-3 text-xs">
+                    <button
+                      type="button"
+                      className="text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => setAll("read")}
+                    >
+                      All read
+                    </button>
+                    <button
+                      type="button"
+                      className="text-subtle underline-offset-2 hover:underline"
+                      onClick={() => setAll("none")}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -262,26 +261,38 @@ export function ConsentForm({
                       value={state[db.projectDatabaseId] ?? "none"}
                       disabled={pending}
                       onChange={(v) => setDb(db.projectDatabaseId, v)}
+                      label={db.name}
                     />
                   </div>
                 ))}
               </div>
-              <p className="text-xs text-subtle">
-                The agent can only reach the databases you select, at the access
-                you grant. Each database&apos;s own policy and guardrails still
-                apply on top.
-              </p>
-            </>
+              {selectedDbs.length === 0 ? (
+                <p className="text-xs text-subtle">
+                  This project has no databases yet — approve now and grant
+                  access later.
+                </p>
+              ) : selectedCount === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Nothing selected — the agent connects but can&apos;t query
+                  anything until you grant access.
+                </p>
+              ) : (
+                <p className="text-xs text-subtle">
+                  The agent reaches only the databases you select. Each
+                  database&apos;s own policy and guardrails still apply.
+                </p>
+              )}
+            </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Choose a project above to pick the databases this agent can use.
+              Choose a project to pick its databases.
             </p>
           )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          You don&apos;t have any databases yet. You can approve this agent now
-          and grant database access later from the dashboard.
+          No databases yet — you can approve this agent now and grant access
+          later from the dashboard.
         </p>
       )}
 
@@ -302,9 +313,10 @@ export function ConsentForm({
         </Button>
         <Button
           type="button"
+          variant={zeroGrant ? "outline" : "default"}
           disabled={pending || mustPickProject}
           onClick={() => decide(true)}
-          arrow
+          arrow={!zeroGrant}
         >
           {pending
             ? "Authorizing…"
@@ -312,7 +324,9 @@ export function ConsentForm({
               ? "Choose a project"
               : selectedCount > 0
                 ? `Allow access to ${selectedCount} database${selectedCount === 1 ? "" : "s"}`
-                : "Approve without database access"}
+                : hasDbs
+                  ? "Connect without database access"
+                  : "Connect agent"}
         </Button>
       </div>
     </div>
