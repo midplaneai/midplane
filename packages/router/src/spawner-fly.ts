@@ -32,6 +32,19 @@ export interface FlyMachineSpawnerOptions {
   regions: Record<Region, RegionConfig>;
   /** Default 60s — Fly cold start is slower than local Docker. */
   bootTimeoutMs?: number;
+  /** Pull the engine image from GHCR instead of Docker Hub, so machine creates
+   *  bypass Fly's Docker Hub pull-through mirror. Defaults to
+   *  MIDPLANE_ENGINE_USE_GHCR === "1". When on, this rewrites OUR engine ref —
+   *  whether the default pin or a staged `midplane/midplane:<tag>` — to
+   *  `ghcr.io/midplaneai/midplane` at the SAME tag. A genuinely custom `image` /
+   *  MIDPLANE_OSS_IMAGE (a fork, a local dev tag) is NOT our repo and is still
+   *  honored verbatim. */
+  useGhcr?: boolean;
+  /** How many times createMachine attempts the Fly create call before giving
+   *  up, when the failure looks transient (registry/mirror 5xx, "no space left
+   *  on device", network error). Default 3. A 409 (name taken) never retries —
+   *  it means adopt. */
+  createAttempts?: number;
   /** Shared bearer the audit indexer presents to the container's
    *  GET /audit/since endpoint. Injected as INDEXER_TOKEN env on the
    *  Fly machine so OSS can compare. Required in production (the audit
@@ -66,6 +79,7 @@ export class FlyMachineSpawner implements Spawner {
   private readonly indexerToken: string | undefined;
   private readonly regions: Record<Region, RegionConfig>;
   private readonly bootTimeoutMs: number;
+  private readonly createAttempts: number;
   private readonly fetchFn: typeof fetch;
 
   constructor(opts: FlyMachineSpawnerOptions) {
@@ -73,9 +87,23 @@ export class FlyMachineSpawner implements Spawner {
     this.token = opts.apiToken;
     this.indexerToken = opts.indexerToken;
     this.apiBase = opts.apiBase ?? "https://api.machines.dev";
-    this.image = opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? OSS_ENGINE_IMAGE;
+    // Image resolution. `explicit` is whatever the operator pinned (option or
+    // MIDPLANE_OSS_IMAGE), else the compiled OSS pin.
+    //
+    // The GHCR mirror-bypass toggle must win over MIDPLANE_OSS_IMAGE for OUR
+    // engine repo: prod ALWAYS stages MIDPLANE_OSS_IMAGE=midplane/midplane:<tag>
+    // (deploy-fly.yml), so if the explicit image took precedence,
+    // MIDPLANE_ENGINE_USE_GHCR=1 would be a dead letter in every normal rollout.
+    // When the toggle is on we rewrite any midplane/midplane (or already-GHCR)
+    // ref — default OR staged — to ghcr.io/midplaneai/midplane at the SAME tag.
+    // ghcrEngineRef returns null for a genuinely custom image, which we honor.
+    const useGhcr = opts.useGhcr ?? process.env.MIDPLANE_ENGINE_USE_GHCR === "1";
+    const explicit =
+      opts.image ?? process.env.MIDPLANE_OSS_IMAGE ?? OSS_ENGINE_IMAGE;
+    this.image = useGhcr ? (ghcrEngineRef(explicit) ?? explicit) : explicit;
     this.regions = opts.regions;
     this.bootTimeoutMs = opts.bootTimeoutMs ?? 60_000;
+    this.createAttempts = opts.createAttempts ?? 3;
     this.fetchFn = opts.fetch ?? fetch;
   }
 
@@ -289,7 +317,8 @@ export class FlyMachineSpawner implements Spawner {
     const policyYaml = serializeMultiDbPolicyToYaml(
       opts.databases.map(toDatabaseEntry),
     );
-    const res = await this.fetchFn(`${this.apiBase}/v1/apps/${app}/machines`, {
+    const url = `${this.apiBase}/v1/apps/${app}/machines`;
+    const init: RequestInit = {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -369,16 +398,47 @@ export class FlyMachineSpawner implements Spawner {
           },
         },
       }),
-    });
-    if (!res.ok) {
+    };
+
+    // Bounded retry for transient create failures. The failure that motivated
+    // this: Fly's Docker Hub pull-through mirror runs out of disk and returns a
+    // registry 500 ("no space left on device") wrapped as a 400 on create — a
+    // single blip that, unretried, 502s the whole spawn. Retry those and
+    // network errors; a 409 (name taken) is NOT an error (adopt), and a genuine
+    // config 400 (e.g. bad guest) is permanent, so neither is retried.
+    let lastDetail = "";
+    for (let attempt = 0; attempt < this.createAttempts; attempt++) {
+      let res: Response;
+      try {
+        res = await this.fetchFn(url, init);
+      } catch (err) {
+        // Network-level failure (DNS/connect/TLS) — transient by nature.
+        lastDetail = `network: ${String(err)}`;
+        if (attempt < this.createAttempts - 1) {
+          await sleep(createBackoffMs(attempt));
+          continue;
+        }
+        throw new Error(`fly machine create failed: ${lastDetail}`);
+      }
+      if (res.ok) return (await res.json()) as MachineCreateResponse;
       const text = await res.text();
       // Name collision: a machine for this project already exists (our
       // in-memory registry was lost to a redeploy, or another web instance
       // owns it). Signal the caller to adopt it rather than failing the spawn.
       if (res.status === 409 || text.includes("already_exists")) return null;
+      if (
+        isTransientCreateError(res.status, text) &&
+        attempt < this.createAttempts - 1
+      ) {
+        lastDetail = `${res.status} ${text}`;
+        await sleep(createBackoffMs(attempt));
+        continue;
+      }
       throw new Error(`fly machine create failed: ${res.status} ${text}`);
     }
-    return (await res.json()) as MachineCreateResponse;
+    // Unreachable: the loop returns or throws on the final attempt. Kept for
+    // the type-checker and as a defensive backstop.
+    throw new Error(`fly machine create failed: ${lastDetail}`);
   }
 
   private async waitForStarted(
@@ -499,16 +559,86 @@ export function sameImageRef(a: string, b: string): boolean {
   return normalizeImageRef(a) === normalizeImageRef(b);
 }
 
-function normalizeImageRef(ref: string): string {
-  let r = ref.split("@")[0]!; // drop digest
-  // Drop a registry-host prefix (contains "." or ":" before the first
-  // slash — `docker.io/`, `registry-1.docker.io/`, `localhost:5000/`).
+/** The two repos that host OUR engine artifact: Docker Hub (`midplane/midplane`,
+ *  the OSS pin) and GHCR (`midplaneai/midplane`, the mirror-bypass source).
+ *  engine-publish.yml pushes both from one build, so at a given tag they are
+ *  byte-identical. Treating them as one identity keeps adoption/staleness
+ *  stable when a project's machine was pulled from one source and the running
+ *  pin names the other — the exact mixed state during the GHCR rollout and its
+ *  bluegreen window. Without this, an equal-version cross-source pair reads as
+ *  "same version, different repo → recreate", so instances would ping-pong the
+ *  machine (kill live sessions) on every flip. */
+const ENGINE_REPO_ALIASES = new Set(["midplane/midplane", "midplaneai/midplane"]);
+const CANONICAL_ENGINE_REPO = "midplane/midplane";
+
+/** If `ref` points at our engine repo (Docker Hub `midplane/midplane` or the
+ *  GHCR mirror), return the GHCR ref at the SAME tag/digest so the pull bypasses
+ *  Fly's Docker Hub mirror. Returns null for anything else — a fork or a local
+ *  dev tag the operator chose deliberately, which must be honored verbatim.
+ *  This is what makes MIDPLANE_ENGINE_USE_GHCR win over the always-staged
+ *  MIDPLANE_OSS_IMAGE=midplane/midplane:<tag> in prod. Exported for tests. */
+export function ghcrEngineRef(ref: string): string | null {
+  // Strip a registry-host prefix (dot/colon before the first slash).
+  let r = ref;
   const firstSlash = r.indexOf("/");
   if (firstSlash > 0) {
     const head = r.slice(0, firstSlash);
     if (head.includes(".") || head.includes(":")) r = r.slice(firstSlash + 1);
   }
+  // Split the repo from its :tag or @digest suffix (whichever is present).
+  const at = r.indexOf("@");
+  const colon = r.lastIndexOf(":");
+  let repo: string;
+  let suffix: string;
+  if (at >= 0) {
+    repo = r.slice(0, at);
+    suffix = r.slice(at); // "@sha256:..."
+  } else if (colon > 0) {
+    repo = r.slice(0, colon);
+    suffix = r.slice(colon); // ":tag"
+  } else {
+    repo = r;
+    suffix = "";
+  }
+  if (!ENGINE_REPO_ALIASES.has(repo)) return null;
+  return `ghcr.io/midplaneai/midplane${suffix}`;
+}
+
+function normalizeImageRef(ref: string): string {
+  let r = ref.split("@")[0]!; // drop digest
+  // Drop a registry-host prefix (contains "." or ":" before the first
+  // slash — `docker.io/`, `ghcr.io/`, `registry-1.docker.io/`, `localhost:5000/`).
+  const firstSlash = r.indexOf("/");
+  if (firstSlash > 0) {
+    const head = r.slice(0, firstSlash);
+    if (head.includes(".") || head.includes(":")) r = r.slice(firstSlash + 1);
+  }
+  // Collapse the Docker Hub / GHCR engine repos to one identity (tag preserved).
+  // After host-stripping the only remaining colon separates repo:tag.
+  const colon = r.lastIndexOf(":");
+  const repo = colon > 0 ? r.slice(0, colon) : r;
+  if (ENGINE_REPO_ALIASES.has(repo)) {
+    return colon > 0
+      ? `${CANONICAL_ENGINE_REPO}:${r.slice(colon + 1)}`
+      : CANONICAL_ENGINE_REPO;
+  }
   return r;
+}
+
+/** True when a failed Fly machine-create looks transient (worth retrying)
+ *  rather than a permanent config error. The registry-out-of-disk case arrives
+ *  as a 400 whose body quotes an upstream registry 500, so we can't gate on
+ *  status alone — match the infra/registry markers in the body too. */
+export function isTransientCreateError(status: number, body: string): boolean {
+  if (status >= 500) return true;
+  return /no space left on device|internal server error|http 5\d\d|manifest|request failed|i\/o timeout|temporarily unavailable|too many requests|connection reset|deadline exceeded/i.test(
+    body,
+  );
+}
+
+/** Exponential backoff (500ms, 1s, 2s, …) between create attempts. */
+function createBackoffMs(attempt: number): number {
+  return 500 * 2 ** attempt;
 }
 
 /** ONE-DIRECTIONAL staleness: true only when `adopted` should be torn

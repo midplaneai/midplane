@@ -1,12 +1,73 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { OSS_ENGINE_IMAGE } from "../src/oss-image.ts";
-import { FlyMachineSpawner, imageIsStale, sameImageRef } from "../src/spawner-fly.ts";
+import { OSS_ENGINE_IMAGE, OSS_ENGINE_IMAGE_GHCR } from "../src/oss-image.ts";
+import {
+  FlyMachineSpawner,
+  ghcrEngineRef,
+  imageIsStale,
+  isTransientCreateError,
+  sameImageRef,
+} from "../src/spawner-fly.ts";
+
+const oneDb = [
+  {
+    name: "main",
+    projectDatabaseId: "01HXYZMAIN0000000000000000",
+    dsn: "postgres://x",
+    tableAccess: { default: "read" as const, tables: {} },
+    tenantScope: { column: null, overrides: {}, exempt: [] },
+    guardrails: { block_unqualified_dml: true, block_ddl: true },
+  },
+];
 
 const regions = {
   eu: { publicHost: "eu.midplane.ai", flyApp: "midplane-eu", flyRegion: "fra" },
   us: { publicHost: "us.midplane.ai", flyApp: "midplane-us", flyRegion: "iad" },
 };
+
+// Spawn once with the given spawner options and return the `config.image` that
+// was posted to Fly — the single fact the image-resolution tests care about.
+async function postedImageFor(
+  overrides: Partial<ConstructorParameters<typeof FlyMachineSpawner>[0]>,
+): Promise<string> {
+  const ip = "fdaa:0:1::9";
+  let postedImage = "";
+  const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/machines") && init?.method === "POST") {
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      postedImage = (body.config as Record<string, unknown>).image as string;
+      return new Response(
+        JSON.stringify({ id: "m", private_ip: ip, state: "starting" }),
+        { status: 200 },
+      );
+    }
+    if (url.endsWith("/machines/m")) {
+      return new Response(
+        JSON.stringify({ id: "m", state: "started", private_ip: ip }),
+        { status: 200 },
+      );
+    }
+    if (url === `http://[${ip}]:8080/health`) {
+      return new Response("ok", { status: 200 });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as unknown as typeof fetch;
+
+  const spawner = new FlyMachineSpawner({
+    apiToken: "fo-test",
+    regions,
+    bootTimeoutMs: 5000,
+    fetch: fetchFn,
+    ...overrides,
+  });
+  await spawner.spawn({
+    projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
+    region: "us",
+    databases: oneDb,
+  });
+  return postedImage;
+}
 
 describe("FlyMachineSpawner", () => {
   it("posts machine create to the regional app and waits for started", async () => {
@@ -415,6 +476,191 @@ describe("FlyMachineSpawner", () => {
       });
   });
 
+  it("pulls the GHCR image when useGhcr is set (bypasses Fly's Docker Hub mirror)", async () => {
+    // The whole point of the toggle: config.image must name the ghcr.io ref so
+    // Fly pulls it directly instead of through docker-hub-mirror.fly.io.
+    let postedImage = "";
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/machines") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        postedImage = (body.config as Record<string, unknown>).image as string;
+        return new Response(
+          JSON.stringify({ id: "mach-g", private_ip: "fdaa:0:1::9", state: "starting" }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/machines/mach-g")) {
+        return new Response(
+          JSON.stringify({ id: "mach-g", state: "started", private_ip: "fdaa:0:1::9" }),
+          { status: 200 },
+        );
+      }
+      if (url === "http://[fdaa:0:1::9]:8080/health") {
+        return new Response("ok", { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const spawner = new FlyMachineSpawner({
+      apiToken: "fo-test",
+      regions,
+      bootTimeoutMs: 5000,
+      useGhcr: true,
+      fetch: fetchFn,
+    });
+
+    await spawner.spawn({
+      projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      region: "us",
+      databases: oneDb,
+    });
+
+    expect(postedImage).toBe(OSS_ENGINE_IMAGE_GHCR);
+    expect(postedImage.startsWith("ghcr.io/")).toBe(true);
+  });
+
+  it("GHCR toggle wins over a staged MIDPLANE_OSS_IMAGE=midplane/midplane (deploy-fly path)", async () => {
+    // Regression: prod ALWAYS stages MIDPLANE_OSS_IMAGE=midplane/midplane:<tag>
+    // (deploy-fly.yml:189). The toggle must still rewrite that to GHCR, or the
+    // mirror bypass never takes effect in a normal rollout.
+    expect(
+      await postedImageFor({ image: "midplane/midplane:0.14.0", useGhcr: true }),
+    ).toBe("ghcr.io/midplaneai/midplane:0.14.0");
+  });
+
+  it("GHCR toggle preserves the staged tag (not the compiled pin)", async () => {
+    expect(
+      await postedImageFor({ image: "midplane/midplane:0.15.0", useGhcr: true }),
+    ).toBe("ghcr.io/midplaneai/midplane:0.15.0");
+  });
+
+  it("GHCR toggle honors a genuinely custom image verbatim", async () => {
+    // A fork / local dev tag is not our engine repo — respect the operator.
+    expect(
+      await postedImageFor({ image: "myfork/engine:dev", useGhcr: true }),
+    ).toBe("myfork/engine:dev");
+  });
+
+  it("without the toggle, a staged image is used as-is", async () => {
+    expect(
+      await postedImageFor({ image: "midplane/midplane:0.14.0" }),
+    ).toBe("midplane/midplane:0.14.0");
+  });
+
+  it("retries a transient create failure (registry mirror out of disk) then succeeds", async () => {
+    // Reproduces the reported 502: Fly's Docker Hub mirror returns a registry
+    // 500 ("no space left on device") wrapped as a 400 on create. A single
+    // blip must not fail the whole spawn — retry and the next attempt wins.
+    let createCalls = 0;
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/machines") && init?.method === "POST") {
+        createCalls += 1;
+        if (createCalls === 1) {
+          return new Response(
+            JSON.stringify({
+              error:
+                'failed to get manifest docker-hub-mirror.fly.io/midplane/midplane:0.14.0: request failed: unexpected http status code: Internal Server Error [http 500]: {"errors":[{"detail":"filesystem: mkdir /storage/docker/registry/...: no space left on device"}]}',
+            }),
+            { status: 400 },
+          );
+        }
+        return new Response(
+          JSON.stringify({ id: "mach-r", private_ip: "fdaa:0:2::2", state: "starting" }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/machines/mach-r")) {
+        return new Response(
+          JSON.stringify({ id: "mach-r", state: "started", private_ip: "fdaa:0:2::2" }),
+          { status: 200 },
+        );
+      }
+      if (url === "http://[fdaa:0:2::2]:8080/health") {
+        return new Response("ok", { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const spawner = new FlyMachineSpawner({
+      apiToken: "fo-test",
+      regions,
+      bootTimeoutMs: 5000,
+      fetch: fetchFn,
+    });
+
+    const c = await spawner.spawn({
+      projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
+      region: "us",
+      databases: oneDb,
+    });
+
+    expect(createCalls).toBe(2); // one failure + one retried success
+    expect(c.host).toBe("[fdaa:0:2::2]");
+  });
+
+  it("gives up after createAttempts transient failures and throws", async () => {
+    let createCalls = 0;
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/machines") && init?.method === "POST") {
+        createCalls += 1;
+        return new Response(
+          JSON.stringify({ error: "boom: no space left on device" }),
+          { status: 400 },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const spawner = new FlyMachineSpawner({
+      apiToken: "fo-test",
+      regions,
+      createAttempts: 2,
+      fetch: fetchFn,
+    });
+
+    await expect(
+      spawner.spawn({
+        projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        region: "us",
+        databases: oneDb,
+      }),
+    ).rejects.toThrow(/fly machine create failed/);
+    expect(createCalls).toBe(2);
+  });
+
+  it("does NOT retry a permanent config error (fails fast)", async () => {
+    let createCalls = 0;
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/machines") && init?.method === "POST") {
+        createCalls += 1;
+        return new Response(
+          JSON.stringify({ error: "invalid machine config: guest memory_mb too low" }),
+          { status: 400 },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const spawner = new FlyMachineSpawner({
+      apiToken: "fo-test",
+      regions,
+      fetch: fetchFn,
+    });
+
+    await expect(
+      spawner.spawn({
+        projectId: "01HXYZCONNABCDEFGHIJKLMNOP",
+        region: "us",
+        databases: oneDb,
+      }),
+    ).rejects.toThrow(/create failed: 400/);
+    expect(createCalls).toBe(1); // permanent → no retry
+  });
+
   it("throws if apiToken missing", () => {
     expect(
       () =>
@@ -460,6 +706,26 @@ describe("sameImageRef", () => {
   it("does not strip a plain org prefix (no dot/colon = not a registry host)", () => {
     expect(sameImageRef("midplane/midplane:0.9.0", "other/midplane:0.9.0")).toBe(false);
   });
+
+  it("treats the Docker Hub and GHCR engine repos as the same artifact", () => {
+    // engine-publish.yml pushes both from one build. During the GHCR rollout a
+    // machine pulled from Docker Hub and a pin naming GHCR must compare EQUAL,
+    // or adoption would recreate every machine on flag flip.
+    expect(
+      sameImageRef(OSS_ENGINE_IMAGE, OSS_ENGINE_IMAGE_GHCR),
+    ).toBe(true);
+    expect(
+      sameImageRef("midplane/midplane:0.14.0", "ghcr.io/midplaneai/midplane:0.14.0"),
+    ).toBe(true);
+    // Different tags across sources still differ.
+    expect(
+      sameImageRef("midplane/midplane:0.14.0", "ghcr.io/midplaneai/midplane:0.13.0"),
+    ).toBe(false);
+    // A foreign repo on GHCR is NOT our engine.
+    expect(
+      sameImageRef("ghcr.io/midplaneai/midplane:0.14.0", "other/midplane:0.14.0"),
+    ).toBe(false);
+  });
 });
 
 describe("imageIsStale", () => {
@@ -488,5 +754,81 @@ describe("imageIsStale", () => {
         "midplane/midplane:0.9.0",
       ),
     ).toBe(false);
+  });
+
+  it("same-version Docker Hub and GHCR refs are never stale to each other (no rollout churn)", () => {
+    // Neither direction recreates: a flag-flip during a bluegreen deploy leaves
+    // mixed instances (one pins Docker Hub, one pins GHCR) — if either read the
+    // other as stale they'd ping-pong the machine and kill live sessions.
+    expect(
+      imageIsStale("midplane/midplane:0.14.0", "ghcr.io/midplaneai/midplane:0.14.0"),
+    ).toBe(false);
+    expect(
+      imageIsStale("ghcr.io/midplaneai/midplane:0.14.0", "midplane/midplane:0.14.0"),
+    ).toBe(false);
+  });
+
+  it("still catches a genuinely older engine across sources", () => {
+    // The stale-engine security guard must survive the aliasing: an old
+    // Docker Hub machine vs a newer GHCR pin is still stale → recreate.
+    expect(
+      imageIsStale("midplane/midplane:0.8.0", "ghcr.io/midplaneai/midplane:0.14.0"),
+    ).toBe(true);
+  });
+});
+
+describe("isTransientCreateError", () => {
+  it("treats the registry-out-of-disk 400 as transient (the reported 502 cause)", () => {
+    expect(
+      isTransientCreateError(
+        400,
+        'failed to get manifest docker-hub-mirror.fly.io/midplane/midplane:0.14.0: request failed: unexpected http status code: Internal Server Error [http 500]: no space left on device',
+      ),
+    ).toBe(true);
+  });
+
+  it("treats any 5xx as transient regardless of body", () => {
+    expect(isTransientCreateError(500, "")).toBe(true);
+    expect(isTransientCreateError(503, "service unavailable")).toBe(true);
+  });
+
+  it("does not retry a permanent config 400", () => {
+    expect(
+      isTransientCreateError(400, "invalid machine config: guest memory_mb too low"),
+    ).toBe(false);
+  });
+});
+
+describe("ghcrEngineRef", () => {
+  it("rewrites the Docker Hub engine ref to GHCR at the same tag", () => {
+    expect(ghcrEngineRef("midplane/midplane:0.14.0")).toBe(
+      "ghcr.io/midplaneai/midplane:0.14.0",
+    );
+    expect(ghcrEngineRef("midplane/midplane:0.15.0")).toBe(
+      "ghcr.io/midplaneai/midplane:0.15.0",
+    );
+  });
+
+  it("strips a registry-host prefix before matching", () => {
+    expect(ghcrEngineRef("registry-1.docker.io/midplane/midplane:0.14.0")).toBe(
+      "ghcr.io/midplaneai/midplane:0.14.0",
+    );
+  });
+
+  it("is idempotent on an already-GHCR ref", () => {
+    expect(ghcrEngineRef("ghcr.io/midplaneai/midplane:0.14.0")).toBe(
+      "ghcr.io/midplaneai/midplane:0.14.0",
+    );
+  });
+
+  it("preserves a digest suffix", () => {
+    expect(ghcrEngineRef("midplane/midplane@sha256:abc")).toBe(
+      "ghcr.io/midplaneai/midplane@sha256:abc",
+    );
+  });
+
+  it("returns null for a non-engine image (honored verbatim)", () => {
+    expect(ghcrEngineRef("myfork/engine:dev")).toBeNull();
+    expect(ghcrEngineRef("other/midplane:0.14.0")).toBeNull();
   });
 });

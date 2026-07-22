@@ -71,6 +71,7 @@ primary_region = "fra"
 #   FLY_REGION_EU="fra"
 #   MIDPLANE_PUBLIC_HOST_EU               # e.g. "eu.midplane.ai"
 #   MIDPLANE_OSS_IMAGE                    # e.g. "midplane/midplane:0.14.0"
+#   MIDPLANE_ENGINE_USE_GHCR="1"          # pull engine from GHCR (bypass Fly's Docker Hub mirror); publish + make GHCR image Public first
 #   INDEXER_TOKEN                         # shared with regional containers
 #   MIDPLANE_STAFF_USER_IDS               # comma-separated user IDs (staff allowlist)
 

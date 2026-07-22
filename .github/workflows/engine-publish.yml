@@ -24,6 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Push the same image to GHCR (ghcr.io/midplaneai/midplane) alongside
+      # Docker Hub. The cloud FlyMachineSpawner pulls the GHCR tag when
+      # MIDPLANE_ENGINE_USE_GHCR=1 so machine creates bypass Fly's Docker Hub
+      # pull-through mirror (which has run out of disk and 500'd manifest
+      # writes). GHCR is pulled directly by Fly. One-time: the GHCR package
+      # must be set to Public so Fly can pull it without registry creds.
+      packages: write
     steps:
       - uses: actions/checkout@v5
 
@@ -35,6 +42,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract version
         id: version
@@ -69,3 +83,5 @@ jobs:
           tags: |
             midplane/midplane:${{ steps.version.outputs.tag }}
             midplane/midplane:latest
+            ghcr.io/midplaneai/midplane:${{ steps.version.outputs.tag }}
+            ghcr.io/midplaneai/midplane:latest
