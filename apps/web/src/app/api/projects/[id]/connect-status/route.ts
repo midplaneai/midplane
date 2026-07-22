@@ -1,13 +1,15 @@
 // GET /api/projects/:id/connect-status — the Connect pane's live-confirmation
 // poll (support-channels-onboarding Day 2). Returns the phase the pane
-// renders: waiting → connected (or connected_no_databases) → first_query
-// with its decision. See lib/connect-status.ts for the state machine.
+// renders: waiting → connected (or connected_no_databases) → first_query with
+// its decision → active (the live "N queries · last query …" steady-state).
+// See lib/connect-status.ts for the state machine.
 //
 // Auth: session via currentCustomer; ownership-checked against
 // projects.customer_id with the usual 404-on-foreign-row leakage shape.
 // Deliberately NO manager gate — the Connect pane is a member surface
 // (members connect their own agents) and the payload carries no secrets:
-// a phase enum, a grant count, and a first-query decision.
+// a phase enum, grant/query counts, a first-query decision, and a
+// last-query timestamp.
 //
 // Cache: no-store. The route exists to deliver fresher-than-page data;
 // an HTTP cache here would defeat the purpose.

@@ -13,10 +13,15 @@
 //                             403s and no query ever reaches the engine or the
 //                             audit index), so waiting for a query would spin
 //                             forever; the user must re-consent and grant one
-//   first_query             — terminal: the first query's decision landed in the
-//                             audit index. Decision-aware: a denied first query
-//                             is the product working, not a failure, and the UI
-//                             must not mislabel it "allowed".
+//   first_query             — the first query's decision landed in the audit
+//                             index (exactly one query so far). Decision-aware:
+//                             a denied first query is the product working, not a
+//                             failure, and the UI must not mislabel it "allowed".
+//   active                  — the project has queried more than once; the pane
+//                             leaves the first-query milestone behind for a live
+//                             steady-state (query count + last-query time) that
+//                             keeps polling instead of freezing on that one
+//                             confirmation forever.
 //
 // "Agent connected" reads the same facts the consent action writes (the
 // mcp_scope_grants rows + the kind='oauth' attribution row, now minted at
@@ -44,7 +49,8 @@ export type ConnectPhase =
   | "waiting"
   | "connected"
   | "connected_no_databases"
-  | "first_query";
+  | "first_query"
+  | "active";
 
 export type FirstQueryDecision = "allow" | "deny";
 
@@ -52,15 +58,23 @@ export interface ConnectStatus {
   phase: ConnectPhase;
   /** Distinct databases of this project granted to OAuth agents. */
   grantedDatabases: number;
-  /** Set only when phase === "first_query". */
+  /** Total queries this project has in the audit index (0 before any). Drives
+   *  the first_query → active graduation and the steady-state count. */
+  queryCount: number;
+  /** Set when phase === "first_query" or "active". */
   firstQuery: { decision: FirstQueryDecision; at: Date } | null;
+  /** Most recent query activity — the live "last query …" clock in the
+   *  steady state. Null before the first query. */
+  lastQuery: { at: Date } | null;
 }
 
 /** Wire shape for the poll route + the client component's initial prop. */
 export interface SerializedConnectStatus {
   phase: ConnectPhase;
   grantedDatabases: number;
+  queryCount: number;
   firstQuery: { decision: FirstQueryDecision; at: string } | null;
+  lastQuery: { at: string } | null;
 }
 
 export function serializeConnectStatus(
@@ -69,11 +83,15 @@ export function serializeConnectStatus(
   return {
     phase: status.phase,
     grantedDatabases: status.grantedDatabases,
+    queryCount: status.queryCount,
     firstQuery: status.firstQuery
       ? {
           decision: status.firstQuery.decision,
           at: status.firstQuery.at.toISOString(),
         }
+      : null,
+    lastQuery: status.lastQuery
+      ? { at: status.lastQuery.at.toISOString() }
       : null,
   };
 }
@@ -121,24 +139,47 @@ export interface ConnectFacts {
   /** Earliest decided query in the audit index for this project, with its
    *  decision (null decision = attempted but not yet decided/indexed). */
   firstQuery: { decision: FirstQueryDecision | null; at: Date } | null;
+  /** Total queries (distinct query_id) this project has in the audit index. */
+  queryCount: number;
+  /** Timestamp of the most recent query activity; null before the first. */
+  lastQueryAt: Date | null;
 }
 
 export function deriveConnectStatus(facts: ConnectFacts): ConnectStatus {
-  const { oauthAgentPresent, grantedDatabases, urlTokenUsed, firstQuery } =
-    facts;
-  // Terminal: the first query has a decision. Ordered first — a query in the
-  // audit index outranks every connection-side signal.
+  const {
+    oauthAgentPresent,
+    grantedDatabases,
+    urlTokenUsed,
+    firstQuery,
+    queryCount,
+    lastQueryAt,
+  } = facts;
+  const lastQuery = lastQueryAt ? { at: lastQueryAt } : null;
+
+  // A decided query exists. Ordered first — a query in the audit index outranks
+  // every connection-side signal. The first query is an onboarding milestone we
+  // confirm decision-aware; once a SECOND query lands the pane graduates to a
+  // live steady-state (count + last-query time) that keeps polling instead of
+  // freezing on the first-query confirmation forever.
   if (firstQuery?.decision) {
     return {
-      phase: "first_query",
+      phase: queryCount >= 2 ? "active" : "first_query",
       grantedDatabases,
+      queryCount,
       firstQuery: { decision: firstQuery.decision, at: firstQuery.at },
+      lastQuery,
     };
   }
   // A query without a decision yet still proves an agent is connected (the
   // decision follows on the next indexer tick).
   if (grantedDatabases > 0 || urlTokenUsed || firstQuery !== null) {
-    return { phase: "connected", grantedDatabases, firstQuery: null };
+    return {
+      phase: "connected",
+      grantedDatabases,
+      queryCount,
+      firstQuery: null,
+      lastQuery,
+    };
   }
   // Approved client, zero databases: nothing can ever query, so "waiting"
   // would spin forever. Surface the fix instead.
@@ -146,10 +187,18 @@ export function deriveConnectStatus(facts: ConnectFacts): ConnectStatus {
     return {
       phase: "connected_no_databases",
       grantedDatabases: 0,
+      queryCount: 0,
       firstQuery: null,
+      lastQuery: null,
     };
   }
-  return { phase: "waiting", grantedDatabases: 0, firstQuery: null };
+  return {
+    phase: "waiting",
+    grantedDatabases: 0,
+    queryCount: 0,
+    firstQuery: null,
+    lastQuery: null,
+  };
 }
 
 // audit_events_index carries FORCE ROW LEVEL SECURITY keyed on
@@ -180,7 +229,7 @@ export async function getConnectStatus(
   }
   const db = getDb(customer.region);
 
-  const [owned, oauthRows, grantRows, urlRows, firstQuery] = await Promise.all([
+  const [owned, oauthRows, grantRows, urlRows, queryFacts] = await Promise.all([
     db
       .select({ id: projects.id })
       .from(projects)
@@ -254,23 +303,37 @@ export async function getConnectStatus(
     // security, and an unbound read would return zero rows on any deployment
     // whose app role isn't BYPASSRLS (e.g. self-host), leaving the pane stuck
     // before first_query forever.
-    db.transaction(async (tx): Promise<ConnectFacts["firstQuery"]> => {
+    db.transaction(async (tx): Promise<{
+      firstQuery: ConnectFacts["firstQuery"];
+      queryCount: number;
+      lastQueryAt: Date | null;
+    }> => {
       await tx.execute(
         sql.raw(`SET LOCAL app.customer_id = '${customer.id}'`),
       );
-      // Two probes, both scoped to the OSS per-query events only (same
-      // filter as lastQueryByDatabase in lib/projects.ts — config/token
-      // events ride in the same table and must not read as a query; the
-      // partial audit_customer_region_project_ts_idx covers the scans):
+      // TIMESTAMPTZ may come back as a string on some drivers — coerce
+      // defensively (same posture as lastQueryByDatabase), and guard validity:
+      // an unparseable ts must degrade to a sentinel, not throw RangeError out
+      // of serializeConnectStatus and 500 the poll route.
+      const coerce = (ts: Date | string): Date => {
+        const d = ts instanceof Date ? ts : new Date(ts);
+        return Number.isFinite(d.getTime()) ? d : new Date(0);
+      };
+      // Probes, all scoped to the OSS per-query events only (same filter as
+      // lastQueryByDatabase in lib/projects.ts — config/token events ride in
+      // the same table and must not read as a query; the partial
+      // audit_customer_region_project_ts_idx covers the scans):
       //
       //   1. ANY lifecycle row — proof an agent's query reached the engine
       //      (drives "connected" while the decision is still indexing).
-      //   2. The earliest DECISION-BEARING row (DECIDED/EXECUTED/FAILED).
-      //      The terminal state keys on this, NOT on the earliest query —
+      //   2. Activity roll-up — distinct query_id count + newest ts, for the
+      //      first_query → active graduation and the live "last query …" line.
+      //   3. The earliest DECISION-BEARING row (DECIDED/EXECUTED/FAILED).
+      //      The first-query state keys on this, NOT on the earliest query —
       //      a first-ever query that goes STUCK (ATTEMPTED with no terminal
-      //      row: engine crash, indexer partial write) must not wedge the
-      //      pane on "waiting for its first query" forever while later
-      //      queries decide fine.
+      //      row: engine crash, indexer partial write) must not wedge the pane
+      //      on "waiting for its first query" forever while later queries
+      //      decide fine.
       const firstRows = await tx
         .select({ ts: auditEventsIndex.ts })
         .from(auditEventsIndex)
@@ -285,7 +348,28 @@ export async function getConnectStatus(
         .orderBy(asc(auditEventsIndex.ts), asc(auditEventsIndex.id))
         .limit(1);
       const first = firstRows[0];
-      if (!first) return null;
+      if (!first) return { firstQuery: null, queryCount: 0, lastQueryAt: null };
+      // Distinct queries + newest activity across the same event set. The
+      // count(distinct query_id) is the graduation signal (≥2 ⇒ leave the
+      // first-query milestone for the steady-state); max(ts) is the live
+      // "last query …" clock.
+      const activityRows = await tx
+        .select({
+          count: sql<number>`count(distinct ${auditEventsIndex.queryId})::int`,
+          lastTs: sql<Date | string | null>`max(${auditEventsIndex.ts})`,
+        })
+        .from(auditEventsIndex)
+        .where(
+          and(
+            eq(auditEventsIndex.customerId, customer.id),
+            eq(auditEventsIndex.region, customer.region),
+            eq(auditEventsIndex.projectId, projectId),
+            inArray(auditEventsIndex.eventType, [...EVENT_TYPES]),
+          ),
+        );
+      const queryCount = Number(activityRows[0]?.count ?? 0);
+      const lastRaw = activityRows[0]?.lastTs ?? null;
+      const lastQueryAt = lastRaw != null ? coerce(lastRaw) : null;
       const decidedRows = await tx
         .select({ queryId: auditEventsIndex.queryId, ts: auditEventsIndex.ts })
         .from(auditEventsIndex)
@@ -304,15 +388,12 @@ export async function getConnectStatus(
         .orderBy(asc(auditEventsIndex.ts), asc(auditEventsIndex.id))
         .limit(1);
       const decided = decidedRows[0];
-      // TIMESTAMPTZ may come back as a string on some drivers — coerce
-      // defensively (same posture as lastQueryByDatabase), and guard
-      // validity: an unparseable ts must degrade to a sentinel, not throw
-      // RangeError out of serializeConnectStatus and 500 the poll route.
-      const coerce = (ts: Date | string): Date => {
-        const d = ts instanceof Date ? ts : new Date(ts);
-        return Number.isFinite(d.getTime()) ? d : new Date(0);
-      };
-      if (!decided) return { decision: null, at: coerce(first.ts) };
+      if (!decided)
+        return {
+          firstQuery: { decision: null, at: coerce(first.ts) },
+          queryCount,
+          lastQueryAt,
+        };
       // Aggregate the decision-bearing query's lifecycle rows. Keyed on
       // query_id (audit_query_id_idx); customer/region re-checked so a
       // colliding query_id from another tenant can't leak into the
@@ -336,14 +417,18 @@ export async function getConnectStatus(
         );
       const agg = aggRows[0];
       return {
-        decision: agg
-          ? classifyFirstQueryDecision({
-              hasExecuted: Boolean(agg.hasExecuted),
-              hasMaskingBlock: Boolean(agg.hasMaskingBlock),
-              decision: agg.decision ?? null,
-            })
-          : null,
-        at: coerce(decided.ts),
+        firstQuery: {
+          decision: agg
+            ? classifyFirstQueryDecision({
+                hasExecuted: Boolean(agg.hasExecuted),
+                hasMaskingBlock: Boolean(agg.hasMaskingBlock),
+                decision: agg.decision ?? null,
+              })
+            : null,
+          at: coerce(decided.ts),
+        },
+        queryCount,
+        lastQueryAt,
       };
     }),
   ]);
@@ -353,6 +438,8 @@ export async function getConnectStatus(
     oauthAgentPresent: oauthRows.length > 0,
     grantedDatabases: Number(grantRows[0]?.count ?? 0),
     urlTokenUsed: urlRows.length > 0,
-    firstQuery,
+    firstQuery: queryFacts.firstQuery,
+    queryCount: queryFacts.queryCount,
+    lastQueryAt: queryFacts.lastQueryAt,
   });
 }

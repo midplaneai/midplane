@@ -5,7 +5,6 @@ import { useId, useState } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { buttonVariants } from "@/components/ui/button";
-import { DOCS_CONNECT_AGENT_URL } from "@/lib/docs";
 import { cn } from "@/lib/utils";
 
 // The canonical "connect an agent" card (OAuth). One component, one place the
@@ -128,14 +127,10 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
           Connect an agent
         </h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Paste this URL into any MCP client and sign in. It&apos;s an address,
-          not a secret. At sign-in, choose{" "}
+          Paste this URL into any MCP client and sign in. At sign-in, choose{" "}
           <span className="font-medium text-foreground">{projectLabel}</span> and
           the databases this agent should reach. Works with Cursor, Claude Code,
           VS Code, Claude Desktop, ChatGPT, and any other MCP client.
-        </p>
-        <p className="mt-1.5 text-[11px] text-subtle">
-          Connect as many agents as you like — unlimited on every plan.
         </p>
       </div>
 
@@ -155,7 +150,7 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
       <div
         role="tablist"
         aria-label="Agent client"
-        className="mt-4 flex gap-0.5 overflow-x-auto border-b border-border px-4"
+        className="mt-4 flex flex-wrap gap-0.5 border-b border-border px-4"
       >
         {TABS.map((t) => {
           const selected = t.id === active;
@@ -254,20 +249,6 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
             <CodeBlock path="paste into your agent" code={setupPrompt} wrap />
           </div>
         )}
-
-        <p className="text-[11px] text-subtle">
-          No token to copy — your client registers itself and you sign in once.
-          Revoke access any time from the agent list below, or by pausing the
-          project.{" "}
-          <a
-            href={DOCS_CONNECT_AGENT_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[hsl(var(--brand))] underline underline-offset-2"
-          >
-            Read the docs →
-          </a>
-        </p>
       </div>
     </div>
   );
@@ -280,10 +261,7 @@ function InstallButton({ href, label }: { href: string; label: string }) {
   return (
     <a
       href={href}
-      className={cn(
-        buttonVariants({ variant: "default", size: "sm" }),
-        "w-full gap-2",
-      )}
+      className={cn(buttonVariants({ variant: "default", size: "sm" }), "gap-2")}
     >
       <Download aria-hidden className="h-3.5 w-3.5" />
       {label}

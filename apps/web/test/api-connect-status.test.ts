@@ -63,21 +63,25 @@ describe("GET /api/projects/[id]/connect-status", () => {
   it("200 + no-store with the serialized status", async () => {
     currentCustomer.mockResolvedValue(CUSTOMER);
     getConnectStatus.mockResolvedValue({
-      phase: "first_query",
+      phase: "active",
       grantedDatabases: 1,
+      queryCount: 3,
       firstQuery: {
         decision: "deny",
         at: new Date("2026-07-17T10:00:00Z"),
       },
+      lastQuery: { at: new Date("2026-07-17T10:05:00Z") },
     });
     const { GET } = await loadRoute();
     const res = await GET(...request());
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     await expect(res.json()).resolves.toEqual({
-      phase: "first_query",
+      phase: "active",
       grantedDatabases: 1,
+      queryCount: 3,
       firstQuery: { decision: "deny", at: "2026-07-17T10:00:00.000Z" },
+      lastQuery: { at: "2026-07-17T10:05:00.000Z" },
     });
   });
 });
