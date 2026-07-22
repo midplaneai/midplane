@@ -7,10 +7,12 @@
 // the same pair so a leaked ciphertext misrouted to a different customer or
 // region fails decryption at the KMS boundary, not just at AES-GCM.
 //
-// Bootstrap status: scaffolded but not exercised. The router falls back to
-// env-mode in the V1 critical path. Wire prod by adding per-region CMK ARNs
-// to env (MIDPLANE_KMS_KEY_EU, MIDPLANE_KMS_KEY_US) and IAM permissions
-// for kms:GenerateDataKey + kms:Decrypt scoped per-region.
+// Production posture: cloud runs kms-mode (MIDPLANE_KMS_MODE=kms) with a
+// per-region CMK (MIDPLANE_KMS_KEY_EU / MIDPLANE_KMS_KEY_US) and an IAM
+// identity granted kms:GenerateDataKey + kms:Decrypt on that region's key.
+// The IAM policy Resource MUST be the key ARN, not the alias ARN — KMS ignores
+// alias ARNs in identity policies, so an alias-scoped grant AccessDenies every
+// GenerateDataKey. env-mode is the self-host / local-dev path only.
 
 import {
   DecryptCommand,

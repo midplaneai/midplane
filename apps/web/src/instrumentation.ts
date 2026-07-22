@@ -22,9 +22,10 @@
 // design rationale: no DB touch in the liveness path).
 
 import type { Instrumentation } from "next";
+import type { Region } from "@midplane-cloud/kms";
 
 import { assertBootEnv } from "./lib/assert-boot-env.ts";
-import { isSelfHost } from "./lib/self-host.ts";
+import { isSelfHost, SELF_HOST_REGION } from "./lib/self-host.ts";
 
 export async function register() {
   const region = process.env.MIDPLANE_REGION ?? "<unset>";
@@ -39,6 +40,29 @@ export async function register() {
     }),
   );
   assertBootEnv();
+
+  // KMS liveness. assertBootEnv only checks the KMS env vars are PRESENT, not
+  // that they actually encrypt. Do one real encrypt for the pinned region so a
+  // present-but-invalid AWS key (or an IAM policy scoped to the alias ARN
+  // instead of the key ARN) fails the DEPLOY here — instead of silently 500ing
+  // every add-database and DSN decrypt at runtime, as the US region once did.
+  // nodejs-only + dynamic import: the AWS SDK must never enter the Edge bundle
+  // (same guard rationale as the db/ee/posthog imports below).
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const kmsRegion: Region = isSelfHost()
+      ? SELF_HOST_REGION
+      : (process.env.MIDPLANE_REGION as Region);
+    const { assertKmsLiveness } = await import("./lib/assert-kms-liveness.ts");
+    await assertKmsLiveness(kmsRegion);
+    console.log(
+      JSON.stringify({
+        level: "info",
+        event: "kms.liveness_ok",
+        region: kmsRegion,
+        ts: new Date().toISOString(),
+      }),
+    );
+  }
 
   // Flush PostHog's buffered events on shutdown — posthog-node batches
   // (flushAt/flushInterval), so without this the buffered tail (often the
