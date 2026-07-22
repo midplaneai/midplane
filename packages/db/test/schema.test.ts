@@ -66,6 +66,7 @@ describe("projects (0008-slimmed parent + 0018 cleanup)", () => {
       "region",
       "name",
       "createdAt",
+      "isSample",
     ]) {
       expect(cols).toContain(col);
     }

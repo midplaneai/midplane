@@ -12,6 +12,8 @@ import {
   type FreshnessInitial,
 } from "@/components/dashboard/freshness-provider";
 import { LiveProjectFreshness } from "@/components/dashboard/live-project-freshness";
+import { SampleProjectButton } from "@/components/projects/sample-project-button";
+import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -94,8 +96,13 @@ export default async function Dashboard({
   // would otherwise see an upgrade wall for a create that succeeds. The rows
   // already carry each project's databases, so this costs no extra query.
   const hasReusableEmpty = rows.some((r) => r.databases.length === 0);
+  // The sample project doesn't count against the plan cap (createProject /
+  // getPlanUsage exclude it), so the header counter and the at-limit gate
+  // count only real projects — otherwise a user who tried the sample sees a
+  // wrong "2 / 1" or a bogus upgrade wall when adding their first real one.
+  const billableProjects = rows.filter((r) => !r.project.isSample).length;
   const atProjectLimit =
-    projectAddBlock({ projects: rows.length }, caps) !== null &&
+    projectAddBlock({ projects: billableProjects }, caps) !== null &&
     !hasReusableEmpty;
 
   return (
@@ -120,7 +127,7 @@ export default async function Dashboard({
             <div className="flex items-center gap-3">
               {Number.isFinite(projectLimit) ? (
                 <span className="font-mono text-[11px] uppercase tracking-[0.04em] text-subtle">
-                  {rows.length} / {projectLimit}
+                  {billableProjects} / {projectLimit}
                 </span>
               ) : null}
               {/* Members can't add projects — show the counter, hide the CTA. */}
@@ -157,9 +164,14 @@ export default async function Dashboard({
             }
             action={
               canManage ? (
-                <Link href="/projects/new">
-                  <Button size="sm">Connect Postgres</Button>
-                </Link>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Link href="/projects/new">
+                    <Button size="sm">Connect Postgres</Button>
+                  </Link>
+                  {process.env.MIDPLANE_SAMPLE_DSN ? (
+                    <SampleProjectButton entry="dashboard_empty" />
+                  ) : null}
+                </div>
               ) : undefined
             }
           />
@@ -250,12 +262,19 @@ function ProjectCard({
       <div className="p-4">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <Link
-              href={`/projects/${c.id}`}
-              className="text-sm font-medium tracking-tight text-foreground after:absolute after:inset-0 focus-visible:underline focus-visible:outline-none"
-            >
-              {label}
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/projects/${c.id}`}
+                className="truncate text-sm font-medium tracking-tight text-foreground after:absolute after:inset-0 focus-visible:underline focus-visible:outline-none"
+              >
+                {label}
+              </Link>
+              {c.isSample ? (
+                <Badge withDot={false} className="flex-shrink-0">
+                  Sample
+                </Badge>
+              ) : null}
+            </div>
             <div className="mt-1.5 flex items-center gap-3">
               <LiveProjectFreshness
                 projectId={c.id}

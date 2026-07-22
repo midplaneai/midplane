@@ -2549,12 +2549,14 @@ describe("listProjectSwitcherRows", () => {
         id: "01HSWITCHNAMEDXXXXXXXXXXXX",
         name: "prod",
         pausedAt: null,
+        isSample: false,
         databaseCount: 2,
       },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         name: null, // never named → stable 12-char id prefix (projectLabel parity)
         pausedAt: null,
+        isSample: true, // hosted sample → flows through to the switcher badge
         databaseCount: 1,
       },
     ]);
@@ -2563,11 +2565,17 @@ describe("listProjectSwitcherRows", () => {
     const rows = await listProjectSwitcherRows(customer);
 
     expect(rows).toEqual([
-      { id: "01HSWITCHNAMEDXXXXXXXXXXXX", label: "prod", serving: "ready" },
+      {
+        id: "01HSWITCHNAMEDXXXXXXXXXXXX",
+        label: "prod",
+        serving: "ready",
+        isSample: false,
+      },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         label: "01HSWITCHUNN",
         serving: "ready",
+        isSample: true,
       },
     ]);
   });

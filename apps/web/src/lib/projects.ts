@@ -232,6 +232,12 @@ export async function createProject(
   // unusable row burning a plan token slot. When false, `defaultTokenPlaintext`
   // is null and no token slot is consumed.
   mintDefaultToken: boolean = true,
+  // Marks the project as the hosted read-only sample (the "Try the sample
+  // database" flow). A sample is badged in the UI and does NOT count against
+  // the plan's project cap: the locked cap check below is skipped when true,
+  // and the row is inserted (or the reused empty project updated) with
+  // is_sample = true so every usage count can exclude it.
+  isSample: boolean = false,
 ): Promise<{ id: string; defaultTokenPlaintext: string | null }> {
   const kms = makeKmsContext(process.env);
   const { ciphertext, kmsKeyId } = await encryptDsn(
@@ -329,21 +335,34 @@ export async function createProject(
       resolvedProjectId = emptyProject[0].id;
       // Label the reused project with the first database's alias when it's
       // still unnamed or the auto-seed placeholder "Default" — a one-DB
-      // project reads coherently and stays renamable later.
-      if (
-        emptyProject[0].name === null ||
-        emptyProject[0].name === "Default"
-      ) {
+      // project reads coherently and stays renamable later. Also mark it as
+      // the sample when this is the sample flow, so a reused Default (the
+      // common first-run case) is badged + cap-excluded, not just a freshly
+      // inserted row.
+      const relabel =
+        emptyProject[0].name === null || emptyProject[0].name === "Default";
+      if (relabel || isSample) {
         await tx
           .update(projects)
-          .set({ name: dbAlias })
+          .set({
+            ...(relabel ? { name: dbAlias } : {}),
+            ...(isSample ? { isSample: true } : {}),
+          })
           .where(eq(projects.id, resolvedProjectId));
       }
-    } else if (Number.isFinite(caps.projects)) {
+    } else if (!isSample && Number.isFinite(caps.projects)) {
+      // Samples don't consume a project slot, so skip the cap check entirely
+      // for them; for a real project, count only non-sample projects against
+      // the cap.
       const existing = await tx
         .select({ id: projects.id })
         .from(projects)
-        .where(eq(projects.customerId, customer.id));
+        .where(
+          and(
+            eq(projects.customerId, customer.id),
+            eq(projects.isSample, false),
+          ),
+        );
       if (existing.length >= caps.projects) {
         throw new PlanLimitError("projects", caps.projects, plan);
       }
@@ -363,6 +382,7 @@ export async function createProject(
         customerId: customer.id,
         region: customer.region,
         name: dbAlias,
+        isSample,
       });
     }
     await tx.insert(projectDatabases).values({
@@ -480,6 +500,23 @@ export function isValidDsn(s: unknown): s is string {
   return typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8;
 }
 
+/** The customer's existing hosted-sample project, if any. The "Try the sample
+ *  database" flow (lib/sample-project.ts) is idempotent — a second click
+ *  returns the existing sample rather than creating duplicates. Samples skip
+ *  the project cap, so this one-sample-per-customer guard is what bounds them. */
+export async function findSampleProjectId(
+  customer: Customer,
+): Promise<string | null> {
+  const rows = await getDb(customer.region)
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(eq(projects.customerId, customer.id), eq(projects.isSample, true)),
+    )
+    .limit(1);
+  return rows[0]?.id ?? null;
+}
+
 /** Read-only plan usage for pre-flight UX gating (current project +
  *  usable-token counts for the customer's region). NOT authoritative: the
  *  locked count inside createProject is the real cap enforcer and closes
@@ -496,7 +533,15 @@ export async function getPlanUsage(
     db
       .select({ count: sql<number>`count(*)::int` })
       .from(projects)
-      .where(eq(projects.customerId, customer.id)),
+      // Samples don't consume the project cap, so they're excluded from the
+      // usage count that gates the create form (projectAddBlock) and the
+      // "N of M" display — mirrors the locked check in createProject.
+      .where(
+        and(
+          eq(projects.customerId, customer.id),
+          eq(projects.isSample, false),
+        ),
+      ),
     countUsableTokens(db, customer.id),
   ]);
   return { projects: Number(connRows[0]?.count ?? 0), tokens };
@@ -545,6 +590,9 @@ export interface ProjectSwitcherRow {
    *  broken) — the switcher is a fleet of headline dots, so it renders
    *  Axis 1, never audit-drain health (see lib/freshness.ts). */
   serving: ServingState;
+  /** Hosted read-only sample project — badged in the switcher and excluded
+   *  from the header's project-quota line. */
+  isSample: boolean;
 }
 
 /** The customer's projects with the light facts the rail-header switcher
@@ -561,6 +609,7 @@ export async function listProjectSwitcherRows(
       id: projects.id,
       name: projects.name,
       pausedAt: projects.pausedAt,
+      isSample: projects.isSample,
       databaseCount: sql<number>`count(${projectDatabases.id})::int`,
     })
     .from(projects)
@@ -577,6 +626,7 @@ export async function listProjectSwitcherRows(
       pausedAt: r.pausedAt,
       databaseCount: Number(r.databaseCount ?? 0),
     }).state,
+    isSample: r.isSample,
   }));
 }
 

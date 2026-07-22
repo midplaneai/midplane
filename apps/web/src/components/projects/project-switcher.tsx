@@ -4,6 +4,7 @@ import { ArrowUpRight, Check, ChevronsUpDown, Plus } from "lucide-react";
 import Link from "next/link";
 
 import { StatusDot } from "@/components/dashboard/status-dot";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -74,6 +75,11 @@ export function ProjectSwitcher({
           >
             {currentLabel}
           </span>
+          {current?.isSample ? (
+            <Badge withDot={false} className="flex-shrink-0">
+              Sample
+            </Badge>
+          ) : null}
           <ChevronsUpDown
             aria-hidden
             className="h-3.5 w-3.5 flex-shrink-0 text-subtle transition-colors group-hover:text-foreground group-focus-visible:text-foreground group-data-[state=open]:text-foreground"
@@ -102,6 +108,11 @@ export function ProjectSwitcher({
                   label={SERVING_LABELS[p.serving]}
                 />
                 <span className="min-w-0 flex-1 truncate">{p.label}</span>
+                {p.isSample ? (
+                  <Badge withDot={false} className="flex-shrink-0">
+                    Sample
+                  </Badge>
+                ) : null}
                 {p.id === currentId ? (
                   <Check
                     aria-hidden

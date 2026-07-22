@@ -13,6 +13,7 @@
 
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   customType,
   foreignKey,
   index,
@@ -133,6 +134,11 @@ export const projects = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // True for the hosted read-only sample project (the "Try the sample
+    // database" onboarding path, lib/sample-project.ts). The UI badges it as a
+    // demo, and it's excluded from plan project-count caps — trying the sample
+    // never consumes the customer's project quota.
+    isSample: boolean("is_sample").notNull().default(false),
   },
   (t) => ({
     customerRegionFk: foreignKey({
