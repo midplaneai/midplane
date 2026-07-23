@@ -5,6 +5,7 @@ import { useId, useState } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { buttonVariants } from "@/components/ui/button";
+import { DOCS_CONNECT_AGENT_URL } from "@/lib/docs";
 import { cn } from "@/lib/utils";
 
 // The canonical "connect an agent" card (OAuth). One component, one place the
@@ -22,8 +23,12 @@ import { cn } from "@/lib/utils";
 // Copy principle (see docs/agents/overview): carry only DURABLE, Midplane-owned
 // facts (endpoint URL, Streamable HTTP transport, OAuth sign-in). Let each
 // client own its volatile mechanics (CLI flags, config paths, UI navigation).
-// The one exception we hardcode is the high-value `--transport http` gotcha in
-// Claude Code, which fails silently without it.
+// Two calibrated exceptions: the `--transport http` gotcha in Claude Code
+// (fails silently without it), and short menu paths for the UI-only clients
+// (Claude Desktop, ChatGPT) — those have no config to paste, so without a
+// pointer the tab would be empty. Each UI-only tab links the client's OFFICIAL
+// setup doc as the source of truth when menus move, and the card header links
+// our own step-by-step guide (DOCS_CONNECT_AGENT_URL).
 //
 // For headless agents (CI, workflows) that can't do a browser sign-in, the
 // machine-token list sits below this card — those carry a stored bearer secret.
@@ -31,7 +36,13 @@ import { cn } from "@/lib/utils";
 // "use client" + no `@midplane-cloud/db` import keeps this off the Node-only
 // driver path (see CLAUDE.md). CopyButton is already a client island.
 
-type Client = "cursor" | "claude" | "vscode" | "desktop" | "prompt";
+type Client =
+  | "cursor"
+  | "claude"
+  | "vscode"
+  | "claudedesktop"
+  | "chatgpt"
+  | "prompt";
 
 // Conventional per-client paths lead; the agent-driven prompt is the fallback,
 // so it sits last and is relabeled to describe what it does, not what it is.
@@ -39,9 +50,17 @@ const TABS: { id: Client; label: string }[] = [
   { id: "cursor", label: "cursor" },
   { id: "claude", label: "claude code" },
   { id: "vscode", label: "vs code" },
-  { id: "desktop", label: "claude desktop / chatgpt" },
+  { id: "claudedesktop", label: "claude desktop" },
+  { id: "chatgpt", label: "chatgpt" },
   { id: "prompt", label: "let your agent do it" },
 ];
+
+// Official per-client setup docs — the durable source of truth when the
+// clients' own menus move. Ours goes in the card header.
+const CLAUDE_CONNECTOR_DOC_URL =
+  "https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities";
+const CHATGPT_DEV_MODE_DOC_URL =
+  "https://developers.openai.com/api/docs/guides/developer-mode";
 
 function slugify(name: string | null | undefined): string {
   const base = (name ?? "")
@@ -73,6 +92,15 @@ export function OAuthConnectGuide({
   // fall back to manual config when the endpoint is self-hosted.
   const isSelfHost = mcpUrl.startsWith("http://");
 
+  // Self-host ChatGPT: the tunneled hostname must forward to the SAME endpoint
+  // path, so the example in that tab carries the real path from mcpUrl.
+  let mcpPath = "/mcp";
+  try {
+    mcpPath = new URL(mcpUrl).pathname;
+  } catch {
+    // keep the fallback
+  }
+
   const cursorDeeplink =
     `cursor://anysphere.cursor-deeplink/mcp/install?name=${encodeURIComponent(serverKey)}` +
     `&config=${btoa(JSON.stringify({ url: mcpUrl }))}`;
@@ -100,8 +128,9 @@ export function OAuthConnectGuide({
 
   const claudeCli = `claude mcp add --transport http ${serverKey} ${mcpUrl}`;
 
-  // The mcp-remote stdio shim bridges a local HTTP endpoint into Desktop/ChatGPT,
-  // whose Connectors UI won't accept an http://localhost URL directly.
+  // The mcp-remote stdio shim bridges a local HTTP endpoint into Claude
+  // Desktop, whose hosted Connectors can't reach http://localhost. (ChatGPT
+  // has no local-config equivalent — its tab points at a public tunnel.)
   const desktopShimJson = `{
   "mcpServers": {
     "${serverKey}": {
@@ -130,7 +159,17 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
           Paste this URL into any MCP client and sign in. At sign-in, choose{" "}
           <span className="font-medium text-foreground">{projectLabel}</span> and
           the databases this agent should reach. Works with Cursor, Claude Code,
-          VS Code, Claude Desktop, ChatGPT, and any other MCP client.
+          VS Code, Claude Desktop, ChatGPT, and any other MCP client. Full
+          walkthroughs for every client:{" "}
+          <a
+            href={DOCS_CONNECT_AGENT_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            connect-an-agent docs
+          </a>
+          .
         </p>
       </div>
 
@@ -208,12 +247,13 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
           </div>
         )}
 
-        {active === "desktop" && (
+        {active === "claudedesktop" && (
           <div className="space-y-2">
             {isSelfHost ? (
               <>
                 <p className="text-xs text-muted-foreground">
-                  The Connectors UI rejects a{" "}
+                  Connectors run from Anthropic&apos;s cloud and can&apos;t
+                  reach a{" "}
                   <code className="font-mono">http://localhost</code> URL, so
                   bridge it with the{" "}
                   <code className="font-mono">mcp-remote</code> stdio shim. Open
@@ -229,12 +269,111 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
                 />
               </>
             ) : (
-              <p className="text-xs text-muted-foreground">
-                In Claude Desktop or ChatGPT: Settings → Connectors →{" "}
-                <span className="font-medium">Add custom connector</span>, then
-                paste the URL above.
-              </p>
+              <ol className="list-decimal space-y-1.5 pl-4 text-xs text-muted-foreground">
+                <li>
+                  In Claude Desktop (or claude.ai): open{" "}
+                  <span className="font-medium text-foreground">
+                    Settings → Connectors
+                  </span>{" "}
+                  and choose{" "}
+                  <span className="font-medium text-foreground">
+                    Add custom connector
+                  </span>
+                  .
+                </li>
+                <li>
+                  Name it (e.g.{" "}
+                  <code className="font-mono">{serverKey}</code>) and paste the
+                  URL above — leave the advanced OAuth fields empty.
+                </li>
+                <li>
+                  Click <span className="font-medium text-foreground">Add</span>
+                  , then{" "}
+                  <span className="font-medium text-foreground">Connect</span>{" "}
+                  and sign in. At the consent screen, pick {projectLabel} and
+                  the databases this agent may reach.
+                </li>
+              </ol>
             )}
+            <p className="text-[11px] text-subtle">
+              Available on every Claude plan (Free allows one custom
+              connector). Menus moved?{" "}
+              <a
+                href={CLAUDE_CONNECTOR_DOC_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-muted-foreground"
+              >
+                Anthropic&apos;s connector guide
+              </a>{" "}
+              is the source of truth.
+            </p>
+          </div>
+        )}
+
+        {active === "chatgpt" && (
+          <div className="space-y-2">
+            {isSelfHost ? (
+              <p className="text-xs text-muted-foreground">
+                ChatGPT connectors run from OpenAI&apos;s cloud and can&apos;t
+                reach a{" "}
+                <code className="font-mono">http://localhost</code> URL. Expose
+                your self-hosted endpoint on a publicly reachable HTTPS
+                hostname (e.g. a tunnel), then follow the steps below with that
+                URL.
+              </p>
+            ) : null}
+            <ol className="list-decimal space-y-1.5 pl-4 text-xs text-muted-foreground">
+              <li>
+                On chatgpt.com: enable{" "}
+                <span className="font-medium text-foreground">
+                  Developer mode
+                </span>{" "}
+                under{" "}
+                <span className="font-medium text-foreground">
+                  Settings → Security and login
+                </span>{" "}
+                (custom MCP connectors ship behind it).
+              </li>
+              <li>
+                {isSelfHost ? (
+                  <>
+                    In the apps/connectors settings, add a new connector with
+                    your public tunnel URL — keep the same path as the URL
+                    above (e.g.{" "}
+                    <code className="font-mono">
+                      https://midplane.example.com{mcpPath}
+                    </code>
+                    ), not the unreachable localhost URL itself. Authentication
+                    is OAuth, no key to paste.
+                  </>
+                ) : (
+                  <>
+                    In the apps/connectors settings, add a new connector with
+                    the URL above — authentication is OAuth, no key to paste.
+                  </>
+                )}
+              </li>
+              <li>
+                Sign in when prompted; at the consent screen, pick{" "}
+                {projectLabel} and the databases this agent may reach. Then
+                enable the connector from the composer&apos;s tools menu in a
+                chat.
+              </li>
+            </ol>
+            <p className="text-[11px] text-subtle">
+              Requires Plus, Pro, Business, Enterprise, or Edu on the web.
+              Menus moved?{" "}
+              <a
+                href={CHATGPT_DEV_MODE_DOC_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-muted-foreground"
+              >
+                OpenAI&apos;s developer-mode guide
+              </a>{" "}
+              is the source of truth.
+            </p>
           </div>
         )}
 

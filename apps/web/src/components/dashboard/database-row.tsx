@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { Database } from "lucide-react";
 
-import { type TableAccessPolicy } from "@midplane-cloud/db";
+// Type-only, and from the pure /policy subpath (CLAUDE.md client-import rule):
+// the root entrypoint pulls the Node-only `postgres` driver. The inline
+// `{ type X }` form keeps the module in the graph, and Turbopack (Next 16's
+// default bundler) hard-errors on the driver where webpack was lenient.
+import type { TableAccessPolicy } from "@midplane-cloud/db/policy";
 
 // Type-only import — `@/lib/projects` re-exports `getDb` which pulls
 // in the `postgres` driver (Node-only). `import type` erases at compile

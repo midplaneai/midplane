@@ -1,16 +1,25 @@
-import { FlatCompat } from "@eslint/eslintrc";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const compat = new FlatCompat({
-  baseDirectory: dirname(fileURLToPath(import.meta.url)),
-});
+// eslint-config-next 16 ships native flat configs (arrays), so the FlatCompat
+// bridge is gone — running the legacy shareable configs through it crashes
+// with a circular-structure error under ESLint 9.
+import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
+import nextTypescript from "eslint-config-next/typescript";
 
 const config = [
   {
     ignores: [".next/**", "node_modules/**", "next-env.d.ts"],
   },
-  ...compat.extends("next/core-web-vitals", "next/typescript"),
+  ...nextCoreWebVitals,
+  ...nextTypescript,
+  {
+    // eslint-plugin-react-hooks v7 (via eslint-config-next 16) added
+    // set-state-in-effect as an ERROR. The existing hits are deliberate
+    // hydration-safe patterns (e.g. computing a mailto from client-only
+    // state after mount). Keep it visible as a warning; revisit per
+    // component rather than blocking the Next 16 upgrade on a rewrite.
+    rules: {
+      "react-hooks/set-state-in-effect": "warn",
+    },
+  },
   {
     // Open-core boundary (the flip): MIT core must NEVER import from ee/
     // (commercial, license-key gated). ee/ MAY import core, never the reverse,
