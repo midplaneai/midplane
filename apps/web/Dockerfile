@@ -54,8 +54,13 @@ ENV HOSTNAME=0.0.0.0
 # `output: 'standalone'` + `outputFileTracingRoot: <repo root>` writes:
 #   apps/web/.next/standalone/{apps/web,packages/*,node_modules,...}
 # We copy that whole tree to /app and start the entry at apps/web/server.js.
+# standalone deliberately excludes .next/static AND public/ — Next expects the
+# host to copy both. Miss public/ and every static asset (favicons, OG card,
+# /brand/*) 404s at runtime; the consent screen's <img src="/brand/..."> is the
+# first in-page reference, so it's where the omission first shows as a broken image.
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder /app/apps/web/public ./apps/web/public
 
 EXPOSE 3000
 

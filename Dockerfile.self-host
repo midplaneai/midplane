@@ -86,9 +86,12 @@ ENV MIGRATIONS_DIR=/app/migrations
 
 # `output: 'standalone'` + `outputFileTracingRoot: <repo root>` writes
 # apps/web/.next/standalone/{apps/web,packages/*,node_modules,...}; copy the
-# whole tree to /app and start at apps/web/server.js.
+# whole tree to /app and start at apps/web/server.js. standalone excludes
+# .next/static AND public/ — both must be copied or every static asset
+# (favicons, OG card, /brand/*) 404s at runtime.
 COPY --from=web-builder /app/apps/web/.next/standalone ./
 COPY --from=web-builder /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=web-builder /app/apps/web/public ./apps/web/public
 
 # The compiled engine binary on PATH, plus the ONE WASM asset bun --compile
 # can't embed (libpg-query loads it via fs.readFileSync(__dirname + ...); the
