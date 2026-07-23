@@ -2263,6 +2263,33 @@ describe("addDatabase", () => {
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
 
+  it("sample refusal: returns null and never inserts on the hosted sample project", async () => {
+    // The parent read matches an owned row, but it's the hosted sample —
+    // our shared read-only demo. Adding a database is refused before the
+    // cap count / insert, with the leakage-safe null shape of an unknown id.
+    handle.setProjectsReturning([{ id: "sample-1" }]);
+    handle.queueSelect([{ id: "sample-1", region: "eu", isSample: true }]);
+    const { addDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    const result = await addDatabase(
+      customer,
+      "sample-1",
+      "analytics",
+      "postgres://u:p@host:5432/db",
+      "read",
+      deps,
+    );
+
+    expect(result).toBeNull();
+    const insert = handle.calls.find(
+      (c) => c.op === "insert" && c.table === projectDatabases,
+    );
+    expect(insert, "no insert on the sample project").toBeUndefined();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid dbName before touching KMS / Postgres", async () => {
     const { addDatabase } = await import("../src/lib/projects.ts");
     const deps = makeMutationDeps();

@@ -1600,7 +1600,7 @@ export async function addDatabase(
       // would escape as a raw Postgres error instead of
       // DatabaseNameTaken.
       const parent = await tx
-        .select({ id: projects.id })
+        .select({ id: projects.id, isSample: projects.isSample })
         .from(projects)
         .where(
           and(
@@ -1611,6 +1611,12 @@ export async function addDatabase(
         .for("update")
         .limit(1);
       if (parent.length === 0) return null;
+      // The hosted sample project is our shared read-only demo, not a
+      // place for the customer's own database — attaching one would mix
+      // real data into a container that's off the plan cap and can't have
+      // its credential rotated. Refuse (leakage-safe null, same shape as an
+      // unknown id); the UI steers them to a real new project instead.
+      if (parent[0]!.isSample) return null;
 
       // Fixed structural per-project database ceiling
       // (plan.ts maxDatabasesPerProject) — the same on every plan, so it's

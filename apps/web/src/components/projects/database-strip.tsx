@@ -25,6 +25,7 @@ export function DatabaseStrip({
   addAction,
   showAdd = true,
   atCap = false,
+  sample = false,
   newProjectHref = "/projects/new",
 }: {
   databases: string[];
@@ -38,6 +39,11 @@ export function DatabaseStrip({
    *  fails against it. The ceiling is plan-independent, so the remedy is
    *  another project, not an upgrade. */
   atCap?: boolean;
+  /** This is the hosted sample project. Adding a database is refused on the
+   *  server (it's our shared read-only demo), so instead of an add control we
+   *  point at a real new project — the "graduate off the sample" path, placed
+   *  exactly where a user would look to bring in their own data. */
+  sample?: boolean;
   newProjectHref?: string;
 }) {
   function go(name: string) {
@@ -106,7 +112,19 @@ export function DatabaseStrip({
           </details>
         ) : null}
         {showAdd ? (
-          atCap ? (
+          sample ? (
+            <Link
+              href={newProjectHref}
+              className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[hsl(var(--brand)/0.35)] px-3 py-2 text-sm text-[hsl(var(--brand))] transition-colors hover:border-[hsl(var(--brand)/0.6)] hover:bg-[hsl(var(--brand)/0.05)]"
+            >
+              Connect your own database
+              <ArrowUpRight
+                className="h-3.5 w-3.5"
+                strokeWidth={1.5}
+                aria-hidden
+              />
+            </Link>
+          ) : atCap ? (
             <Link
               href={newProjectHref}
               className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-3 py-2 text-sm text-subtle transition-colors hover:border-border-strong hover:text-foreground"
