@@ -17,6 +17,7 @@ import {
 import { buildStripePlugins } from "./billing";
 import { getEeAuthPlugins } from "./ee-plugins";
 import { isEmailConfigured, sendPasswordResetEmail } from "./email";
+import { repairedLoopbackRedirect } from "./mcp-redirect";
 import { getPostHog } from "./posthog";
 import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
@@ -220,10 +221,20 @@ function createAuth() {
         //    purpose can't reach a database. Injecting it here means a compliant
         //    client always gets a usable token regardless of which scopes it
         //    requested, while the proxy still rejects tokens that lack it.
+        //  - loopback redirect repair: Next 15's parseURL corrupts a loopback
+        //    `redirect_uri` (127.0.0.1 → localhost) inside the query string in
+        //    production, so a native client's RFC 8252 redirect never
+        //    exact-matches its own registration and authorize 400s ("Invalid
+        //    redirect URI" — how VS Code broke). When the requested URI is
+        //    loopback and NOT an exact registered match, substitute the
+        //    loopback-EQUIVALENT registered string (same scheme/port/path,
+        //    localhost ↔ 127.0.0.0/8 ↔ [::1]). Full rationale, incl. why the
+        //    token exchange stays consistent: lib/mcp-redirect.ts.
         //
-        // Both ride the login-resume path too: authorizeMCPOAuth stores this
-        // query in the oidc_login_prompt cookie before bouncing to /sign-in, so
-        // the post-login resume sees the same prompt + scope.
+        // All of these ride the login-resume path too: authorizeMCPOAuth stores
+        // this query in the oidc_login_prompt cookie before bouncing to
+        // /sign-in, so the post-login resume sees the same prompt + scope +
+        // repaired redirect_uri.
         if (ctx.path === "/mcp/authorize") {
           const scopes = new Set(
             String(ctx.query?.scope ?? "")
@@ -231,11 +242,18 @@ function createAuth() {
               .filter(Boolean),
           );
           scopes.add("mcp");
+
+          const repaired = await repairedLoopbackRedirect(
+            ctx.query,
+            ctx.context.adapter,
+          );
+
           return {
             context: {
               ...ctx,
               query: {
                 ...ctx.query,
+                ...(repaired ? { redirect_uri: repaired } : {}),
                 prompt: "consent",
                 scope: Array.from(scopes).join(" "),
               },
