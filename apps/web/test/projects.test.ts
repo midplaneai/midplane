@@ -42,7 +42,7 @@ interface FakeDbHandle {
    *  mcp_url_auth_security: parent rows no longer carry mcp_token — the
    *  agent-facing surface lives in the mcp_tokens table. */
   setParentSelectResult(
-    rows: Array<{ id: string; region?: string }>,
+    rows: Array<{ id: string; region?: string; isSample?: boolean }>,
   ): void;
   /** Result of a project_databases UPDATE…RETURNING (rotateProject
    *  needs the child id to feed DecryptCache.invalidate). */
@@ -79,6 +79,7 @@ function makeFakeDb(): FakeDbHandle {
   let parentSelect: Array<{
     id: string;
     region?: string;
+    isSample?: boolean;
   }> = [];
   let childUpdate: Array<{ id: string }> = [];
   let childDelete: Array<{ id: string }> = [];
@@ -828,6 +829,38 @@ describe("rotateProject", () => {
     );
 
     expect(result).toBeNull();
+    expect(caches.cache.invalidate).not.toHaveBeenCalled();
+    expect(caches.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("sample refusal: returns null and never touches the child DSN or caches for the hosted sample project", async () => {
+    // The parent read matches an owned row, but it's the hosted sample
+    // (shared read-only MIDPLANE_SAMPLE_DSN) — rotation must refuse before
+    // the UPDATE, with the same leakage-safe null shape as an unknown id.
+    handle.setParentSelectResult([
+      { id: "sample-1", region: "eu", isSample: true },
+    ]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const { rotateProject } = await import("../src/lib/projects.ts");
+    const caches = makeCaches();
+
+    const result = await rotateProject(
+      customer,
+      "sample-1",
+      "postgres://u:p@host:5432/db",
+      caches,
+      "main",
+    );
+
+    expect(result).toBeNull();
+    // No credential write, no cache churn.
+    expect(
+      handle.calls.find(
+        (c) => c.op === "update" && c.table === projectDatabases,
+      ),
+      "sample rotation must NOT issue an UPDATE on project_databases",
+    ).toBeUndefined();
     expect(caches.cache.invalidate).not.toHaveBeenCalled();
     expect(caches.registry.invalidate).not.toHaveBeenCalled();
   });

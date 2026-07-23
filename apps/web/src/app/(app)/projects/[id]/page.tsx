@@ -848,16 +848,18 @@ export default async function ProjectWorkspace({
             name={selDb.name}
             action={renameDatabaseAction}
           />
-          <RotateCredentialSheet
-            id={conn.id}
-            dbName={selDb.name}
-            action={rotateAction}
-            lastRotatedLabel={
-              selDb.rotatedAt
-                ? `Last rotated ${formatRelative(selDb.rotatedAt)}.`
-                : undefined
-            }
-          />
+          {conn.isSample ? null : (
+            <RotateCredentialSheet
+              id={conn.id}
+              dbName={selDb.name}
+              action={rotateAction}
+              lastRotatedLabel={
+                selDb.rotatedAt
+                  ? `Last rotated ${formatRelative(selDb.rotatedAt)}.`
+                  : undefined
+              }
+            />
+          )}
           <DeleteDatabaseButton
             name={selDb.name}
             action={deleteDatabaseAction}

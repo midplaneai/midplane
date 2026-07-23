@@ -1256,6 +1256,7 @@ export async function rotateProject(
       .select({
         id: projects.id,
         region: projects.region,
+        isSample: projects.isSample,
       })
       .from(projects)
       .where(
@@ -1263,6 +1264,12 @@ export async function rotateProject(
       )
       .limit(1);
     if (parent.length === 0) return null;
+    // The hosted sample project uses a shared read-only DSN we own
+    // (MIDPLANE_SAMPLE_DSN); it's excluded from plan caps and isn't the
+    // customer's credential to rotate. Refuse — returning null gives the
+    // same leakage-safe shape as an unknown id, so the UI treats it as
+    // not-found rather than surfacing that a sample carve-out exists.
+    if (parent[0]!.isSample) return null;
 
     const updated = await tx
       .update(projectDatabases)
