@@ -92,6 +92,15 @@ export function OAuthConnectGuide({
   // fall back to manual config when the endpoint is self-hosted.
   const isSelfHost = mcpUrl.startsWith("http://");
 
+  // Self-host ChatGPT: the tunneled hostname must forward to the SAME endpoint
+  // path, so the example in that tab carries the real path from mcpUrl.
+  let mcpPath = "/mcp";
+  try {
+    mcpPath = new URL(mcpUrl).pathname;
+  } catch {
+    // keep the fallback
+  }
+
   const cursorDeeplink =
     `cursor://anysphere.cursor-deeplink/mcp/install?name=${encodeURIComponent(serverKey)}` +
     `&config=${btoa(JSON.stringify({ url: mcpUrl }))}`;
@@ -327,8 +336,23 @@ Don't invent or ask me for an auth token — Midplane authorizes over OAuth. Aft
                 (custom MCP connectors ship behind it).
               </li>
               <li>
-                In the apps/connectors settings, add a new connector with the
-                URL above — authentication is OAuth, no key to paste.
+                {isSelfHost ? (
+                  <>
+                    In the apps/connectors settings, add a new connector with
+                    your public tunnel URL — keep the same path as the URL
+                    above (e.g.{" "}
+                    <code className="font-mono">
+                      https://midplane.example.com{mcpPath}
+                    </code>
+                    ), not the unreachable localhost URL itself. Authentication
+                    is OAuth, no key to paste.
+                  </>
+                ) : (
+                  <>
+                    In the apps/connectors settings, add a new connector with
+                    the URL above — authentication is OAuth, no key to paste.
+                  </>
+                )}
               </li>
               <li>
                 Sign in when prompted; at the consent screen, pick{" "}
