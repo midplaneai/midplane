@@ -36,6 +36,7 @@ import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/projects/rename-database-control";
 import { RotateCredentialSheet } from "@/components/projects/rotate-credential-sheet";
+import { SampleProjectNotice } from "@/components/projects/sample-project-notice";
 import { AgentList } from "@/components/tokens/agent-list";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -773,6 +774,7 @@ export default async function ProjectWorkspace({
         projectId={conn.id}
         addAction={addDatabaseAction}
         atCap={dbAtCap}
+        sample={conn.isSample}
         newProjectHref="/projects/new"
       />
       <div className="space-y-6">
@@ -848,16 +850,18 @@ export default async function ProjectWorkspace({
             name={selDb.name}
             action={renameDatabaseAction}
           />
-          <RotateCredentialSheet
-            id={conn.id}
-            dbName={selDb.name}
-            action={rotateAction}
-            lastRotatedLabel={
-              selDb.rotatedAt
-                ? `Last rotated ${formatRelative(selDb.rotatedAt)}.`
-                : undefined
-            }
-          />
+          {conn.isSample ? null : (
+            <RotateCredentialSheet
+              id={conn.id}
+              dbName={selDb.name}
+              action={rotateAction}
+              lastRotatedLabel={
+                selDb.rotatedAt
+                  ? `Last rotated ${formatRelative(selDb.rotatedAt)}.`
+                  : undefined
+              }
+            />
+          )}
           <DeleteDatabaseButton
             name={selDb.name}
             action={deleteDatabaseAction}
@@ -898,6 +902,7 @@ export default async function ProjectWorkspace({
         addAction={addDatabaseAction}
         showAdd={canManage}
         atCap={dbAtCap}
+        sample={conn.isSample}
         newProjectHref="/projects/new"
       />
       {canManage ? (
@@ -941,6 +946,10 @@ export default async function ProjectWorkspace({
 
   const connectPane = (
     <div className="space-y-6">
+      {conn.isSample && canManage ? (
+        <SampleProjectNotice newProjectHref="/projects/new" />
+      ) : null}
+
       {justCreated ? (
         <div
           role="status"
