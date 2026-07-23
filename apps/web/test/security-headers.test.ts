@@ -3,13 +3,13 @@
 // the authenticated dashboard, so a missing frame-ancestors directive is a
 // clickjacking primitive against the auth surface — not just the brochure.
 //
-// We assert the config-level contract (next.config.ts headers()) rather than
+// We assert the config-level contract (next.config.mjs headers()) rather than
 // spinning up Next: the values are static and the regression we care about is
 // "someone deleted/loosened a header", which a unit check catches cheaply.
 
 import { describe, expect, it } from "vitest";
 
-import config from "../next.config.ts";
+import config from "../next.config.mjs";
 
 async function headerMap() {
   const rules = await config.headers!();

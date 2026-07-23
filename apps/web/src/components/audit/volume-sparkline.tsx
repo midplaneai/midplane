@@ -6,10 +6,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  type TerminalStatus,
-  type VolumeBucket,
-} from "@/lib/audit";
+// Full-statement `import type` (not inline `{ type X }`): lib/audit reaches
+// the Node-only postgres driver via @midplane-cloud/db, and only the full
+// type-import form drops the module from Turbopack's client graph.
+import type { TerminalStatus, VolumeBucket } from "@/lib/audit";
 
 interface Props {
   buckets: readonly VolumeBucket[];

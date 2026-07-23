@@ -1,10 +1,16 @@
+// Plain-ESM config (.mjs, not .ts): Next 16's TypeScript-config loader
+// transpiles next.config.ts to CommonJS and evaluates it through a hook that
+// breaks under this package's `"type": "module"` — on Node ("exports is not
+// defined in ES module scope") and differently under Bun. An .mjs config
+// skips that loader entirely and works on both runtimes; the JSDoc @type
+// keeps editor/typecheck support.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { NextConfig } from "next";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const config: NextConfig = {
+/** @type {import('next').NextConfig} */
+const config = {
   reactStrictMode: true,
   // Standalone bundle for the Fly Docker deploy (fly-web.toml).
   output: "standalone",
