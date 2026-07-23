@@ -115,7 +115,7 @@ export function DatabaseStrip({
           sample ? (
             <Link
               href={newProjectHref}
-              className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[hsl(var(--brand)/0.35)] px-3 py-2 text-sm text-[hsl(var(--brand))] transition-colors hover:border-[hsl(var(--brand)/0.6)] hover:bg-[hsl(var(--brand)/0.05)]"
+              className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[hsl(var(--brand)/0.35)] px-3 py-2 text-sm text-subtle transition-colors hover:border-[hsl(var(--brand)/0.6)] hover:bg-[hsl(var(--brand)/0.05)] hover:text-foreground"
             >
               Connect your own database
               <ArrowUpRight

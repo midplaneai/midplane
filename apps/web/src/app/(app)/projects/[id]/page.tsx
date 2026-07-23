@@ -946,7 +946,9 @@ export default async function ProjectWorkspace({
 
   const connectPane = (
     <div className="space-y-6">
-      {conn.isSample ? <SampleProjectNotice newProjectHref="/projects/new" /> : null}
+      {conn.isSample && canManage ? (
+        <SampleProjectNotice newProjectHref="/projects/new" />
+      ) : null}
 
       {justCreated ? (
         <div
