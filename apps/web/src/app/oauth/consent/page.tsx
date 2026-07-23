@@ -29,14 +29,15 @@ export const dynamic = "force-dynamic";
 // it renders its own minimal chrome instead of the AppShell.
 
 // Identity scopes are the Better Auth OIDC defaults — shown muted; the `mcp`
-// database scope is now expressed by the picker itself, not a bullet.
+// database scope is now expressed by the picker itself, not a bullet. openid
+// grants no data access ("you can sign in"), so it's intentionally omitted —
+// listing it ("confirm your identity") was noise on a consent screen.
 // Each phrase carries its own verb so the joined list reads as a single
 // grammatical sentence after the "It will also " lead-in (a shared "read"
 // lead-in can't govern this mix of verb- and noun-phrases).
 const IDENTITY_COPY: Record<string, string> = {
-  openid: "confirm your identity",
   profile: "read your name and profile image",
-  email: "read your email address",
+  email: "read your email",
   offline_access: "stay connected without re-approving",
 };
 
@@ -124,8 +125,21 @@ export default async function OAuthConsentPage({
                 </div>
                 <span className="font-mono text-sm text-subtle">→</span>
                 <div className="flex h-12 w-12 items-center justify-center border border-border bg-secondary">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- static 20px SVG: next/image never optimizes SVGs, so it would only add its client runtime to this route */}
-                  <img src="/brand/icon-bare.svg" alt="" width={20} height={20} />
+                  {/* Inlined bare-colon mark (mirrors /brand/icon-bare.svg): a
+                      trust-critical "grant access?" surface must not depend on a
+                      separately-served static file — a public/ 404 once rendered
+                      a broken image here. Inline SVG needs no fetch and no image
+                      runtime. */}
+                  <svg
+                    width={20}
+                    height={20}
+                    viewBox="0 0 100 100"
+                    fill="none"
+                    aria-hidden
+                  >
+                    <circle cx={50} cy={28} r={14} fill="#1d4eff" />
+                    <circle cx={50} cy={72} r={14} fill="#1d4eff" />
+                  </svg>
                 </div>
               </div>
               <div className="space-y-1.5">
@@ -133,11 +147,8 @@ export default async function OAuthConsentPage({
                   Connect {displayName}?
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  An agent identifying itself as{" "}
-                  <span className="font-medium text-foreground">
-                    {displayName}
-                  </span>{" "}
-                  wants to connect to your Midplane account.
+                  This name is self-reported by the agent — approve only if you
+                  recognize it.
                 </p>
               </div>
             </div>
