@@ -214,6 +214,46 @@ export function projectAddBlock(
   return null;
 }
 
+/** The project-quota facts a surface needs to render the cap: whether a create
+ *  is currently blocked, the "N/M projects" usage line, and the raw limit. */
+export interface ProjectQuota {
+  /** Cap reached AND no reusable empty project to absorb the next database
+   *  (advisory pre-flight; createProject's locked count is the real enforcer). */
+  atCap: boolean;
+  /** Footer usage line, e.g. "free plan · 1/1 projects". Null on an unlimited
+   *  (Infinity) tier — no counter to show. */
+  quotaLine: string | null;
+  /** The plan's project cap (Infinity = unlimited). */
+  projectLimit: number;
+}
+
+/** Pure consolidation of the at-cap + quota-line logic that was inline-
+ *  duplicated at the dashboard, project-detail, and new-project sites. Takes
+ *  counts the caller already has in hand — `billableProjects` (samples already
+ *  excluded) and `hasEmpty` (a reusable database-less project exists, which
+ *  clears the cap because createProject attaches the first DB to it without
+ *  consuming a slot) — so it stays db-free and unit-testable. The quota line
+ *  mirrors the ProjectSwitcher format ("<plan> plan · N/M projects"). Advisory
+ *  UX only. */
+export function projectQuota({
+  billableProjects,
+  hasEmpty,
+  caps,
+  plan,
+}: {
+  billableProjects: number;
+  hasEmpty: boolean;
+  caps: PlanCaps;
+  plan: Plan;
+}): ProjectQuota {
+  const atCap =
+    projectAddBlock({ projects: billableProjects }, caps) !== null && !hasEmpty;
+  const quotaLine = Number.isFinite(caps.projects)
+    ? `${plan} plan · ${billableProjects}/${caps.projects} projects`
+    : null;
+  return { atCap, quotaLine, projectLimit: caps.projects };
+}
+
 /** Whether the fixed per-project database ceiling blocks adding ONE more
  *  database to a project right now.
  *

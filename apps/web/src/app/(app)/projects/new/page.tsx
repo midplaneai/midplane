@@ -19,17 +19,17 @@ import { currentCustomer } from "@/lib/customer";
 import { isManager, requireManager } from "@/lib/org-auth";
 import {
   createProject,
-  getPlanUsage,
-  hasEmptyProject,
   isValidDsn,
+  listProjectSwitcherRows,
   slugifyDatabaseName,
 } from "@/lib/projects";
 import {
-  projectAddBlock,
+  projectQuota,
   PlanLimitError,
   resolvePlan,
   UPGRADE_URL,
 } from "@/lib/plan";
+import { revalidateProjectsChrome } from "@/lib/revalidate";
 import { PROJECTS_LIST_HREF } from "@/lib/routes";
 import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
@@ -58,10 +58,19 @@ export default async function NewProject() {
   // new slot, so the DSN form must stay open. Without this, a fresh Free
   // customer (auto-seeded Default, 1/1) is wrongly told they're at their
   // project limit and can't add a first database.
-  const usage = await getPlanUsage(customer);
-  const rawBlock = projectAddBlock({ projects: usage.projects }, caps);
-  const block =
-    rawBlock && (await hasEmptyProject(customer)) ? null : rawBlock;
+  // Billable count AND "has an empty project" (isEmpty) both come from ONE
+  // switcher-rows query (D9) — replacing the old getPlanUsage (which re-COUNTed
+  // and ran an unused token query) + a separate hasEmptyProject. projectQuota
+  // is the shared at-cap unit (D2).
+  const switcherRows = await listProjectSwitcherRows(customer);
+  const billableProjects = switcherRows.filter((r) => !r.isSample).length;
+  const { atCap } = projectQuota({
+    billableProjects,
+    hasEmpty: switcherRows.some((r) => r.isEmpty),
+    caps,
+    plan,
+  });
+  const block = atCap ? { limit: caps.projects } : null;
 
   return (
     <>
@@ -79,8 +88,13 @@ export default async function NewProject() {
             title="Connect Postgres"
             subtitle={
               <>
-                Paste a Postgres connection string. We encrypt it with your
-                region&apos;s KMS key and{" "}
+                A project is a{" "}
+                <strong className="font-medium text-foreground">
+                  governed MCP endpoint
+                </strong>{" "}
+                your agents connect to. Add its first database below — we
+                encrypt the connection string with your region&apos;s KMS key
+                and{" "}
                 <strong className="font-medium text-foreground">
                   never persist the plaintext
                 </strong>
@@ -233,6 +247,10 @@ async function createAction(
     }
     throw err;
   }
+
+  // A new project just joined the list — refresh the shared sidebar chrome
+  // across every authed route (D11) before the redirect below.
+  revalidateProjectsChrome();
 
   // Whether the evaluator took the hosted sample-database escape hatch
   // instead of bringing their own Postgres — the funnel's BYO-Postgres

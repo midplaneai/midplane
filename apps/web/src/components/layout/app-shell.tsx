@@ -17,6 +17,13 @@ interface AppShellProps {
    *  Billing), admin sees the Audit log but not Billing, a member sees only
    *  Projects. Those routes also gate server-side; this is just the nav. */
   role?: string | null;
+  /** The ambient project map (D12), rendered between the workspace mark and
+   *  the nav. Passed in from the (app) layout — a slot, NOT a direct import —
+   *  so app-shell.tsx (which also exports Topbar/PageContainer, imported all
+   *  over) stays free of the server-only projects/customer graph and remains
+   *  safe for any client component to import from. The layout wraps it in
+   *  <Suspense> (D10) so the projects query never blocks the shell. */
+  projectsNav?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -39,6 +46,7 @@ export function AppShell({
   region,
   selfHost = false,
   role = null,
+  projectsNav = null,
   children,
 }: AppShellProps) {
   return (
@@ -50,6 +58,9 @@ export function AppShell({
             <WorkspaceLabel />
           </div>
         </div>
+        {/* Ambient project map (D12) — a server-fetched slot from the layout,
+            Suspense-wrapped there (D10) so it never blocks the shell. */}
+        {projectsNav}
         <SidebarNav selfHost={selfHost} role={role} />
         {region && (
           <>

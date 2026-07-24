@@ -54,7 +54,6 @@ import {
   getProjectWithDatabase,
   getProjectWithDatabaseAndCredential,
   getTokenUsage,
-  hasEmptyProject,
   listProjectSwitcherRows,
   maskConfigAddsMasking,
   isValidDatabaseName,
@@ -81,9 +80,10 @@ import { addDatabaseFromForm } from "@/lib/database-form";
 import { projectLabel, formatRelative } from "@/lib/format";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { pingDsnGuarded } from "@/lib/ping-guard";
+import { revalidateProjectsChrome } from "@/lib/revalidate";
 import {
   databaseAddBlock,
-  projectAddBlock,
+  projectQuota,
   resolvePlan,
   UPGRADE_URL,
 } from "@/lib/plan";
@@ -151,13 +151,12 @@ export default async function ProjectWorkspace({
   // Token usage is its own light COUNT; the project count comes free from
   // the switcher rows below (getPlanUsage here would re-COUNT projects the
   // page already fetches on every render).
-  const [home, agents, tokensUsed, switcherRows, reusableEmpty, connectStatus] =
+  const [home, agents, tokensUsed, switcherRows, connectStatus] =
     await Promise.all([
       getProjectHomeData(customer, id, caps.auditRetentionDays),
       listProjectAgents(customer, id),
       getTokenUsage(customer),
       listProjectSwitcherRows(customer),
-      hasEmptyProject(customer),
       getConnectStatus(customer, id),
     ]);
   if (!home) notFound();
@@ -261,6 +260,8 @@ export default async function ProjectWorkspace({
     if (!renamed) notFound();
     revalidatePath("/dashboard");
     revalidatePath(`/projects/${formId}`);
+    // Renaming changes the label shown in the sidebar map on every route (D11).
+    revalidateProjectsChrome();
   }
 
   async function deleteAction(formData: FormData) {
@@ -297,6 +298,8 @@ export default async function ProjectWorkspace({
         });
       }
     }
+    // Deleting removes the row from the sidebar map on every route (D11).
+    revalidateProjectsChrome();
     redirect("/dashboard");
   }
 
@@ -1114,12 +1117,15 @@ export default async function ProjectWorkspace({
   // them), so the switcher's quota line and its at-cap gate count only real
   // projects — the sample row still lists, just not against the limit.
   const billableProjects = switcherRows.filter((r) => !r.isSample).length;
-  const atProjectCap =
-    projectAddBlock({ projects: billableProjects }, caps) !== null &&
-    !reusableEmpty;
-  const projectQuotaLine = Number.isFinite(caps.projects)
-    ? `${plan} plan · ${billableProjects}/${caps.projects} projects`
-    : null;
+  // hasEmpty comes free from the switcher rows' count aggregate (isEmpty) — no
+  // separate hasEmptyProject query (D9). projectQuota is the shared unit (D2):
+  // the same at-cap + quota-line the dashboard and /projects/new use.
+  const { atCap: atProjectCap, quotaLine: projectQuotaLine } = projectQuota({
+    billableProjects,
+    hasEmpty: switcherRows.some((r) => r.isEmpty),
+    caps,
+    plan,
+  });
 
   const railHeader = (
     <div>

@@ -9,6 +9,7 @@ import { navItemsFor } from "@/components/layout/nav-items";
 import { UserMenuButton } from "@/components/layout/user-menu-button";
 import { WorkspaceLabel } from "@/components/layout/workspace-label";
 import { RegionBadge } from "@/components/ui/region-badge";
+import { PROJECTS_LIST_HREF } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import type { Region } from "@midplane-cloud/kms";
 
@@ -39,10 +40,17 @@ export function MobileNav({
         {navItemsFor({ selfHost, role }).map((item) => {
           const active = item.match(pathname);
           const Icon = item.icon;
+          // Mobile has no ambient sidebar list (that's desktop-only), so the
+          // "Projects" tab routes to the explicit list view — bypassing
+          // /dashboard's single-project auto-jump so the list is always one tap
+          // away. Desktop keeps /dashboard; the sidebar is the map there.
+          // usePathname ignores the query string, so `active` is unaffected.
+          const href =
+            item.href === "/dashboard" ? PROJECTS_LIST_HREF : item.href;
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={href}
               aria-current={active ? "page" : undefined}
               className={cn(
                 // Horizontal twin of the sidebar's 3px inset left rail.

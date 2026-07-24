@@ -1,5 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { headers } from "next/headers";
+import { cache } from "react";
 import { ulid } from "ulid";
 
 import { customers, getDb, type Customer } from "@midplane-cloud/db";
@@ -28,7 +29,16 @@ import {
 //
 // One Midplane customer == one organization. Org members are the actors who
 // can sign in and act on its behalf.
-export async function currentCustomer(): Promise<Customer | null> {
+//
+// Wrapped in React cache() so the SAME customer object is shared across every
+// caller in a request render — the (app) layout, each page, resolvePlan(), and
+// the sidebar's ProjectsNav data all resolve the session + customers row ONCE
+// instead of 3+ times. This is also what makes the downstream cache() wraps
+// (listProjectSwitcherRows) actually dedup: React cache() keys on argument
+// identity, so callers must share one customer object for a hit. Per-request
+// scope; server actions run in their own request, so nothing bleeds across
+// mutations. Outside a request (unit tests) cache() is a transparent passthrough.
+export const currentCustomer = cache(async (): Promise<Customer | null> => {
   // Self-host: one implicit tenant (seeded at boot by ensureImplicitCustomer).
   // Access requires ACCEPTED MEMBERSHIP (or being the claimed owner) — NOT just
   // a session. An invited email can sign up (the gate allows it), but gets NO
@@ -83,7 +93,7 @@ export async function currentCustomer(): Promise<Customer | null> {
     .from(customers)
     .where(eq(customers.orgId, orgId));
   return rows[0] ?? null;
-}
+});
 
 // Seed the implicit org + customer rows the self-host build is keyed on.
 //

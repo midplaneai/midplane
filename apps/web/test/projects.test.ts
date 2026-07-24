@@ -2699,12 +2699,14 @@ describe("listProjectSwitcherRows", () => {
         label: "prod",
         serving: "ready",
         isSample: false,
+        isEmpty: false,
       },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         label: "01HSWITCHUNN",
         serving: "ready",
         isSample: true,
+        isEmpty: false,
       },
     ]);
   });
