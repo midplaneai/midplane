@@ -1,6 +1,11 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/layout/app-shell";
+import {
+  ProjectsNavData,
+  ProjectsNavSkeleton,
+} from "@/components/layout/projects-nav-data";
 import { currentCustomer } from "@/lib/customer";
 import { getActiveRole } from "@/lib/org-auth";
 import { getActorEmail } from "@/lib/org-context";
@@ -46,7 +51,16 @@ export default async function AuthenticatedLayout({
   // and passed down; every gated route also enforces server-side.
   const role = (await getActiveRole())?.role ?? null;
   return (
-    <AppShell region={region} selfHost={selfHost} role={role}>
+    <AppShell
+      region={region}
+      selfHost={selfHost}
+      role={role}
+      projectsNav={
+        <Suspense fallback={<ProjectsNavSkeleton />}>
+          <ProjectsNavData />
+        </Suspense>
+      }
+    >
       {children}
     </AppShell>
   );

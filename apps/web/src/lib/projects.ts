@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { cache } from "react";
 import { ulid } from "ulid";
 
 import {
@@ -616,6 +617,11 @@ export interface ProjectSwitcherRow {
   /** Hosted read-only sample project — badged in the switcher and excluded
    *  from the header's project-quota line. */
   isSample: boolean;
+  /** No databases yet (a reusable "empty" project — the auto-seeded Default, or
+   *  one whose databases were all removed). Derived from the same grouped
+   *  count(project_databases) the serving dot uses, so callers get the
+   *  "has an empty project" signal WITHOUT a separate hasEmptyProject query. */
+  isEmpty: boolean;
 }
 
 /** The customer's projects with the light facts the rail-header switcher
@@ -623,35 +629,44 @@ export interface ProjectSwitcherRow {
  *  listDashboardProjects without tokens / last-query / cursor detail. One
  *  grouped query (database count feeds resolveServing). Newest-first to
  *  match the dashboard list. */
-export async function listProjectSwitcherRows(
-  customer: Customer,
-): Promise<ProjectSwitcherRow[]> {
-  const db = getDb(customer.region);
-  const rows = await db
-    .select({
-      id: projects.id,
-      name: projects.name,
-      pausedAt: projects.pausedAt,
-      isSample: projects.isSample,
-      databaseCount: sql<number>`count(${projectDatabases.id})::int`,
-    })
-    .from(projects)
-    .leftJoin(projectDatabases, eq(projectDatabases.projectId, projects.id))
-    .where(eq(projects.customerId, customer.id))
-    // projects.id is the PK, so the non-aggregated columns are functionally
-    // dependent and Postgres accepts the single-column GROUP BY.
-    .groupBy(projects.id)
-    .orderBy(desc(projects.createdAt));
-  return rows.map((r) => ({
-    id: r.id,
-    label: projectLabel(r),
-    serving: resolveServing({
-      pausedAt: r.pausedAt,
-      databaseCount: Number(r.databaseCount ?? 0),
-    }).state,
-    isSample: r.isSample,
-  }));
-}
+// cache()-wrapped so the layout's ProjectsNav data and the project route
+// (which also calls this at projects/[id]/page.tsx) share ONE query per request.
+// The dedup only fires because currentCustomer() is itself cache()-wrapped —
+// React cache() keys on argument identity, so both callers must pass the same
+// customer object. Outside a request (unit tests) cache() is a passthrough.
+export const listProjectSwitcherRows = cache(
+  async (customer: Customer): Promise<ProjectSwitcherRow[]> => {
+    const db = getDb(customer.region);
+    const rows = await db
+      .select({
+        id: projects.id,
+        name: projects.name,
+        pausedAt: projects.pausedAt,
+        isSample: projects.isSample,
+        databaseCount: sql<number>`count(${projectDatabases.id})::int`,
+      })
+      .from(projects)
+      .leftJoin(projectDatabases, eq(projectDatabases.projectId, projects.id))
+      .where(eq(projects.customerId, customer.id))
+      // projects.id is the PK, so the non-aggregated columns are functionally
+      // dependent and Postgres accepts the single-column GROUP BY.
+      .groupBy(projects.id)
+      .orderBy(desc(projects.createdAt));
+    return rows.map((r) => {
+      const databaseCount = Number(r.databaseCount ?? 0);
+      return {
+        id: r.id,
+        label: projectLabel(r),
+        serving: resolveServing({
+          pausedAt: r.pausedAt,
+          databaseCount,
+        }).state,
+        isSample: r.isSample,
+        isEmpty: databaseCount === 0,
+      };
+    });
+  },
+);
 
 // Update the user-supplied name on the parent project. Cosmetic — no
 // caches to invalidate, no container to restart, no token rotation.

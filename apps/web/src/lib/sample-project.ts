@@ -9,6 +9,7 @@ import { getOrgContext } from "@/lib/org-context";
 import { PlanLimitError, resolvePlan } from "@/lib/plan";
 import { getPostHog } from "@/lib/posthog";
 import { createProject } from "@/lib/projects";
+import { revalidateProjectsChrome } from "@/lib/revalidate";
 
 // Where the "Try the sample database" CTA was clicked — recorded on the funnel
 // events so we can see which surface converts evaluators onto the hosted
@@ -90,6 +91,11 @@ export async function createSampleProject(formData: FormData): Promise<void> {
   // the one-sample race) — createProject returned it untouched. Skip the funnel
   // events (nothing was created) and go straight to its Connect pane.
   if (!created) redirect(`/projects/${id}?section=connect`);
+
+  // A new sample project just joined the list — refresh the shared sidebar
+  // chrome across every authed route (D11). Only reached on the created path
+  // (the !created redirect above throws first).
+  revalidateProjectsChrome();
 
   groupIdentifyProject(id, { region: customer.region });
   const properties = {

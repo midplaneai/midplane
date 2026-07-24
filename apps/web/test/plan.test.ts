@@ -24,6 +24,7 @@ import {
   planLimitBody,
   projectAddBlock,
   projectCreateBlock,
+  projectQuota,
   hasEntitlement,
   resolvePlan,
   resolvePlanFor,
@@ -276,6 +277,73 @@ describe("projectAddBlock", () => {
   it("never blocks on unlimited (Infinity) caps", () => {
     expect(projectAddBlock({ projects: 999_999 }, CAPS.team)).toBeNull();
     expect(projectAddBlock({ projects: 999_999 }, SELF_HOST_CAPS)).toBeNull();
+  });
+});
+
+describe("projectQuota", () => {
+  it("has room: not at cap, formats the usage line, passes the limit through", () => {
+    expect(
+      projectQuota({
+        billableProjects: 3,
+        hasEmpty: false,
+        caps: CAPS.pro,
+        plan: "pro",
+      }),
+    ).toEqual({
+      atCap: false,
+      quotaLine: "pro plan · 3/10 projects",
+      projectLimit: 10,
+    });
+  });
+
+  it("Free at 1/1 with no empty project is at cap", () => {
+    const q = projectQuota({
+      billableProjects: 1,
+      hasEmpty: false,
+      caps: CAPS.free,
+      plan: "free",
+    });
+    expect(q.atCap).toBe(true);
+    expect(q.quotaLine).toBe("free plan · 1/1 projects");
+  });
+
+  it("a reusable empty project clears the cap even at the limit", () => {
+    // createProject attaches the first DB to the empty project without
+    // consuming a slot, so "New project" must stay available.
+    expect(
+      projectQuota({
+        billableProjects: 1,
+        hasEmpty: true,
+        caps: CAPS.free,
+        plan: "free",
+      }).atCap,
+    ).toBe(false);
+  });
+
+  it("fresh Free (0/1) is not at cap", () => {
+    expect(
+      projectQuota({
+        billableProjects: 0,
+        hasEmpty: false,
+        caps: CAPS.free,
+        plan: "free",
+      }),
+    ).toEqual({
+      atCap: false,
+      quotaLine: "free plan · 0/1 projects",
+      projectLimit: 1,
+    });
+  });
+
+  it("unlimited (Team) is never at cap and shows no quota line", () => {
+    expect(
+      projectQuota({
+        billableProjects: 5,
+        hasEmpty: false,
+        caps: CAPS.team,
+        plan: "team",
+      }),
+    ).toEqual({ atCap: false, quotaLine: null, projectLimit: Infinity });
   });
 });
 

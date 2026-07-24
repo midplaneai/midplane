@@ -31,7 +31,8 @@ import {
 import { currentCustomer } from "@/lib/customer";
 import { assertManager, isManager } from "@/lib/org-auth";
 import { projectLabel, formatRelative } from "@/lib/format";
-import { projectAddBlock, resolvePlan, UPGRADE_URL } from "@/lib/plan";
+import { projectQuota, resolvePlan, UPGRADE_URL } from "@/lib/plan";
+import { revalidateProjectsChrome } from "@/lib/revalidate";
 import { wantsProjectList } from "@/lib/routes";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { analyticsGroups } from "@/lib/analytics";
@@ -67,7 +68,7 @@ export default async function Dashboard({
   // (connects agents, runs queries) but sees no management controls.
   const canManage = await isManager();
 
-  const { caps } = await resolvePlan();
+  const { plan, caps } = await resolvePlan();
   const rows = await listDashboardProjects(
     customer,
     caps.auditRetentionDays,
@@ -101,9 +102,15 @@ export default async function Dashboard({
   // count only real projects — otherwise a user who tried the sample sees a
   // wrong "2 / 1" or a bogus upgrade wall when adding their first real one.
   const billableProjects = rows.filter((r) => !r.project.isSample).length;
-  const atProjectLimit =
-    projectAddBlock({ projects: billableProjects }, caps) !== null &&
-    !hasReusableEmpty;
+  // Shared at-cap unit (D2), fed the billable + empty counts the dashboard
+  // already derived from listDashboardProjects — no extra query (D2=A keeps
+  // the dashboard's own rows as the source).
+  const { atCap: atProjectLimit } = projectQuota({
+    billableProjects,
+    hasEmpty: hasReusableEmpty,
+    caps,
+    plan,
+  });
 
   return (
     <>
@@ -460,6 +467,8 @@ async function deleteAction(formData: FormData) {
     }
   }
   revalidatePath("/dashboard");
+  // Deleting removes the row from the sidebar map on every route (D11).
+  revalidateProjectsChrome();
 }
 
 async function pauseAction(formData: FormData) {

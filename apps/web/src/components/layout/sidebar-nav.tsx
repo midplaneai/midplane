@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { navItemsFor } from "@/components/layout/nav-items";
+import { isOnProjectDetailPath } from "@/lib/nav-active";
 import { cn } from "@/lib/utils";
 
 export function SidebarNav({
@@ -14,13 +15,21 @@ export function SidebarNav({
   role?: string | null;
 }) {
   const pathname = usePathname() ?? "";
+  // On a project detail page a ProjectsNav row carries the active rail, so
+  // suppress the top-level "Projects" item's rail here — otherwise two rails
+  // render at once (design D3). Pathname-only so SidebarNav stays part of the
+  // instant shell chrome and never waits on the streamed project rows; mobile
+  // (MobileNav) reuses NAV_ITEMS unchanged and keeps its top-item indicator.
+  const suppressProjectsRail = isOnProjectDetailPath(pathname);
   return (
     <nav className="space-y-1 py-2" aria-label="Workspace">
       <div className="px-[18px] pb-1 font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
         workspace
       </div>
       {navItemsFor({ selfHost, role }).map((item) => {
-        const active = item.match(pathname);
+        const active =
+          item.match(pathname) &&
+          !(item.href === "/dashboard" && suppressProjectsRail);
         const Icon = item.icon;
         return (
           <Link
