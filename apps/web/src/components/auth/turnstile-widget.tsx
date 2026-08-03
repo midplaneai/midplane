@@ -91,10 +91,25 @@ export function TurnstileWidget({
   siteKey,
   action,
   onToken,
+  onLoadError,
+  resetSignal = 0,
 }: {
   siteKey: string | null;
   action: string;
   onToken: (token: string | null) => void;
+  /** Called when the Turnstile script cannot load or render at all (blocked by
+   *  an extension, offline, CDN failure). Distinct from onToken(null), which
+   *  means "not solved yet". The two are NOT interchangeable: the server
+   *  enforces whenever it's configured, so a load failure makes signup
+   *  impossible and the form has to SAY so — an unexplained permanently
+   *  disabled button is the failure mode this exists to prevent. */
+  onLoadError?: () => void;
+  /** Bump to tear down and re-render the widget. Needed because tokens are
+   *  single-use: after the server rejects a submit, the widget still displays a
+   *  solved challenge while its token is spent, so without a reset the user
+   *  sits on a disabled button with no way to retry. Also doubles as the retry
+   *  path after onLoadError. */
+  resetSignal?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Keep the latest callback in a ref so re-rendering the parent (every
@@ -110,6 +125,11 @@ export function TurnstileWidget({
   useEffect(() => {
     onTokenRef.current = onToken;
   }, [onToken]);
+
+  const onLoadErrorRef = useRef(onLoadError);
+  useEffect(() => {
+    onLoadErrorRef.current = onLoadError;
+  }, [onLoadError]);
 
   useEffect(() => {
     if (!siteKey || !containerRef.current) return;
@@ -131,17 +151,25 @@ export function TurnstileWidget({
         });
       })
       .catch((err) => {
-        // A blocked or failed script must not strand the user on a dead form
-        // with no explanation — surface it as "no token" so the form can say so.
+        // Report load failure on its OWN channel. Collapsing it into
+        // onToken(null) made it indistinguishable from an unsolved challenge,
+        // so the form disabled its submit button forever and explained nothing.
         console.error(err);
-        if (!cancelled) onTokenRef.current(null);
+        if (cancelled) return;
+        onTokenRef.current(null);
+        onLoadErrorRef.current?.();
       });
 
     return () => {
       cancelled = true;
       if (widgetId && api) api.remove(widgetId);
     };
-  }, [siteKey, action]);
+    // resetSignal is a dependency ON PURPOSE: bumping it re-runs this effect,
+    // whose cleanup removes the spent widget and whose body renders a fresh
+    // one. A full re-render rather than turnstile.reset() so the same mechanism
+    // covers both retry cases — spent token, and a failed initial load where
+    // there is no widget to reset.
+  }, [siteKey, action, resetSignal]);
 
   if (!siteKey) return null;
   return <div ref={containerRef} className="min-h-[65px]" />;

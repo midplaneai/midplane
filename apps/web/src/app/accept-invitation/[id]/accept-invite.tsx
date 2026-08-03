@@ -46,6 +46,9 @@ export function AcceptInvite({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
+  const [captchaFailed, setCaptchaFailed] = useState(false);
+  const [awaitingVerification, setAwaitingVerification] = useState(false);
 
   const matches =
     signedInEmail != null &&
@@ -82,15 +85,37 @@ export function AcceptInvite({
     e.preventDefault();
     setError(null);
     setPending(true);
-    const { error: signUpError } = await authClient.signUp.email(
-      { name, email, password },
+    const { data, error: signUpError } = await authClient.signUp.email(
+      {
+        name,
+        email,
+        password,
+        // Verification lands them back HERE, signed in as the invited address
+        // (autoSignInAfterVerification), which drops them into the one-click
+        // accept branch above. Invited users are no longer pre-verified — an
+        // invitation proves nothing about who is at the keyboard, and the
+        // exemption that assumed otherwise let anyone who knew an invited
+        // address claim it. See the note in lib/auth.ts.
+        callbackURL: `/accept-invitation/${invitationId}`,
+      },
       captchaToken
         ? { headers: { "x-captcha-response": captchaToken } }
         : undefined,
     );
     if (signUpError) {
       setError(signUpError.message ?? "Could not create your account.");
-      setCaptchaToken(null); // single-use; force a fresh challenge on retry
+      // Single-use token: clear ours AND re-render the widget, or the button
+      // stays disabled over a solved-looking challenge that can't be resubmitted.
+      setCaptchaToken(null);
+      setCaptchaReset((n) => n + 1);
+      setPending(false);
+      return;
+    }
+    // No session token => verification is required, so there is nothing to
+    // accept with yet. Accepting here would fail on a missing session; the
+    // invitation stays pending until they follow the link and come back.
+    if (!data?.token) {
+      setAwaitingVerification(true);
       setPending(false);
       return;
     }
@@ -108,6 +133,32 @@ export function AcceptInvite({
     await authClient.signOut();
     router.refresh();
     setPending(false);
+  }
+
+  // Account created, but verification is required so there's no session to
+  // accept with. The invitation stays pending — following the emailed link
+  // signs them in and returns them here, where `matches` is true and the
+  // one-click accept branch takes over.
+  if (awaitingVerification) {
+    return (
+      <div className="w-full max-w-[400px]">
+        <div className="mb-8 space-y-2">
+          <h1 className="text-3xl font-semibold tracking-[-0.025em] text-foreground">
+            Check your inbox
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Your account is created. We sent a verification link to{" "}
+            <span className="text-foreground">{email}</span> — open it and
+            you&apos;ll come back here to join{" "}
+            <strong className="font-medium text-foreground">{orgName}</strong>.
+          </p>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Your invitation stays valid until you do. Check spam if it hasn&apos;t
+          arrived in a minute.
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -209,8 +260,30 @@ export function AcceptInvite({
           <TurnstileWidget
             siteKey={captchaSiteKey}
             action={CAPTCHA_ACTION}
-            onToken={setCaptchaToken}
+            resetSignal={captchaReset}
+            onToken={(t) => {
+              setCaptchaToken(t);
+              if (t) setCaptchaFailed(false);
+            }}
+            onLoadError={() => setCaptchaFailed(true)}
           />
+
+          {captchaFailed && (
+            <p role="alert" className="text-sm text-muted-foreground">
+              The bot check couldn&apos;t load — an ad blocker or network filter
+              is the usual cause.{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setCaptchaFailed(false);
+                  setCaptchaReset((n) => n + 1);
+                }}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                Try again
+              </button>
+            </p>
+          )}
 
           {error && (
             <p role="alert" className="text-sm text-[hsl(var(--deny))]">

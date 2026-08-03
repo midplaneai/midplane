@@ -18,7 +18,6 @@ import { buildStripePlugins } from "./billing";
 import { buildCaptchaPlugins } from "./captcha";
 import { normalizeDisplayName } from "./display-name";
 import { getEeAuthPlugins } from "./ee-plugins";
-import { hasPendingInvitation } from "./invited-signup";
 import {
   isEmailConfigured,
   sendPasswordResetEmail,
@@ -344,34 +343,25 @@ function createAuth() {
           before: async (newUser) => {
             await enforceSelfHostSignupGate(newUser.email);
 
-            const patch: Record<string, unknown> = {};
-
             // Bound the display name at the write, not the form: this hook is
             // the one path BOTH credential signup and Google OAuth (name taken
             // from the provider profile) go through. See lib/display-name.ts
             // for why we normalize rather than reject markup characters.
+            //
+            // NOTHING here may set `emailVerified`. An earlier version
+            // pre-verified signups that had a pending invitation for the same
+            // address, on the reasoning that holding an invite proved mailbox
+            // control. It does not: signup asserts an email, it carries no
+            // invitation id or token, so merely KNOWING an address was invited
+            // was enough to claim it. And because acceptInvitation checks the
+            // invitation against the SESSION's email, the forged account then
+            // satisfied that check and could join the org — the exemption
+            // disabled the verification gate exactly on the path that grants
+            // tenant access. Invited teammates verify like everyone else; the
+            // accept flow routes them back via callbackURL.
             const name = normalizeDisplayName(newUser.name ?? "");
-            if (name !== newUser.name) patch.name = name;
-
-            // Pre-verify an invited teammate: reaching signup with a pending
-            // invitation already proves control of the mailbox, so a second
-            // round trip through a verification email proves nothing new and
-            // races the invite mail into the same inbox. Grants no access on
-            // its own — see lib/invited-signup.ts. Best-effort: if the lookup
-            // fails, fall through to the normal verification flow rather than
-            // failing the signup.
-            if (!newUser.emailVerified) {
-              try {
-                if (await hasPendingInvitation(newUser.email)) {
-                  patch.emailVerified = true;
-                }
-              } catch (err) {
-                console.error("pending-invitation lookup failed", err);
-              }
-            }
-
-            if (Object.keys(patch).length === 0) return;
-            return { data: { ...newUser, ...patch } };
+            if (name === newUser.name) return;
+            return { data: { ...newUser, name } };
           },
           // Link the OWNER as an `owner` member of the implicit org so Better
           // Auth's org APIs (active organization, workspace rename/manage)
