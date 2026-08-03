@@ -37,7 +37,21 @@ import type { Db } from "./resolve.ts";
 
 export type ResolveDsnResult =
   | { ok: true; plaintext: string; source: "fresh" | "grace" | "miss" }
-  | { ok: false; reason: "credential_unavailable" };
+  | {
+      ok: false;
+      reason: "credential_unavailable";
+      /** Why the credential is unavailable, for operator-facing logging only.
+       *  "expired" when the cache aged out with KMS still bad; otherwise the
+       *  KMS/decrypt error message.
+       *
+       *  This exists because the KMS throw used to be swallowed by a bare
+       *  `catch {}`, so a total outage (a whole region's rows stranded on a
+       *  retired key after a MIDPLANE_KMS_MODE switch) reached the logs and the
+       *  error tracker as a bare "credential_unavailable" with no cause — and
+       *  went unread for ten days. Never surfaced to the agent; the proxy still
+       *  returns the opaque code. */
+      detail: string;
+    };
 
 export interface ResolveDsnDeps {
   db: Db;
@@ -86,7 +100,11 @@ export class DsnResolver {
     }
 
     if (cached.kind === "expired") {
-      return { ok: false, reason: "credential_unavailable" };
+      return {
+        ok: false,
+        reason: "credential_unavailable",
+        detail: "cache expired (>70min) with no KMS success",
+      };
     }
 
     // miss → must hit KMS now. If KMS fails we refuse — even if a row
@@ -105,8 +123,17 @@ export class DsnResolver {
       cache.set(cdb.id, region, plaintext, decryptStartedAt);
       await this.persistSuccess(cdb.id);
       return { ok: true, plaintext, source: "miss" };
-    } catch {
-      return { ok: false, reason: "credential_unavailable" };
+    } catch (err) {
+      // The message, not the error object: a KMS SDK error can carry request
+      // metadata, and this string reaches logs + the error tracker. The
+      // failures that matter here are config-shaped ("MIDPLANE_KMS_DEV_KEY_EU
+      // is not set", "AccessDenied", "unsupported wire version") and name no
+      // secret.
+      return {
+        ok: false,
+        reason: "credential_unavailable",
+        detail: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 

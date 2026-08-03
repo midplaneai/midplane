@@ -159,6 +159,7 @@ export default async function OAuthConsentPage({
               projects={projects}
               defaultProjectId={defaultProjectId}
               existing={existing}
+              appName={displayName}
             />
 
             <div className="max-w-[400px] space-y-1 text-center">
