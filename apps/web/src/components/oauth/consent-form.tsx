@@ -57,7 +57,19 @@ export interface ConsentFormProps {
   defaultProjectId: string | null;
   /** Prior grant (cdbId → access) so a re-consent pre-selects the last choice. */
   existing: Record<string, Access>;
+  /** The client's sanitized display name, for the hand-off status line. Already
+   *  scrubbed by the page (control/format chars stripped, length clamped) — this
+   *  component renders it as-is. */
+  appName?: string;
 }
+
+/** A decision that can no longer be recorded because the authorization request
+ *  it belongs to is gone — consumed by an earlier Allow, or expired. Retrying
+ *  can never succeed, so this must NOT render as "please try again": the most
+ *  common way to reach it is a second click after a first one already worked,
+ *  and telling that user to retry sends them round the same loop. */
+const STALE_MESSAGE =
+  "This approval request has already been completed or has expired.";
 
 export function ConsentForm({
   consentCode,
@@ -65,9 +77,18 @@ export function ConsentForm({
   projects,
   defaultProjectId,
   existing,
+  appName,
 }: ConsentFormProps) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  // Set the instant a decision is accepted, and never cleared: the browser is
+  // now navigating to the agent's own callback (typically an RFC 8252 loopback
+  // URL that renders little or nothing). Without this the page sat visually
+  // unchanged across the hand-off, which reads as "the button did nothing" —
+  // and the natural response, clicking again, lands on the consumed-code path
+  // above.
+  const [handingOff, setHandingOff] = useState(false);
 
   // The one project this credential will be bound to. Auto-select ONLY when the
   // choice is unambiguous: a re-consent's existing binding, or the sole project.
@@ -132,11 +153,19 @@ export function ConsentForm({
       body: JSON.stringify({ accept, consent_code: consentCode }),
     });
     if (!res.ok) {
+      // The plugin 401s a consumed / expired / already-decided code. Separate
+      // that from a genuine transient failure so only the latter says "retry".
+      if (res.status === 401) {
+        setStale(true);
+        setError(STALE_MESSAGE);
+        return;
+      }
       setError("Could not record your decision. Please try again.");
       return;
     }
     const data = (await res.json()) as { redirectURI?: string };
     if (data.redirectURI) {
+      setHandingOff(true);
       window.location.href = data.redirectURI;
       return;
     }
@@ -158,11 +187,21 @@ export function ConsentForm({
               access: state[db.projectDatabaseId] as Access,
             }));
           const grant = await writeConsentGrants(
+            consentCode,
             clientId,
             selectedProjectId,
             selections,
           );
           if (!grant.ok) {
+            // stale_request means the action REFUSED to touch the grant set
+            // because this page's authorization request is already gone — the
+            // agent's real grants are untouched, so say so rather than implying
+            // the selection failed to save.
+            if (grant.error === "stale_request") {
+              setStale(true);
+              setError(STALE_MESSAGE);
+              return;
+            }
             setError(
               "Could not save the database selection. Please try again.",
             );
@@ -292,17 +331,40 @@ export function ConsentForm({
         </p>
       )}
 
-      {error && (
-        <p role="alert" className="text-sm text-deny">
-          {error}
+      {handingOff && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Approved — returning you to {appName ?? "your agent"}…
         </p>
+      )}
+
+      {error && (
+        <div role="alert" className="space-y-1">
+          <p className="text-sm text-deny">{error}</p>
+          {stale && (
+            <p className="text-xs text-muted-foreground">
+              If you just approved this agent it is already connected — check{" "}
+              {selectedProjectId ? (
+                <a
+                  href={`/projects/${selectedProjectId}`}
+                  className="underline underline-offset-2"
+                >
+                  the project&apos;s Connect tab
+                </a>
+              ) : (
+                "the project's Connect tab"
+              )}
+              . Otherwise start the connection again from your agent — this page
+              can&apos;t be retried.
+            </p>
+          )}
+        </div>
       )}
 
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
         <Button
           type="button"
           variant="outline"
-          disabled={pending}
+          disabled={pending || handingOff || stale}
           onClick={() => decide(false)}
         >
           Deny
@@ -312,19 +374,23 @@ export function ConsentForm({
           // secondary, not outline: the demoted approve must never be a visual
           // twin of the adjacent Deny (opposite decisions on a consent screen).
           variant={zeroGrant ? "secondary" : "default"}
-          disabled={pending || mustPickProject}
+          disabled={pending || handingOff || stale || mustPickProject}
           onClick={() => decide(true)}
-          arrow={!zeroGrant}
+          arrow={!zeroGrant && !handingOff && !stale}
         >
-          {pending
-            ? "Authorizing…"
-            : mustPickProject
-              ? "Choose a project"
-              : selectedCount > 0
-                ? `Allow access to ${selectedCount} database${selectedCount === 1 ? "" : "s"}`
-                : zeroGrant
-                  ? "Connect without database access"
-                  : "Connect agent"}
+          {stale
+            ? "Request closed"
+            : handingOff
+              ? "Redirecting…"
+              : pending
+                ? "Authorizing…"
+                : mustPickProject
+                  ? "Choose a project"
+                  : selectedCount > 0
+                    ? `Allow access to ${selectedCount} database${selectedCount === 1 ? "" : "s"}`
+                    : zeroGrant
+                      ? "Connect without database access"
+                      : "Connect agent"}
         </Button>
       </div>
     </div>

@@ -14,10 +14,11 @@
 import { and, eq } from "drizzle-orm";
 
 import { getDb } from "@midplane-cloud/db";
-import { oauthApplication } from "@midplane-cloud/db/auth-schema";
+import { oauthApplication, verification } from "@midplane-cloud/db/auth-schema";
 import { safeErrorDetail } from "@midplane-cloud/router";
 
 import { analyticsGroups, captureError } from "@/lib/analytics";
+import { isPendingConsentRow } from "@/lib/consent-request";
 import { currentCustomer } from "@/lib/customer";
 import { getOrgContext } from "@/lib/org-context";
 import { getPostHog } from "@/lib/posthog";
@@ -26,7 +27,10 @@ import { ensureConsentAttributionToken } from "@/lib/tokens";
 
 export type ConsentGrantResult =
   | { ok: true; granted: number }
-  | { ok: false; error: "unauthenticated" | "bad_request" | "internal" };
+  | {
+      ok: false;
+      error: "unauthenticated" | "bad_request" | "internal" | "stale_request";
+    };
 
 /** Persist the consent picker's project + DB selection as the (client, user)
  *  grant set, BEFORE the client posts the consent decision. The selection binds
@@ -34,12 +38,22 @@ export type ConsentGrantResult =
  *  and project-membership are validated inside setOAuthGrants (foreign / tampered
  *  / off-project ids are dropped). An empty selection is valid — it writes zero
  *  grants, and the proxy then 403s the agent (the user approved the client but
- *  no databases). */
+ *  no databases).
+ *
+ *  `consentCode` gates the write on the authorization request still being
+ *  pending — see assertPendingConsent. Without that gate a consent page whose
+ *  code was already consumed still rewrote the grant set (replace-all) on a
+ *  second Allow, so a stale tab could clobber a live agent's grants even though
+ *  its own consent POST then 401'd. */
 export async function writeConsentGrants(
+  consentCode: string,
   clientId: string,
   projectId: string,
   selections: Array<{ projectDatabaseId: string; access: "read" | "write" }>,
 ): Promise<ConsentGrantResult> {
+  if (typeof consentCode !== "string" || consentCode.length === 0) {
+    return { ok: false, error: "bad_request" };
+  }
   if (typeof clientId !== "string" || clientId.length === 0) {
     return { ok: false, error: "bad_request" };
   }
@@ -70,6 +84,10 @@ export async function writeConsentGrants(
     )
     .limit(1);
   if (knownClient.length === 0) return { ok: false, error: "bad_request" };
+
+  if (!(await isConsentPending(customer.region, consentCode, clientId, userId))) {
+    return { ok: false, error: "stale_request" };
+  }
 
   try {
     const granted = await setOAuthGrants(customer, {
@@ -120,5 +138,43 @@ export async function writeConsentGrants(
       },
     });
     return { ok: false, error: "internal" };
+  }
+}
+
+/** Is `consentCode` still an unconsumed, unexpired authorization request that
+ *  belongs to this user and client?
+ *
+ *  The oidc-provider plugin stores the pending request as a `verification` row
+ *  keyed by the consent code, and CONSUMES it on a successful consent by
+ *  rewriting the identifier to the freshly-minted authorization code and
+ *  flipping `requireConsent` to false. So "the row is still findable under the
+ *  consent code, unexpired, and still requires consent" is exactly the
+ *  plugin's own precondition for accepting the decision — we check it here so
+ *  the grant write can't outlive the request it belongs to.
+ *
+ *  Reading the plugin's table directly (rather than through Better Auth) mirrors
+ *  what the consent page already does for `oauth_application`, and this is a
+ *  strictly read-only precondition — the plugin still owns every write and
+ *  re-validates the code itself when the decision is posted. Any race left
+ *  between this check and the POST is sub-request-length, versus the unbounded
+ *  window a parked tab had before.
+ *
+ *  Fails CLOSED: a missing row, unparseable value, mismatched subject, or any
+ *  error means "not pending". */
+async function isConsentPending(
+  region: Parameters<typeof getDb>[0],
+  consentCode: string,
+  clientId: string,
+  userId: string,
+): Promise<boolean> {
+  try {
+    const rows = await getDb(region)
+      .select({ value: verification.value, expiresAt: verification.expiresAt })
+      .from(verification)
+      .where(eq(verification.identifier, consentCode))
+      .limit(1);
+    return isPendingConsentRow(rows[0] ?? null, { clientId, userId });
+  } catch {
+    return false;
   }
 }
