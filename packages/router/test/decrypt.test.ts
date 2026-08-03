@@ -98,6 +98,33 @@ describe("DsnResolver", () => {
     if (!r.ok) expect(r.reason).toBe("credential_unavailable");
   });
 
+  // The KMS error used to be swallowed by a bare `catch {}`, so an outage that
+  // stranded a whole region on a retired key logged the same opaque string as a
+  // transient blip — and went unread for ten days. The cause must survive.
+  it("carries the KMS failure reason out as `detail`", async () => {
+    const cache = new DecryptCache();
+    const decrypt = vi
+      .fn()
+      .mockRejectedValue(new Error("MIDPLANE_KMS_DEV_KEY_EU is not set"));
+    const { db } = fakeDb();
+    const resolver = new DsnResolver({ db, cache, kms, decrypt });
+
+    const r = await resolver.resolve(input);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail).toBe("MIDPLANE_KMS_DEV_KEY_EU is not set");
+  });
+
+  it("stringifies a non-Error rejection into `detail`", async () => {
+    const cache = new DecryptCache();
+    const decrypt = vi.fn().mockRejectedValue("AccessDenied");
+    const { db } = fakeDb();
+    const resolver = new DsnResolver({ db, cache, kms, decrypt });
+
+    const r = await resolver.resolve(input);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail).toBe("AccessDenied");
+  });
+
   it("returns 'expired' as credential_unavailable", async () => {
     const start = 1_000_000;
     const clock = { t: start, now: () => start };
@@ -110,6 +137,9 @@ describe("DsnResolver", () => {
 
     const r = await resolver.resolve(input);
     expect(r.ok).toBe(false);
+    // Distinguishable from a KMS throw: the cache aged out without ever
+    // reaching KMS, so `detail` must say so rather than echo a KMS message.
+    if (!r.ok) expect(r.detail).toMatch(/cache expired/);
     expect(decrypt).not.toHaveBeenCalled();
   });
 

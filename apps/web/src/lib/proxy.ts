@@ -546,13 +546,18 @@ async function forwardResolved(
       // KMS/decrypt failure: the customer's agent is fully down and this
       // path previously produced NO signal at all — not even a console
       // line (launch-analytics spec §5, the one silent 5xx).
+      // `detail` carries WHY (see ResolveDsnResult) — without it this line and
+      // the capture below are indistinguishable between a transient KMS blip
+      // and a whole region stranded on a retired key, which is how a 10-day
+      // outage read as noise. Operator-facing only: the agent still gets the
+      // opaque code below.
       console.error(
-        `forwardResolved: credential_unavailable for project ${project.id} (db=${cdb.id})`,
+        `forwardResolved: credential_unavailable for project ${project.id} (db=${cdb.id}, kms_key=${cdb.kmsKeyId}): ${decrypt.detail}`,
       );
       if (shouldCaptureProxyError(`proxy.credential_unavailable:${project.id}`)) {
         captureError(
           "proxy.credential_unavailable",
-          new Error("DSN decrypt failed at spawn"),
+          new Error(`DSN decrypt failed at spawn: ${decrypt.detail}`),
           {
             distinctId: tokenId,
             personProfile: false,
@@ -560,6 +565,7 @@ async function forwardResolved(
               project_id: project.id,
               customer_id: project.customerId,
               project_database_id: cdb.id,
+              kms_key_id: cdb.kmsKeyId,
             },
           },
         );
