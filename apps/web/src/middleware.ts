@@ -37,6 +37,12 @@ const PUBLIC_EXACT = new Set(["/", "/signup"]);
 // (/accept-invitation/<id>) which an invited, not-yet-signed-up user must reach
 // pre-auth to sign up + accept (the page validates the invite itself).
 //
+// /forgot and /reset-password are public for the same reason: the only user who
+// needs them is signed OUT by definition. Gating them bounced the reset link
+// straight back to /sign-in, so a reset mail could be sent but never redeemed.
+// /reset-password authenticates by the token in the URL, which Better Auth
+// verifies server-side — the session gate was never what protected it.
+//
 // The Stripe webhook is /api/auth/stripe/webhook (the @better-auth/stripe plugin
 // mounts it inside Better Auth's handler), so it's already public via /api/auth
 // — no separate entry. It arrives without a session cookie and verifies its own
@@ -44,6 +50,8 @@ const PUBLIC_EXACT = new Set(["/", "/signup"]);
 const PUBLIC_PREFIXES = [
   "/sign-in",
   "/sign-up",
+  "/forgot",
+  "/reset-password",
   "/accept-invitation",
   "/mcp",
   "/api/auth",
