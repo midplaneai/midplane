@@ -58,6 +58,14 @@ export function SignInFlow({
   const [revealPassword, setRevealPassword] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when sign-in is refused specifically because the address is unverified
+  // (HTTP 403). Distinct from `error` because it isn't a dead end — the server
+  // has just re-sent the link (sendOnSignIn), so the useful response is
+  // "check your inbox", not "wrong password".
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent">(
+    "idle",
+  );
   const [pending, setPending] = useState(false);
   const [resetPending, setResetPending] = useState(false);
 
@@ -91,6 +99,16 @@ export function SignInFlow({
       password,
     });
     if (signInError) {
+      // 403 = credentials were fine but the address is unverified. Better Auth
+      // has already re-sent the link (emailVerification.sendOnSignIn), so route
+      // to the inbox prompt rather than the generic credential error — telling
+      // this user to "check your email and password" would send them to reset a
+      // password that was never wrong.
+      if (signInError.status === 403) {
+        setNeedsVerification(true);
+        setPending(false);
+        return;
+      }
       setError(
         signInError.message ??
           "Could not sign in. Check your email and password.",
@@ -121,6 +139,57 @@ export function SignInFlow({
     // requestPasswordReset returns success whether or not the email exists, so
     // the confirmation is deliberately non-committal about existence.
     setResetSent(true);
+  }
+
+  async function onResendVerification() {
+    setResendState("sending");
+    // Same non-committal posture as onForgot: the endpoint answers uniformly
+    // regardless of whether the address exists, so "sent" means "we asked".
+    await authClient
+      .sendVerificationEmail({ email, callbackURL: redirectTo })
+      .catch(() => {});
+    setResendState("sent");
+  }
+
+  if (needsVerification) {
+    return (
+      <div className="w-full max-w-[400px]">
+        <Header subtitle="One more step before you sign in." />
+        <p className="mb-6 text-sm text-muted-foreground">
+          Your email address isn&apos;t verified yet. We just sent a new
+          verification link to{" "}
+          <span className="text-foreground">{email}</span> — open it and
+          you&apos;ll be signed in.
+        </p>
+        <div className="space-y-4">
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            size="lg"
+            onClick={onResendVerification}
+            disabled={resendState !== "idle"}
+          >
+            {resendState === "sending"
+              ? "Sending…"
+              : resendState === "sent"
+                ? "Sent — check your inbox"
+                : "Send it again"}
+          </Button>
+          <button
+            type="button"
+            onClick={() => {
+              setNeedsVerification(false);
+              setResendState("idle");
+              changeEmail();
+            }}
+            className="text-sm text-muted-foreground underline underline-offset-2"
+          >
+            Use a different email
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (step === "email") {

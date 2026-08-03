@@ -28,6 +28,23 @@ describe("security headers", () => {
     expect(h.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   });
 
+  // The nonce-free half of a real CSP. These two cost nothing on a page that
+  // loads no plugins and sets no <base>, and they close injection primitives
+  // that output escaping alone doesn't: <object>/<embed> script execution, and
+  // an injected <base href> repointing every relative URL at another origin.
+  //
+  // NOT yet covered: script-src. The app loads zero third-party browser scripts
+  // (auth is Better Auth, PostHog is server-side only, Stripe is hosted
+  // Checkout by redirect, next/font self-hosts), so the only blocker is Next's
+  // inline hydration bootstrap — which needs a per-request nonce from
+  // middleware.ts. When that lands, assert it here.
+  it("sets the nonce-free CSP directives", async () => {
+    const h = await headerMap();
+    const csp = h.get("Content-Security-Policy")!;
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("base-uri 'self'");
+  });
+
   it("sets the cheap hardening headers", async () => {
     const h = await headerMap();
     expect(h.get("X-Content-Type-Options")).toBe("nosniff");

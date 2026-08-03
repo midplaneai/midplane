@@ -7,8 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth-client";
+import { TurnstileWidget } from "@/components/auth/turnstile-widget";
 
 import { acceptInvite } from "./actions";
+
+// Must match the action the sign-up form renders with: the captcha plugin
+// guards the ENDPOINT (/sign-up/email), and both surfaces post to it, so a
+// token minted here has to satisfy the same expectedAction check.
+const CAPTCHA_ACTION = "signup";
 
 // The interactive half of the invite-accept landing. Three states, decided by
 // the session the server resolved:
@@ -23,17 +29,23 @@ export function AcceptInvite({
   email,
   orgName,
   signedInEmail,
+  captchaSiteKey = null,
 }: {
   invitationId: string;
   email: string;
   orgName: string;
   signedInEmail: string | null;
+  /** Resolved server-side by captchaSiteKey(); null = captcha off. The sign-up
+   *  branch below posts to the same guarded endpoint as the main sign-up form,
+   *  so it needs its own widget or every invited teammate is rejected. */
+  captchaSiteKey?: string | null;
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
 
   const matches =
     signedInEmail != null &&
@@ -70,13 +82,15 @@ export function AcceptInvite({
     e.preventDefault();
     setError(null);
     setPending(true);
-    const { error: signUpError } = await authClient.signUp.email({
-      name,
-      email,
-      password,
-    });
+    const { error: signUpError } = await authClient.signUp.email(
+      { name, email, password },
+      captchaToken
+        ? { headers: { "x-captcha-response": captchaToken } }
+        : undefined,
+    );
     if (signUpError) {
       setError(signUpError.message ?? "Could not create your account.");
+      setCaptchaToken(null); // single-use; force a fresh challenge on retry
       setPending(false);
       return;
     }
@@ -192,6 +206,12 @@ export function AcceptInvite({
             <p className="text-xs text-muted-foreground">At least 8 characters.</p>
           </div>
 
+          <TurnstileWidget
+            siteKey={captchaSiteKey}
+            action={CAPTCHA_ACTION}
+            onToken={setCaptchaToken}
+          />
+
           {error && (
             <p role="alert" className="text-sm text-[hsl(var(--deny))]">
               {error}
@@ -203,7 +223,7 @@ export function AcceptInvite({
             className="w-full"
             size="lg"
             arrow
-            disabled={pending}
+            disabled={pending || (Boolean(captchaSiteKey) && !captchaToken)}
           >
             {pending ? "Joining…" : "Create account & join"}
           </Button>

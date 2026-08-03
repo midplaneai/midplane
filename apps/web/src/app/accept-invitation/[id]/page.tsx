@@ -5,6 +5,7 @@ import { invitation, organization } from "@midplane-cloud/db/auth-schema";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
 import { EmptyState } from "@/components/ui/empty-state";
+import { captchaSiteKey } from "@/lib/captcha";
 import { getActorEmail } from "@/lib/org-context";
 import { bootRegion } from "@/lib/region-context";
 
@@ -83,6 +84,7 @@ export default async function AcceptInvitationPage({
       email={inv.email}
       orgName={orgName}
       signedInEmail={signedInEmail}
+      captchaSiteKey={captchaSiteKey()}
     />,
   );
 }
