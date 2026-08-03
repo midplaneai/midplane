@@ -46,6 +46,12 @@ export function AcceptInvite({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
+  const [captchaFailed, setCaptchaFailed] = useState(false);
+  const [awaitingVerification, setAwaitingVerification] = useState(false);
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent">(
+    "idle",
+  );
 
   const matches =
     signedInEmail != null &&
@@ -82,15 +88,37 @@ export function AcceptInvite({
     e.preventDefault();
     setError(null);
     setPending(true);
-    const { error: signUpError } = await authClient.signUp.email(
-      { name, email, password },
+    const { data, error: signUpError } = await authClient.signUp.email(
+      {
+        name,
+        email,
+        password,
+        // Verification lands them back HERE, signed in as the invited address
+        // (autoSignInAfterVerification), which drops them into the one-click
+        // accept branch above. Invited users are no longer pre-verified — an
+        // invitation proves nothing about who is at the keyboard, and the
+        // exemption that assumed otherwise let anyone who knew an invited
+        // address claim it. See the note in lib/auth.ts.
+        callbackURL: `/accept-invitation/${invitationId}`,
+      },
       captchaToken
         ? { headers: { "x-captcha-response": captchaToken } }
         : undefined,
     );
     if (signUpError) {
       setError(signUpError.message ?? "Could not create your account.");
-      setCaptchaToken(null); // single-use; force a fresh challenge on retry
+      // Single-use token: clear ours AND re-render the widget, or the button
+      // stays disabled over a solved-looking challenge that can't be resubmitted.
+      setCaptchaToken(null);
+      setCaptchaReset((n) => n + 1);
+      setPending(false);
+      return;
+    }
+    // No session token => verification is required, so there is nothing to
+    // accept with yet. Accepting here would fail on a missing session; the
+    // invitation stays pending until they follow the link and come back.
+    if (!data?.token) {
+      setAwaitingVerification(true);
       setPending(false);
       return;
     }
@@ -102,12 +130,76 @@ export function AcceptInvite({
     }
   }
 
+  async function onResendVerification(): Promise<void> {
+    setResendState("sending");
+    // Must carry the SAME callbackURL as signup, or verifying via the resent
+    // link drops them somewhere generic instead of back on this invitation.
+    // Result deliberately ignored: the endpoint answers uniformly whether or
+    // not the address exists, and reporting a distinguishable failure here
+    // would undo that.
+    await authClient
+      .sendVerificationEmail({
+        email,
+        callbackURL: `/accept-invitation/${invitationId}`,
+      })
+      .catch(() => {});
+    setResendState("sent");
+  }
+
   async function onSignOut(): Promise<void> {
     setError(null);
     setPending(true);
     await authClient.signOut();
     router.refresh();
     setPending(false);
+  }
+
+  // Account created, but verification is required so there's no session to
+  // accept with. The invitation stays pending — following the emailed link
+  // signs them in and returns them here, where `matches` is true and the
+  // one-click accept branch takes over.
+  if (awaitingVerification) {
+    return (
+      <div className="w-full max-w-[400px]">
+        <div className="mb-8 space-y-2">
+          <h1 className="text-3xl font-semibold tracking-[-0.025em] text-foreground">
+            Check your inbox
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Your account is created. We sent a verification link to{" "}
+            <span className="text-foreground">{email}</span> — open it and
+            you&apos;ll come back here to join{" "}
+            <strong className="font-medium text-foreground">{orgName}</strong>.
+          </p>
+        </div>
+        <div className="space-y-4">
+          {/* Without this the user is stranded: verification-send failures are
+              swallowed on purpose (surfacing them would leak which addresses
+              exist), and signing up again just hits "account already exists".
+              Resend is the only way back. */}
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            size="lg"
+            onClick={onResendVerification}
+            disabled={resendState !== "idle"}
+          >
+            {resendState === "sending"
+              ? "Sending…"
+              : resendState === "sent"
+                ? "Sent — check your inbox"
+                : "Resend the link"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Check spam if it hasn&apos;t arrived in a minute. Your invitation
+            expires 7 days after it was sent — if it lapses, ask{" "}
+            <strong className="font-medium text-foreground">{orgName}</strong>{" "}
+            for a new one.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -209,8 +301,30 @@ export function AcceptInvite({
           <TurnstileWidget
             siteKey={captchaSiteKey}
             action={CAPTCHA_ACTION}
-            onToken={setCaptchaToken}
+            resetSignal={captchaReset}
+            onToken={(t) => {
+              setCaptchaToken(t);
+              if (t) setCaptchaFailed(false);
+            }}
+            onLoadError={() => setCaptchaFailed(true)}
           />
+
+          {captchaFailed && (
+            <p role="alert" className="text-sm text-muted-foreground">
+              The bot check couldn&apos;t load — an ad blocker or network filter
+              is the usual cause.{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setCaptchaFailed(false);
+                  setCaptchaReset((n) => n + 1);
+                }}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                Try again
+              </button>
+            </p>
+          )}
 
           {error && (
             <p role="alert" className="text-sm text-[hsl(var(--deny))]">

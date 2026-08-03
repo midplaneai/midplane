@@ -43,6 +43,10 @@ export function SignUpForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  // Bumped to re-render the challenge: tokens are single-use, so after a failed
+  // submit the widget still shows solved while its token is spent.
+  const [captchaReset, setCaptchaReset] = useState(0);
+  const [captchaFailed, setCaptchaFailed] = useState(false);
   const [awaitingVerification, setAwaitingVerification] = useState(false);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">(
     "idle",
@@ -68,7 +72,11 @@ export function SignUpForm({
 
     if (error) {
       setError(error.message ?? "Could not create your account.");
-      setCaptchaToken(null); // single-use; force a fresh challenge on retry
+      // Tokens are single-use. Clearing our copy is not enough — the widget
+      // must be re-rendered too, or it keeps showing a solved challenge whose
+      // token is spent and the submit button never re-enables.
+      setCaptchaToken(null);
+      setCaptchaReset((n) => n + 1);
       setPending(false);
       return;
     }
@@ -193,8 +201,33 @@ export function SignUpForm({
         <TurnstileWidget
           siteKey={captchaSiteKey}
           action={CAPTCHA_ACTION}
-          onToken={setCaptchaToken}
+          resetSignal={captchaReset}
+          onToken={(t) => {
+            setCaptchaToken(t);
+            if (t) setCaptchaFailed(false);
+          }}
+          onLoadError={() => setCaptchaFailed(true)}
         />
+
+        {captchaFailed && (
+          // The server enforces whenever it's configured, so a load failure
+          // means signup genuinely cannot proceed. Say that, and offer a way
+          // out — silently leaving the button disabled is the bug this fixes.
+          <p role="alert" className="text-sm text-muted-foreground">
+            The bot check couldn&apos;t load — an ad blocker or network filter
+            is the usual cause.{" "}
+            <button
+              type="button"
+              onClick={() => {
+                setCaptchaFailed(false);
+                setCaptchaReset((n) => n + 1);
+              }}
+              className="font-medium text-foreground underline underline-offset-2"
+            >
+              Try again
+            </button>
+          </p>
+        )}
 
         {error && (
           <p role="alert" className="text-sm text-[hsl(var(--deny))]">
