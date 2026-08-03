@@ -96,3 +96,28 @@ describe("middleware — apex detected from the Host header (behind a proxy)", (
     expect(r.location).toBe("http://localhost:3000/sign-in");
   });
 });
+
+// The password-reset pages are reachable ONLY by a signed-out user, so gating
+// them on a session cookie made the flow unredeemable: Better Auth mailed a
+// /reset-password?token=... link and the middleware bounced it to /sign-in.
+// Prod shipped that way (both regions 307'd) until /forgot + /reset-password
+// joined PUBLIC_PREFIXES.
+describe("middleware — password reset is reachable signed out", () => {
+  for (const path of [
+    "/forgot",
+    "/reset-password",
+    "/reset-password?token=abc123",
+  ]) {
+    it(`lets a cookie-less visitor through to ${path}`, async () => {
+      const r = await runProxied("eu.app.midplane.ai", path);
+      expect(r.isNext).toBe(true);
+      expect(r.location).toBeNull();
+    });
+  }
+
+  it("still gates a protected path on the same host", async () => {
+    // Guards the fix: the prefixes opened reset, not the whole app.
+    const r = await runProxied("eu.app.midplane.ai", "/settings");
+    expect(r.location).toBe("http://localhost:3000/sign-in");
+  });
+});
