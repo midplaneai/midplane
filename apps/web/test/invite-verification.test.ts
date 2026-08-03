@@ -66,4 +66,36 @@ describe("invite signup routes verification back to the invitation", () => {
     expect(code).toMatch(/data\?\.token/);
     expect(code).toMatch(/setAwaitingVerification\(true\)/);
   });
+
+  it("offers a resend, or a lost mail strands the invited user", async () => {
+    // Verification-send failures are swallowed on purpose (surfacing them would
+    // leak which addresses exist), and signing up again just hits "account
+    // already exists" — so with no resend there is no route back at all.
+    const code = await source(
+      "../src/app/accept-invitation/[id]/accept-invite.tsx",
+    );
+    expect(code).toMatch(/sendVerificationEmail/);
+    expect(code).toMatch(/onResendVerification/);
+  });
+
+  it("the resend preserves the invitation callback URL", async () => {
+    // A resend that drops the callback lands them somewhere generic and leaves
+    // the invitation pending — the same dead end, one step later.
+    const code = await source(
+      "../src/app/accept-invitation/[id]/accept-invite.tsx",
+    );
+    const resend = code.slice(code.indexOf("onResendVerification"));
+    expect(resend).toMatch(/callbackURL:\s*`\/accept-invitation\/\$\{invitationId\}`/);
+  });
+
+  it("does not claim the invitation lasts forever", async () => {
+    // organization({ invitationExpiresIn: 7 days }) in lib/auth.ts. Copy saying
+    // it "stays valid until you do" is simply false, and the user can follow a
+    // verification link days later onto an expired invitation.
+    const code = await source(
+      "../src/app/accept-invitation/[id]/accept-invite.tsx",
+    );
+    expect(code).not.toMatch(/stays valid until you do/);
+    expect(code).toMatch(/expires 7 days/);
+  });
 });

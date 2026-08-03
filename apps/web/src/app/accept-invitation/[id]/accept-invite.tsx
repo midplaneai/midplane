@@ -49,6 +49,9 @@ export function AcceptInvite({
   const [captchaReset, setCaptchaReset] = useState(0);
   const [captchaFailed, setCaptchaFailed] = useState(false);
   const [awaitingVerification, setAwaitingVerification] = useState(false);
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent">(
+    "idle",
+  );
 
   const matches =
     signedInEmail != null &&
@@ -127,6 +130,22 @@ export function AcceptInvite({
     }
   }
 
+  async function onResendVerification(): Promise<void> {
+    setResendState("sending");
+    // Must carry the SAME callbackURL as signup, or verifying via the resent
+    // link drops them somewhere generic instead of back on this invitation.
+    // Result deliberately ignored: the endpoint answers uniformly whether or
+    // not the address exists, and reporting a distinguishable failure here
+    // would undo that.
+    await authClient
+      .sendVerificationEmail({
+        email,
+        callbackURL: `/accept-invitation/${invitationId}`,
+      })
+      .catch(() => {});
+    setResendState("sent");
+  }
+
   async function onSignOut(): Promise<void> {
     setError(null);
     setPending(true);
@@ -153,10 +172,32 @@ export function AcceptInvite({
             <strong className="font-medium text-foreground">{orgName}</strong>.
           </p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Your invitation stays valid until you do. Check spam if it hasn&apos;t
-          arrived in a minute.
-        </p>
+        <div className="space-y-4">
+          {/* Without this the user is stranded: verification-send failures are
+              swallowed on purpose (surfacing them would leak which addresses
+              exist), and signing up again just hits "account already exists".
+              Resend is the only way back. */}
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            size="lg"
+            onClick={onResendVerification}
+            disabled={resendState !== "idle"}
+          >
+            {resendState === "sending"
+              ? "Sending…"
+              : resendState === "sent"
+                ? "Sent — check your inbox"
+                : "Resend the link"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Check spam if it hasn&apos;t arrived in a minute. Your invitation
+            expires 7 days after it was sent — if it lapses, ask{" "}
+            <strong className="font-medium text-foreground">{orgName}</strong>{" "}
+            for a new one.
+          </p>
+        </div>
       </div>
     );
   }

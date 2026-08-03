@@ -37,6 +37,24 @@ describe("spent tokens can be replaced", () => {
   });
 });
 
+describe("retry after a failed script load actually retries", () => {
+  it("drops the cached promise AND the dead <script> on failure", async () => {
+    // The subtle one. Re-listening to a <script> whose load/error already fired
+    // waits for events that never come again, so the promise never settles and
+    // "Try again" hangs silently — worse than the disabled button it replaced.
+    // Recovery requires discarding BOTH the memoized promise and the dead tag.
+    const code = await source("../src/components/auth/turnstile-widget.tsx");
+    expect(code).toMatch(/loadPromise\s*=\s*null/);
+    expect(code).toMatch(/getElementById\(SCRIPT_ID\)\?\.remove\(\)/);
+  });
+
+  it("never re-attaches listeners to an existing script element", async () => {
+    // This is the shape of the bug: find-by-id, then addEventListener on it.
+    const code = await source("../src/components/auth/turnstile-widget.tsx");
+    expect(code).not.toMatch(/existing\.addEventListener/);
+  });
+});
+
 describe("a failed script load is explained, not silent", () => {
   it("the widget reports load failure on its own channel", async () => {
     // onToken(null) means "not solved yet". Collapsing a load failure into it

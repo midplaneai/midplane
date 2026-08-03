@@ -39,42 +39,55 @@ const SCRIPT_SRC =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 const SCRIPT_ID = "cf-turnstile-script";
 
-/** Load the Turnstile script once per document, resolving when the API is
- *  ready. Multiple widgets (or a remount) share the single tag. */
+// One in-flight load shared by every widget on the page, CLEARED ON FAILURE.
+//
+// Both halves matter. Sharing dedupes concurrent mounts onto a single <script>.
+// Clearing on failure is what makes retry work: an earlier version looked for an
+// existing tag by id and, finding the DEAD one from a failed load, attached
+// fresh load/error listeners to it. Those events had already fired and never
+// fire again, so the promise never settled — "Try again" silently hung forever,
+// which is worse than the disabled button it was added to fix.
+let loadPromise: Promise<TurnstileApi> | null = null;
+
+/** Load the Turnstile script, resolving when the API is ready. Safe to call
+ *  again after a failure: the rejected attempt drops both the cached promise and
+ *  the dead <script>, so the next call starts genuinely fresh. */
 function loadTurnstile(): Promise<TurnstileApi> {
   if (typeof window === "undefined") {
     return Promise.reject(new Error("turnstile: no window"));
   }
   if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (loadPromise) return loadPromise;
 
-  return new Promise((resolve, reject) => {
-    const existing = document.getElementById(SCRIPT_ID);
-    const onReady = () => {
-      if (window.turnstile) resolve(window.turnstile);
-      else reject(new Error("turnstile: script loaded but API missing"));
-    };
-    if (existing) {
-      existing.addEventListener("load", onReady, { once: true });
-      existing.addEventListener(
-        "error",
-        () => reject(new Error("turnstile: script failed")),
-        { once: true },
-      );
-      return;
-    }
+  loadPromise = new Promise<TurnstileApi>((resolve, reject) => {
     const script = document.createElement("script");
     script.id = SCRIPT_ID;
     script.src = SCRIPT_SRC;
     script.async = true;
     script.defer = true;
-    script.addEventListener("load", onReady, { once: true });
+    script.addEventListener(
+      "load",
+      () => {
+        if (window.turnstile) resolve(window.turnstile);
+        else reject(new Error("turnstile: script loaded but API missing"));
+      },
+      { once: true },
+    );
     script.addEventListener(
       "error",
       () => reject(new Error("turnstile: script failed")),
       { once: true },
     );
     document.head.appendChild(script);
+  }).catch((err: unknown) => {
+    // Drop the poisoned state so a retry re-creates the tag from scratch. A
+    // spent <script> cannot be revived by re-listening to it.
+    loadPromise = null;
+    document.getElementById(SCRIPT_ID)?.remove();
+    throw err;
   });
+
+  return loadPromise;
 }
 
 /** Renders the challenge and reports the token upward. Renders nothing when
