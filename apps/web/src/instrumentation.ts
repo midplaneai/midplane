@@ -18,8 +18,10 @@
 // That silently un-seeds the self-host implicit customer below and bricks the
 // first signup (P0). Keep it in src/.
 //
-// Intentionally minimal — does not import the db client (cf. /api/health
-// design rationale: no DB touch in the liveness path).
+// Kept lean. The db client is imported only behind a NEXT_RUNTIME==='nodejs'
+// dynamic import, and only for the two boot checks that genuinely need stored
+// state (self-host customer seeding, KMS key coverage) — the /api/health
+// liveness path itself still touches no DB.
 
 import type { Instrumentation } from "next";
 import type { Region } from "@midplane-cloud/kms";
@@ -62,6 +64,17 @@ export async function register() {
         ts: new Date().toISOString(),
       }),
     );
+
+    // Liveness proves a FRESH encrypt round-trips; it says nothing about the key
+    // ids already stored on project_databases rows, which is what decryptDsn
+    // actually dispatches on. Report rows this env can't decrypt — a mode switch
+    // that leaves rows behind otherwise boots green and only surfaces as
+    // `credential_unavailable` on a customer's next query. Warn-only and
+    // awaited-but-never-throwing (see the module header for why not fatal).
+    const { reportKmsKeyCoverage } = await import(
+      "./lib/assert-kms-key-coverage.ts"
+    );
+    await reportKmsKeyCoverage(kmsRegion);
   }
 
   // Flush PostHog's buffered events on shutdown — posthog-node batches
