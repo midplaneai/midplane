@@ -15,8 +15,15 @@ import {
   redactForCapture,
 } from "./analytics";
 import { buildStripePlugins } from "./billing";
+import { buildCaptchaPlugins } from "./captcha";
+import { normalizeDisplayName } from "./display-name";
 import { getEeAuthPlugins } from "./ee-plugins";
-import { isEmailConfigured, sendPasswordResetEmail } from "./email";
+import { hasPendingInvitation } from "./invited-signup";
+import {
+  isEmailConfigured,
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "./email";
 import { repairedLoopbackRedirect } from "./mcp-redirect";
 import { getPostHog } from "./posthog";
 import { hasEntitlement } from "./plan";
@@ -103,11 +110,74 @@ function createAuth() {
       provider: "pg",
       schema: { ...authSchema },
     }),
+    // Address verification. The ENTIRE block is conditional on
+    // isEmailConfigured(), and that conditionality is load-bearing rather than
+    // stylistic: requireEmailVerification blocks session creation until the
+    // address is confirmed, and self-host ships no Resend
+    // (isEmailConfigured() === false there by design). Registering the gate
+    // unconditionally would mean a self-host instance can never send a
+    // verification mail, so no account can ever verify, so NO ONE CAN EVER SIGN
+    // IN — the first signup would brick the install. Cloud has Resend and gets
+    // the gate; self-host and keyless dev stay open, exactly like the
+    // sendResetPassword conditional below.
+    //
+    // Social sign-in is unaffected: Better Auth reads verification status from
+    // the provider, and Google asserts a verified email, so Google users arrive
+    // verified and never see this. The gate only binds credential signups.
+    ...(isEmailConfigured()
+      ? {
+          emailVerification: {
+            // Send at signup, and re-send on a sign-in attempt by an unverified
+            // account (sendOnSignIn is REQUIRED for requireEmailVerification to
+            // re-mail rather than just reject — otherwise someone who lost the
+            // first mail has no way back in).
+            sendOnSignUp: true,
+            sendOnSignIn: true,
+            // Following the link signs them in, so the flow is
+            // signup → mail → click → onboarding, with no "now go log in again"
+            // step. The landing spot is the callbackURL the client passes.
+            autoSignInAfterVerification: true,
+            sendVerificationEmail: async ({
+              user: verifyUser,
+              url,
+            }: {
+              user: { id?: string; email: string };
+              url: string;
+            }) => {
+              try {
+                await sendVerificationEmail({
+                  to: verifyUser.email,
+                  verifyUrl: url,
+                });
+              } catch (err) {
+                console.error("verification email failed", err);
+                // Same posture as the reset mail: never surface a send failure
+                // to the caller (it would leak which addresses exist), so this
+                // capture is the only visibility a Resend outage gets.
+                const message = redactForCapture(
+                  err instanceof Error ? err.message : String(err),
+                  verifyUser.email,
+                );
+                captureError(
+                  "auth.verification_email_failed",
+                  new Error(message),
+                  { distinctId: verifyUser.id },
+                );
+              }
+            },
+          },
+        }
+      : {}),
     emailAndPassword: {
       enabled: true,
       // A password reset mints a fresh credential; drop every other live
       // session so a leaked/forgotten one can't outlive the reset.
       revokeSessionsOnPasswordReset: true,
+      // The gate itself — same isEmailConfigured() condition as the
+      // emailVerification block above, for the brick-the-install reason
+      // documented there. Unverified credential sign-in returns 403; the
+      // sign-in client renders that as "check your inbox" plus a resend.
+      ...(isEmailConfigured() ? { requireEmailVerification: true } : {}),
       // "Forgot password" by email. Registered ONLY when this build can send
       // email (cloud + Resend) — self-host / keyless dev have no SMTP, so no
       // reset is offered and the UI gates on isEmailConfigured() the same way
@@ -273,6 +343,35 @@ function createAuth() {
           // race-safe — see lib/self-host-gate.ts. No-op in the cloud.
           before: async (newUser) => {
             await enforceSelfHostSignupGate(newUser.email);
+
+            const patch: Record<string, unknown> = {};
+
+            // Bound the display name at the write, not the form: this hook is
+            // the one path BOTH credential signup and Google OAuth (name taken
+            // from the provider profile) go through. See lib/display-name.ts
+            // for why we normalize rather than reject markup characters.
+            const name = normalizeDisplayName(newUser.name ?? "");
+            if (name !== newUser.name) patch.name = name;
+
+            // Pre-verify an invited teammate: reaching signup with a pending
+            // invitation already proves control of the mailbox, so a second
+            // round trip through a verification email proves nothing new and
+            // races the invite mail into the same inbox. Grants no access on
+            // its own — see lib/invited-signup.ts. Best-effort: if the lookup
+            // fails, fall through to the normal verification flow rather than
+            // failing the signup.
+            if (!newUser.emailVerified) {
+              try {
+                if (await hasPendingInvitation(newUser.email)) {
+                  patch.emailVerified = true;
+                }
+              } catch (err) {
+                console.error("pending-invitation lookup failed", err);
+              }
+            }
+
+            if (Object.keys(patch).length === 0) return;
+            return { data: { ...newUser, ...patch } };
           },
           // Link the OWNER as an `owner` member of the implicit org so Better
           // Auth's org APIs (active organization, workspace rename/manage)
@@ -281,6 +380,18 @@ function createAuth() {
           // cloud.
           after: async (newUser) => {
             await linkSelfHostOwnerMember(newUser);
+          },
+        },
+        update: {
+          // Better Auth exposes /update-user by default, so `name` stays
+          // rewritable after signup even though no UI of ours edits it. Without
+          // this the cap would be a signup-time cap only — trivially sidestepped
+          // by signing up clean and then PATCHing the value.
+          before: async (data) => {
+            if (typeof data.name !== "string") return;
+            const name = normalizeDisplayName(data.name);
+            if (name === data.name) return;
+            return { data: { ...data, name } };
           },
         },
       },
@@ -426,6 +537,12 @@ function createAuth() {
       // and before nextCookies(). It registers /api/auth/stripe/webhook —
       // already public via the /api/auth middleware prefix.
       ...buildStripePlugins(),
+      // Turnstile bot protection on /sign-up/email. [] unless BOTH Turnstile
+      // keys are set (cloud only) — see lib/captcha.ts for why the scope is
+      // signup-only and why half-configuration must not enable it. Order is not
+      // load-bearing beyond staying before nextCookies(): the plugin only reads
+      // the x-captcha-response header off the request and rejects early.
+      ...buildCaptchaPlugins(),
       // Enterprise Edition plugins (SSO/SAML). Empty unless the ee build
       // registered them at boot (lib/ee-plugins.ts ← src/ee/register.ts, wired
       // by instrumentation under MIDPLANE_EE). Core never imports ee/ — it reads

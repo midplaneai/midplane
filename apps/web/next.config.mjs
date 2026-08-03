@@ -20,14 +20,42 @@ const config = {
   // Drizzle + postgres-js pull pg-native via optional deps; mark them external
   // so Next's bundler doesn't try to resolve them in the edge runtime.
   serverExternalPackages: ["postgres", "drizzle-orm"],
-  // Security headers applied to every route (landing, Clerk auth flows, the
+  // Security headers applied to every route (landing, auth flows, the
   // authenticated dashboard, and API routes all share this origin).
   //
-  // Scope note: this is anti-framing + cheap hardening only. We deliberately
-  // do NOT set a `script-src`/`style-src` CSP here — Clerk, PostHog, Stripe,
-  // and Google Fonts all load on this origin, so a strict CSP needs its own
-  // nonce/allowlist pass or it white-screens the app. `frame-ancestors 'none'`
-  // (plus X-Frame-Options for older UAs) closes clickjacking without that risk.
+  // Scope note: still no `script-src`/`style-src` here, but the reason has
+  // changed and is worth stating precisely, because the old one is no longer
+  // true. This used to read "Clerk, PostHog, Stripe, and Google Fonts all load
+  // on this origin, so a strict CSP needs a nonce/allowlist pass". None of that
+  // holds now: auth is Better Auth (no Clerk), PostHog is server-side only (no
+  // posthog-js in the bundle), Stripe is hosted Checkout reached by REDIRECT
+  // (no embedded js.stripe.com), and next/font/google self-hosts the font files
+  // at build time (no fonts.googleapis.com).
+  //
+  // The one third-party script the browser does load is Cloudflare Turnstile
+  // (challenges.cloudflare.com) on the sign-up form, and only when the
+  // Turnstile env is set — so a `script-src` allowlist is one known origin, not
+  // an open-ended audit.
+  //
+  // What actually blocks `script-src` now is Next's own inline hydration
+  // bootstrap, which needs either 'unsafe-inline' (worthless) or a per-request
+  // nonce plumbed through middleware.ts. That's tractable and worth doing — see
+  // the note in test/security-headers.test.ts — but it touches the region
+  // routing middleware, so it's a deliberate follow-up rather than a drive-by.
+  // Turnstile also needs frame-src for its challenge iframe, so that pass
+  // should land both directives together.
+  //
+  // The directives below are the subset that needs no nonce and cannot break a
+  // page that loads no plugins and sets no <base>:
+  //   - object-src 'none' kills <object>/<embed> plugin-based script execution.
+  //   - base-uri 'self' blocks an injected <base href> from silently
+  //     repointing every relative URL (script, form, link) at another origin.
+  //   - frame-ancestors 'none' (+ X-Frame-Options for older UAs) is the
+  //     clickjacking control.
+  // `form-action` is deliberately absent: MCP OAuth redirects out to external
+  // client callbacks (VS Code loopback, agent clients), and some browsers apply
+  // form-action across post-submission redirects — that would break the OAuth
+  // flow, so it needs testing rather than assumption.
   async headers() {
     return [
       {
@@ -36,7 +64,7 @@ const config = {
           { key: "X-Frame-Options", value: "DENY" },
           {
             key: "Content-Security-Policy",
-            value: "frame-ancestors 'none'",
+            value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
           },
           { key: "X-Content-Type-Options", value: "nosniff" },
           {

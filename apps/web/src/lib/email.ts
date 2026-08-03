@@ -82,13 +82,23 @@ async function sendEmail(args: {
   }
 }
 
-/** Minimal HTML escape for the few interpolated strings (org/inviter names) so a
- *  name with `<`/`&` can't break the markup. */
+/** HTML escape for the few interpolated strings (org/inviter names) so a name
+ *  with `<`/`&` can't break the markup.
+ *
+ *  Quotes are escaped too even though every current interpolation lands in
+ *  element TEXT content, where they're harmless. The templates below are
+ *  hand-written HTML with no framework escaping behind them, so the day someone
+ *  interpolates a name into an attribute (`title="…"`, `style="…"`) a
+ *  text-only escape becomes a stored-XSS delivery path — and nothing about the
+ *  call site would look wrong. Escaping all five here keeps esc() safe in both
+ *  contexts instead of safe-by-coincidence. */
 function esc(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 /** Send a workspace invitation email. Best-effort at the call site (auth.ts wraps
@@ -139,6 +149,60 @@ export async function sendOrgInvitationEmail(args: {
         <p style="font-size:12px;line-height:1.6;color:#999999;margin:0;border-top:1px solid #eeeeee;padding-top:16px;">
           This link is tied to <strong>${esc(args.to)}</strong> and expires in 7 days.
           If you weren't expecting this, you can ignore this email.
+        </p>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+
+  await sendEmail({ to: args.to, subject, html, text });
+}
+
+/** Send an address-verification email. Wired into Better Auth's
+ *  emailVerification.sendVerificationEmail (lib/auth.ts), registered ONLY when
+ *  isEmailConfigured() — self-host ships no Resend, so it never gates there
+ *  (see the requireEmailVerification note in auth.ts for why that matters).
+ *  `verifyUrl` is Better Auth's signed, single-use link; following it marks the
+ *  address verified and — with autoSignInAfterVerification — signs the user in
+ *  and drops them at the callbackURL the signup passed. */
+export async function sendVerificationEmail(args: {
+  to: string;
+  verifyUrl: string;
+}): Promise<void> {
+  const subject = "Verify your email for Midplane";
+
+  const text = [
+    "Confirm this address to finish setting up your Midplane account.",
+    "",
+    "Verify your email:",
+    args.verifyUrl,
+    "",
+    "If you didn't create a Midplane account, you can ignore this email.",
+  ].join("\n");
+
+  const html = `<!doctype html>
+<html>
+  <body style="margin:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111111;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:0 auto;padding:40px 24px;">
+      <tr><td>
+        <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
+          Confirm this address to finish setting up your Midplane account.
+        </p>
+        <p style="margin:0 0 28px;">
+          <a href="${args.verifyUrl}"
+             style="display:inline-block;background:#111111;color:#ffffff;text-decoration:none;font-size:14px;font-weight:500;padding:12px 20px;border-radius:6px;">
+            Verify email
+          </a>
+        </p>
+        <p style="font-size:13px;line-height:1.6;color:#666666;margin:0 0 8px;">
+          Or paste this link into your browser:
+        </p>
+        <p style="font-size:12px;line-height:1.6;color:#666666;word-break:break-all;margin:0 0 28px;">
+          <a href="${args.verifyUrl}" style="color:#666666;">${args.verifyUrl}</a>
+        </p>
+        <p style="font-size:12px;line-height:1.6;color:#999999;margin:0;border-top:1px solid #eeeeee;padding-top:16px;">
+          This link can be used once. If you didn't create a Midplane account,
+          you can ignore this email.
         </p>
       </td></tr>
     </table>

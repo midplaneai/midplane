@@ -1,6 +1,7 @@
 import { GoogleSignIn } from "@/components/auth/google-sign-in";
 import { SignUpForm } from "@/components/auth/sign-up-form";
 import { BrandLockup } from "@/components/layout/brand-mark";
+import { captchaSiteKey } from "@/lib/captcha";
 import { googleAuthEnabled } from "@/lib/social-auth";
 
 // Only allow same-origin relative redirects (no open redirect via ?redirect).
@@ -29,7 +30,10 @@ export default async function SignUpPage({
       </header>
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-[400px]">
-          <SignUpForm redirectTo={redirectTo} />
+          <SignUpForm
+            redirectTo={redirectTo}
+            captchaSiteKey={captchaSiteKey()}
+          />
           {googleEnabled && (
             <GoogleSignIn redirectTo={redirectTo} label="Sign up with Google" />
           )}
