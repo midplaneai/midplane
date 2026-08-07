@@ -158,6 +158,20 @@ describe("reconciledRedirectUrls", () => {
         "http://localhost:3118/a,b",
       ]),
     ).toBeNull();
+    // WHATWG URL STRIPS leading/trailing control chars while parsing, so these
+    // all parse as a clean loopback URI. Since the raw string is what gets
+    // persisted, they must be refused at the door.
+    for (const dirty of [
+      "http://localhost:9999/cb\n",
+      "http://localhost:9999/cb\t",
+      " http://localhost:9999/cb",
+      "http://localhost:9999/c b",
+    ]) {
+      expect(new URL(dirty).hostname).toBe("localhost"); // parses despite the junk
+      expect(
+        reconciledRedirectUrls(dirty, ["http://localhost:3118/cb"]),
+      ).toBeNull();
+    }
     expect(reconciledRedirectUrls("not a url", [CLAUDE_CODE_REGISTERED])).toBe(
       null,
     );

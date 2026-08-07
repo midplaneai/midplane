@@ -109,9 +109,18 @@ export function reconciledRedirectUrls(
 ): string[] | null {
   const req = parseAnyPortCandidate(requested);
   if (!req) return null;
-  // Better Auth stores the list comma-joined, so a comma in the requested URI
-  // would corrupt every entry after it. Refuse rather than write a broken row.
+  // We persist the REQUESTED string verbatim rather than the parsed URL's href,
+  // because the token exchange compares against the exact bytes the client sent
+  // (normalizing would drop a missing trailing slash and break it). That makes
+  // the raw string durable state, so it has to be clean going in:
+  //  - Comma: Better Auth stores the list comma-joined, so one would corrupt
+  //    every entry after it.
+  //  - Anything outside printable ASCII: WHATWG URL silently STRIPS leading and
+  //    trailing control characters while parsing, so `…/cb\n` passes the checks
+  //    above and would write a newline into the row. A loopback callback is
+  //    always plain ASCII; anything else arrives percent-encoded.
   if (requested.includes(",")) return null;
+  if (/[^!-~]/.test(requested)) return null;
   if (registered.includes(requested)) return null;
 
   const sameShape = (reg: URL) =>
