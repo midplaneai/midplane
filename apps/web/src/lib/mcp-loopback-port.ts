@@ -99,10 +99,10 @@ function parseAnyPortCandidate(uri: string): URL | null {
  *  loopback entry is ever valid. Non-loopback entries (VS Code registers two
  *  https ones) are carried through untouched.
  *
- *  A match requires: both URIs http, both hosts loopback, identical path and
- *  query, and a DIFFERENT port. Requiring the port to differ means this never
- *  competes with the host-spelling repair in lib/mcp-redirect.ts, which handles
- *  the same-port case and needs no write. */
+ *  A match requires: both URIs http, both hosts loopback AND spelled
+ *  identically, identical path and query, and a DIFFERENT port. Requiring the
+ *  port to differ means this never competes with the host-spelling repair in
+ *  lib/mcp-redirect.ts, which handles the same-port case and needs no write. */
 export function reconciledRedirectUrls(
   requested: string,
   registered: string[],
