@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import type { Engine, EngineContext } from "@midplane/engine";
+import { ApprovalPendingError, ApprovalUnavailableError } from "@midplane/engine";
 
 const SqlSchema = z
   .string()
@@ -85,11 +86,23 @@ export async function handleQuery(input: {
   ctx: EngineContext;
   args: QueryArgs;
 }): Promise<ToolResult> {
-  const decision = await input.engine.handle({
-    sql: input.args.sql,
-    ctx: input.ctx,
-    intent: input.args.intent,
-  });
+  let decision;
+  try {
+    decision = await input.engine.handle({
+      sql: input.args.sql,
+      ctx: input.ctx,
+      intent: input.args.intent,
+    });
+  } catch (err) {
+    // Write approvals raise rather than return, because neither state is a
+    // DECISION (see engine/src/errors.ts). But a thrown error reaches the agent
+    // as its `message` and nothing else — the SDK discards the instance — so
+    // rendering them here is the only way the approval id, the deadline and the
+    // review URL survive the MCP boundary.
+    const held = approvalHoldResult(err, input.args);
+    if (held) return held;
+    throw err;
+  }
 
   if (decision.allowed) {
     return {
@@ -121,4 +134,79 @@ export async function handleQuery(input: {
       },
     ],
   };
+}
+
+// Render the two approval non-decisions as structured tool output, matching the
+// shape a denial gets so an agent can branch on one JSON contract.
+//
+// `isError: true` on both: nothing ran, and an agent that treats this as success
+// would report a write it never performed. `retryable` distinguishes them —
+// pending means a human has to act, unavailable means the control plane blinked
+// and the same call may well succeed shortly.
+function approvalHoldResult(
+  err: unknown,
+  args: { sql: string; intent: string },
+): ToolResult | null {
+  if (err instanceof ApprovalPendingError) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            allowed: false,
+            status: "awaiting_approval",
+            policy_rule: "approval_pending",
+            // Stated flatly and first. An agent that skims this and reports
+            // success to its user has done the worst possible thing here:
+            // claimed a write happened that did not.
+            executed: false,
+            reason: err.message,
+            approval_id: err.details.approvalId,
+            expires_at: new Date(err.details.expiresAt).toISOString(),
+            ...(err.details.reviewUrl ? { review_url: err.details.reviewUrl } : {}),
+            retryable: true,
+            // The resume contract, spelled out and CARRYING ITS OWN INPUTS.
+            //
+            // The grant is keyed on (database, sql, intent, token), so a retry
+            // that differs by one character — in EITHER field — opens a second
+            // request instead of collecting the first. Telling the agent to
+            // "re-run the identical statement" while making it reconstruct that
+            // statement from memory is a trap; handing both strings back closes
+            // it.
+            resume: {
+              instructions:
+                "This write has NOT run yet. Do not report it as done. Track it as an open task: poll check_approval with this approval_id, and when it returns \"approved\", call query again passing the sql and intent below EXACTLY as given. Polling is cheap and does not consume the approval; calling query again is what executes it.",
+              tool: "check_approval",
+              sql: args.sql,
+              intent: args.intent,
+              warning:
+                "sql and intent must match byte-for-byte. Any difference is treated as a different request and will need its own approval.",
+            },
+          }),
+        },
+      ],
+    };
+  }
+  if (err instanceof ApprovalUnavailableError) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            allowed: false,
+            executed: false,
+            status: "approval_unavailable",
+            policy_rule: "approval_unavailable",
+            // Deliberately NOT phrased as a refusal: nobody denied this write.
+            reason:
+              "This write needs human approval, but the approval service could not be reached. Nothing was executed and nothing was denied — try again.",
+            retryable: true,
+          }),
+        },
+      ],
+    };
+  }
+  return null;
 }

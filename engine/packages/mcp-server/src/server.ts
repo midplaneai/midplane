@@ -64,6 +64,12 @@ export interface BuildServerOptions {
   // per-session serverFactory hands this in; stdio and tests can leave it
   // undefined — null mcp_token_id / null scope are the well-defined
   // "no cloud token attribution" / "no scope (full access)" states.
+  /** Approval gate, when one is configured. Only used to register the
+   *  `check_approval` tool — the gate's enforcement path lives inside the
+   *  engine, not here. Absent (or a gate with no `check`) simply means the tool
+   *  is not offered, which is the correct surface for a deployment that has no
+   *  approvals. */
+  approvalGate?: ApprovalGate;
   sessionContext?: {
     mcp_token_id: string | null;
     // null = no scope header = full access (URL-token / self-host owner-all /
@@ -233,6 +239,7 @@ export function buildServer(opts: BuildServerOptions): McpServer {
       },
     );
 
+    registerCheckApproval(server, opts, telemetry);
     return server;
   }
 
@@ -371,7 +378,111 @@ export function buildServer(opts: BuildServerOptions): McpServer {
     },
   );
 
+  registerCheckApproval(server, opts, telemetry);
   return server;
+}
+
+// Registered on EVERY path that serves tools, not just one.
+//
+// This lived inline in the multi-DB tail and was therefore invisible to
+// single-database projects — which is most of them — because that branch
+// returns its own server well before reaching it. Extracted so the call site is
+// explicit at each return and a future branch cannot silently omit it.
+//
+// Deliberately NOT registered on the empty-scope surface: that path is
+// fail-closed by design and should not grow tools.
+//
+// Only offered when the gate can actually answer — a deployment without
+// approvals should not advertise a tool that always fails.
+function registerCheckApproval(
+  server: McpServer,
+  opts: BuildServerOptions,
+  telemetry: TelemetryHandle,
+): void {
+  const gate = opts.approvalGate;
+  if (!gate?.check) return;
+
+  server.registerTool(
+    "check_approval",
+    {
+      title: "Check whether a held write has been approved",
+      description:
+        "Poll a held write's approval status WITHOUT running anything. Use this to wait — it is cheap, safe to call repeatedly, and never consumes the approval. Returns pending (with its deadline), approved (call query again with the same sql and intent to actually execute it), executed (already ran — do not repeat), denied (with the reviewer's note), or expired. Never returns the statement or its results.",
+      inputSchema: { approval_id: ApprovalIdSchema },
+    },
+    async (args: { approval_id: string }) => {
+      let ok = false;
+      try {
+        const status = await gate.check!(
+          args.approval_id,
+          opts.sessionContext?.mcp_token_id ?? null,
+        );
+        ok = true;
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(toStatusWire(status)) },
+          ],
+        };
+      } finally {
+        telemetry.recordToolCall("check_approval", ok, null);
+      }
+    },
+  );
+}
+
+const ApprovalIdSchema = z
+  .string()
+  .min(1, "approval_id cannot be empty")
+  .max(64, "approval_id is too long");
+
+// Flatten for the wire, and tell the agent what to DO in each state — an agent
+// that reads "approved" and does not know to re-run has learned nothing.
+function toStatusWire(s: {
+  status: string;
+  expiresAt?: number;
+  by?: string | null;
+  note?: string | null;
+}): Record<string, unknown> {
+  switch (s.status) {
+    case "pending":
+      return {
+        status: "pending",
+        executed: false,
+        expires_at: s.expiresAt ? new Date(s.expiresAt).toISOString() : null,
+        next: "Nobody has decided yet. Keep polling this tool — it is cheap and never consumes the approval. Do NOT re-run the statement to check; that call blocks and is what executes it. Re-run only once this returns \"approved\".",
+      };
+    case "approved":
+      return {
+        status: "approved",
+        executed: false,
+        by: s.by ?? null,
+        note: s.note ?? null,
+        next: "Approved but NOT yet run — it only executes when you call query again with the same sql and intent. The approval is single-use, so do that once.",
+      };
+    case "executed":
+      return {
+        status: "executed",
+        executed: true,
+        next: "The write ran. This approval is spent — re-running the statement would open a NEW approval request, and would run it a SECOND time.",
+      };
+    case "denied":
+      return {
+        status: "denied",
+        by: s.by ?? null,
+        note: s.note ?? null,
+        next: "A human refused this statement. Do not retry it unchanged — write a different statement.",
+      };
+    case "expired":
+      return {
+        status: "expired",
+        next: "Nobody responded in time. Re-run the identical statement to ask again.",
+      };
+    default:
+      return {
+        status: "not_found",
+        next: "No such request for this agent. It may belong to a different agent, or never existed.",
+      };
+  }
 }
 
 // Tool surface for an active-but-empty scope (a malformed/empty X-Midplane-Scope

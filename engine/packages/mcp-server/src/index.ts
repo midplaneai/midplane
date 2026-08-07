@@ -18,6 +18,7 @@ import {
   DenyWebhookAuditWriter,
   loadDenyWebhookConfig,
 } from "./deny-webhook.ts";
+import { HttpApprovalGate, loadApprovalGateConfig } from "./approval-gate.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
 export async function runServer(): Promise<void> {
@@ -56,12 +57,31 @@ export async function runServer(): Promise<void> {
     );
   }
 
+  // Write-approval gate. Half-configured throws — same fail-at-boot posture as
+  // the deny webhook above, and for a sharper reason: a URL without a token
+  // would 401 every held write, so the operator would learn about it from a
+  // stuck agent rather than from a failed deploy.
+  let approvalGateConfig;
+  try {
+    approvalGateConfig = loadApprovalGateConfig(process.env);
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+    process.exit(1);
+  }
+  const approvalGate = approvalGateConfig
+    ? new HttpApprovalGate(approvalGateConfig)
+    : undefined;
+  if (approvalGateConfig) {
+    // URL only — the token is a secret and never reaches a log line.
+    logger.info({ url: approvalGateConfig.url }, "write approvals enabled");
+  }
+
   const wrapAudit = (w: AuditWriter): AuditWriter => {
     let result = telemetry.wrap(w);
     if (denyWebhook) result = new DenyWebhookAuditWriter(result, denyWebhook);
     return result;
   };
-  const handle = buildEngine(cfg, { wrapAudit });
+  const handle = buildEngine(cfg, { wrapAudit, approvalGate });
 
   let close: () => Promise<void>;
 
@@ -74,6 +94,7 @@ export async function runServer(): Promise<void> {
     const server = buildServer({
       handle,
       telemetry,
+      approvalGate,
       sessionContext: { mcp_token_id: null, scope: null },
     });
     await startStdio(server);
@@ -84,7 +105,7 @@ export async function runServer(): Promise<void> {
   } else {
     const http = await startHttp(
       (sessionContext) =>
-        buildServer({ handle, telemetry, sessionContext }),
+        buildServer({ handle, telemetry, approvalGate, sessionContext }),
       {
         port: cfg.port,
         host: cfg.host,

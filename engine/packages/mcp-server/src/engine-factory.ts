@@ -41,6 +41,7 @@ import {
   type SourceRewriteObserver,
   type TableAccessConfig,
   type TenantScopeConfig,
+  type ApprovalGate,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
 import {
@@ -58,6 +59,7 @@ import {
   resolveDatabasesFromConfig,
   type DatabaseSpec,
   type GuardrailsSpec,
+  type ApprovalsSpec,
   type LoadedPolicy,
   type TableAccessLevel,
   type TenantScopeSpec,
@@ -79,6 +81,10 @@ export interface PolicyHolder {
   // to DEFAULT_GUARDRAILS (both ON). The dangerous_statement rule reads this
   // via a getter once per query, so a hot-swap flips traffic cleanly.
   guardrails: GuardrailsSpec;
+  // Resolved approvals config. Defaults to OFF. The engine reads this via a
+  // getter once per query, so toggling approvals lands on the next statement
+  // instead of needing a respawn that would drop the agent's live session.
+  approvals: ApprovalsSpec;
 }
 
 // What the MCP layer holds per registered DB.
@@ -152,6 +158,9 @@ export interface EngineRegistry {
 
 export interface EngineHandle {
   registry: EngineRegistry;
+  /** The gate this engine was built with, if any — surfaced so the MCP layer
+   *  can offer `check_approval` only when it can actually be answered. */
+  approvalGate?: ApprovalGate;
   close(): Promise<void>;
 }
 
@@ -165,6 +174,11 @@ export interface BuildEngineOptions {
   // get one PgPoolExecutor per DB.
   executor?: Executor;
   credentials?: CredentialStore;
+  // Approval gate for held writes. Supplied by the server when
+  // MIDPLANE_APPROVAL_URL + MIDPLANE_APPROVAL_TOKEN are configured. Left
+  // undefined otherwise — a policy that enables approvals without one then
+  // fails closed at query time instead of running the write.
+  approvalGate?: ApprovalGate;
 }
 
 export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineHandle {
@@ -297,6 +311,13 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
     if (next.hasGuardrails) {
       target.holder.guardrails = { ...next.guardrails };
     }
+    // Same omit-vs-set rule. Without this branch a policy push that turns
+    // approvals ON lands in the control plane's database and never reaches a
+    // warm engine — so writes would keep executing unapproved until the next
+    // respawn, which is the one failure this feature cannot have.
+    if (next.hasApprovals) {
+      target.holder.approvals = { ...next.approvals };
+    }
 
     return finalizeReload(cfg, baseAudit, "admin_endpoint", [
       {
@@ -396,6 +417,7 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
 
   return {
     registry,
+    approvalGate: opts.approvalGate,
     async close() {
       await registry.close();
     },
@@ -417,6 +439,7 @@ function makeEngineEntry(
       : undefined,
     tenantScope: cloneTenantScope(spec.tenantScope),
     guardrails: { ...spec.guardrails },
+    approvals: { ...spec.approvals },
   };
 
   // Resolve the dialect for this DB. Postgres is a stateless singleton; one
@@ -454,6 +477,14 @@ function makeEngineEntry(
     // Column-mask hot-reload is a follow-up — a masks edit currently lands on
     // the next engine spawn (the same path table_access took pre-hot-reload).
     masking: buildMaskingConfig(spec, cfg, executor),
+    // Write approvals. The getter mirrors the rules' hot-swap pattern. The gate
+    // comes from the server (HTTP-backed when MIDPLANE_APPROVAL_URL is set);
+    // when approvals are on and no gate was supplied the engine's refusing gate
+    // errors rather than letting the write through.
+    approvals: {
+      config: (): ApprovalsSpec => holder.approvals,
+      gate: opts.approvalGate,
+    },
     // Resolved per-DB from the YAML `dialect:` key (defaults to "postgres"
     // when omitted). The engine routes parse() + normalize() through this;
     // the same instance backs the metadata SQL on the EngineEntry.
@@ -743,6 +774,13 @@ async function swapMultiDb(
     }
     if (spec.hasGuardrails) {
       existing.holder.guardrails = { ...spec.guardrails };
+    }
+    // Multi-DB is the shape the cloud always emits, so this — not the legacy
+    // single-DB swap above — is the branch a hosted toggle actually travels
+    // through. Missing it means the control plane records "approvals on" while
+    // the warm engine keeps running writes unapproved.
+    if (spec.hasApprovals) {
+      existing.holder.approvals = { ...spec.approvals };
     }
 
     summaries.push({
