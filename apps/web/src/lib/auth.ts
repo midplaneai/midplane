@@ -23,6 +23,7 @@ import {
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "./email";
+import { reconcileLoopbackPortRegistration } from "./mcp-loopback-port";
 import { repairedLoopbackRedirect } from "./mcp-redirect";
 import { getPostHog } from "./posthog";
 import { hasEntitlement } from "./plan";
@@ -299,6 +300,16 @@ function createAuth() {
         //    loopback-EQUIVALENT registered string (same scheme/port/path,
         //    localhost ↔ 127.0.0.0/8 ↔ [::1]). Full rationale, incl. why the
         //    token exchange stays consistent: lib/mcp-redirect.ts.
+        //  - loopback any-port reconcile: native clients take a FRESH ephemeral
+        //    port from the OS on every attempt, so the port they registered via
+        //    DCR is stale from the second run on and exact-matching 400s them
+        //    forever (RFC 8252 §7.3 says any port must be allowed). A rewrite
+        //    can't fix that — the plugin matches against the registered list and
+        //    then redirects the browser to whatever the query says — so we move
+        //    the stale registration to the requested port instead, leaving the
+        //    query alone. Scoping and the write-on-GET tradeoff:
+        //    lib/mcp-loopback-port.ts. Runs only when the spelling repair above
+        //    found nothing, so the same-port case still takes the no-write path.
         //
         // All of these ride the login-resume path too: authorizeMCPOAuth stores
         // this query in the oidc_login_prompt cookie before bouncing to
@@ -316,6 +327,12 @@ function createAuth() {
             ctx.query,
             ctx.context.adapter,
           );
+          if (!repaired) {
+            await reconcileLoopbackPortRegistration(
+              ctx.query,
+              ctx.context.adapter,
+            );
+          }
 
           return {
             context: {
