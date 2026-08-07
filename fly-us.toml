@@ -21,7 +21,7 @@ primary_region = "iad"
   # is intentionally dropped between releases. RELEASE STEP: publish the pinned
   # tag (engine-v<version>), then re-pin the @sha256 digest here + in fly-eu.toml
   # and re-run scripts/check-image-pin.ts (it validates the tag part).
-  image = "midplane/midplane:0.15.0"
+  image = "midplane/midplane:0.16.0"
 
 [env]
   PORT = "8080"

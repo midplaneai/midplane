@@ -412,9 +412,12 @@ Each step is verifiable before the next begins.
 8. **Notifications** ✅ — link-only email + the once-per-grant guard
    (`resolveApproval`'s `onCreated`, which fires only on a real insert).
 9. **Ship the engine** — publish, bump `OSS_ENGINE_IMAGE`, re-resolve the digest for the two
-   Fly configs, `scripts/check-image-pin.ts`. NOT DONE — this publishes a public image, so it
-   needs a human to pull the trigger. Everything else is complete and green without it; the
-   pin is still `0.15.0` and the drift check passes.
+   Fly configs, `scripts/check-image-pin.ts`. PARTLY DONE: the repo side is cut — `CHANGELOG`
+   releases 0.16.0, `OSS_ENGINE_IMAGE` pins `midplane/midplane:0.16.0`, and the drift check is
+   green across every literal site. The PUBLISH is not done — it pushes a public image, so it
+   needs a human to pull the trigger (`engine-v0.16.0` tag → `engine-publish.yml`). Until then
+   the repo is in exactly the state the paragraph below warns about, and the digest re-pin for
+   the two Fly configs can't happen (there is no manifest to resolve yet).
 
 Step 4 before step 6 is the point of the ordering: the prior branch reached 1,199 green tests
 with the loop still unproven end-to-end, because its cut engine version was never published
