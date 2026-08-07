@@ -11,14 +11,23 @@
 // the spawners + their tests follow automatically; the drift check tells you
 // which config/doc sites still need updating.
 //
-// NOTE: this is the human-readable TAG — the spawner fallback + dev/docs use it.
-// PROD (fly-eu.toml / fly-us.toml) pins the immutable multi-arch *digest* of this
-// version, which closes the tag-granular adoption-image-check gap (TODOS.md) and
-// makes "prod == tested" byte-exact. Bumping the engine: change the version here,
-// re-resolve the digest (`docker buildx imagetools inspect midplane/midplane:<v>
-// --format '{{.Manifest.Digest}}'`), update the two fly configs, run
+// NOTE: this is the human-readable TAG. It is the local-dev/self-host default
+// and the spawner's last-resort fallback — it is NOT the ref prod pulls.
+//
+// What makes "prod == tested" byte-exact is deploy-fly.yml: preflight resolves
+// this tag's immutable multi-arch manifest digest and the rollout stages
+// MIDPLANE_OSS_IMAGE=midplane/midplane:<v>@sha256:<digest>, which is what
+// FlyMachineSpawner creates customer machines from. The digest in fly-eu.toml /
+// fly-us.toml is a RECORD of the release, not an enforcement point: customer
+// engines are created through the Machines API and those apps are deliberately
+// never `fly deploy`ed, so nothing reads their [build] image at runtime.
+//
+// Bumping the engine: change the version here, publish the tag, re-resolve the
+// digest for the two fly configs (`docker buildx imagetools inspect
+// midplane/midplane:<v>` — the top-level `Digest:` line; deploy-fly.yml reads
+// the same value from the registry's Docker-Content-Digest header), then run
 // scripts/check-image-pin.ts.
-export const OSS_ENGINE_IMAGE = "midplane/midplane:0.15.0";
+export const OSS_ENGINE_IMAGE = "midplane/midplane:0.16.0";
 
 // GHCR mirror of the same engine artifact, published in lockstep by
 // engine-publish.yml (same build, two tags). When MIDPLANE_ENGINE_USE_GHCR=1

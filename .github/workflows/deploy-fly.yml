@@ -56,7 +56,7 @@ on:
         required: true
         # Default mirrors OSS_ENGINE_IMAGE (packages/router/src/oss-image.ts);
         # scripts/check-image-pin.ts enforces it matches the rest of the repo.
-        default: "0.15.0"
+        default: "0.16.0"
       region:
         description: "Region(s) to roll out. With 'both', eu rolls fully before us (staged blast radius)."
         type: choice
@@ -85,11 +85,19 @@ jobs:
   preflight:
     name: Verify image exists (multi-arch)
     runs-on: ubuntu-latest
+    outputs:
+      # Immutable manifest-list digest of inputs.image_tag. The deploy job stages
+      # MIDPLANE_OSS_IMAGE as repo:tag@digest so what customers run is byte-exact
+      # rather than "whatever that tag points at when a machine happens to spawn".
+      digest: ${{ steps.inspect.outputs.digest }}
     steps:
       - name: Inspect midplane/midplane:${{ inputs.image_tag }} on Docker Hub
+        id: inspect
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          REF="midplane/midplane:${{ inputs.image_tag }}"
+          REF="midplane/midplane:$IMAGE_TAG"
           echo "Inspecting $REF ..."
           if ! RAW="$(docker buildx imagetools inspect "$REF" --raw 2>/dev/null)"; then
             echo "::error::$REF not found on Docker Hub. Check the tag — the image is published by the midplaneai/midplane v*-tag CI, not by this repo."
@@ -116,6 +124,60 @@ jobs:
           fi
           echo "OK: $REF is a multi-arch manifest list with linux/amd64."
 
+          # --- Resolve the immutable manifest-list digest -------------------
+          # Read it from the registry's own Docker-Content-Digest header rather
+          # than hashing the --raw bytes (a stray trailing newline from the CLI
+          # would silently yield a digest that resolves to nothing) or parsing
+          # `imagetools inspect --format`, whose output shape varies by buildx
+          # version. This header is exactly what a `@sha256:` pull resolves on.
+          ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+
+          manifest_digest() { # $1 = token URL, $2 = registry host, $3 = repo
+            local tok
+            tok="$(curl -fsS "$1" | jq -r '.token // .access_token')"
+            curl -fsS -I \
+              -H "Authorization: Bearer $tok" \
+              -H "Accept: $ACCEPT" \
+              "https://$2/v2/$3/manifests/$IMAGE_TAG" \
+              | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}'
+          }
+
+          # `|| true` so a curl/auth failure lands on the friendly error below
+          # instead of tripping `set -e` with a bare exit code.
+          DIGEST="$(manifest_digest \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:midplane/midplane:pull" \
+            "registry-1.docker.io" "midplane/midplane" || true)"
+          case "$DIGEST" in
+            sha256:*) ;;
+            *)
+              echo "::error::could not resolve a manifest digest for $REF (got '$DIGEST')."
+              exit 1
+              ;;
+          esac
+          echo "Docker Hub digest: $DIGEST"
+
+          # --- The GHCR mirror must agree, byte for byte -------------------
+          # Prod runs MIDPLANE_ENGINE_USE_GHCR=1, so FlyMachineSpawner rewrites
+          # the staged ref to ghcr.io/midplaneai/midplane and CARRIES THE DIGEST
+          # ACROSS. engine-publish.yml pushes both registries from one
+          # build-push-action, so the digests are the same by construction — but
+          # if that ever stops being true, a digest-pinned ref becomes unpullable
+          # from GHCR and EVERY machine create fails. Catch it here, where it
+          # costs a red preflight, instead of in prod on the first cold spawn.
+          if ! GHCR_DIGEST="$(manifest_digest \
+                "https://ghcr.io/token?service=ghcr.io&scope=repository:midplaneai/midplane:pull" \
+                "ghcr.io" "midplaneai/midplane")"; then
+            echo "::error::ghcr.io/midplaneai/midplane:$IMAGE_TAG is not pullable. engine-publish.yml pushes it alongside Docker Hub; prod pulls from GHCR (MIDPLANE_ENGINE_USE_GHCR=1), so this tag would fail every machine create. Check the publish run and that the GHCR package is Public."
+            exit 1
+          fi
+          if [ "$GHCR_DIGEST" != "$DIGEST" ]; then
+            echo "::error::GHCR and Docker Hub disagree on :$IMAGE_TAG (ghcr=$GHCR_DIGEST hub=$DIGEST). The two registries are supposed to receive one identical push; a digest-pinned rollout cannot be pulled from both. Re-publish the tag."
+            exit 1
+          fi
+          echo "GHCR digest matches."
+
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
   deploy:
     name: Roll out
     needs: preflight
@@ -127,7 +189,14 @@ jobs:
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       IMAGE_TAG: ${{ inputs.image_tag }}
-      IMAGE_REF: "midplane/midplane:${{ inputs.image_tag }}"
+      # Tag AND digest. The tag keeps the ref readable in logs, `fly secrets
+      # list`, and the audit trail; the digest is what actually gets pulled, so a
+      # re-pushed tag can no longer change what customers run between the
+      # preflight check and a machine spawning days later. FlyMachineSpawner
+      # accepts this ref verbatim (normalizeImageRef drops the digest before
+      # comparing, so adoption/staleness are unaffected) and ghcrEngineRef
+      # carries the digest across when the GHCR bypass is on.
+      IMAGE_REF: "midplane/midplane:${{ inputs.image_tag }}@${{ needs.preflight.outputs.digest }}"
       REGION_INPUT: ${{ inputs.region }}
       DRAIN: ${{ inputs.drain_engines }}
     steps:
@@ -141,6 +210,18 @@ jobs:
             echo "::error::FLY_API_TOKEN is not set. Add it as a repo or 'production' Environment secret."
             exit 1
           fi
+          # IMAGE_REF is assembled from a preflight job output. If that output
+          # ever goes missing the ref degrades to a trailing-"@" string that no
+          # registry resolves, and the failure would surface as a broken pull on
+          # the first customer spawn rather than here. Assert the shape instead.
+          case "$IMAGE_REF" in
+            midplane/midplane:*@sha256:*) ;;
+            *)
+              echo "::error::IMAGE_REF is not tag+digest qualified (got '$IMAGE_REF'). The preflight digest output is missing."
+              exit 1
+              ;;
+          esac
+          echo "Rolling out $IMAGE_REF"
 
       - name: Set up flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master

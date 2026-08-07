@@ -411,10 +411,20 @@ Each step is verifiable before the next begins.
    cloud and self-host paths, plus `.env.example`.
 8. **Notifications** ✅ — link-only email + the once-per-grant guard
    (`resolveApproval`'s `onCreated`, which fires only on a real insert).
-9. **Ship the engine** — publish, bump `OSS_ENGINE_IMAGE`, re-resolve the digest for the two
-   Fly configs, `scripts/check-image-pin.ts`. NOT DONE — this publishes a public image, so it
-   needs a human to pull the trigger. Everything else is complete and green without it; the
-   pin is still `0.15.0` and the drift check passes.
+9. **Ship the engine** ✅ — `CHANGELOG` releases 0.16.0, `OSS_ENGINE_IMAGE` pins
+   `midplane/midplane:0.16.0`, drift check green across every literal site.
+   `midplane/midplane:0.16.0` is published (OCI image index, linux/amd64 + linux/arm64), with
+   `ghcr.io/midplaneai/midplane:0.16.0` published in lockstep and anonymously pullable, so the
+   `MIDPLANE_ENGINE_USE_GHCR` mirror-bypass path works on this tag too. The two engine Fly
+   configs record the immutable manifest-list digest
+   `sha256:bdbcdc0d5194bedeb14571e5858f2b15991f1c9ecc529103522c301271f13c1e`.
+
+   Byte-exactness in prod does NOT come from those configs — customer engines are created
+   through the Machines API from the `MIDPLANE_OSS_IMAGE` secret, and the engine apps are
+   never `fly deploy`ed, so nothing reads their `[build] image`. `deploy-fly.yml` now resolves
+   the digest in preflight (rejecting the tag if the GHCR mirror disagrees) and stages
+   `midplane/midplane:<tag>@sha256:<digest>`, which is the ref machines are actually created
+   from. Remaining is the rollout itself, which is a deploy decision, not a repo one.
 
 Step 4 before step 6 is the point of the ordering: the prior branch reached 1,199 green tests
 with the loop still unproven end-to-end, because its cut engine version was never published

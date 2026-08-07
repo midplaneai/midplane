@@ -16,12 +16,16 @@ app = "midplane-us"
 primary_region = "iad"
 
 [build]
-  # Prod is normally pinned by immutable digest (the multi-arch manifest-list
-  # sha256) so a re-pushed tag can't silently change what runs here. The digest
-  # is intentionally dropped between releases. RELEASE STEP: publish the pinned
-  # tag (engine-v<version>), then re-pin the @sha256 digest here + in fly-eu.toml
-  # and re-run scripts/check-image-pin.ts (it validates the tag part).
-  image = "midplane/midplane:0.15.0"
+  # A RECORD of the released engine, pinned by immutable digest (the multi-arch
+  # manifest-list sha256). It does NOT govern what customers run: their engines
+  # are created through the Machines API by FlyMachineSpawner from the
+  # MIDPLANE_OSS_IMAGE secret, and this app is deliberately never `fly deploy`ed
+  # (see deploy-fly.yml), so nothing reads this block at runtime. Byte-exactness
+  # in prod comes from deploy-fly.yml staging <tag>@sha256:<digest>.
+  # The digest is intentionally dropped between releases. RELEASE STEP: publish
+  # the pinned tag (engine-v<version>), then re-pin the @sha256 digest here + in
+  # fly-eu.toml and re-run scripts/check-image-pin.ts (it validates the tag part).
+  image = "midplane/midplane:0.16.0@sha256:bdbcdc0d5194bedeb14571e5858f2b15991f1c9ecc529103522c301271f13c1e"
 
 [env]
   PORT = "8080"
