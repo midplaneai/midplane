@@ -23,10 +23,12 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 import {
   type ColumnMasksConfig,
+  type ApprovalsConfig,
   type GuardrailsConfig,
   type IgnoredColumnsConfig,
   type TableAccessPolicy,
@@ -219,6 +221,17 @@ export const projectDatabases = pgTable(
       .$type<IgnoredColumnsConfig>()
       .notNull()
       .default(sql`'{}'::jsonb`),
+    // Write approvals (docs/designs/write-approvals-mlp.md): hold a write the
+    // policy already permits until a human approves it. Default OFF — unlike
+    // guardrails, holding writes is something an operator asks for, never
+    // something a pre-existing row inherits. Only `writes` reaches the engine
+    // YAML; `expires_after_seconds` governs the approval row's lifetime and is
+    // control-plane only. Hot-swappable via /admin/policy alongside the other
+    // blocks, so toggling it never respawns a warm container.
+    approvals: jsonb("approvals")
+      .$type<ApprovalsConfig>()
+      .notNull()
+      .default(sql`'{"writes":false,"expires_after_seconds":1800}'::jsonb`),
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),
     // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse
     // new sessions after 70 minutes of KMS unreachability — see design doc
@@ -616,6 +629,111 @@ export const mcpScopeGrants = pgTable(
   }),
 );
 
+// --- write_approvals --------------------------------------------------------
+//
+// One row per held write. See docs/designs/write-approvals-mlp.md.
+//
+// The lifetime of a row is short and its job is narrow: it is the thing a human
+// acts on, and the thing that proves an approval was granted for THIS statement
+// and used at most once. Settled history lives in the audit log — an approved
+// write is an ordinary ALLOW + EXECUTED there, a refused one a DENY carrying
+// `approval_denied` / `approval_expired` — so this table is a live queue, not a
+// second record of what happened.
+export const WRITE_APPROVAL_STATUSES = [
+  "pending",
+  "approved",
+  "denied",
+  "expired",
+] as const;
+export type WriteApprovalStatus = (typeof WRITE_APPROVAL_STATUSES)[number];
+
+export const writeApprovals = pgTable(
+  "write_approvals",
+  {
+    id: text("id").primaryKey(), // ULID
+    customerId: text("customer_id").notNull(),
+    projectId: text("project_id").notNull(),
+    projectDatabaseId: text("project_database_id").notNull(),
+    region: text("region", { enum: REGIONS }).notNull(),
+    // Deterministic digest over (project_database_id, sql, intent, mcp_token_id).
+    // This is what binds a grant to one exact statement and lets an agent that
+    // re-runs the same query find its own pending request instead of opening a
+    // second one. An approval for `DELETE … WHERE id < 100` therefore cannot
+    // authorize `… < 100000` — different statement, different key, no grant.
+    grantKey: text("grant_key").notNull(),
+    // The statement verbatim, for the approver to read. Region-resident and
+    // org-scoped; it is NEVER put in a notification (a WHERE clause routinely
+    // carries live values, so the SQL is data, not metadata).
+    sqlText: text("sql_text").notNull(),
+    intent: text("intent").notNull(),
+    statementType: text("statement_type").notNull(),
+    tablesTouched: text("tables_touched").array().notNull(),
+    // Correlates with the ATTEMPTED audit row for the attempt that was held.
+    queryId: text("query_id").notNull(),
+    agentName: text("agent_name"),
+    mcpTokenId: text("mcp_token_id"),
+    status: text("status", { enum: WRITE_APPROVAL_STATUSES })
+      .notNull()
+      .default("pending"),
+    decidedByUserId: text("decided_by_user_id"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    // The approver's note, surfaced to the agent on a denial so it can write a
+    // better statement instead of retrying the same one.
+    decisionNote: text("decision_note"),
+    // Set in the same transaction that answers APPROVE. Two retries racing one
+    // approval therefore yield exactly one execution.
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    // query_id of the attempt that CONSUMED this grant — which is NOT the
+    // `query_id` column above. That one identifies the attempt that was HELD,
+    // and by design a held attempt never executes: the agent re-runs under a
+    // fresh query_id, and that is the one that touches the database. Without
+    // this column an approval cannot be joined to its own outcome, so the queue
+    // can say who approved a write but never whether it ran or what it did.
+    claimedQueryId: text("claimed_query_id"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    customerFk: foreignKey({
+      name: "write_approvals_customer_fk",
+      columns: [t.customerId],
+      foreignColumns: [customers.id],
+    }).onDelete("cascade"),
+    projectFk: foreignKey({
+      name: "write_approvals_project_fk",
+      columns: [t.projectId],
+      foreignColumns: [projects.id],
+    }).onDelete("cascade"),
+    databaseFk: foreignKey({
+      name: "write_approvals_database_fk",
+      columns: [t.projectDatabaseId],
+      foreignColumns: [projectDatabases.id],
+    }).onDelete("cascade"),
+    // Drives the queue: "everything still waiting in this workspace/region".
+    queueIdx: index("write_approvals_queue_idx").on(
+      t.customerId,
+      t.region,
+      t.status,
+      t.createdAt,
+    ),
+    // At most ONE pending request per statement per database. Partial so a
+    // settled row never blocks asking again — re-running a denied statement
+    // opens a fresh request rather than colliding with the old refusal.
+    pendingUq: uniqueIndex("write_approvals_pending_uq")
+      .on(t.projectDatabaseId, t.grantKey)
+      .where(sql`status = 'pending'`),
+    // The gate's lookup on every held write: "is there an approved, unclaimed
+    // grant for this exact statement?"
+    grantIdx: index("write_approvals_grant_idx").on(
+      t.projectDatabaseId,
+      t.grantKey,
+      t.status,
+    ),
+  }),
+);
+
 // --- types ------------------------------------------------------------------
 
 export type Customer = typeof customers.$inferSelect;
@@ -632,5 +750,7 @@ export type McpToken = typeof mcpTokens.$inferSelect;
 export type NewMcpToken = typeof mcpTokens.$inferInsert;
 export type McpScopeGrant = typeof mcpScopeGrants.$inferSelect;
 export type NewMcpScopeGrant = typeof mcpScopeGrants.$inferInsert;
+export type WriteApproval = typeof writeApprovals.$inferSelect;
+export type NewWriteApproval = typeof writeApprovals.$inferInsert;
 
 export { sql };

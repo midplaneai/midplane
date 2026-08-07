@@ -274,6 +274,118 @@ export function parseGuardrailsOrThrow(input: unknown): GuardrailsConfig {
   throw new Error(`invalid guardrails: ${summary}`);
 }
 
+// --- approvals ---------------------------------------------------------------
+//
+// Write approvals — hold a write the policy already permits until a human
+// approves it. See docs/designs/write-approvals-mlp.md.
+//
+//   writes                  every statement with a write target needs approval
+//   expires_after_seconds   how long a pending request lives before it denies
+//
+// Deliberately NOT a threshold. The trigger is categorical because the noise
+// floor is already set by table_access: only a table marked read_write can
+// produce a held write at all.
+//
+// `writes` is the only field the engine sees. `expires_after_seconds` is a
+// control-plane concern (it governs the approval row's expires_at, not anything
+// the engine does — the engine's hold is a fixed short window), so it lives in
+// the same stored object but is never emitted into the policy YAML.
+//
+// OFF is the default and an off config emits NO yaml block, so a database that
+// doesn't use approvals produces byte-identical YAML to today.
+
+export interface ApprovalsConfig {
+  writes: boolean;
+  expires_after_seconds: number;
+}
+
+/** Off, with a 30-minute window when switched on. Long enough that an approver
+ *  reached by email can still act, short enough that a forgotten request does
+ *  not sit claimable for a working day. */
+export const DEFAULT_APPROVALS: ApprovalsConfig = {
+  writes: false,
+  expires_after_seconds: 1800,
+};
+
+/** One minute floor — below this an agent's own retry cadence would outrun the
+ *  window. One day ceiling — a request nobody answered in a day is not pending,
+ *  it is abandoned, and holding the grant claimable that long is a liability. */
+const MIN_APPROVAL_EXPIRY_SECONDS = 60;
+const MAX_APPROVAL_EXPIRY_SECONDS = 86_400;
+
+export interface ApprovalsValidationError {
+  path: string;
+  message: string;
+}
+export type ApprovalsValidationResult =
+  | { ok: true; value: ApprovalsConfig }
+  | { ok: false; errors: ApprovalsValidationError[] };
+
+// Validate untrusted input into a typed ApprovalsConfig. An absent section
+// resolves to DEFAULT_APPROVALS (off) — a row written before this column
+// existed reads as "no approvals", which matches what that row's engine was
+// actually doing.
+export function validateApprovals(input: unknown): ApprovalsValidationResult {
+  // Spread, never the shared object — a caller mutating its result must not
+  // poison the module-level default for the whole process.
+  if (input == null) return { ok: true, value: { ...DEFAULT_APPROVALS } };
+  if (typeof input !== "object" || Array.isArray(input)) {
+    return {
+      ok: false,
+      errors: [{ path: "", message: "approvals must be an object" }],
+    };
+  }
+  const obj = input as Record<string, unknown>;
+  const errors: ApprovalsValidationError[] = [];
+  const value: ApprovalsConfig = { ...DEFAULT_APPROVALS };
+
+  if (obj.writes !== undefined) {
+    if (typeof obj.writes !== "boolean") {
+      errors.push({ path: "writes", message: "must be a boolean" });
+    } else {
+      value.writes = obj.writes;
+    }
+  }
+
+  if (obj.expires_after_seconds !== undefined) {
+    const raw = obj.expires_after_seconds;
+    if (typeof raw !== "number" || !Number.isInteger(raw)) {
+      errors.push({
+        path: "expires_after_seconds",
+        message: "must be an integer number of seconds",
+      });
+    } else if (
+      raw < MIN_APPROVAL_EXPIRY_SECONDS ||
+      raw > MAX_APPROVAL_EXPIRY_SECONDS
+    ) {
+      errors.push({
+        path: "expires_after_seconds",
+        message: `must be between ${MIN_APPROVAL_EXPIRY_SECONDS} and ${MAX_APPROVAL_EXPIRY_SECONDS}`,
+      });
+    } else {
+      value.expires_after_seconds = raw;
+    }
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value };
+}
+
+/** Strict variant for the spawner / hot-reload boundary. Fail closed rather
+ *  than start a container whose approval posture we could not parse. */
+export function parseApprovalsOrThrow(input: unknown): ApprovalsConfig {
+  const r = validateApprovals(input);
+  if (r.ok) return r.value;
+  const summary = r.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+  throw new Error(`invalid approvals: ${summary}`);
+}
+
+/** True when this config asks the engine to do anything. Drives both the YAML
+ *  block and the `write_approvals` feature token. */
+export function approvalsAreActive(config: ApprovalsConfig): boolean {
+  return config.writes;
+}
+
 export interface DatabaseEntry {
   name: string;
   /** Project-database id used to derive the DSN env var name. ULIDs
@@ -305,6 +417,14 @@ export interface DatabaseEntry {
    *  Rollout is engine-first: publish the rewrite-capable image, THEN flip this on
    *  per canary project. Inert without masks (nothing to rewrite). */
   maskSourceRewrite?: boolean;
+  /** Write approvals. Absent/off ⇒ the YAML omits the block entirely and is
+   *  byte-identical to a pre-approvals policy. When on, the entry also carries a
+   *  `write_approvals` feature token, so an engine that predates the gate REFUSES
+   *  the policy instead of running writes unapproved — the failure mode this
+   *  feature can least afford. Unlike the column_masks rollout, that defense
+   *  works against already-deployed engines too: 0.15.0 understands
+   *  `requires_features` and does not know this token. */
+  approvals?: ApprovalsConfig;
 }
 
 // Mirrors OSS ENV_INTERP_RE so the cloud refuses to derive an env var name
@@ -378,9 +498,57 @@ export function serializeMultiDbPolicyToYaml(
       `      block_unqualified_dml: ${db.guardrails.block_unqualified_dml}`,
     );
     lines.push(`      block_ddl: ${db.guardrails.block_ddl}`);
-    emitColumnMasks(lines, db.columnMasks ?? {}, db.maskSourceRewrite ?? false);
+    // ONE requires_features list per database, emitted before the sections that
+    // need it. Every feature-gated section must contribute here rather than
+    // writing its own key: two emitters each pushing `requires_features:` would
+    // produce a duplicate YAML key, and js-yaml's last-one-wins would silently
+    // drop the earlier list — turning a fail-closed token into no token at all.
+    const masks = db.columnMasks ?? {};
+    const approvals = db.approvals ?? DEFAULT_APPROVALS;
+    emitRequiresFeatures(lines, collectRequiredFeatures(db, masks, approvals));
+    emitColumnMasks(lines, masks, db.maskSourceRewrite ?? false);
+    emitApprovals(lines, approvals);
   }
   return lines.join("\n") + "\n";
+}
+
+/** Feature tokens this database's policy depends on, in a stable order. An
+ *  engine missing any of them refuses the whole policy rather than enforcing a
+ *  subset of the controls the operator configured. */
+function collectRequiredFeatures(
+  db: DatabaseEntry,
+  masks: ColumnMasksConfig,
+  approvals: ApprovalsConfig,
+): string[] {
+  const features: string[] = [];
+  if (hasAnyMask(masks)) {
+    features.push("column_masks");
+    // Inert without masks — requiring source-rewrite for a database that
+    // rewrites nothing would fail an upgrade for no enforcement gain.
+    if (db.maskSourceRewrite) features.push("mask_source_rewrite");
+  }
+  if (approvalsAreActive(approvals)) features.push("write_approvals");
+  return features;
+}
+
+function emitRequiresFeatures(lines: string[], features: string[]): void {
+  if (features.length === 0) return;
+  lines.push(`    requires_features:`);
+  for (const f of features) lines.push(`      - ${f}`);
+}
+
+function hasAnyMask(masks: ColumnMasksConfig): boolean {
+  return Object.values(masks).some((cols) => Object.keys(cols).length > 0);
+}
+
+// Emit the approvals block. Skipped entirely when inactive so a database that
+// doesn't use approvals serializes exactly as it did before the feature existed.
+// Only `writes` crosses into the engine — expires_after_seconds governs the
+// control-plane approval row, which the engine never sees.
+function emitApprovals(lines: string[], approvals: ApprovalsConfig): void {
+  if (!approvalsAreActive(approvals)) return;
+  lines.push(`    approvals:`);
+  lines.push(`      writes: ${approvals.writes}`);
 }
 
 // Two identifier shapes drive tenant_scope validation:
@@ -1069,19 +1237,18 @@ export function parseIgnoredColumnsOrThrow(input: unknown): IgnoredColumnsConfig
 }
 
 // Emit the column_masks block (sibling of table_access). Skipped entirely when
-// empty so the YAML reads like a pre-masking DB. When present, we also emit
-// `requires_features: [column_masks]` so a future engine that dropped masking
-// support REFUSES the policy rather than silently not enforcing it (the
-// forward half of the version-skew defense T3; an already-old engine can't be
-// taught to refuse — engine-first sequencing covers that). Defense-in-depth
-// identifier checks mirror emitTenantScope's.
+// empty so the YAML reads like a pre-masking DB. Defense-in-depth identifier
+// checks mirror emitTenantScope's.
 //
-// `sourceRewrite` (ISSUE-007): when true, the DB also gets `mask_source_rewrite:
-// true` (flip the engine to source-side rewrite) and a `mask_source_rewrite`
-// requires_features token, so an engine too old to rewrite refuses instead of
-// silently masking the old (blast-radius) way. Inert without masks — the token
-// would pointlessly require a feature for a DB that rewrites nothing — so it
-// rides the same non-empty-masks gate.
+// The `column_masks` / `mask_source_rewrite` feature tokens are NOT emitted here
+// — collectRequiredFeatures owns the single per-database requires_features list
+// so multiple gated sections can coexist. This function still owns the
+// `mask_source_rewrite: true` flag itself, which is masking config rather than a
+// capability assertion.
+//
+// `sourceRewrite` (ISSUE-007): when true, the DB gets `mask_source_rewrite: true`
+// (flip the engine to source-side rewrite). Inert without masks — nothing to
+// rewrite — so it rides the same non-empty-masks gate.
 function emitColumnMasks(
   lines: string[],
   masks: ColumnMasksConfig,
@@ -1092,10 +1259,7 @@ function emitColumnMasks(
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   if (tables.length === 0) return;
 
-  lines.push(`    requires_features:`);
-  lines.push(`      - column_masks`);
   if (sourceRewrite) {
-    lines.push(`      - mask_source_rewrite`);
     lines.push(`    mask_source_rewrite: true`);
   }
   lines.push(`    column_masks:`);
