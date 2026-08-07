@@ -411,13 +411,15 @@ Each step is verifiable before the next begins.
    cloud and self-host paths, plus `.env.example`.
 8. **Notifications** ✅ — link-only email + the once-per-grant guard
    (`resolveApproval`'s `onCreated`, which fires only on a real insert).
-9. **Ship the engine** — publish, bump `OSS_ENGINE_IMAGE`, re-resolve the digest for the two
-   Fly configs, `scripts/check-image-pin.ts`. PARTLY DONE: the repo side is cut — `CHANGELOG`
-   releases 0.16.0, `OSS_ENGINE_IMAGE` pins `midplane/midplane:0.16.0`, and the drift check is
-   green across every literal site. The PUBLISH is not done — it pushes a public image, so it
-   needs a human to pull the trigger (`engine-v0.16.0` tag → `engine-publish.yml`). Until then
-   the repo is in exactly the state the paragraph below warns about, and the digest re-pin for
-   the two Fly configs can't happen (there is no manifest to resolve yet).
+9. **Ship the engine** ✅ — `CHANGELOG` releases 0.16.0, `OSS_ENGINE_IMAGE` pins
+   `midplane/midplane:0.16.0`, drift check green across every literal site.
+   `midplane/midplane:0.16.0` is published (OCI image index, linux/amd64 + linux/arm64), with
+   `ghcr.io/midplaneai/midplane:0.16.0` published in lockstep and anonymously pullable, so the
+   `MIDPLANE_ENGINE_USE_GHCR` mirror-bypass path works on this tag too. The two engine Fly
+   configs are re-pinned to the immutable manifest-list digest
+   `sha256:bdbcdc0d5194bedeb14571e5858f2b15991f1c9ecc529103522c301271f13c1e`, so prod is
+   byte-exact rather than tag-granular. Remaining is the rollout itself (`deploy-fly.yml`),
+   which is a deploy decision, not a repo one.
 
 Step 4 before step 6 is the point of the ordering: the prior branch reached 1,199 green tests
 with the loop still unproven end-to-end, because its cut engine version was never published
