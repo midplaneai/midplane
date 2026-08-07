@@ -6,7 +6,7 @@
 // (customer_id, region) FK onto customers), so one indexed read on
 // (customer_id, region, status, created_at) covers the whole queue.
 
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, gt, lte, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import {
@@ -202,23 +202,38 @@ export async function decideApproval(args: {
         eq(writeApprovals.customerId, args.customerId),
         eq(writeApprovals.region, args.region),
         eq(writeApprovals.status, "pending"),
+        // The deadline belongs IN the atomic update, not after it. Marking a
+        // row approved and correcting it a moment later opens a window where an
+        // engine poll can claim the grant and execute a write past its expiry —
+        // the corrective UPDATE then arrives too late to matter. With the
+        // predicate here, an expired request simply never becomes approved.
+        gt(writeApprovals.expiresAt, at),
       ),
     )
-    .returning({ id: writeApprovals.id, expiresAt: writeApprovals.expiresAt });
+    .returning({ id: writeApprovals.id });
 
   if (updated.length === 0) {
+    // Nothing matched. Read back to say WHICH precondition failed, so the
+    // approver gets "someone else decided" vs "it expired" rather than a
+    // generic refusal.
     const existing = await getApproval(args.region, args.customerId, args.id);
     if (!existing) return { ok: false, error: "not_found" };
-    return { ok: false, error: "already_decided" };
-  }
+    if (existing.status !== "pending") return { ok: false, error: "already_decided" };
 
-  // Approving something already past its deadline would resurrect it. Roll the
-  // decision to expired rather than letting a late yes through.
-  if (updated[0]!.expiresAt.getTime() <= now()) {
+    // Still pending, so the deadline is what refused us. Relabel it now rather
+    // than waiting for the sweeper, so the queue stops offering an action that
+    // cannot succeed. Conditional and idempotent — and note it never passes
+    // through 'approved', which is precisely what made the old ordering racy.
     await db
       .update(writeApprovals)
-      .set({ status: "expired", decidedByUserId: null, decisionNote: null })
-      .where(eq(writeApprovals.id, args.id));
+      .set({ status: "expired", decidedAt: at })
+      .where(
+        and(
+          eq(writeApprovals.id, args.id),
+          eq(writeApprovals.status, "pending"),
+          lte(writeApprovals.expiresAt, at),
+        ),
+      );
     return { ok: false, error: "expired" };
   }
 

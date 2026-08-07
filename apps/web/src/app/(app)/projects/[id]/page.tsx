@@ -34,6 +34,7 @@ import { DeleteProjectButton } from "@/components/delete-project-button";
 import { PauseProjectButton } from "@/components/projects/pause-project-button";
 import { GuardrailsToggles } from "@/components/guardrails-toggles";
 import { ApprovalsToggle } from "@/components/approvals-toggle";
+import { approvalGateConfigured } from "@/lib/approvals";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/projects/rename-database-control";
@@ -634,6 +635,16 @@ export default async function ProjectWorkspace({
       throw new Error("approvals is not valid JSON");
     }
     const config = parseApprovalsOrThrow(parsed);
+    // Refuse to enable a gate nobody can answer. Saving `writes: true` on a
+    // deployment with no approval secret/origin leaves the engine with no gate,
+    // so every permitted write is refused forever and no request is ever
+    // created for a human to see. Turning it OFF is always allowed — that path
+    // is how you recover.
+    if (config.writes && !approvalGateConfigured()) {
+      throw new Error(
+        "Approvals need MIDPLANE_APPROVAL_SECRET and MIDPLANE_APP_ORIGIN set on this deployment. Without them the engine has no way to ask anyone, so every write would be refused and no request would appear here.",
+      );
+    }
     const ctx = getMcpProxyContext();
     const result = await setApprovals(
       customer,
@@ -879,6 +890,7 @@ export default async function ProjectWorkspace({
             key={selDb.name}
             initialConfig={parseApprovalsOrThrow(selDb.approvals)}
             action={approvalsAction}
+            gateConfigured={approvalGateConfigured()}
           />
         </div>
       </section>

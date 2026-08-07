@@ -465,6 +465,16 @@ function toStatusWire(s: {
         executed: true,
         next: "The write ran. This approval is spent — re-running the statement would open a NEW approval request, and would run it a SECOND time.",
       };
+    case "consumed":
+      return {
+        status: "consumed",
+        // Deliberately NOT executed:true. The grant was used, but nothing
+        // confirms the statement landed — it may have failed in Postgres after
+        // the grant was claimed. Saying it ran would be a guess presented as a
+        // fact, and a blind retry could double-write if it actually did.
+        executed: null,
+        next: "This approval was used, but the outcome is unconfirmed — the write may or may not have landed. Do NOT report it as done and do NOT blindly retry: check the data (or the audit log) first, then ask for a new approval if it needs running.",
+      };
     case "denied":
       return {
         status: "denied",

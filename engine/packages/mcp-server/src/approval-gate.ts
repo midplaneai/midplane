@@ -252,6 +252,8 @@ function parseStatus(body: unknown): ApprovalStatus | null {
       return { status: "denied", by: str(b.by), note: str(b.note) };
     case "executed":
       return { status: "executed" };
+    case "consumed":
+      return { status: "consumed" };
     case "expired":
       return { status: "expired" };
     case "not_found":

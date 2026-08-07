@@ -20,9 +20,14 @@ import { cn } from "@/lib/utils";
 export function ApprovalsToggle({
   initialConfig,
   action,
+  gateConfigured = true,
 }: {
   initialConfig: ApprovalsConfig;
   action: (formData: FormData) => Promise<void>;
+  /** Whether this deployment has an approval secret + origin. The server
+   *  action refuses the save without them; showing it here means the user
+   *  learns before clicking rather than from a rejected save. */
+  gateConfigured?: boolean;
 }) {
   const [applied, setApplied] = useState<ApprovalsConfig>(initialConfig);
   const [config, setConfig] = useState<ApprovalsConfig>(initialConfig);
@@ -90,6 +95,18 @@ export function ApprovalsToggle({
         </div>
       </div>
 
+      {!gateConfigured && (
+        <p className="border-l-[3px] border-warn bg-warn/[0.06] px-3 py-2 text-xs text-muted-foreground">
+          <strong className="font-medium text-foreground">
+            This deployment has no approval service configured.
+          </strong>{" "}
+          Set <code className="font-mono">MIDPLANE_APPROVAL_SECRET</code> and{" "}
+          <code className="font-mono">MIDPLANE_APP_ORIGIN</code> first — without
+          them the engine has no way to ask anyone, so every write would be
+          refused and nothing would appear in the queue.
+        </p>
+      )}
+
       <p className="text-xs text-muted-foreground">
         Reads are never held. If a read needs a human, deny the table instead —
         adding a review step to <code className="font-mono">SELECT</code> makes
@@ -109,7 +126,10 @@ export function ApprovalsToggle({
       ) : null}
 
       <div className="flex items-center gap-2">
-        <Button type="submit" disabled={pending || !dirty}>
+        <Button
+          type="submit"
+          disabled={pending || !dirty || (config.writes && !gateConfigured)}
+        >
           {pending ? "Saving…" : "Save approvals"}
         </Button>
         {dirty && !pending && (

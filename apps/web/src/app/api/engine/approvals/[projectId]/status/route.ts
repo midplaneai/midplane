@@ -82,6 +82,7 @@ function toWire(
     case "denied":
       return { status: "denied", by: s.by, note: s.note };
     case "executed":
+    case "consumed":
     case "expired":
     case "not_found":
       return { status: s.status };

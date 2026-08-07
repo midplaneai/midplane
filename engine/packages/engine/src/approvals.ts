@@ -58,6 +58,11 @@ export type ApprovalStatus =
   | { status: "pending"; expiresAt: number }
   | { status: "approved"; by: string | null; note: string | null }
   | { status: "executed" }
+  /** The grant was consumed but no EXECUTED audit row confirms the outcome —
+   *  the claim happens before execution, so a statement can still fail in
+   *  Postgres afterwards. Distinct from `executed` because telling an agent a
+   *  write landed when it may not have is the worst answer this can give. */
+  | { status: "consumed" }
   | { status: "denied"; by: string | null; note: string | null }
   | { status: "expired" }
   | { status: "not_found" };

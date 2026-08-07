@@ -16,6 +16,7 @@ import { and, desc, eq, gt, isNull, lt } from "drizzle-orm";
 import { ulid } from "ulid";
 
 import {
+  auditEventsIndex,
   getDb,
   writeApprovals,
   type Region,
@@ -393,6 +394,7 @@ export async function checkApprovalStatus(args: {
   | { status: "pending"; expiresAt: number }
   | { status: "approved"; by: string | null; note: string | null }
   | { status: "executed" }
+  | { status: "consumed" }
   | { status: "denied"; by: string | null; note: string | null }
   | { status: "expired" }
   | { status: "not_found" }
@@ -410,9 +412,14 @@ export async function checkApprovalStatus(args: {
 
   const row = rows[0];
   if (!row) return { status: "not_found" };
-  // A null mcpTokenId on either side cannot match: an anonymous caller must not
-  // inherit access to a request some token owns.
-  if (!args.mcpTokenId || row.mcpTokenId !== args.mcpTokenId) {
+  // Scoped to the token that opened the request. A strict !== compares null to
+  // null correctly, which matters: stdio and self-host sessions carry no MCP
+  // token, and their approval rows store null too. Rejecting on falsiness made
+  // check_approval return not_found for every one of those sessions while the
+  // pending response was actively telling them to call it. Isolation for
+  // tokenless callers is the project, which is already what the grant key gives
+  // them — a tokenless session cannot see a row some token owns, and vice versa.
+  if (row.mcpTokenId !== args.mcpTokenId) {
     return { status: "not_found" };
   }
 
@@ -430,14 +437,56 @@ export async function checkApprovalStatus(args: {
     return { status: "pending", expiresAt: row.expiresAt.getTime() };
   }
 
-  // Approved. Whether it has been CONSUMED is the actionable half: an unclaimed
-  // grant means "re-run to collect", a claimed one means "you already ran this,
-  // re-running asks again". Without the distinction an agent that lost its
-  // result would re-run and silently open a second request.
-  if (row.claimedAt) return { status: "executed" };
+  // Approved. Two questions, in order.
+  //
+  // 1. Was the grant CONSUMED? claimedAt is set BEFORE the engine audits and
+  //    executes, so a claim alone does not mean the write landed — the
+  //    statement can still fail in Postgres afterwards. Reporting "executed"
+  //    off claimedAt told the agent a write had happened when it may not have,
+  //    which is the worst thing this tool can say. Confirm against the EXECUTED
+  //    audit row for the claiming attempt; without one the honest answer is
+  //    "the grant is spent and I cannot confirm the outcome".
+  if (row.claimedAt) {
+    const executed = row.claimedQueryId
+      ? await getDb(args.region)
+          .select({ id: auditEventsIndex.id })
+          .from(auditEventsIndex)
+          .where(
+            and(
+              eq(auditEventsIndex.queryId, row.claimedQueryId),
+              eq(auditEventsIndex.eventType, "EXECUTED"),
+            ),
+          )
+          .limit(1)
+      : [];
+    return executed.length > 0 ? { status: "executed" } : { status: "consumed" };
+  }
+
+  // 2. Is it still collectable? claimSettled requires expiresAt > now, so an
+  //    approved grant past its deadline can never be claimed. Reporting
+  //    "approved" for one would tell the agent to run a statement that will
+  //    only ever open a fresh request.
+  if (row.expiresAt.getTime() <= Date.now()) return { status: "expired" };
+
   return {
     status: "approved",
     by: await displayName(args.region, row.decidedByUserId),
     note: row.decisionNote,
   };
+}
+
+/** True when this deployment can actually answer a held write.
+ *
+ *  Both halves are required: the secret mints the per-project bearer, the origin
+ *  tells the engine where to send the request. Absent is a perfectly valid
+ *  deployment — approvals are opt-in — which is exactly why enabling the toggle
+ *  there is a trap: the engine gets no gate, so every write the policy permits
+ *  is refused with no reviewable request ever created. Fail-closed, but
+ *  permanently and invisibly, which is the worst shape a safety feature can
+ *  take. Callers gate the SAVE on this rather than letting it happen. */
+export function approvalGateConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(
+    env.MIDPLANE_APPROVAL_SECRET &&
+      (env.MIDPLANE_APPROVAL_CALLBACK_ORIGIN ?? env.MIDPLANE_APP_ORIGIN),
+  );
 }

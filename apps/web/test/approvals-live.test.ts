@@ -36,6 +36,8 @@ const {
 const { decideApproval, listPendingApprovals, listDecidedApprovals, getApproval } =
   await import("../src/lib/approval-queue.ts");
 
+const { checkApprovalStatus } = await import("../src/lib/approvals.ts");
+
 const BASE = {
   customerId: "c_live",
   projectId: "p_live",
@@ -284,6 +286,128 @@ d("approval resolution — live", () => {
     expect(await expireStaleApprovals("eu")).toBe(0);
     const rows = await sql`SELECT status FROM write_approvals WHERE grant_key = ${grantKeyFor(BASE)}`;
     expect(rows[0]!.status).toBe("pending");
+  });
+
+  describe("review fixes", () => {
+    async function openOne2() {
+      const a = await resolveApproval(BASE, NO_WAIT);
+      if (a.status !== "pending") throw new Error("expected pending");
+      return a.approvalId;
+    }
+
+    it("an expired request can never be marked approved, even for an instant", async () => {
+      // The deadline is IN the atomic update. Marking it approved and
+      // correcting afterwards left a window where a concurrent engine poll
+      // could claim the grant and execute past expiry.
+      const id = await openOne2();
+      await sql`UPDATE write_approvals SET expires_at = now() - interval '1 minute' WHERE id = ${id}`;
+
+      const result = await decideApproval({
+        region: "eu", customerId: "c_live", id,
+        decision: "approved", userId: "u_named", note: null,
+      });
+      expect(result).toEqual({ ok: false, error: "expired" });
+
+      // Relabelled to expired, but never through 'approved' — and with no
+      // approver recorded, so no racer could have seen a claimable grant and
+      // no human is credited with a decision they did not make.
+      const rows = await sql`SELECT status, decided_by_user_id FROM write_approvals WHERE id = ${id}`;
+      expect(rows[0]!.status).toBe("expired");
+      expect(rows[0]!.decided_by_user_id).toBeNull();
+    });
+
+    it("still distinguishes already-decided from expired", async () => {
+      const id = await openOne2();
+      await decideApproval({
+        region: "eu", customerId: "c_live", id,
+        decision: "denied", userId: "u_named", note: null,
+      });
+      expect(
+        await decideApproval({
+          region: "eu", customerId: "c_live", id,
+          decision: "approved", userId: "u_named", note: null,
+        }),
+      ).toEqual({ ok: false, error: "already_decided" });
+    });
+
+    it("a claimed grant with no EXECUTED row reports consumed, not executed", async () => {
+      // claimedAt is set BEFORE the engine audits and executes, so the
+      // statement can still fail in Postgres afterwards. Reporting "executed"
+      // off the claim alone tells the agent a write happened when it may not
+      // have.
+      const id = await openOne2();
+      await decideApproval({
+        region: "eu", customerId: "c_live", id,
+        decision: "approved", userId: "u_named", note: null,
+      });
+      await resolveApproval({ ...BASE, queryId: "q_claim" }, NO_WAIT);
+
+      expect(
+        await checkApprovalStatus({
+          region: "eu", projectId: "p_live", approvalId: id, mcpTokenId: BASE.mcpTokenId,
+        }),
+      ).toEqual({ status: "consumed" });
+
+      await sql`INSERT INTO audit_events_index
+                  (id, customer_id, tenant_id, region, query_id, database, ts,
+                   event_type, payload, schema_version)
+                VALUES ('ae_ck','c_live','t','eu','q_claim','main', now(),
+                        'EXECUTED', ${sql.json({ exec_ms: 2, overhead_ms: 1, rows_affected: 1 })}, 3)`;
+
+      expect(
+        await checkApprovalStatus({
+          region: "eu", projectId: "p_live", approvalId: id, mcpTokenId: BASE.mcpTokenId,
+        }),
+      ).toEqual({ status: "executed" });
+    });
+
+    it("an approved grant past its deadline reports expired, not approved", async () => {
+      // claimSettled requires expiresAt > now, so this grant can never be
+      // claimed. Saying "approved" would tell the agent to run a statement that
+      // will only ever open a fresh request.
+      const id = await openOne2();
+      await decideApproval({
+        region: "eu", customerId: "c_live", id,
+        decision: "approved", userId: "u_named", note: null,
+      });
+      await sql`UPDATE write_approvals SET expires_at = now() - interval '1 minute' WHERE id = ${id}`;
+
+      expect(
+        await checkApprovalStatus({
+          region: "eu", projectId: "p_live", approvalId: id, mcpTokenId: BASE.mcpTokenId,
+        }),
+      ).toEqual({ status: "expired" });
+    });
+
+    it("a tokenless session can check its own tokenless request", async () => {
+      // stdio and self-host carry no MCP token, and their rows store null too.
+      // Rejecting on falsiness made check_approval useless for exactly the
+      // sessions the pending response tells to call it.
+      const anon = { ...BASE, mcpTokenId: null };
+      const a = await resolveApproval(anon, NO_WAIT);
+      if (a.status !== "pending") throw new Error("expected pending");
+
+      const seen = await checkApprovalStatus({
+        region: "eu", projectId: "p_live", approvalId: a.approvalId, mcpTokenId: null,
+      });
+      expect(seen.status).toBe("pending");
+
+      // A tokened session still cannot see it, and vice versa.
+      expect(
+        await checkApprovalStatus({
+          region: "eu", projectId: "p_live", approvalId: a.approvalId, mcpTokenId: "tok_a",
+        }),
+      ).toEqual({ status: "not_found" });
+    });
+
+    it("one agent cannot check another agent's request", async () => {
+      const id = await openOne2();
+      expect(
+        await checkApprovalStatus({
+          region: "eu", projectId: "p_live", approvalId: id, mcpTokenId: "tok_other",
+        }),
+      ).toEqual({ status: "not_found" });
+    });
   });
 
   describe("deciding", () => {
