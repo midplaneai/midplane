@@ -123,8 +123,20 @@ export function reconciledRedirectUrls(
   if (/[^!-~]/.test(requested)) return null;
   if (registered.includes(requested)) return null;
 
+  // Host spelling must match EXACTLY — only the port may differ. Allowing
+  // `127.0.0.1` to reconcile against a requested `localhost` would desync the
+  // token exchange: under the Next loopback-host corruption that
+  // lib/mcp-redirect.ts exists for, the query arrives spelled `localhost` while
+  // the client's token POST body (which nothing rewrites) still says
+  // `127.0.0.1`, and Better Auth compares those two byte-for-byte. Authorize
+  // would succeed and the exchange would 401 — later and less legible than the
+  // 400 this fixes — and the corrupted spelling would be persisted, breaking
+  // every subsequent attempt too. Requiring equality means that combination
+  // simply doesn't reconcile and degrades to the clean 400 instead.
   const sameShape = (reg: URL) =>
-    reg.pathname === req.pathname && reg.search === req.search;
+    reg.hostname === req.hostname &&
+    reg.pathname === req.pathname &&
+    reg.search === req.search;
 
   // If some registration already covers this port, the request is a pure
   // host-SPELLING mismatch and lib/mcp-redirect.ts repairs it with a query

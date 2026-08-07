@@ -61,17 +61,30 @@ describe("reconciledRedirectUrls", () => {
     ]);
   });
 
-  it("matches across loopback host spellings", () => {
+  // Requiring identical host spelling is what keeps the token exchange in sync.
+  // If the request arrives host-corrupted (`127.0.0.1` → `localhost`, the case
+  // lib/mcp-redirect.ts exists for) AND the port has rolled, reconciling across
+  // spellings would store `localhost:54096` while the client's token POST body
+  // still says `127.0.0.1:54096` — authorize succeeds, the exchange 401s, and
+  // the corrupted spelling is now persisted. Degrade to no-reconcile instead.
+  it("refuses to reconcile across loopback host spellings", () => {
     expect(
       reconciledRedirectUrls("http://127.0.0.1:9000/cb", [
         "http://localhost:3118/cb",
       ]),
-    ).toEqual(["http://127.0.0.1:9000/cb"]);
+    ).toBeNull();
     expect(
       reconciledRedirectUrls("http://[::1]:9000/cb", [
         "http://localhost:3118/cb",
       ]),
-    ).toEqual(["http://[::1]:9000/cb"]);
+    ).toBeNull();
+    // The exact prod-shaped combination: registered 127.0.0.1, request
+    // corrupted to localhost, port rolled.
+    expect(
+      reconciledRedirectUrls("http://localhost:54096/callback", [
+        "http://127.0.0.1:3118/callback",
+      ]),
+    ).toBeNull();
   });
 
   it("does nothing when the requested URI is already registered", () => {
@@ -464,6 +477,29 @@ describe("mcp authorize with a fresh ephemeral port", () => {
     expect(signIn.status).toBe(302);
     expect(signIn.headers.get("location")).toContain("/oauth/consent");
     expect(cookie).toBeTruthy();
+  });
+
+  // Regression: a host-corrupted request whose port ALSO rolled must fail at
+  // authorize (clean 400, same as before this change) rather than sail through
+  // to a 401 at the token exchange — and must leave the registration alone, so
+  // the client's next uncorrupted attempt still works.
+  it("a host-corrupted request with a rolled port 400s and leaves the row intact", async () => {
+    const REGISTERED = "http://127.0.0.1:3118/callback";
+    const { auth, clientId, cookie } = await buildAuth([REGISTERED]);
+
+    const res = await auth.handler(
+      new Request(authorizeUrl(clientId, "http://localhost:54096/callback"), {
+        headers: { cookie },
+      }),
+    );
+    expect(res.status).toBe(400);
+
+    // The registration must NOT have been rewritten to the corrupted spelling.
+    const reg = await auth.handler(
+      new Request(authorizeUrl(clientId, REGISTERED), { headers: { cookie } }),
+    );
+    expect(reg.status).toBe(302);
+    expect(reg.headers.get("location")).toContain("/oauth/consent");
   });
 
   it("an https redirect with a mismatched port is still rejected", async () => {
