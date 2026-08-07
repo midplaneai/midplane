@@ -23,6 +23,7 @@
 // and held in process memory only as long as the container is alive.
 
 import type {
+  ApprovalsConfig,
   ColumnMasksConfig,
   DatabaseEntry,
   GuardrailsConfig,
@@ -59,6 +60,10 @@ export interface SpawnDatabase {
   /** Column masking (design A2): "schema.table" -> (column -> transform).
    *  Empty/absent yields no column_masks block in the rendered YAML. */
   columnMasks?: ColumnMasksConfig;
+  /** Write approvals. Absent/off yields no approvals block AND no
+   *  `write_approvals` feature token — which is why omitting this field is a
+   *  FAIL-OPEN, not a no-op: the engine is told nothing and runs the write. */
+  approvals?: ApprovalsConfig;
 }
 
 /** Map a SpawnDatabase to the policy DatabaseEntry the engine's boot YAML is
@@ -83,6 +88,7 @@ export function toDatabaseEntry(db: SpawnDatabase): DatabaseEntry {
     guardrails: db.guardrails,
     columnMasks: db.columnMasks,
     maskSourceRewrite: true,
+    approvals: db.approvals,
   };
 }
 
@@ -104,6 +110,21 @@ export interface SpawnOptions {
    *  with masks but no salt, so the proxy must supply it. Undefined when no
    *  database is masked. */
   maskSalt?: string;
+  /** Write-approval gate for this project's engine. Both halves or neither —
+   *  the engine refuses to boot half-configured, so passing one without the
+   *  other is a spawn-time bug, not a runtime one.
+   *
+   *  Injected whenever the deployment has an approval secret, NOT only when a
+   *  database currently has approvals on. The values are per-project constants,
+   *  so wiring them unconditionally means enabling approvals is a pure policy
+   *  hot-reload — a warm container already has the gate and just starts using
+   *  it. Gating injection on the toggle would instead force a respawn, which
+   *  drops the agent's live session the moment someone turns the feature on.
+   *
+   *  Undefined only when the deployment has no approval secret at all (self-host
+   *  without it, or local dev), which keeps the container env byte-identical to
+   *  today for everyone else. */
+  approvalGate?: { url: string; token: string };
 }
 
 export interface Spawner {
@@ -148,7 +169,13 @@ export function bootFingerprint(opts: SpawnOptions): string {
     })
     .sort()
     .join("|");
-  return `salt:${opts.maskSalt ?? ""}#masks:${dbs}`;
+  // The gate URL+token are boot-time env: a warm container cannot pick up a new
+  // pair by hot-reload. Including them means provisioning approvals on a
+  // deployment (or rotating the secret) respawns rather than leaving warm
+  // engines pointed at a gate that will 401 every held write. Absent on both
+  // sides ⇒ the fingerprint is byte-identical to before this feature.
+  const gate = opts.approvalGate ? `${opts.approvalGate.url}:${opts.approvalGate.token}` : "";
+  return `salt:${opts.maskSalt ?? ""}#masks:${dbs}#gate:${gate}`;
 }
 
 export interface ActiveContainer {

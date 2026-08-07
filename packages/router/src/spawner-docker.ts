@@ -120,6 +120,10 @@ export class DockerSpawner implements Spawner {
     // Masking salt (keys the deterministic transforms). Present only when a
     // database declares column_masks; the engine refuses to boot with masks
     // but no salt, so its presence is gated by the proxy supplying it.
+    if (opts.approvalGate) {
+      args.push("-e", `MIDPLANE_APPROVAL_URL=${opts.approvalGate.url}`);
+      args.push("-e", `MIDPLANE_APPROVAL_TOKEN=${opts.approvalGate.token}`);
+    }
     if (opts.maskSalt) {
       args.push("-e", `MIDPLANE_MASK_SALT=${opts.maskSalt}`);
     }

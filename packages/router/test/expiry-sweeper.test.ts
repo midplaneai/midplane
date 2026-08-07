@@ -1,4 +1,8 @@
-// Unit coverage for the mcp_tokens expiry sweeper.
+// Unit coverage for the expiry sweeper.
+//
+// It now sweeps TWO tables per tick: mcp_tokens (dashboard truthfulness) and
+// write_approvals (a pending row nobody answers must not sit in the approvals
+// queue forever).
 //
 // The sweeper is a dashboard-truthfulness mechanism: durable enforcement
 // of expiry lives in resolveByToken's WHERE filter (NOW() vs
@@ -53,11 +57,11 @@ describe("ExpirySweeper", () => {
     const { db, calls } = makeFakeDb(0);
     const sweeper = new ExpirySweeper({ db });
     await sweeper.tick();
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     // The SQL filters active+past-due rows and sets status='expired'
     // with revoked_reason='expired'. NOW() ensures the sweeper matches
     // the runtime lookup's clock so there's no drift window.
-    const sql = calls[0]!;
+    const sql = calls.find((c) => c.includes("mcp_tokens"))!;
     expect(sql).toContain("UPDATE mcp_tokens");
     expect(sql).toContain("status = 'expired'");
     expect(sql).toContain("revoked_reason = 'expired'");
@@ -77,7 +81,8 @@ describe("ExpirySweeper", () => {
     setAffected(3);
     await sweeper.tick();
     expect(onSweep).toHaveBeenCalledTimes(1);
-    expect(onSweep).toHaveBeenCalledWith({ affected: 3 });
+    // One tick sweeps two tables; the fake returns 3 rows for each.
+    expect(onSweep).toHaveBeenCalledWith({ affected: 6 });
   });
 
   it("surfaces errors through onError without throwing", async () => {
@@ -93,7 +98,7 @@ describe("ExpirySweeper", () => {
     });
     const result = await sweeper.tick();
     expect(result.affected).toBe(0);
-    expect(errors).toHaveLength(1);
+    expect(errors).toHaveLength(2);
     expect((errors[0] as Error).message).toBe("postgres outage");
   });
 
@@ -104,5 +109,39 @@ describe("ExpirySweeper", () => {
     sweeper.start(); // second start should be a no-op (no double-tick)
     sweeper.stop();
     sweeper.stop(); // second stop should also be a no-op
+  });
+
+  it("sweeps stale pending approvals out of the queue", async () => {
+    // Not cosmetic, unlike the token sweep: an unanswered request would
+    // otherwise sit in /approvals forever, and the queue is what an approver
+    // trusts as "what is waiting on me".
+    const { db, calls } = makeFakeDb(0);
+    await new ExpirySweeper({ db }).tick();
+
+    const sql = calls.find((c) => c.includes("write_approvals"))!;
+    expect(sql).toContain("UPDATE write_approvals");
+    expect(sql).toContain("status = 'expired'");
+    expect(sql).toContain("status = 'pending'");
+    expect(sql).toContain("expires_at < NOW()");
+    // Expiry always DENIES. A sweeper that could approve anything would be a
+    // way to get a write executed by waiting.
+    expect(sql).not.toContain("'approved'");
+  });
+
+  it("a failure sweeping one table does not stop the other", async () => {
+    let n = 0;
+    const db = {
+      async execute(): Promise<unknown> {
+        n += 1;
+        if (n === 1) throw new Error("tokens table locked");
+        return { count: 2 };
+      },
+    } as unknown as Db;
+    const errors: unknown[] = [];
+    const sweeper = new ExpirySweeper({ db, onError: (e) => errors.push(e) });
+
+    const result = await sweeper.tick();
+    expect(errors).toHaveLength(1);
+    expect(result.affected).toBe(2);
   });
 });

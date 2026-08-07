@@ -64,9 +64,44 @@ export class ExpirySweeper {
     }
   }
 
-  /** One pass over `mcp_tokens`. Exposed for tests; the tick loop calls
-   *  this on the configured cadence. */
+  /** One pass over `mcp_tokens` AND `write_approvals`. Exposed for tests; the
+   *  tick loop calls this on the configured cadence. */
   async tick(): Promise<{ affected: number }> {
+    const tokens = await this.tickTokens();
+    const approvals = await this.tickApprovals();
+    const affected = tokens + approvals;
+    if (affected > 0) this.onSweep?.({ affected });
+    return { affected };
+  }
+
+  /** Flip pending write approvals whose window has closed.
+   *
+   *  Unlike the token sweep, this one is NOT merely cosmetic. A pending row that
+   *  nobody ever answers would otherwise sit in the approvals queue forever,
+   *  and the queue is the surface an approver is supposed to trust as "what is
+   *  waiting on me". Expiry always denies — a request that timed out into a yes
+   *  would be a denial-of-attention attack on the control plane — so this only
+   *  ever moves work OUT of a human's inbox, never grants anything.
+   *
+   *  The gate also checks the deadline on read, so an unswept row can never
+   *  authorize a write; this is what keeps the queue honest. */
+  private async tickApprovals(): Promise<number> {
+    try {
+      const result = await this.db.execute(drizzleSql`
+        UPDATE write_approvals
+           SET status = 'expired',
+               decided_at = NOW()
+         WHERE status = 'pending'
+           AND expires_at < NOW()
+      `);
+      return countOf(result);
+    } catch (err) {
+      this.onError?.(err);
+      return 0;
+    }
+  }
+
+  private async tickTokens(): Promise<number> {
     try {
       // NOW() is the DB clock — keeps the predicate consistent with
       // resolveByToken's filter (also NOW()) so a token never lands in
@@ -86,17 +121,10 @@ export class ExpirySweeper {
       // returned Result-like value. Drizzle's typing is loose here;
       // tolerate either shape so tests / drivers that return a different
       // count surface still feed the onSweep hook.
-      const affected =
-        typeof (result as { count?: unknown }).count === "number"
-          ? ((result as { count: number }).count)
-          : 0;
-      if (affected > 0) {
-        this.onSweep?.({ affected });
-      }
-      return { affected };
+      return countOf(result);
     } catch (err) {
       this.onError?.(err);
-      return { affected: 0 };
+      return 0;
     }
   }
 
@@ -111,4 +139,13 @@ export class ExpirySweeper {
     }
     this.timer = t;
   }
+}
+
+// postgres-js returns row count via a `count` property on the returned
+// Result-like value. Drizzle's typing is loose here; tolerate either shape so
+// tests / drivers with a different count surface still feed the onSweep hook.
+function countOf(result: unknown): number {
+  return typeof (result as { count?: unknown }).count === "number"
+    ? (result as { count: number }).count
+    : 0;
 }

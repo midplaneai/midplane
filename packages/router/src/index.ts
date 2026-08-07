@@ -73,3 +73,11 @@ export type {
   PreviewRequest,
   RawToolResult,
 } from "./preview.ts";
+
+// Write-approval gate auth. The token IS the project binding, so an engine
+// cannot file requests against a project other than its own.
+export {
+  bearerFrom,
+  mintApprovalToken,
+  verifyApprovalToken,
+} from "./approval-token.ts";
