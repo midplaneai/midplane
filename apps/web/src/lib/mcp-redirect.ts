@@ -21,13 +21,18 @@
 // (the client re-sends ITS original form in the token POST body, which Next
 // never touches) — agrees with what the client actually listens on.
 //
-// Deliberately NOT covered here: RFC 8252's any-port loopback matching (VS
-// Code falls back to a random port when 33418 is busy). Substituting a
+// Deliberately NOT covered here: RFC 8252's any-port loopback matching (native
+// clients take a fresh ephemeral port on every attempt). Substituting a
 // different port would redirect the browser somewhere the client isn't
-// listening; supporting that means teaching the matcher itself, i.e. an
-// upstream Better Auth change, not a rewrite.
+// listening, and substituting nothing still fails the plugin's exact match —
+// supporting it means widening what the matcher READS, not what the query says.
+// That lives in lib/mcp-loopback-port.ts, which moves the stale registration to
+// the requested port; the two compose (this repair takes the same-port case and
+// needs no write, that one takes the port-change case).
 
-function isLoopbackHostname(hostname: string): boolean {
+/** True for the loopback interface's names and literals — `localhost`, the
+ *  whole 127.0.0.0/8 block, and `::1` in either spelling. */
+export function isLoopbackHostname(hostname: string): boolean {
   if (hostname === "localhost") return true;
   // WHATWG URL keeps the brackets on IPv6 hostnames; accept both spellings.
   if (hostname === "[::1]" || hostname === "::1") return true;
