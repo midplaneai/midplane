@@ -112,6 +112,17 @@ export {
   resolveTenantColumn,
 } from "./policy/index.ts";
 
+// Write approvals. The gate is the seam an embedder implements; the engine
+// decides only WHETHER to ask.
+export { REFUSING_APPROVAL_GATE } from "./approvals.ts";
+export type {
+  ApprovalConfig,
+  ApprovalGate,
+  ApprovalOutcome,
+  ApprovalRequest,
+  ApprovalStatus,
+} from "./approvals.ts";
+
 // Dialect surface (0.6.0). `parse` / `warmup` / `ParseResult` / `PgParseTree`
 // continue to be re-exported from the public API so pre-0.6.0 embedders keep
 // compiling unchanged; the underlying source moved into `dialects/postgres/`.
@@ -134,6 +145,8 @@ export {
 export type { Dialect, DialectName } from "./dialects/index.ts";
 
 export {
+  ApprovalPendingError,
+  ApprovalUnavailableError,
   AuditUnavailableError,
   KmsUnavailableError,
   ParserCrashedError,
