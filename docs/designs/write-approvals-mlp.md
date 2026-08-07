@@ -416,10 +416,15 @@ Each step is verifiable before the next begins.
    `midplane/midplane:0.16.0` is published (OCI image index, linux/amd64 + linux/arm64), with
    `ghcr.io/midplaneai/midplane:0.16.0` published in lockstep and anonymously pullable, so the
    `MIDPLANE_ENGINE_USE_GHCR` mirror-bypass path works on this tag too. The two engine Fly
-   configs are re-pinned to the immutable manifest-list digest
-   `sha256:bdbcdc0d5194bedeb14571e5858f2b15991f1c9ecc529103522c301271f13c1e`, so prod is
-   byte-exact rather than tag-granular. Remaining is the rollout itself (`deploy-fly.yml`),
-   which is a deploy decision, not a repo one.
+   configs record the immutable manifest-list digest
+   `sha256:bdbcdc0d5194bedeb14571e5858f2b15991f1c9ecc529103522c301271f13c1e`.
+
+   Byte-exactness in prod does NOT come from those configs — customer engines are created
+   through the Machines API from the `MIDPLANE_OSS_IMAGE` secret, and the engine apps are
+   never `fly deploy`ed, so nothing reads their `[build] image`. `deploy-fly.yml` now resolves
+   the digest in preflight (rejecting the tag if the GHCR mirror disagrees) and stages
+   `midplane/midplane:<tag>@sha256:<digest>`, which is the ref machines are actually created
+   from. Remaining is the rollout itself, which is a deploy decision, not a repo one.
 
 Step 4 before step 6 is the point of the ordering: the prior branch reached 1,199 green tests
 with the loop still unproven end-to-end, because its cut engine version was never published

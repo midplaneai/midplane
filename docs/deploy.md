@@ -20,6 +20,14 @@ tag has a single source of truth — `OSS_ENGINE_IMAGE` in
 `packages/router/src/oss-image.ts` — and `bun scripts/check-image-pin.ts` (CI)
 fails if any config/doc site drifts from it.
 
+**Prod pulls by digest, not by tag.** `deploy-fly.yml` resolves the tag's
+immutable multi-arch manifest digest during preflight (and checks that the GHCR
+mirror carries the same one) and then stages
+`MIDPLANE_OSS_IMAGE=midplane/midplane:<tag>@sha256:<digest>`. That staged secret
+is the ref `FlyMachineSpawner` creates customer machines from, so re-pushing a
+published tag cannot change what customers run. Prefer the workflow over setting
+the secret by hand; if you must set it manually, include the digest.
+
 For local dev (when the published tag isn't on Docker Hub yet, or while iterating
 on the engine), build the image from the in-tree engine:
 

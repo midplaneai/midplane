@@ -535,6 +535,27 @@ describe("FlyMachineSpawner", () => {
     ).toBe("ghcr.io/midplaneai/midplane:0.15.0");
   });
 
+  it("GHCR toggle carries a staged tag+digest across to GHCR", async () => {
+    // deploy-fly.yml stages MIDPLANE_OSS_IMAGE=midplane/midplane:<tag>@sha256:<d>
+    // so customer machines are byte-exact. The rewrite must keep the digest —
+    // dropping it silently restores tag-granular pulls, and mangling the parse
+    // returns null, which drops the machine back onto Fly's Docker Hub mirror.
+    // Safe because engine-publish.yml pushes both registries from one build, so
+    // the digest is identical in each (verified against the live 0.16.0 tag).
+    expect(
+      await postedImageFor({
+        image: "midplane/midplane:0.16.0@sha256:abc",
+        useGhcr: true,
+      }),
+    ).toBe("ghcr.io/midplaneai/midplane:0.16.0@sha256:abc");
+  });
+
+  it("without the toggle, a staged tag+digest is used as-is", async () => {
+    expect(
+      await postedImageFor({ image: "midplane/midplane:0.16.0@sha256:abc" }),
+    ).toBe("midplane/midplane:0.16.0@sha256:abc");
+  });
+
   it("GHCR toggle honors a genuinely custom image verbatim", async () => {
     // A fork / local dev tag is not our engine repo — respect the operator.
     expect(
@@ -827,8 +848,46 @@ describe("ghcrEngineRef", () => {
     );
   });
 
+  it("preserves BOTH tag and digest (the shape deploy-fly.yml stages)", () => {
+    // Regression: peeling the ":tag" split before the "@digest" split left
+    // repo="midplane/midplane:0.16.0", which misses ENGINE_REPO_ALIASES, so this
+    // returned null — the GHCR bypass silently switching itself off on exactly
+    // the refs prod stages, sending cold spawns back through Fly's Docker Hub
+    // mirror (the 502 source this whole path exists to avoid).
+    expect(ghcrEngineRef("midplane/midplane:0.16.0@sha256:abc")).toBe(
+      "ghcr.io/midplaneai/midplane:0.16.0@sha256:abc",
+    );
+    expect(
+      ghcrEngineRef("registry-1.docker.io/midplane/midplane:0.16.0@sha256:abc"),
+    ).toBe("ghcr.io/midplaneai/midplane:0.16.0@sha256:abc");
+    expect(ghcrEngineRef("ghcr.io/midplaneai/midplane:0.16.0@sha256:abc")).toBe(
+      "ghcr.io/midplaneai/midplane:0.16.0@sha256:abc",
+    );
+  });
+
   it("returns null for a non-engine image (honored verbatim)", () => {
     expect(ghcrEngineRef("myfork/engine:dev")).toBeNull();
     expect(ghcrEngineRef("other/midplane:0.14.0")).toBeNull();
+    expect(ghcrEngineRef("other/midplane:0.16.0@sha256:abc")).toBeNull();
+  });
+});
+
+describe("digest-qualified refs (deploy-fly.yml stages repo:tag@sha256:...)", () => {
+  const PINNED = "midplane/midplane:0.16.0@sha256:abc";
+
+  it("compares equal to the same version without a digest", () => {
+    // Fly normalizes refs on the machine it reports back, and a machine created
+    // before the digest-staging change carries the bare tag. Both must read as
+    // the same image or adoption would destroy live machines on every check.
+    expect(sameImageRef(PINNED, "midplane/midplane:0.16.0")).toBe(true);
+    expect(sameImageRef(PINNED, "ghcr.io/midplaneai/midplane:0.16.0")).toBe(true);
+  });
+
+  it("does not read a bare-tag machine at the same version as stale", () => {
+    expect(imageIsStale("midplane/midplane:0.16.0", PINNED)).toBe(false);
+  });
+
+  it("still reads an older version as stale", () => {
+    expect(imageIsStale("midplane/midplane:0.15.0", PINNED)).toBe(true);
   });
 });

@@ -582,7 +582,10 @@ const CANONICAL_ENGINE_REPO = "midplane/midplane";
  *  Fly's Docker Hub mirror. Returns null for anything else — a fork or a local
  *  dev tag the operator chose deliberately, which must be honored verbatim.
  *  This is what makes MIDPLANE_ENGINE_USE_GHCR win over the always-staged
- *  MIDPLANE_OSS_IMAGE=midplane/midplane:<tag> in prod. Exported for tests. */
+ *  MIDPLANE_OSS_IMAGE=midplane/midplane:<tag>@sha256:<digest> in prod. Carrying
+ *  the digest across is sound because engine-publish.yml pushes Docker Hub and
+ *  GHCR from ONE build-push-action, so the manifest bytes — and therefore the
+ *  digest — are the same in both registries. Exported for tests. */
 export function ghcrEngineRef(ref: string): string | null {
   // Strip a registry-host prefix (dot/colon before the first slash).
   let r = ref;
@@ -591,23 +594,21 @@ export function ghcrEngineRef(ref: string): string | null {
     const head = r.slice(0, firstSlash);
     if (head.includes(".") || head.includes(":")) r = r.slice(firstSlash + 1);
   }
-  // Split the repo from its :tag or @digest suffix (whichever is present).
+  // A ref can carry a tag, a digest, or BOTH — `repo:tag@sha256:...` is the
+  // shape deploy-fly.yml stages so prod pulls are byte-exact. Peel the digest
+  // FIRST, then the tag off what remains. Splitting on whichever appears first
+  // leaves the tag glued to the repo ("midplane/midplane:0.16.0"), which misses
+  // ENGINE_REPO_ALIASES and returns null — silently disabling the mirror bypass
+  // precisely when a digest pin is in play, i.e. reopening the Docker Hub
+  // mirror-outage 502 this function exists to route around.
   const at = r.indexOf("@");
-  const colon = r.lastIndexOf(":");
-  let repo: string;
-  let suffix: string;
-  if (at >= 0) {
-    repo = r.slice(0, at);
-    suffix = r.slice(at); // "@sha256:..."
-  } else if (colon > 0) {
-    repo = r.slice(0, colon);
-    suffix = r.slice(colon); // ":tag"
-  } else {
-    repo = r;
-    suffix = "";
-  }
+  const digest = at >= 0 ? r.slice(at) : ""; // "@sha256:..."
+  const named = at >= 0 ? r.slice(0, at) : r; // "repo" | "repo:tag"
+  const colon = named.lastIndexOf(":");
+  const repo = colon > 0 ? named.slice(0, colon) : named;
+  const tag = colon > 0 ? named.slice(colon) : ""; // ":X.Y.Z"
   if (!ENGINE_REPO_ALIASES.has(repo)) return null;
-  return `ghcr.io/midplaneai/midplane${suffix}`;
+  return `ghcr.io/midplaneai/midplane${tag}${digest}`;
 }
 
 function normalizeImageRef(ref: string): string {
