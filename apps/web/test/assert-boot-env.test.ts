@@ -310,3 +310,46 @@ describe("assertBootEnv", () => {
     });
   });
 });
+
+describe("write-approval gate env", () => {
+  it("is silent when neither half is set — approvals are opt-in", () => {
+    // A deployment that never enables approvals is completely valid without
+    // these, so their absence must not be an error.
+    expect(() => assertBootEnv(envMode("eu"))).not.toThrow();
+  });
+
+  it("throws when only the secret is set", () => {
+    expect(() =>
+      assertBootEnv({ ...envMode("eu"), MIDPLANE_APPROVAL_SECRET: SECRET }),
+    ).toThrow(/MIDPLANE_APP_ORIGIN/);
+  });
+
+  it("throws when only the origin is set", () => {
+    expect(() =>
+      assertBootEnv({
+        ...envMode("eu"),
+        MIDPLANE_APP_ORIGIN: "https://app.midplane.ai",
+      }),
+    ).toThrow(/MIDPLANE_APPROVAL_SECRET/);
+  });
+
+  it("throws on a weak secret — it is what binds a token to one project", () => {
+    expect(() =>
+      assertBootEnv({
+        ...envMode("eu"),
+        MIDPLANE_APPROVAL_SECRET: "short",
+        MIDPLANE_APP_ORIGIN: "https://app.midplane.ai",
+      }),
+    ).toThrow(/MIDPLANE_APPROVAL_SECRET/);
+  });
+
+  it("passes on a complete, strong pair", () => {
+    expect(() =>
+      assertBootEnv({
+        ...envMode("eu"),
+        MIDPLANE_APPROVAL_SECRET: SECRET,
+        MIDPLANE_APP_ORIGIN: "https://app.midplane.ai",
+      }),
+    ).not.toThrow();
+  });
+});

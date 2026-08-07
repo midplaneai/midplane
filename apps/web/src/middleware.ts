@@ -32,8 +32,12 @@ const PUBLIC_EXACT = new Set(["/", "/signup"]);
 // Public path prefixes — the route itself plus any subpath. Covers the auth UI
 // (/sign-in, /sign-up), Better Auth's own API (/api/auth/*) which must never be
 // gated, the agent-facing MCP endpoint (/mcp/*, token-authed not session-authed),
-// the unauthenticated health check (/api/health — Fly's http_service.checks
-// polls it with no session), and the teammate invite-accept landing
+// the engine callback surface (/api/engine/* — the write-approval gate, called
+// BY a spawned engine container with a per-project HMAC bearer, never by a
+// browser; session-gating it silently 307s the engine to /sign-in and every
+// held write fails as approval_unavailable with nothing logged, because the
+// route handler is never reached), the unauthenticated health check
+// (/api/health — Fly's http_service.checks polls it with no session), and the teammate invite-accept landing
 // (/accept-invitation/<id>) which an invited, not-yet-signed-up user must reach
 // pre-auth to sign up + accept (the page validates the invite itself).
 //
@@ -55,6 +59,7 @@ const PUBLIC_PREFIXES = [
   "/accept-invitation",
   "/mcp",
   "/api/auth",
+  "/api/engine",
   "/api/health",
 ];
 

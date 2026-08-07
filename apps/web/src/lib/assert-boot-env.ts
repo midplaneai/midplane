@@ -134,6 +134,11 @@ export function assertBootEnv(env: EnvLike = process.env): void {
       "HMAC for the signed region cookie; must match across apex + both web apps",
     ),
   );
+  // Write approvals. Validate-if-SET only, same posture as the mask salt just
+  // below: approvals are opt-in, so absent-entirely is valid and silent. Checked
+  // on BOTH the cloud and self-host paths — the process spawner injects the same
+  // pair, so a self-hosted instance can hold writes too.
+  pushIssue(issues, approvalGateIssue(env));
   pushIssue(issues, maskSaltIssue(env));
 
   // Hosted shape: FLY_API_TOKEN set means the indexer must be reachable.
@@ -189,6 +194,34 @@ function secretIssue(
 
 function pushIssue(issues: Issue[], issue: Issue | null): void {
   if (issue) issues.push(issue);
+}
+
+// Write-approval gate: MIDPLANE_APPROVAL_SECRET keys the per-project HMAC the
+// proxy mints, MIDPLANE_APP_ORIGIN tells the engine where to send held writes.
+// Both or neither — one alone means every held write reaches an engine with no
+// gate. Fail-closed either way (the write is refused, never run), but finding
+// that out at the first held write is a bad way to learn it.
+//
+// The secret is length-floored because it is precisely what stops one project's
+// engine from minting a token that speaks for another project.
+function approvalGateIssue(env: EnvLike): Issue | null {
+  const secret = env.MIDPLANE_APPROVAL_SECRET;
+  const origin = env.MIDPLANE_APP_ORIGIN;
+  if (!secret && !origin) return null;
+  if (!secret || !origin) {
+    return {
+      var: secret ? "MIDPLANE_APP_ORIGIN" : "MIDPLANE_APPROVAL_SECRET",
+      reason:
+        "required together with the other half for write approvals; with only one set, every held write reaches an engine with no gate and is refused",
+    };
+  }
+  if (secret.length < MIN_SECRET_LEN) {
+    return {
+      var: "MIDPLANE_APPROVAL_SECRET",
+      reason: `too short (${secret.length} chars) — keys the per-project approval-gate HMAC that stops one engine speaking for another project; needs 32+ bytes (openssl rand -hex 32)`,
+    };
+  }
+  return null;
 }
 
 // Masking salt master — validate-if-SET only. Masking is opt-in (a deploy with
@@ -266,6 +299,11 @@ function selfHostIssues(env: EnvLike): Issue[] {
       "signs sessions; Better Auth uses an insecure built-in default if unset",
     ),
   );
+  // Write approvals. Validate-if-SET only, same posture as the mask salt just
+  // below: approvals are opt-in, so absent-entirely is valid and silent. Checked
+  // on BOTH the cloud and self-host paths — the process spawner injects the same
+  // pair, so a self-hosted instance can hold writes too.
+  pushIssue(issues, approvalGateIssue(env));
   pushIssue(issues, maskSaltIssue(env));
 
   const upper = SELF_HOST_REGION.toUpperCase();
