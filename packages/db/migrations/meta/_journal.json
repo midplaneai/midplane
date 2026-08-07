@@ -36,6 +36,20 @@
       "when": 1784726897835,
       "tag": "0004_zippy_bloodaxe",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786088140443,
+      "tag": "0005_slim_glorian",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786107985408,
+      "tag": "0006_flashy_meggan",
+      "breakpoints": true
     }
   ]
 }

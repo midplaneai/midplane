@@ -367,6 +367,12 @@ export class FlyMachineSpawner implements Spawner {
             // Masking salt; present only when a database declares column_masks
             // (the engine refuses to boot with masks but no salt).
             ...(opts.maskSalt ? { MIDPLANE_MASK_SALT: opts.maskSalt } : {}),
+            ...(opts.approvalGate
+              ? {
+                  MIDPLANE_APPROVAL_URL: opts.approvalGate.url,
+                  MIDPLANE_APPROVAL_TOKEN: opts.approvalGate.token,
+                }
+              : {}),
           },
           // Inline file content per machine. The Fly Machines API base64-
           // decodes raw_value into the guest filesystem at start. No volume,

@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 
 import {
   parseColumnMasksOrThrow,
+  parseApprovalsOrThrow,
   parseGuardrailsOrThrow,
   parseIgnoredColumnsOrThrow,
   parsePolicyOrThrow,
@@ -32,6 +33,8 @@ import { RenameProjectInline } from "@/components/dashboard/rename-project-inlin
 import { DeleteProjectButton } from "@/components/delete-project-button";
 import { PauseProjectButton } from "@/components/projects/pause-project-button";
 import { GuardrailsToggles } from "@/components/guardrails-toggles";
+import { ApprovalsToggle } from "@/components/approvals-toggle";
+import { approvalGateConfigured } from "@/lib/approvals";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
 import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/projects/rename-database-control";
@@ -66,6 +69,7 @@ import {
   resumeProject,
   rotateProject,
   setColumnMasks,
+  setApprovals,
   setGuardrails,
   setIgnoredColumns,
   setTableAccess,
@@ -616,6 +620,44 @@ export default async function ProjectWorkspace({
     revalidatePath(`/projects/${id}`);
   }
 
+  async function approvalsAction(formData: FormData) {
+    "use server";
+    const customer = await currentCustomer();
+    if (!customer) redirect("/");
+    const { userId } = await assertManager();
+    if (!selectedName) notFound();
+    const raw = formData.get("approvals");
+    if (typeof raw !== "string") throw new Error("missing approvals");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("approvals is not valid JSON");
+    }
+    const config = parseApprovalsOrThrow(parsed);
+    // Refuse to enable a gate nobody can answer. Saving `writes: true` on a
+    // deployment with no approval secret/origin leaves the engine with no gate,
+    // so every permitted write is refused forever and no request is ever
+    // created for a human to see. Turning it OFF is always allowed — that path
+    // is how you recover.
+    if (config.writes && !approvalGateConfigured()) {
+      throw new Error(
+        "Approvals need MIDPLANE_APPROVAL_SECRET and MIDPLANE_APP_ORIGIN set on this deployment. Without them the engine has no way to ask anyone, so every write would be refused and no request would appear here.",
+      );
+    }
+    const ctx = getMcpProxyContext();
+    const result = await setApprovals(
+      customer,
+      id,
+      config,
+      ctx,
+      userId,
+      selectedName,
+    );
+    if (!result) notFound();
+    revalidatePath(`/projects/${id}`);
+  }
+
   async function rotateAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
@@ -825,6 +867,30 @@ export default async function ProjectWorkspace({
             key={selDb.name}
             initialConfig={parseGuardrailsOrThrow(selDb.guardrails)}
             action={guardrailsAction}
+          />
+        </div>
+      </section>
+
+      <section className={CARD}>
+        <h2 className="text-base font-medium text-foreground">Approvals</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Hold a write until a human says yes. The agent waits; nothing runs
+          unreviewed. Guardrails still win —{" "}
+          <strong className="font-medium text-foreground">
+            an approval cannot unblock what a guardrail refuses
+          </strong>
+          , so a blocked statement never reaches a person. Decide them in{" "}
+          <Link href="/approvals" className="underline underline-offset-2">
+            Approvals
+          </Link>
+          .
+        </p>
+        <div className="pt-3">
+          <ApprovalsToggle
+            key={selDb.name}
+            initialConfig={parseApprovalsOrThrow(selDb.approvals)}
+            action={approvalsAction}
+            gateConfigured={approvalGateConfigured()}
           />
         </div>
       </section>

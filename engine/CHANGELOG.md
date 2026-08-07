@@ -2,6 +2,20 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Write approvals — hold a write until a human says yes.** A policy can set `approvals.writes: true` per database; a statement the policy already ALLOWS is then held until an approver decides. The engine asks an injected `ApprovalGate` (HTTP-backed via `MIDPLANE_APPROVAL_URL` + `MIDPLANE_APPROVAL_TOKEN`, mirroring the `MIDPLANE_DENY_WEBHOOK` pattern) between the policy verdict and execution.
+  - **Approvals sit UNDER the policy, never over it.** The stage runs only after `evaluate()` returns ALLOW, so a statement `table_access` or a guardrail refused never reaches a human and no approval can buy a way past one.
+  - **Write detection reads `accessChecks`, not the statement keyword.** `WITH d AS (DELETE FROM orders …) SELECT count(*) FROM d` reports `auditStatementType: "SELECT"`; keying on that would wave a delete through. `accessChecks` already emits a `write` entry for every write-target node anywhere in the tree, CTEs included, so the gate cannot drift from the permission decision.
+  - **Neither non-decision is recorded as a denial.** An unreachable gate raises `ApprovalUnavailableError` and a still-pending request raises `ApprovalPendingError`, both BEFORE the `DECIDED` write — so a control-plane outage never fires the deny-webhook, never puts a refusal nobody made into a compliance export, and reaches the agent as retryable. Denied/expired ride the existing `DECIDED(DENY)` shape with `policy_rule: approval_denied | approval_expired`; **no new audit event types or decision values**, so `schema_version` is unchanged.
+  - **Bounded hold, resumable ticket.** The gate holds briefly and then hands the agent a ticket rather than blocking past an MCP client's ~60s timeout. The agent re-runs the identical statement to collect; the grant is bound to `(database, sql, intent, token)` and is single-use, so an approval for `DELETE … WHERE id < 100` cannot authorize `… < 100000`, and two retries racing one approval yield exactly one execution.
+  - **`requires_features: [write_approvals]`.** A policy that enables approvals carries the token, so an engine that predates the gate REFUSES the policy instead of running writes unapproved.
+  - **Hot-reloadable.** `approvals` swaps on `/admin/policy` like `guardrails`, on both the multi-DB and legacy single-DB paths, so toggling it does not respawn a warm container and drop the agent's session.
+
+- **`check_approval` tool.** Polls a held write's status without running anything and without consuming the grant: `pending` / `approved` / `executed` / `denied` / `expired`. Scoped to the calling agent's `mcp_token_id` — the engine's bearer proves which PROJECT it speaks for, not which agent inside it, so another agent's request reads as `not_found`. Registered on every serving path, and only when a gate can answer it.
+
 ## [0.13.0] — 2026-06-24
 
 ### Security

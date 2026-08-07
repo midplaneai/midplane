@@ -121,3 +121,26 @@ describe("middleware — password reset is reachable signed out", () => {
     expect(r.location).toBe("http://localhost:3000/sign-in");
   });
 });
+
+describe("engine callback surface", () => {
+  it("does not session-gate /api/engine/* — the caller is an engine, not a browser", async () => {
+    // Regression: with this path gated, the write-approval gate 307s to
+    // /sign-in. The engine sees HTML instead of JSON and reports
+    // approval_unavailable, and NOTHING is logged control-plane side because
+    // the route handler is never reached — so the failure looks like a network
+    // problem rather than an auth redirect.
+    const res = await run(`${APEX}/api/engine/approvals/01HXYZ123ABC456DEF789GHI01`);
+    expect(res.isNext).toBe(true);
+    expect(res.location).toBeNull();
+  });
+
+  it("still gates an ordinary app route", async () => {
+    // Guards the guard: if the session gate stopped redirecting entirely, the
+    // test above would pass for the wrong reason. Asserts only THAT it
+    // redirects — the destination (/signup vs /sign-in) is a product decision
+    // this test has no business pinning.
+    const res = await run(`${APEX}/dashboard`);
+    expect(res.isNext).toBe(false);
+    expect(res.location).toBeTruthy();
+  });
+});

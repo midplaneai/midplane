@@ -10,12 +10,14 @@ import {
   EMPTY_TENANT_SCOPE,
   getDb,
   indexerCursors,
+  validateApprovals,
   validateColumnMasks,
   validateGuardrails,
   validateIgnoredColumns,
   validatePolicy,
   validateTenantScope,
   type AccessLevel,
+  type ApprovalsConfig,
   type ColumnMasksConfig,
   type Customer,
   type DatabaseEntry,
@@ -95,6 +97,8 @@ const SAFE_DATABASE_COLUMNS = {
   // Scan-view dismissals — the exposure scan seeds these so masked/dismissed
   // columns render (and stay manageable) before any live scan is run.
   ignoredColumns: projectDatabases.ignoredColumns,
+  // Write approvals — the Database pane's toggle reads it.
+  approvals: projectDatabases.approvals,
   rotatedAt: projectDatabases.rotatedAt,
   lastKmsSuccessAt: projectDatabases.lastKmsSuccessAt,
   createdAt: projectDatabases.createdAt,
@@ -108,6 +112,7 @@ export type SafeProjectDatabase = Pick<
   | "tableAccess"
   | "tenantScope"
   | "guardrails"
+  | "approvals"
   | "columnMasks"
   | "ignoredColumns"
   | "rotatedAt"
@@ -842,7 +847,7 @@ interface PolicyConfigChange {
   update: Partial<
     Pick<
       typeof projectDatabases.$inferInsert,
-      "tableAccess" | "tenantScope" | "guardrails" | "columnMasks"
+      "tableAccess" | "tenantScope" | "guardrails" | "columnMasks" | "approvals"
     >
   >;
   eventType: "POLICY_CHANGED" | "TENANT_SCOPE_CHANGED" | "GUARDRAILS_CHANGED";
@@ -913,6 +918,10 @@ async function applyPolicyConfigChange(
         tableAccess: projectDatabases.tableAccess,
         tenantScope: projectDatabases.tenantScope,
         guardrails: projectDatabases.guardrails,
+        // Without this the push emits no approvals block and no
+        // `write_approvals` token, so toggling approvals ON changes nothing on
+        // the engine and writes keep running unapproved.
+        approvals: projectDatabases.approvals,
       })
       .from(projectDatabases)
       .where(eq(projectDatabases.projectId, id));
@@ -927,6 +936,7 @@ async function applyPolicyConfigChange(
     tableAccess: s.tableAccess,
     tenantScope: s.tenantScope ?? EMPTY_TENANT_SCOPE,
     guardrails: s.guardrails,
+    approvals: s.approvals,
   }));
 
   if (change.forceRespawn) {
@@ -1104,6 +1114,37 @@ export async function setGuardrails(
     eventType: "GUARDRAILS_CHANGED",
     payload: { guardrails: validation.value },
     logPrefix: "[setGuardrails]",
+  });
+}
+
+// Write approvals (docs/designs/write-approvals-mlp.md). Same write path as
+// guardrails: validate, persist the approvals JSONB on the named database, and
+// hot-reload the running engine so the toggle lands on the next statement
+// instead of respawning and dropping the agent's session.
+//
+// Reuses POLICY_CHANGED rather than minting an APPROVALS_CHANGED event, for the
+// same reason column_masks did: a new event_type needs a CHECK-constraint
+// migration, and the payload already makes the change legible.
+export async function setApprovals(
+  customer: Customer,
+  id: string,
+  config: ApprovalsConfig,
+  deps: PolicyPushDeps,
+  actorUserId: string,
+  dbName: string = DEFAULT_DATABASE_NAME,
+): Promise<{ id: string } | null> {
+  const validation = validateApprovals(config);
+  if (!validation.ok) {
+    const summary = validation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`invalid approvals: ${summary}`);
+  }
+  return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
+    update: { approvals: validation.value },
+    eventType: "POLICY_CHANGED",
+    payload: { approvals: validation.value },
+    logPrefix: "[setApprovals]",
   });
 }
 

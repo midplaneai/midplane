@@ -39,6 +39,16 @@ export interface EvaluateResult {
   verdict: RuleVerdict;
   statementType: string | null;
   tablesTouched: string[];
+  // True when the statement writes to at least one relation — the trigger for
+  // write approvals.
+  //
+  // Read from the SAME accessChecks sequence table_access replays, not from
+  // statementType, and that is the point: `WITH d AS (DELETE FROM orders …)
+  // SELECT count(*) FROM d` has auditStatementType "SELECT" and would sail past
+  // a keyword check while deleting rows. Because the adapter emits a write
+  // check for every write-target node anywhere in the tree (CTEs and
+  // subqueries included), this cannot drift from the permission decision.
+  hasWriteTarget: boolean;
 }
 
 // Evaluates all rules in a single AST walk.
@@ -75,6 +85,7 @@ export function evaluate(input: EvaluateInput): EvaluateResult {
     // inline AST accumulator by the IR-equivalence harness before the cut-over.
     statementType: program.auditStatementType,
     tablesTouched: program.allRelnames,
+    hasWriteTarget: program.accessChecks.some((c) => c.kind === "write"),
   };
 }
 

@@ -206,6 +206,10 @@ export class ProcessSpawner implements Spawner {
     // Masking salt; present only when a database declares column_masks (the
     // engine refuses to boot with masks but no salt).
     if (opts.maskSalt) env.MIDPLANE_MASK_SALT = opts.maskSalt;
+    if (opts.approvalGate) {
+      env.MIDPLANE_APPROVAL_URL = opts.approvalGate.url;
+      env.MIDPLANE_APPROVAL_TOKEN = opts.approvalGate.token;
+    }
 
     const child = this.spawnFn(this.binaryPath, ["server"], {
       env: env as NodeJS.ProcessEnv,

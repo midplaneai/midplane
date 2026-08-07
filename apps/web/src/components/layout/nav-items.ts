@@ -1,4 +1,5 @@
 import {
+  CheckSquare,
   CreditCard,
   Database,
   ScrollText,
@@ -23,6 +24,12 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Projects",
     icon: Database,
     match: (p) => p === "/dashboard" || p.startsWith("/projects"),
+  },
+  {
+    href: "/approvals",
+    label: "Approvals",
+    icon: CheckSquare,
+    match: (p) => p.startsWith("/approvals"),
   },
   {
     href: "/audit",
@@ -57,6 +64,11 @@ export function navItemsFor({
   return NAV_ITEMS.filter((item) => {
     if (item.href === "/billing") return owner && !selfHost;
     if (item.href === "/audit") return canManage;
+    // Approvals is visible to everyone, deliberately: a member is often the
+    // person whose agent is blocked, and the queue is where they find out why.
+    // The decide controls (and the server action behind them) are still
+    // owner/admin only.
+    if (item.href === "/approvals") return true;
     return true;
   });
 }

@@ -30,6 +30,7 @@
 //     and must not fail because of it.
 
 import { createHmac } from "node:crypto";
+import { mintApprovalToken } from "@midplane-cloud/router";
 
 import {
   bumpLastUsed,
@@ -45,6 +46,7 @@ import {
   customers,
   getDb,
   parseColumnMasksOrThrow,
+  parseApprovalsOrThrow,
   parseGuardrailsOrThrow,
   parsePolicyOrThrow,
   parseTenantScopeOrThrow,
@@ -95,6 +97,31 @@ const STRIP_RESPONSE_HEADERS = new Set(["fly-replay", "fly-replay-src"]);
 // headers and the Fly routing-control headers (see above), keep everything else
 // (notably mcp-session-id and content-type for SSE). Exported so the stripping
 // has a regression test without standing up the full proxy.
+/** Per-project approval-gate env, or undefined when this deployment has no
+ *  approval secret (local dev, a self-host that never enabled it). */
+function approvalGateFor(projectId: string): { url: string; token: string } | undefined {
+  const master = process.env.MIDPLANE_APPROVAL_SECRET;
+  // Two different audiences, so potentially two different origins:
+  //
+  //   MIDPLANE_APP_ORIGIN            what a HUMAN opens in a browser
+  //   MIDPLANE_APPROVAL_CALLBACK_ORIGIN  what the CONTAINER dials back on
+  //
+  // In cloud they are the same public https origin. In local dev they are not:
+  // the app is on http://localhost:3000, but `localhost` inside a Docker
+  // container is the container itself, so the engine must be handed
+  // http://host.docker.internal:3000 or every held write fails as
+  // approval_unavailable. Same rule SELF_HOST.md already documents for a
+  // localhost Postgres DSN. Defaults to MIDPLANE_APP_ORIGIN so cloud needs no
+  // extra config.
+  const origin =
+    process.env.MIDPLANE_APPROVAL_CALLBACK_ORIGIN ?? process.env.MIDPLANE_APP_ORIGIN;
+  if (!master || !origin) return undefined;
+  return {
+    url: `${origin.replace(/\/$/, "")}/api/engine/approvals/${projectId}`,
+    token: mintApprovalToken(master, projectId),
+  };
+}
+
 export function filterUpstreamResponseHeaders(src: Headers): Headers {
   const out = new Headers();
   for (const [k, v] of src) {
@@ -637,6 +664,10 @@ async function forwardResolved(
       tenantScope,
       guardrails,
       columnMasks,
+      // Omitting this is a FAIL-OPEN: with no approvals block and no
+      // `write_approvals` token, the engine is never told to hold anything and
+      // an old engine has nothing to refuse, so writes just run.
+      approvals: parseApprovalsOrThrow(cdb.approvals),
     });
   }
 
@@ -693,6 +724,11 @@ async function forwardResolved(
       region: project.region,
       databases: spawnDatabases,
       maskSalt,
+      // Write-approval gate. Wired whenever the deployment has the secret, not
+      // only when a database currently has approvals on — see SpawnOptions.
+      // The token is per-project (HMAC), so an engine can only ever speak for
+      // the project it was spawned for.
+      approvalGate: approvalGateFor(project.id),
     });
   } catch (err) {
     // Opaque class only: a spawn failure can wrap a Postgres connect error

@@ -76,6 +76,7 @@ export function makeEngine(opts: {
   enableTenantScope?: boolean;
   rules?: EngineOptions["policy"]["rules"];
   tableAccess?: TableAccessConfig;
+  approvals?: EngineOptions["approvals"];
 } = {}): EngineHarness {
   const audit = new MemoryAuditWriter();
   const executor = new MockExecutor();
@@ -100,6 +101,7 @@ export function makeEngine(opts: {
     audit,
     credentials,
     executor,
+    approvals: opts.approvals,
     now: () => 1_700_000_000_000,
     idGen: () => `01TESTID${(counter++).toString().padStart(18, "0")}`,
   });

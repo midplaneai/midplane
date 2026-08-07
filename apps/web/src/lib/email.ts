@@ -158,6 +158,73 @@ export async function sendOrgInvitationEmail(args: {
   await sendEmail({ to: args.to, subject, html, text });
 }
 
+/** Send a "a write is waiting on you" notice to an approver.
+ *
+ *  LINK-ONLY, by construction. This carries the database ALIAS, the agent name,
+ *  a deadline and a URL — never the SQL and never the table names. A held
+ *  DELETE's WHERE clause routinely contains live values (an email address, an
+ *  account id), so the statement is customer DATA, and email leaves the region
+ *  into third-party retention. The statement renders in-app only.
+ *
+ *  Best-effort at the call site: approval-notify.ts swallows every failure,
+ *  because the gate is holding an engine request open while this runs. */
+export async function sendWriteApprovalEmail(args: {
+  to: string;
+  approvalId: string;
+  database: string;
+  agentName: string | null;
+  expiresAt: Date;
+  url: string;
+}): Promise<void> {
+  const agent = args.agentName?.trim() || "An agent";
+  const subject = `Approval needed: a write to ${args.database}`;
+  const expires = args.expiresAt.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+
+  const text = [
+    `${agent} is waiting on approval to write to the "${args.database}" database.`,
+    "",
+    "Review it in Midplane:",
+    args.url,
+    "",
+    `The request expires at ${expires}. If nobody responds it is denied —`,
+    "silence is never an approval.",
+    "",
+    "The statement itself is only shown in the app.",
+  ].join("\n");
+
+  const html = `<!doctype html>
+<html>
+  <body style="margin:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111111;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:0 auto;padding:40px 24px;">
+      <tr><td>
+        <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
+          <strong>${esc(agent)}</strong> is waiting on approval to write to
+          <strong>${esc(args.database)}</strong>.
+        </p>
+        <p style="margin:0 0 28px;">
+          <a href="${args.url}"
+             style="display:inline-block;background:#111111;color:#ffffff;text-decoration:none;font-size:14px;font-weight:500;padding:12px 20px;border-radius:6px;">
+            Review the request
+          </a>
+        </p>
+        <p style="font-size:13px;line-height:1.6;color:#666666;margin:0 0 8px;">
+          Or paste this link into your browser:
+        </p>
+        <p style="font-size:12px;line-height:1.6;color:#666666;word-break:break-all;margin:0 0 28px;">
+          <a href="${args.url}" style="color:#666666;">${args.url}</a>
+        </p>
+        <p style="font-size:12px;line-height:1.6;color:#999999;margin:0;border-top:1px solid #eeeeee;padding-top:16px;">
+          Expires ${esc(expires)}. If nobody responds, the write is denied.
+          The statement is shown only in Midplane.
+        </p>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+
+  await sendEmail({ to: args.to, subject, html, text });
+}
+
 /** Send an address-verification email. Wired into Better Auth's
  *  emailVerification.sendVerificationEmail (lib/auth.ts), registered ONLY when
  *  isEmailConfigured() — self-host ships no Resend, so it never gates there

@@ -29,7 +29,9 @@ import { evaluate } from "./policy/index.ts";
 import type { Dialect } from "./dialects/types.ts";
 import { postgresDialect } from "./dialects/postgres/index.ts";
 import { AuditEvent } from "./audit/types.ts";
-import { AuditUnavailableError } from "./errors.ts";
+import { AuditUnavailableError, ApprovalPendingError } from "./errors.ts";
+import { REFUSING_APPROVAL_GATE } from "./approvals.ts";
+import type { ApprovalConfig, ApprovalGate } from "./approvals.ts";
 
 export type EngineContext = {
   tenant_id: string;
@@ -145,6 +147,19 @@ export interface EngineOptions {
   // post-processes every ALLOWED result (SELECT and RETURNING) through the
   // fail-closed masker before returning rows to the agent.
   masking?: MaskingConfig;
+  // Optional write approvals. `config.writes` off (or absent) leaves the
+  // pipeline byte-for-byte as it was. When on, `gate` MUST be supplied — an
+  // omitted gate resolves to REFUSING_APPROVAL_GATE, which errors rather than
+  // letting an unapproved write through on a misconfiguration.
+  approvals?: {
+    // A getter (not a value) for the same reason tableAccess and guardrails use
+    // one: approvals live in the policy YAML, so a toggle arrives by hot-reload.
+    // Reading through the holder per query means flipping it takes effect on the
+    // next statement instead of requiring a respawn that would drop the agent's
+    // session mid-conversation.
+    config: ApprovalConfig | (() => ApprovalConfig);
+    gate?: ApprovalGate;
+  };
   // Identifies which DB this Engine is bound to. Stamped on every audit
   // event the engine writes so consumers can group/filter per-DB. Defaults
   // to '__default__' for legacy single-DB callers and tests that don't
@@ -164,6 +179,8 @@ export class Engine {
   private readonly audit: AuditWriter;
   private readonly executor: Executor;
   private readonly masking?: MaskingConfig;
+  private readonly approvalConfig: () => ApprovalConfig;
+  private readonly approvalGate: ApprovalGate;
   private readonly credentials: CredentialStore;
   private readonly databaseName: string;
   private readonly dialect: Dialect;
@@ -175,6 +192,13 @@ export class Engine {
     this.audit = opts.audit;
     this.executor = opts.executor;
     this.masking = opts.masking;
+    const approvalCfg = opts.approvals?.config;
+    this.approvalConfig =
+      typeof approvalCfg === "function" ? approvalCfg : () => approvalCfg ?? { writes: false };
+    // Off by default, so an embedder that never heard of approvals is
+    // unaffected. On without a gate resolves to the refusing gate — a
+    // misconfiguration must not read as permission.
+    this.approvalGate = opts.approvals?.gate ?? REFUSING_APPROVAL_GATE;
     this.credentials = opts.credentials;
     this.databaseName = opts.databaseName ?? "__default__";
     this.dialect = opts.dialect ?? postgresDialect;
@@ -229,14 +253,32 @@ export class Engine {
     //    decision.
     const evalResult = this.evaluateGuarded(parseResult, input.ctx);
 
+    // ── 3b. approvals (T3 amendment) — ask a human about a write the policy
+    //    already permits. Runs ONLY on ALLOW, so approvals sit strictly under
+    //    the policy: a statement table_access or a guardrail refused never
+    //    reaches a human, and there is no path from denied to approved.
+    //
+    //    Placed BEFORE the DECIDED write, deliberately. A refusal here has to be
+    //    THE decision for this attempt, not a correction appended after an
+    //    ALLOW row already claimed the statement was permitted. It also means
+    //    the two non-decisions — gate unreachable, and nobody has ruled yet —
+    //    leave no DECIDED row at all, so neither fires the deny-webhook nor
+    //    lands a refusal nobody made in a compliance export.
+    //
+    //    Costs nothing when unconfigured: no gate call, no allocation, and for
+    //    a read the boolean short-circuits before the array scan.
+    const approval = await this.resolveApproval(evalResult, input, intent, queryId);
+
     // ── 4. audit DECIDED — failure here aborts the pipeline.
     const decidedId = this.idGen();
     const denyMessage =
       evalResult.verdict.decision === "DENY"
         ? evalResult.verdict.message ?? defaultMessageForRule(evalResult.verdict.reason)
-        : "";
+        : approval !== null
+          ? approval.message
+          : "";
     const decidedEvent: AuditEvent =
-      evalResult.verdict.decision === "ALLOW"
+      evalResult.verdict.decision === "ALLOW" && approval === null
         ? {
             id: decidedId,
             query_id: queryId,
@@ -269,8 +311,14 @@ export class Engine {
             schema_version: 3,
             event_type: "DECIDED",
             payload: {
+              // A policy denial outranks an approval refusal in the record:
+              // if a rule already refused this statement, that is why it did
+              // not run, and no human was ever asked.
               decision: "DENY",
-              policy_rule: evalResult.verdict.reason,
+              policy_rule:
+                evalResult.verdict.decision === "DENY"
+                  ? evalResult.verdict.reason
+                  : approval!.rule,
               reason: denyMessage,
               statement_type: evalResult.statementType ?? undefined,
               tables_touched:
@@ -287,6 +335,17 @@ export class Engine {
         allowed: false,
         reason: evalResult.verdict.reason,
         message: denyMessage,
+        auditId: decidedId,
+      };
+    }
+
+    // A human refused it (or the window closed). Same shape as a policy denial
+    // — from the agent's side "this did not run, and here is why" is one thing.
+    if (approval !== null) {
+      return {
+        allowed: false,
+        reason: approval.rule,
+        message: approval.message,
         auditId: decidedId,
       };
     }
@@ -608,7 +667,77 @@ export class Engine {
         verdict: { decision: "DENY", reason: "internal_error" },
         statementType: null,
         tablesTouched: [],
+        // A statement we could not evaluate is already being denied; claiming
+        // it writes would be a guess, and nothing downstream reads this on the
+        // deny path.
+        hasWriteTarget: false,
       };
+    }
+  }
+
+  // Ask a human about an ALLOWed write, when the policy says to.
+  //
+  // Returns null when the statement may proceed — approvals off, not a write,
+  // policy already denied it, or a human approved it. Returns a refusal for the
+  // DECIDED row when a human said no or the window closed.
+  //
+  // Throws (never returns) for the two states that are NOT decisions:
+  // ApprovalUnavailableError when the gate can't be reached, ApprovalPendingError
+  // while nobody has ruled. Both leave the attempt undecided rather than
+  // fabricating a refusal.
+  private async resolveApproval(
+    evalResult: ReturnType<typeof evaluate>,
+    input: { sql: string; ctx: EngineContext },
+    intent: string,
+    queryId: string,
+  ): Promise<{ rule: string; message: string } | null> {
+    // Order matters for cost: the config check is a field read, so a project
+    // without approvals never touches the accessChecks scan.
+    if (!this.approvalConfig().writes) return null;
+    if (evalResult.verdict.decision !== "ALLOW") return null;
+    if (!evalResult.hasWriteTarget) return null;
+
+    const outcome = await this.approvalGate.request({
+      queryId,
+      database: this.databaseName,
+      sql: input.sql,
+      intent,
+      statementType: evalResult.statementType ?? "UNKNOWN",
+      tablesTouched: evalResult.tablesTouched,
+      tenantId: input.ctx.tenant_id,
+      agentName: input.ctx.agent_name,
+      agentVersion: input.ctx.agent_version,
+      mcpTokenId: input.ctx.mcp_token_id,
+    });
+
+    switch (outcome.status) {
+      case "approved":
+        return null;
+      case "denied":
+        return {
+          rule: "approval_denied",
+          // The approver's own words when they left any — a denial that
+          // explains itself is what lets the agent try a better statement
+          // instead of retrying the same one.
+          message: outcome.note?.trim()
+            ? `Denied by ${outcome.by ?? "a reviewer"}: ${outcome.note.trim()}`
+            : `This write was denied by ${outcome.by ?? "a reviewer"}.`,
+        };
+      case "expired":
+        return {
+          rule: "approval_expired",
+          message:
+            "This write needed human approval and the request expired before anyone responded. Re-run it to ask again.",
+        };
+      case "pending":
+        throw new ApprovalPendingError(
+          "awaiting approval — a human must approve this write. Re-run this exact statement to collect the result.",
+          {
+            approvalId: outcome.approvalId,
+            expiresAt: outcome.expiresAt,
+            reviewUrl: outcome.reviewUrl,
+          },
+        );
     }
   }
 

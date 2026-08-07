@@ -42,6 +42,7 @@ const cdb: ProjectDatabase = {
   tableAccess: { default: "deny", tables: {} },
   tenantScope: { column: null, overrides: {}, exempt: [] },
   guardrails: { block_unqualified_dml: true, block_ddl: true },
+  approvals: { writes: false, expires_after_seconds: 1800 },
   columnMasks: {},
   ignoredColumns: {},
   rotatedAt: null,

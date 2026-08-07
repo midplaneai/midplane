@@ -109,6 +109,22 @@ const GuardrailsSchema = z.object({
   block_ddl: z.boolean().default(true), // DROP / TRUNCATE / ALTER
 });
 
+// Write approvals — hold a write the policy already permits until a human
+// approves it. See docs/designs/write-approvals-mlp.md.
+//
+// Defaults OFF, the opposite of guardrails, and for the same reason guardrails
+// default on: the safe posture for an omitted section is the one that surprises
+// nobody. An engine that silently started holding writes because a section was
+// missing would break every existing deployment; guardrails that silently
+// stopped blocking would break every existing guarantee.
+//
+// An operator who sets this needs a gate wired (MIDPLANE_APPROVAL_URL +
+// MIDPLANE_APPROVAL_TOKEN); the server refuses to boot otherwise rather than
+// hold every write against a gate that will never answer.
+const ApprovalsSchema = z.object({
+  writes: z.boolean().default(false),
+});
+
 // Column masking (decision A2). A sibling of table_access: "schema.table" ->
 // (column name -> mask rule). A rule is a param-free PRESET (a bare string) or a
 // PARAMETRIC transform (a tagged object) — mirroring the engine's MaskRule union
@@ -165,7 +181,11 @@ const ColumnMasksSchema = z.record(
 // future enforcement section can't be silently stripped by this engine. (The
 // current column_masks rollout's old-engine skew is handled by engine-first
 // sequencing E3 — an already-shipped old engine can't be taught to refuse.)
-const ENGINE_FEATURES = new Set<string>(["column_masks", "mask_source_rewrite"]);
+const ENGINE_FEATURES = new Set<string>([
+  "column_masks",
+  "mask_source_rewrite",
+  "write_approvals",
+]);
 
 function assertFeaturesSupported(
   features: string[] | undefined,
@@ -204,6 +224,7 @@ const DatabaseEntrySchema = z.object({
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),
   guardrails: GuardrailsSchema.optional(),
+  approvals: ApprovalsSchema.optional(),
   column_masks: ColumnMasksSchema.optional(),
   // Per-DB override of the engine-wide MIDPLANE_MASK_SOURCE_REWRITE default.
   // Present ⇒ this DB uses that enforcement mode regardless of the env default;
@@ -220,6 +241,7 @@ export const PolicyFileSchema = z.object({
   tenant_scope: TenantScopeSchema.optional(),
   table_access: TableAccessSchema.optional(),
   guardrails: GuardrailsSchema.optional(),
+  approvals: ApprovalsSchema.optional(),
   column_masks: ColumnMasksSchema.optional(),
   // Legacy single-DB override of MIDPLANE_MASK_SOURCE_REWRITE (see the per-DB
   // entry key above). Absent ⇒ inherit the env default.
@@ -281,6 +303,15 @@ export interface DatabaseSpec {
   hasTableAccess: boolean;
   // Always resolved (DEFAULT_GUARDRAILS when the section is omitted).
   guardrails: GuardrailsSpec;
+  // Always resolved (DEFAULT_APPROVALS — off — when the section is omitted).
+  approvals: ApprovalsSpec;
+  // True iff the source document explicitly contained an `approvals:` section.
+  // Preserves omit-vs-set for the hot-reload "don't touch" rule, exactly like
+  // hasGuardrails: a body editing table_access alone must not silently switch
+  // approvals off, and a body that DOES carry approvals must actually apply —
+  // without this flag a toggle would land in the database and never reach a
+  // warm engine, so writes would keep running unapproved until respawn.
+  hasApprovals: boolean;
   // True iff the source document explicitly contained a `guardrails:` section.
   // Preserves omit-vs-set for the hot-reload "don't touch" rule (mirrors
   // hasTenantScope) — a body editing table_access alone never clears guardrails.
@@ -427,6 +458,8 @@ export function parsePolicyYaml(
           hasTableAccess: false,
           // Empty doc still gets the default-ON safety net.
           guardrails: DEFAULT_GUARDRAILS,
+              approvals: DEFAULT_APPROVALS,
+          hasApprovals: false,
           hasGuardrails: false,
           columnMasks: null,
           hasColumnMasks: false,
@@ -439,6 +472,8 @@ export function parsePolicyYaml(
       hasTenantScope: false,
       hasTableAccess: false,
       guardrails: DEFAULT_GUARDRAILS,
+      approvals: DEFAULT_APPROVALS,
+      hasApprovals: false,
       hasGuardrails: false,
       columnMasks: null,
       hasColumnMasks: false,
@@ -479,6 +514,8 @@ export function parsePolicyYaml(
       hasTenantScope: false,
       hasTableAccess: false,
       guardrails: DEFAULT_GUARDRAILS,
+      approvals: DEFAULT_APPROVALS,
+      hasApprovals: false,
       hasGuardrails: false,
       columnMasks: null,
       hasColumnMasks: false,
@@ -500,6 +537,10 @@ export function parsePolicyYaml(
     rawDoc,
     "guardrails",
   );
+  const hasApprovals = Object.prototype.hasOwnProperty.call(
+    rawDoc,
+    "approvals",
+  );
 
   const tenantScope = resolveTenantScope(
     parsed.data.tenant_scope,
@@ -510,6 +551,7 @@ export function parsePolicyYaml(
   const ta = parsed.data.table_access;
   const tableAccess = ta ? { default: ta.default, tables: ta.tables } : null;
   const guardrails = resolveGuardrails(parsed.data.guardrails);
+  const approvals = resolveApprovals(parsed.data.approvals);
 
   // Forward-compat refuse (T3): a policy declaring a feature this engine can't
   // enforce is rejected, not silently stripped.
@@ -528,6 +570,8 @@ export function parsePolicyYaml(
         tableAccess,
         hasTableAccess,
         guardrails,
+        approvals,
+        hasApprovals,
         hasGuardrails,
         columnMasks,
         hasColumnMasks,
@@ -540,6 +584,8 @@ export function parsePolicyYaml(
     hasTenantScope,
     hasTableAccess,
     guardrails,
+    approvals,
+    hasApprovals,
     hasGuardrails,
     columnMasks,
     hasColumnMasks,
@@ -570,6 +616,25 @@ function resolveTenantScope(
     overrides,
     exempt: raw.exempt ?? [],
   };
+}
+
+// Resolved approvals config the engine's approval stage reads. Always
+// well-formed; an omitted `approvals` section resolves to OFF, so every policy
+// written before this feature existed keeps behaving exactly as it did.
+export interface ApprovalsSpec {
+  writes: boolean;
+}
+
+export const DEFAULT_APPROVALS: ApprovalsSpec = { writes: false };
+
+// Normalize a parsed `approvals` block into an ApprovalsSpec. Unlike guardrails,
+// an omitted section resolves to OFF — holding writes is something an operator
+// asks for, never something they inherit by saying nothing.
+function resolveApprovals(
+  raw: { writes: boolean } | undefined,
+): ApprovalsSpec {
+  if (!raw) return DEFAULT_APPROVALS;
+  return { writes: raw.writes };
 }
 
 // Normalize a parsed `guardrails` block into a GuardrailsSpec. An OMITTED
@@ -616,6 +681,7 @@ function resolveDatabaseEntry(
   const ta = entry.table_access;
   const tableAccess = ta ? { default: ta.default, tables: ta.tables } : null;
   const guardrails = resolveGuardrails(entry.guardrails);
+  const approvals = resolveApprovals(entry.approvals);
 
   // hasTenantScope / hasTableAccess / hasGuardrails for individual entries —
   // read from the raw doc so omit-vs-empty distinction survives. For the
@@ -625,6 +691,7 @@ function resolveDatabaseEntry(
   const hasTenantScope = Object.prototype.hasOwnProperty.call(rawEntry, "tenant_scope");
   const hasTableAccess = Object.prototype.hasOwnProperty.call(rawEntry, "table_access");
   const hasGuardrails = Object.prototype.hasOwnProperty.call(rawEntry, "guardrails");
+  const hasApprovals = Object.prototype.hasOwnProperty.call(rawEntry, "approvals");
 
   assertFeaturesSupported(
     entry.requires_features,
@@ -643,6 +710,8 @@ function resolveDatabaseEntry(
     tableAccess,
     hasTableAccess,
     guardrails,
+    approvals,
+    hasApprovals,
     hasGuardrails,
     columnMasks,
     hasColumnMasks,
