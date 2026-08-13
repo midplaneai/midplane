@@ -35,6 +35,14 @@ export interface EvaluateInput {
   dialect?: Dialect;
 }
 
+/** The three classes of write a policy states a rule for. One statement can
+ *  carry more than one (a CTE that deletes rows under a top-level whole-table
+ *  update), which is why the evaluator reports a set rather than a winner. */
+export type WriteClass =
+  | "row_changes"
+  | "whole_table_writes"
+  | "schema_changes";
+
 export interface EvaluateResult {
   verdict: RuleVerdict;
   statementType: string | null;
@@ -49,6 +57,17 @@ export interface EvaluateResult {
   // check for every write-target node anywhere in the tree (CTEs and
   // subqueries included), this cannot drift from the permission decision.
   hasWriteTarget: boolean;
+  // Which write classes this statement contains, for the approval stage. Every
+  // class present is reported, and the stage holds if ANY of them is set to
+  // ask — a statement that both changes rows and alters the schema must not
+  // slip through because only one of the two is held.
+  //
+  // A write with no site at all (CREATE TABLE, CREATE TABLE AS, CREATE INDEX)
+  // reports "row_changes". Those are not refusable — no guardrail emits a site
+  // for them — but they ARE writes, and letting them fall out of the classified
+  // set would silently stop holding statements a single `writes: true` used to
+  // hold.
+  writeClasses: WriteClass[];
 }
 
 // Evaluates all rules in a single AST walk.
@@ -78,6 +97,7 @@ export function evaluate(input: EvaluateInput): EvaluateResult {
     }
   }
 
+  const hasWriteTarget = program.accessChecks.some((c) => c.kind === "write");
   return {
     verdict,
     // Audit statement_type + tables_touched come straight from the IR (the
@@ -85,8 +105,29 @@ export function evaluate(input: EvaluateInput): EvaluateResult {
     // inline AST accumulator by the IR-equivalence harness before the cut-over.
     statementType: program.auditStatementType,
     tablesTouched: program.allRelnames,
-    hasWriteTarget: program.accessChecks.some((c) => c.kind === "write"),
+    hasWriteTarget,
+    writeClasses: classifyWriteClasses(program, hasWriteTarget),
   };
+}
+
+// Which write classes a program contains. Reads the same site list the
+// guardrail rule replays, so "what may be refused" and "what may be held" can
+// never disagree about what a statement is.
+function classifyWriteClasses(
+  program: NormalizedProgram,
+  hasWriteTarget: boolean,
+): WriteClass[] {
+  const classes = new Set<WriteClass>();
+  for (const d of program.dangerousStatements) {
+    if (d.kind === "row_dml") classes.add("row_changes");
+    else if (d.kind === "unqualified_dml") classes.add("whole_table_writes");
+    else classes.add("schema_changes");
+  }
+  // A write the dialect emitted no site for is still a write (CREATE TABLE and
+  // friends). Classify it as a row change so it stays inside the approval
+  // stage's reach; nothing refuses it, because refusal reads sites, not this.
+  if (classes.size === 0 && hasWriteTarget) classes.add("row_changes");
+  return [...classes];
 }
 
 // Input for a parse failure: no AST, nothing to normalize. parse_error denies;

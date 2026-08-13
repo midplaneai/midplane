@@ -36,11 +36,18 @@ const WRITABLE = { default: "read_write" as const, tables: {} };
 // every write here carries a WHERE clause.
 const WRITE_SQL = "UPDATE orders SET status='refunded' WHERE id=1";
 
+// Hold every write class — the posture the single `writes: true` flag used
+// to express, and what these tests are about. Per-class routing has its own
+// suite (write-classes.test.ts).
+function holdAll(on: boolean) {
+  return { rowChanges: on, wholeTableWrites: on, schemaChanges: on };
+}
+
 function harness(answer: ApprovalOutcome | (() => never), writes = true) {
   const gate = new StubGate(answer);
   const h = makeEngine({
     tableAccess: WRITABLE,
-    approvals: { config: { writes }, gate },
+    approvals: { config: holdAll(writes), gate },
   });
   return { ...h, gate };
 }
@@ -100,7 +107,7 @@ describe("approvals sit under the policy, never over it", () => {
     const gate = new StubGate(APPROVED);
     const { engine, audit } = makeEngine({
       tableAccess: { default: "read", tables: {} }, // no write anywhere
-      approvals: { config: { writes: true }, gate },
+      approvals: { config: holdAll(true), gate },
     });
 
     const d = await engine.handle({ sql: WRITE_SQL, ctx: baseCtx });
@@ -115,7 +122,7 @@ describe("approvals sit under the policy, never over it", () => {
     const gate = new StubGate(APPROVED);
     const { engine } = makeEngine({
       tableAccess: WRITABLE,
-      approvals: { config: { writes: true }, gate },
+      approvals: { config: holdAll(true), gate },
       rules: [
         parseError(),
         multiStatement(),
@@ -273,7 +280,7 @@ describe("the two non-decisions", () => {
     // A deployment fault must not read as permission.
     const { engine, executor } = makeEngine({
       tableAccess: WRITABLE,
-      approvals: { config: { writes: true } }, // no gate
+      approvals: { config: holdAll(true) }, // no gate
     });
 
     await expect(engine.handle({ sql: WRITE_SQL, ctx: baseCtx })).rejects.toThrow(
@@ -294,7 +301,7 @@ describe("hot-reload", () => {
     let writes = false;
     const { engine, executor } = makeEngine({
       tableAccess: WRITABLE,
-      approvals: { config: () => ({ writes }), gate },
+      approvals: { config: () => holdAll(writes), gate },
     });
 
     await engine.handle({ sql: WRITE_SQL, ctx: baseCtx });
@@ -312,7 +319,7 @@ describe("hot-reload", () => {
     let writes = true;
     const { engine } = makeEngine({
       tableAccess: WRITABLE,
-      approvals: { config: () => ({ writes }), gate },
+      approvals: { config: () => holdAll(writes), gate },
     });
 
     await engine.handle({ sql: WRITE_SQL, ctx: baseCtx });

@@ -30,7 +30,7 @@ import type { Dialect } from "./dialects/types.ts";
 import { postgresDialect } from "./dialects/postgres/index.ts";
 import { AuditEvent } from "./audit/types.ts";
 import { AuditUnavailableError, ApprovalPendingError } from "./errors.ts";
-import { REFUSING_APPROVAL_GATE } from "./approvals.ts";
+import { NO_APPROVALS, REFUSING_APPROVAL_GATE } from "./approvals.ts";
 import type { ApprovalConfig, ApprovalGate } from "./approvals.ts";
 
 export type EngineContext = {
@@ -147,8 +147,8 @@ export interface EngineOptions {
   // post-processes every ALLOWED result (SELECT and RETURNING) through the
   // fail-closed masker before returning rows to the agent.
   masking?: MaskingConfig;
-  // Optional write approvals. `config.writes` off (or absent) leaves the
-  // pipeline byte-for-byte as it was. When on, `gate` MUST be supplied — an
+  // Optional write approvals. Every class off (or absent) leaves the pipeline
+  // byte-for-byte as it was. When any class is on, `gate` MUST be supplied — an
   // omitted gate resolves to REFUSING_APPROVAL_GATE, which errors rather than
   // letting an unapproved write through on a misconfiguration.
   approvals?: {
@@ -194,7 +194,9 @@ export class Engine {
     this.masking = opts.masking;
     const approvalCfg = opts.approvals?.config;
     this.approvalConfig =
-      typeof approvalCfg === "function" ? approvalCfg : () => approvalCfg ?? { writes: false };
+      typeof approvalCfg === "function"
+        ? approvalCfg
+        : () => approvalCfg ?? NO_APPROVALS;
     // Off by default, so an embedder that never heard of approvals is
     // unaffected. On without a gate resolves to the refusing gate — a
     // misconfiguration must not read as permission.
@@ -671,6 +673,7 @@ export class Engine {
         // it writes would be a guess, and nothing downstream reads this on the
         // deny path.
         hasWriteTarget: false,
+        writeClasses: [],
       };
     }
   }
@@ -691,11 +694,25 @@ export class Engine {
     intent: string,
     queryId: string,
   ): Promise<{ rule: string; message: string } | null> {
-    // Order matters for cost: the config check is a field read, so a project
-    // without approvals never touches the accessChecks scan.
-    if (!this.approvalConfig().writes) return null;
+    // Order matters for cost: the config check is three field reads, so a
+    // project without approvals never touches the classification.
+    const cfg = this.approvalConfig();
+    if (!cfg.rowChanges && !cfg.wholeTableWrites && !cfg.schemaChanges) {
+      return null;
+    }
     if (evalResult.verdict.decision !== "ALLOW") return null;
     if (!evalResult.hasWriteTarget) return null;
+    // Held if ANY class the statement carries is held. A statement that both
+    // changes rows and alters the schema must not run unreviewed because only
+    // one of the two was configured to ask.
+    const held = evalResult.writeClasses.some((c) =>
+      c === "row_changes"
+        ? cfg.rowChanges
+        : c === "whole_table_writes"
+          ? cfg.wholeTableWrites
+          : cfg.schemaChanges,
+    );
+    if (!held) return null;
 
     const outcome = await this.approvalGate.request({
       queryId,

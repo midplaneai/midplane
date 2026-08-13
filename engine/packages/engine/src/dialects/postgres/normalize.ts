@@ -675,12 +675,17 @@ function dmlTargetName(node: Record<string, unknown>): string {
   return "the target table";
 }
 
-// Walk every statement node (top-level AND nested) and flag the destructive
-// sites the guardrails block: DELETE/UPDATE with no WHERE clause, and
-// DROP/TRUNCATE/ALTER DDL. The walk descends into children of flagged nodes too,
-// so a no-WHERE DELETE hidden in a CTE (`WITH d AS (DELETE FROM t RETURNING *)
-// …`) is caught — it wipes the table just the same. Emitted in DFS order; the
-// rule denies on the first match for whichever guardrail is enabled.
+// Walk every statement node (top-level AND nested) and flag every write site:
+// row-scoped DML (INSERT / MERGE / WHERE-qualified UPDATE / DELETE), DELETE or
+// UPDATE with no WHERE clause, and DROP/TRUNCATE/ALTER DDL. The walk descends
+// into children of flagged nodes too, so a no-WHERE DELETE hidden in a CTE
+// (`WITH d AS (DELETE FROM t RETURNING *) …`) is caught — it wipes the table
+// just the same. Emitted in DFS order; the rule denies on the first match for
+// whichever guardrail is enabled.
+//
+// CREATE-family writes (CREATE TABLE, CREATE TABLE AS, CREATE INDEX, …) emit no
+// site at all. They are writes as far as table_access is concerned, but no
+// write rule refuses them.
 function collectDangerousStatements(
   stmts: Array<{ stmt: Record<string, unknown> }>,
 ): DangerousStatement[] {
@@ -710,14 +715,26 @@ function collectDangerousStatements(
           // No `whereClause` field ⇒ no WHERE ⇒ whole-table write. A present
           // whereClause (any expression, even `WHERE true`) is "qualified" — the
           // guardrail is specifically the missing-WHERE footgun, not a predicate
-          // strength check (that's tenant_scope's job).
-          if (innerObj.whereClause === null || innerObj.whereClause === undefined) {
-            out.push({
-              kind: "unqualified_dml",
-              operation: kind === "DeleteStmt" ? "DELETE" : "UPDATE",
-              table: dmlTargetName(innerObj),
-            });
-          }
+          // strength check (that's tenant_scope's job). Either way this is a
+          // write site; which of the two it is decides which rule governs it.
+          const operation = kind === "DeleteStmt" ? "DELETE" : "UPDATE";
+          const unqualified =
+            innerObj.whereClause === null || innerObj.whereClause === undefined;
+          out.push({
+            kind: unqualified ? "unqualified_dml" : "row_dml",
+            operation,
+            table: dmlTargetName(innerObj),
+          });
+          for (const k of Object.keys(innerObj)) walk(innerObj[k]);
+          return;
+        }
+        if (kind === "InsertStmt" || kind === "MergeStmt") {
+          // Always row-scoped: neither can touch a row it didn't name or match.
+          out.push({
+            kind: "row_dml",
+            operation: kind === "InsertStmt" ? "INSERT" : "MERGE",
+            table: dmlTargetName(innerObj),
+          });
           for (const k of Object.keys(innerObj)) walk(innerObj[k]);
           return;
         }

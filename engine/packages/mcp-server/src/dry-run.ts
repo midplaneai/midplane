@@ -427,6 +427,7 @@ function computePolicyHash(target: DryRunTarget): string {
     guardrails: {
       block_unqualified_dml: target.guardrails.blockUnqualifiedDml,
       block_ddl: target.guardrails.blockDdl,
+      block_dml: target.guardrails.blockDml,
     },
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);

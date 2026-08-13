@@ -90,7 +90,7 @@ export type {
   MaskStage,
 } from "./masking/source-rewrite.ts";
 
-export type { Rule, RuleVerdict } from "./policy/index.ts";
+export type { Rule, RuleVerdict, WriteClass } from "./policy/index.ts";
 export type {
   TableAccessConfig,
   TableAccessLevel,
@@ -114,7 +114,7 @@ export {
 
 // Write approvals. The gate is the seam an embedder implements; the engine
 // decides only WHETHER to ask.
-export { REFUSING_APPROVAL_GATE } from "./approvals.ts";
+export { NO_APPROVALS, REFUSING_APPROVAL_GATE } from "./approvals.ts";
 export type {
   ApprovalConfig,
   ApprovalGate,

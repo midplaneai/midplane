@@ -2,6 +2,26 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Write rules are stated per statement class.** A policy now says refuse / hold / allow for each of three classes independently, instead of one guardrail flag per destructive class plus one global approvals switch:
+
+  | class | statements | refuse | hold for a human |
+  | --- | --- | --- | --- |
+  | row changes | `INSERT` / `MERGE`, `UPDATE` / `DELETE` with a `WHERE` | `guardrails.block_dml` | `approvals.row_changes` |
+  | whole-table writes | `UPDATE` / `DELETE` with no `WHERE` | `guardrails.block_unqualified_dml` | `approvals.whole_table_writes` |
+  | schema changes | `DROP` / `TRUNCATE` / `ALTER` | `guardrails.block_ddl` | `approvals.schema_changes` |
+
+  - **`guardrails.block_dml`** is new and defaults **off** — the two destructive flags keep defaulting on, but refusing ordinary row changes is a deliberate lockdown, and defaulting it on would break every deployment that upgrades. `CREATE` / `CREATE TABLE AS` / `CREATE INDEX` are **never** refused by it: the dialect emits no write site for them, so an agent that can't change rows can still run a migration.
+  - **`approvals` accepts a class per key**, with `writes` kept as the umbrella: `writes: true` holds every class (exactly what it always meant), and a class key present overrides it. Holding schema changes no longer forces an operator to hold every `UPDATE`.
+  - **A statement carrying more than one class is held if ANY of its classes is held.** `WITH d AS (DELETE FROM audit_log) UPDATE orders SET … WHERE id=1` carries both a whole-table write and a row change; running it because only one of the two was configured to ask would be the worst answer available.
+  - **Classification reads the same write sites the guardrail replays**, so "what may be refused" and "what may be held" can never disagree about what a statement is — and, as with the 0.16.0 gate, it is not keyed on the statement keyword. A write the dialect emits no site for (the `CREATE` family) classifies as a row change, so enabling per-class holds never holds *less* than `writes: true` did.
+  - **Refuse still outranks hold.** Guardrails run before the approval stage, so a refused statement never reaches a reviewer and no approval can buy a way past one. Refuse and hold are mutually exclusive values of one rule, so the two can't be configured to race.
+  - **`requires_features: [write_rules]`.** `block_dml`, and any per-class `approvals` set that isn't expressible as the old `writes` umbrella, carry the token — an engine that predates this release strips unknown keys rather than rejecting them, so it would silently refuse nothing and hold nothing. A policy that only says `writes: true` still needs no token and stays loadable by any 0.15+ engine.
+  - `POLICY_RELOADED` payloads and `list_databases` gained `block_dml` alongside the existing guardrail flags.
+
 ## [0.16.0] — 2026-08-07
 
 ### Added

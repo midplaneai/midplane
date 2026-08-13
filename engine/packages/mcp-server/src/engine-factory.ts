@@ -141,6 +141,7 @@ export interface EngineRegistry {
     table_access_default: TableAccessLevel | null;
     guardrails_block_unqualified_dml: boolean;
     guardrails_block_ddl: boolean;
+    guardrails_block_dml: boolean;
   }>;
   // Hot-swap entrypoint. Same body as 0.1.x's setPolicy — the registry
   // dispatches based on shape (legacy → swap on __default__; multi-DB →
@@ -372,6 +373,7 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
               : null,
             guardrails_block_unqualified_dml: e.holder.guardrails.blockUnqualifiedDml,
             guardrails_block_ddl: e.holder.guardrails.blockDdl,
+            guardrails_block_dml: e.holder.guardrails.blockDml,
           };
         });
     },
@@ -869,6 +871,7 @@ interface TenantScopeDiff {
 interface GuardrailsDiff {
   block_unqualified_dml?: { from: boolean; to: boolean };
   block_ddl?: { from: boolean; to: boolean };
+  block_dml?: { from: boolean; to: boolean };
 }
 
 // Write the POLICY_RELOADED audit row. Best-effort — the swap already
@@ -946,10 +949,11 @@ async function finalizeReload(
             }
           : null,
         // Current guardrails posture (0.9.0). Always present — guardrails are
-        // never "off"; both flags carry their boolean state.
+        // never "off"; every flag carries its boolean state.
         guardrails: {
           block_unqualified_dml: s.guardrails.blockUnqualifiedDml,
           block_ddl: s.guardrails.blockDdl,
+          block_dml: s.guardrails.blockDml,
         },
         // Coarse diff of what changed for THIS row's DB. `null` for
         // brand-new entries (no prior state to diff against) or sections
@@ -1105,6 +1109,9 @@ function diffGuardrails(
   }
   if (prev.blockDdl !== next.blockDdl) {
     diff.block_ddl = { from: prev.blockDdl, to: next.blockDdl };
+  }
+  if (prev.blockDml !== next.blockDml) {
+    diff.block_dml = { from: prev.blockDml, to: next.blockDml };
   }
   return diff;
 }

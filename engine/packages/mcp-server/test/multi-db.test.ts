@@ -203,6 +203,7 @@ describe("multi-DB tool surface", () => {
         table_access_default: "read_write",
         guardrails_block_unqualified_dml: true,
         guardrails_block_ddl: true,
+        guardrails_block_dml: false,
       },
       {
         name: "prod",
@@ -213,6 +214,7 @@ describe("multi-DB tool surface", () => {
         table_access_default: "deny",
         guardrails_block_unqualified_dml: true,
         guardrails_block_ddl: true,
+        guardrails_block_dml: false,
       },
     ]);
 
