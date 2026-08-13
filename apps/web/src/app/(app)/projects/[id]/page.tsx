@@ -61,7 +61,6 @@ import {
   maskConfigAddsMasking,
   isValidDatabaseName,
   isValidDsn,
-  LastDatabaseProtected,
   pauseProject,
   removeDatabase,
   renameProject,
@@ -733,22 +732,12 @@ export default async function ProjectWorkspace({
     await assertManager();
     if (!selectedName) notFound();
     const ctx = getMcpProxyContext();
-    try {
-      const result = await removeDatabase(customer, id, selectedName, ctx);
-      if (!result) notFound();
-    } catch (err) {
-      // Disabled in the UI on the last DB, so this throw is tamper/race-only.
-      if (err instanceof LastDatabaseProtected) {
-        throw new Error(
-          "Can't remove the only database. Add another first or delete the project.",
-        );
-      }
-      throw err;
-    }
+    const result = await removeDatabase(customer, id, selectedName, ctx);
+    if (!result) notFound();
     revalidatePath("/dashboard");
     revalidatePath(`/projects/${id}`);
     // ?db pointed at the deleted database — drop it so the pane falls back to
-    // the first remaining one.
+    // the first remaining one, or to the setup hero when that was the last one.
     redirect(`/projects/${id}?section=database`);
   }
 
@@ -931,16 +920,18 @@ export default async function ProjectWorkspace({
               }
             />
           )}
-          <DeleteDatabaseButton
-            name={selDb.name}
-            action={deleteDatabaseAction}
-            disabled={dbNames.length <= 1}
-          />
+          {conn.isSample ? null : (
+            <DeleteDatabaseButton
+              name={selDb.name}
+              action={deleteDatabaseAction}
+              isOnly={dbNames.length === 1}
+            />
+          )}
         </div>
-        {dbNames.length <= 1 ? (
+        {conn.isSample ? (
           <p className="text-xs text-subtle">
-            Delete is unavailable on the only database — add another, or delete
-            the whole project from Settings.
+            The sample database can&apos;t be replaced or removed. Delete the
+            sample project from Settings to remove it.
           </p>
         ) : null}
       </div>

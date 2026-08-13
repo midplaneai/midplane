@@ -146,7 +146,7 @@ export function maxDatabasesPerProject(): number {
 /** Thrown by createProject / createToken when a plan cap is hit. Caught
  *  at the call sites and translated to a 402 (JSON API) or inline upgrade
  *  CTA (browser forms) — never bubbles to the user as a raw 500. Mirrors
- *  the typed-error idiom (DuplicateTokenName, LastDatabaseProtected). */
+ *  the typed-error idiom (DuplicateTokenName, DatabaseNameTaken). */
 export class PlanLimitError extends Error {
   constructor(
     public readonly resource: "projects" | "tokens",
@@ -163,7 +163,7 @@ export class PlanLimitError extends Error {
  *  distinct from PlanLimitError: this cap is NOT plan-related — it's identical
  *  on every tier, so the remedy is "create another project," never "upgrade."
  *  Call sites render it as a structural message (409), never a 402 / upgrade
- *  CTA. Mirrors the typed-error idiom (DuplicateTokenName, LastDatabaseProtected). */
+ *  CTA. Mirrors the typed-error idiom (DuplicateTokenName, DatabaseNameTaken). */
 export class DatabaseLimitError extends Error {
   constructor(public readonly limit: number) {
     super(`project database limit reached (limit ${limit})`);

@@ -546,11 +546,16 @@ async function forwardResolved(
 ): Promise<Response> {
   const { project, databases, tokenId, scopeHeader } = resolved;
   if (databases.length === 0) {
-    // Project without children is a torn migration / data corruption —
-    // can't spawn a container with no DSN. Treat as not_found to avoid
-    // leaking the row's existence; the underlying issue surfaces in logs.
-    // Log with tokenId only, never the plaintext token.
-    console.error(
+    // A database-less project is a legitimate state, not corruption: it's what
+    // onboarding seeds (ensureDefaultProject) and what removeDatabase leaves
+    // behind when the last database is deleted. The token outlives the
+    // database, so it reaches here — and there is no DSN to spawn a container
+    // with. 404 (same leakage shape as an unknown project) rather than a
+    // spawn attempt; the owner's remedy is to add a database, which the
+    // project page's setup hero prompts. Warn, don't error — this is an
+    // expected owner-initiated state, and error-level would page on it. Log
+    // with tokenId only, never the plaintext token.
+    console.warn(
       `forwardResolved: project ${project.id} has no databases (tokenId=${tokenId})`,
     );
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });

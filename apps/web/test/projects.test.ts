@@ -32,6 +32,8 @@ interface DbCall {
   set?: unknown;
   where?: unknown;
   returning?: Record<string, unknown>;
+  /** ORDER BY expressions passed to a select, in order. */
+  orderBy?: unknown[];
 }
 
 interface FakeDbHandle {
@@ -167,6 +169,7 @@ function makeFakeDb(): FakeDbHandle {
     const startSelect = () => {
       let table: unknown;
       let whereValue: unknown;
+      let orderByValue: unknown[] = [];
       const resolveRows = () =>
         selectQueue.length > 0 ? selectQueue.shift()! : parentSelect;
       const chain = {
@@ -196,14 +199,28 @@ function makeFakeDb(): FakeDbHandle {
           return chain;
         },
         limit() {
-          calls.push({ op: "select", table, where: whereValue });
+          calls.push({
+            op: "select",
+            table,
+            where: whereValue,
+            orderBy: orderByValue,
+          });
           return Promise.resolve(resolveRows());
         },
-        orderBy() {
+        // Recorded (not just accepted) so a test can assert an ordering was
+        // supplied — the empty-project lookup in createProject depends on one
+        // to prefer the "Default" placeholder over a project a user emptied.
+        orderBy(...exprs: unknown[]) {
+          orderByValue = exprs;
           return chain;
         },
         then(onFulfilled: (rows: unknown[]) => unknown) {
-          calls.push({ op: "select", table, where: whereValue });
+          calls.push({
+            op: "select",
+            table,
+            where: whereValue,
+            orderBy: orderByValue,
+          });
           return Promise.resolve(resolveRows()).then(onFulfilled);
         },
       };
@@ -639,6 +656,48 @@ describe("createProject plan caps", () => {
     expect(inserts.some((c) => c.table === projectsTable)).toBe(false);
     expect(inserts.some((c) => c.table === projectDatabases)).toBe(true);
     expect(inserts.some((c) => c.table === mcpTokens)).toBe(true);
+  });
+
+  it("prefers the Default placeholder over a project the user emptied", async () => {
+    const { createProject } = await import("../src/lib/projects.ts");
+    const { CAPS } = await import("../src/lib/plan.ts");
+    const { projects: projectsTable } = await import("@midplane-cloud/db");
+    handle.queueSelect([{ id: customer.id }]); // customers FOR UPDATE
+    handle.queueSelect([{ id: "empty-default", name: "Default" }]); // empty-project detection
+    handle.queueSelect([{ id: "empty-default" }]); // countUsableTokens: project ids
+    handle.queueSelect([{ count: 0 }]); // countUsableTokens: usable
+    await createProject(customer, DSN, null, "read", ACTOR, {
+      plan: "free",
+      caps: CAPS.free,
+    });
+
+    // removeDatabase can now leave a NAMED project database-less, so more than
+    // one empty project can exist. The lookup must order placeholders first,
+    // or "New project" would silently land back inside a project the user
+    // emptied on purpose. The fake DB can't rank rows, so assert the ordering
+    // reaches the driver and names the placeholder it privileges; the ranking
+    // itself is Postgres's job.
+    const emptyLookup = handle.calls.find(
+      (c) =>
+        c.op === "select" &&
+        c.table === projectsTable &&
+        (c.orderBy?.length ?? 0) > 0,
+    );
+    expect(emptyLookup, "empty-project lookup supplies an ORDER BY").toBeDefined();
+    expect(emptyLookup!.orderBy).toHaveLength(2);
+    // Read the literal SQL fragments off the first expression. Drizzle's sql``
+    // holds them as StringChunks with a string[] `value`; the table refs in
+    // between are circular, so this can't go through JSON.stringify.
+    const chunks =
+      (
+        emptyLookup!.orderBy![0] as {
+          queryChunks?: Array<{ value?: unknown }>;
+        }
+      ).queryChunks ?? [];
+    const rankSql = chunks
+      .flatMap((c) => (Array.isArray(c?.value) ? c.value : []))
+      .join(" ");
+    expect(rankSql).toContain("Default");
   });
 });
 
@@ -2368,7 +2427,6 @@ describe("removeDatabase", () => {
   it("happy path: deletes the named child, invalidates registry", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // ownership
-    handle.queueSelect([{ id: "cdb-main" }, { id: "cdb-analytics" }]); // 2 siblings
     handle.setChildDeleteResult([{ id: "cdb-analytics" }]);
     const { removeDatabase } = await import("../src/lib/projects.ts");
     const { projectDatabases } = await import("@midplane-cloud/db");
@@ -2384,25 +2442,52 @@ describe("removeDatabase", () => {
     expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
   });
 
-  it("blocks the last database: throws LastDatabaseProtected without deleting", async () => {
-    handle.setProjectsReturning([{ id: "conn-1" }]);
-    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
-    handle.queueSelect([{ id: "cdb-main" }]); // only 1 sibling — last DB
-    const { removeDatabase, LastDatabaseProtected } = await import(
-      "../src/lib/projects.ts"
-    );
+  it("sample refusal: returns null and never deletes on the hosted sample project", async () => {
+    // The sample's single database is not the customer's to remove: emptying it
+    // would strand the "Try the sample database" flow, which returns the
+    // existing sample row without attaching a database. Same leakage-safe null
+    // as addDatabase's sample refusal.
+    handle.setProjectsReturning([{ id: "sample-1" }]);
+    handle.queueSelect([{ id: "sample-1", region: "eu", isSample: true }]);
+    const { removeDatabase } = await import("../src/lib/projects.ts");
     const { projectDatabases } = await import("@midplane-cloud/db");
     const deps = makeMutationDeps();
 
-    await expect(
-      removeDatabase(customer, "conn-1", "main", deps),
-    ).rejects.toBeInstanceOf(LastDatabaseProtected);
+    const result = await removeDatabase(customer, "sample-1", "sample", deps);
 
+    expect(result).toBeNull();
+    expect(
+      handle.calls.find(
+        (c) => c.op === "delete" && c.table === projectDatabases,
+      ),
+    ).toBeUndefined();
+    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("allows the last database: deletes it and leaves the project empty", async () => {
+    handle.setProjectsReturning([{ id: "conn-1" }]);
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // ownership
+    handle.setChildDeleteResult([{ id: "cdb-main" }]);
+    const { removeDatabase } = await import("../src/lib/projects.ts");
+    const { projectDatabases, projects } = await import("@midplane-cloud/db");
+    const deps = makeMutationDeps();
+
+    const result = await removeDatabase(customer, "conn-1", "main", deps);
+
+    // The project row survives — only the child goes away. That empty project
+    // is the same state onboarding seeds, and createProject reuses it.
+    expect(result).toMatchObject({ id: "conn-1" });
     const childDelete = handle.calls.find(
       (c) => c.op === "delete" && c.table === projectDatabases,
     );
-    expect(childDelete, "no delete when blocked by last-DB rule").toBeUndefined();
-    expect(deps.registry.invalidate).not.toHaveBeenCalled();
+    expect(childDelete).toBeDefined();
+    expect(
+      handle.calls.find((c) => c.op === "delete" && c.table === projects),
+      "deleting the last database must not delete the project",
+    ).toBeUndefined();
+    // Registry invalidation is what tears down the container still serving the
+    // deleted DSN — required, not incidental.
+    expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
   });
 
   it("404 path: returns null when ownership mismatches", async () => {
