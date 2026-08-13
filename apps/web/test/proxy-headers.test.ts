@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { scopeHeaderValue } from "@midplane-cloud/router";
+
 import {
   buildForwardHeaders,
   filterUpstreamResponseHeaders,
@@ -69,6 +71,21 @@ describe("buildForwardHeaders — proxy is the sole authority for control header
       { tokenId: "t", scopeHeader: null },
     );
     expect(out.get("x-midplane-scope")).toBeNull();
+  });
+
+  it("sends an EXPLICIT empty scope when the grant set is empty (deny, not widen)", () => {
+    // The composition that matters: resolveScope → scopeHeaderValue →
+    // buildForwardHeaders. A credential whose grants were all cascaded away
+    // (its only granted database was deleted) resolves to an empty map, and
+    // that MUST reach the engine as a present `{}` — "scope active, zero
+    // databases". If scopeHeaderValue ever returns null for empty again, no
+    // header is sent, the engine reads unscoped = FULL access, and the
+    // credential silently widens to whatever database the project holds next.
+    const out = buildForwardHeaders(new Headers(), {
+      tokenId: "t",
+      scopeHeader: scopeHeaderValue(new Map()),
+    });
+    expect(out.get("x-midplane-scope")).toBe("{}");
   });
 
   it("overrides a client-supplied X-Midplane-Scope with the resolved grant", () => {

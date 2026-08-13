@@ -4,7 +4,6 @@ import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
-  mcpScopeGrants,
   mcpTokens,
   projectDatabases,
   projects,
@@ -1797,10 +1796,11 @@ export async function addDatabase(
 // land on the zero-database branch in proxy.ts forwardResolved(), which
 // answers 404 rather than spawning a container with no DSN.
 //
-// Any headless PAT whose ONLY scope grant was on this database is revoked in
-// the same transaction — see the comment at the query below; leaving it would
-// silently promote a single-database token to full access. `revokedTokens` is
-// how many were revoked, so the caller can tell the user.
+// A credential scoped to ONLY this database keeps existing and simply reaches
+// nothing: the FK cascade takes its mcp_scope_grants rows, and an empty grant
+// set is sent to the engine as `{}` — scope active, zero databases — never as
+// "unscoped, full access" (see proxyMcp in proxy.ts). Widening it again is an
+// explicit scope edit, not a side effect of adding a database.
 //
 // Refuses the hosted sample project, and returns null when the project is
 // unknown / foreign or the child doesn't exist on it.
@@ -1809,7 +1809,7 @@ export async function removeDatabase(
   projectId: string,
   dbName: string,
   deps: DatabaseMutationDeps,
-): Promise<{ id: string; revokedTokens: number } | null> {
+): Promise<{ id: string } | null> {
   const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
     // Lock the parent project row at the top of the txn so any
@@ -1838,55 +1838,6 @@ export async function removeDatabase(
     // null addDatabase uses; Settings → delete project removes the sample.
     if (parent[0]!.isSample) return null;
 
-    // Resolve the child BEFORE deleting it: the FK cascade takes its
-    // mcp_scope_grants rows with it, and we need to know which credentials
-    // those rows belonged to while they still exist.
-    const target = await tx
-      .select({ id: projectDatabases.id })
-      .from(projectDatabases)
-      .where(
-        and(
-          eq(projectDatabases.projectId, projectId),
-          eq(projectDatabases.name, dbName),
-        ),
-      )
-      .limit(1);
-    if (target.length === 0) return null;
-    const targetId = target[0]!.id;
-
-    // Headless PATs whose ONLY grant is on the database being deleted.
-    //
-    // The proxy grandfathers a PAT with zero grant rows as UNSCOPED — no
-    // X-Midplane-Scope header, which the engine reads as full access (see
-    // proxyMcp in proxy.ts). That rule exists for tokens minted before
-    // per-agent scope existed. It means a token deliberately scoped to ONE
-    // database would, the moment the cascade empties its grant set, come
-    // back as a FULL-ACCESS token — silently widening to whatever database
-    // is added to the project next. Revoke it instead: its entire authorized
-    // surface is gone, so the honest state is "authorizes nothing", not
-    // "authorizes everything".
-    //
-    // OAuth grants need no equivalent handling: the cloud OAuth path already
-    // fail-closes on an empty scope with a 403 (see forwardOAuthForProject).
-    //
-    // This is not specific to deleting the LAST database — a token scoped to
-    // one database of several has always been orphaned this way. Lifting the
-    // last-database rule just makes it the common path.
-    const orphaned = await tx
-      .select({ tokenId: mcpScopeGrants.mcpTokenId })
-      .from(mcpScopeGrants)
-      .where(
-        and(
-          eq(mcpScopeGrants.projectDatabaseId, targetId),
-          isNotNull(mcpScopeGrants.mcpTokenId),
-          sql`NOT EXISTS (
-            SELECT 1 FROM mcp_scope_grants g2
-            WHERE g2.mcp_token_id = ${mcpScopeGrants.mcpTokenId}
-              AND g2.project_database_id <> ${targetId}
-          )`,
-        ),
-      );
-
     const deleted = await tx
       .delete(projectDatabases)
       .where(
@@ -1897,27 +1848,7 @@ export async function removeDatabase(
       )
       .returning({ id: projectDatabases.id });
     if (deleted.length === 0) return null;
-
-    const orphanedIds = orphaned
-      .map((r) => r.tokenId)
-      .filter((id): id is string => id !== null);
-    if (orphanedIds.length > 0) {
-      await tx
-        .update(mcpTokens)
-        .set({
-          status: "revoked",
-          revokedAt: new Date(),
-          revokedReason: "sole granted database deleted",
-        })
-        .where(
-          and(
-            inArray(mcpTokens.id, orphanedIds),
-            eq(mcpTokens.status, "active"),
-          ),
-        );
-    }
-
-    return { id: parent[0]!.id, revokedTokens: orphanedIds.length };
+    return { id: parent[0]!.id };
   });
 
   if (!result) return null;
@@ -1928,7 +1859,7 @@ export async function removeDatabase(
     console.error("[removeDatabase] registry.invalidate failed", err);
   }
 
-  return { id: result.id, revokedTokens: result.revokedTokens };
+  return { id: result.id };
 }
 
 // Rename a DB alias. The OSS engine treats `database` as the agent-facing

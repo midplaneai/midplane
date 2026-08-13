@@ -253,9 +253,22 @@ export async function proxyMcp(
   });
 
   // Per-agent DB scope for a headless PAT (mcp_scope_grants keyed by token id).
-  // No grant rows → empty → null header → full access: existing tokens are
-  // grandfathered, and a token opts into a scope at creation. Grants present →
-  // the engine narrows the session to them (+ read clamp).
+  // Grants present → the engine narrows the session to them (+ read clamp).
+  //
+  // NO grant rows → we send `{}` — scope active, zero databases — so the token
+  // reaches nothing. It does NOT mean "unscoped, full access", which is what
+  // sending no header would mean. A PAT's grant set can go empty on its own:
+  // deleting a database cascades mcp_scope_grants, so a token scoped to exactly
+  // that database is left with none, and the old empty→no-header rule handed it
+  // FULL access to whatever database the project held next. A credential that
+  // was granted nothing gets nothing; widening it is an explicit scope edit.
+  //
+  // The engine answers an empty scope in-band ("no databases are in scope for
+  // this credential — adjust the scope in the token's settings"), which is a
+  // better failure than a transport-level 403.
+  //
+  // Self-host is the exception, matching the OAuth path below: single-tenant,
+  // so the owner is unscoped by definition and gets no header at all.
   const scope = await resolveScope(
     db,
     { kind: "token", mcpTokenId: resolved.tokenId },
@@ -266,7 +279,7 @@ export async function proxyMcp(
     project: resolved.project,
     databases: resolved.databases,
     tokenId: resolved.tokenId,
-    scopeHeader: scopeHeaderValue(scope),
+    scopeHeader: isSelfHost() ? null : scopeHeaderValue(scope),
   });
 }
 
@@ -446,7 +459,11 @@ async function forwardOAuthForProject(
     project: resolved.project,
     databases: resolved.databases,
     tokenId,
-    scopeHeader: scopeHeaderValue(scope),
+    // Cloud with an empty scope already returned 403 above, so the only empty
+    // map reaching here is the self-host owner — who gets no header (unscoped,
+    // all their own DBs). Same expression as the PAT path so the two ingresses
+    // can't drift on what "no header" means.
+    scopeHeader: isSelfHost() ? null : scopeHeaderValue(scope),
   });
 }
 

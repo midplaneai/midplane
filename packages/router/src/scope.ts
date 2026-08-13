@@ -74,12 +74,23 @@ export async function resolveScope(
   return scope;
 }
 
-/** Serialize a scope map to the `X-Midplane-Scope` header value, or null when
- *  the map is empty. Null = send NO header = the engine treats the session as
- *  unscoped (full access) — the caller uses this for the back-compat paths
- *  (PAT with no scope, self-host owner-all). The JSON shape is the engine's
- *  wire contract: a flat object of db name → "read" | "write". */
-export function scopeHeaderValue(scope: ScopeMap): string | null {
-  if (scope.size === 0) return null;
+/** Serialize a scope map to the `X-Midplane-Scope` header value. ALWAYS returns
+ *  a header value, including `{}` for an empty map — present-but-empty is the
+ *  engine's "scope active, zero databases" (parseMcpScopeHeader returns null
+ *  ONLY when the header is absent), so an empty grant set denies everything.
+ *
+ *  This used to return null on empty, which sent NO header, which the engine
+ *  reads as unscoped = FULL access. That grandfathered pre-scope tokens, but it
+ *  also meant any token whose grant set became empty — say because its sole
+ *  granted database was deleted, cascading mcp_scope_grants — silently came
+ *  back as a full-access token. Empty now means empty.
+ *
+ *  Sending NO header at all is still meaningful and still supported: the caller
+ *  passes null itself for the self-host owner-all path. That decision belongs to
+ *  the caller, not to this serializer.
+ *
+ *  The JSON shape is the engine's wire contract: a flat object of db name →
+ *  "read" | "write". */
+export function scopeHeaderValue(scope: ScopeMap): string {
   return JSON.stringify(Object.fromEntries(scope));
 }

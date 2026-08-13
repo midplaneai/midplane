@@ -2457,8 +2457,6 @@ describe("removeDatabase", () => {
   it("happy path: deletes the named child, invalidates registry", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // ownership
-    handle.queueSelect([{ id: "cdb-analytics" }]); // target child lookup
-    handle.queueSelect([]); // orphaned-PAT lookup → none
     handle.setChildDeleteResult([{ id: "cdb-analytics" }]);
     const { removeDatabase } = await import("../src/lib/projects.ts");
     const { projectDatabases } = await import("@midplane-cloud/db");
@@ -2499,8 +2497,6 @@ describe("removeDatabase", () => {
   it("allows the last database: deletes it and leaves the project empty", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // ownership
-    handle.queueSelect([{ id: "cdb-main" }]); // target child lookup
-    handle.queueSelect([]); // orphaned-PAT lookup → none
     handle.setChildDeleteResult([{ id: "cdb-main" }]);
     const { removeDatabase } = await import("../src/lib/projects.ts");
     const { projectDatabases, projects } = await import("@midplane-cloud/db");
@@ -2510,7 +2506,7 @@ describe("removeDatabase", () => {
 
     // The project row survives — only the child goes away. That empty project
     // is the same state onboarding seeds, and createProject reuses it.
-    expect(result).toMatchObject({ id: "conn-1", revokedTokens: 0 });
+    expect(result).toMatchObject({ id: "conn-1" });
     const childDelete = handle.calls.find(
       (c) => c.op === "delete" && c.table === projectDatabases,
     );
@@ -2524,15 +2520,13 @@ describe("removeDatabase", () => {
     expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
   });
 
-  it("revokes a PAT whose only scope grant was the deleted database", async () => {
-    // A PAT with zero grant rows is grandfathered by the proxy as UNSCOPED —
-    // full access. So a token scoped to exactly this database must NOT be left
-    // behind when the cascade empties its grants: it would come back as a
-    // full-access token the moment another database is added.
+  it("does not touch tokens — an emptied scope denies, it does not widen", async () => {
+    // A credential scoped to only this database keeps existing and simply
+    // reaches nothing: the cascade takes its grants, and the proxy sends an
+    // empty grant set as `{}` (scope active, zero DBs) rather than as no
+    // header. Nothing here should revoke or rewrite a token row.
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // ownership
-    handle.queueSelect([{ id: "cdb-main" }]); // target child lookup
-    handle.queueSelect([{ tokenId: "tok-scoped" }]); // orphaned PATs
     handle.setChildDeleteResult([{ id: "cdb-main" }]);
     const { removeDatabase } = await import("../src/lib/projects.ts");
     const { mcpTokens } = await import("@midplane-cloud/db");
@@ -2540,38 +2534,10 @@ describe("removeDatabase", () => {
 
     const result = await removeDatabase(customer, "conn-1", "main", deps);
 
-    expect(result).toMatchObject({ id: "conn-1", revokedTokens: 1 });
-    const revoke = handle.calls.find(
-      (c) => c.op === "update" && c.table === mcpTokens,
-    );
-    expect(revoke, "orphaned PAT must be revoked").toBeDefined();
-    expect(revoke!.set).toMatchObject({
-      status: "revoked",
-      revokedReason: "sole granted database deleted",
-    });
-  });
-
-  it("leaves a PAT alone when it still has grants on sibling databases", async () => {
-    handle.setProjectsReturning([{ id: "conn-1" }]);
-    handle.queueSelect([{ id: "conn-1", region: "eu" }]); // ownership
-    handle.queueSelect([{ id: "cdb-analytics" }]); // target child lookup
-    handle.queueSelect([]); // NOT orphaned — the SQL NOT EXISTS excluded it
-    handle.setChildDeleteResult([{ id: "cdb-analytics" }]);
-    const { removeDatabase } = await import("../src/lib/projects.ts");
-    const { mcpTokens } = await import("@midplane-cloud/db");
-    const deps = makeMutationDeps();
-
-    const result = await removeDatabase(
-      customer,
-      "conn-1",
-      "analytics",
-      deps,
-    );
-
-    expect(result).toMatchObject({ id: "conn-1", revokedTokens: 0 });
+    expect(result).toMatchObject({ id: "conn-1" });
     expect(
-      handle.calls.find((c) => c.op === "update" && c.table === mcpTokens),
-      "a token scoped to other databases keeps working",
+      handle.calls.find((c) => c.table === mcpTokens && c.op !== "select"),
+      "removing a database must not mutate token rows",
     ).toBeUndefined();
   });
 
@@ -2586,25 +2552,16 @@ describe("removeDatabase", () => {
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
 
-  it("dbName not on project: returns null without deleting", async () => {
-    // The target lookup now runs BEFORE the delete (it has to — the scope
-    // grants it inspects are cascaded away by the delete), so an unknown name
-    // short-circuits there rather than at a delete that matches 0 rows.
+  it("dbName not on project: returns null after attempting delete", async () => {
     handle.setProjectsReturning([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "conn-1", region: "eu" }]); // ownership
-    handle.queueSelect([]); // target child lookup → no such name
+    handle.setChildDeleteResult([]); // delete matched 0 rows
     const { removeDatabase } = await import("../src/lib/projects.ts");
-    const { projectDatabases } = await import("@midplane-cloud/db");
     const deps = makeMutationDeps();
 
     const result = await removeDatabase(customer, "conn-1", "ghost-db", deps);
 
     expect(result).toBeNull();
-    expect(
-      handle.calls.find(
-        (c) => c.op === "delete" && c.table === projectDatabases,
-      ),
-    ).toBeUndefined();
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
 });
