@@ -195,15 +195,18 @@ export const projectDatabases = pgTable(
         sql`'{"column":null,"overrides":{},"exempt":[]}'::jsonb`,
       ),
     // Per-DB dangerous-statement guardrails (OSS 0.9.0): categorical
-    // blocks for no-WHERE DML and DDL that fire regardless of
-    // table_access. Default both-on mirrors the engine's omitted-section
-    // posture, so a row that predates an explicit save is protected.
+    // blocks that fire regardless of table_access — the REFUSE value of
+    // each write-class rule. no-WHERE DML and DDL default on (the
+    // engine's omitted-section posture, so a row that predates an
+    // explicit save is protected); block_dml — refusing row-scoped
+    // INSERT/UPDATE/DELETE — defaults off, because every row that
+    // predates it was running them.
     // Hot-swappable via /admin/policy alongside the other two blocks.
     guardrails: jsonb("guardrails")
       .$type<GuardrailsConfig>()
       .notNull()
       .default(
-        sql`'{"block_unqualified_dml":true,"block_ddl":true}'::jsonb`,
+        sql`'{"block_unqualified_dml":true,"block_ddl":true,"block_dml":false}'::jsonb`,
       ),
     // Column masking (design A2): "schema.table" -> (column -> transform).
     // Empty default = no masking, the YAML omits the block. Validated by
@@ -222,16 +225,24 @@ export const projectDatabases = pgTable(
       .notNull()
       .default(sql`'{}'::jsonb`),
     // Write approvals (docs/designs/write-approvals-mlp.md): hold a write the
-    // policy already permits until a human approves it. Default OFF — unlike
-    // guardrails, holding writes is something an operator asks for, never
-    // something a pre-existing row inherits. Only `writes` reaches the engine
-    // YAML; `expires_after_seconds` governs the approval row's lifetime and is
-    // control-plane only. Hot-swappable via /admin/policy alongside the other
-    // blocks, so toggling it never respawns a warm container.
+    // policy already permits until a human approves it — the ASK value of each
+    // write-class rule. Default OFF for every class: unlike guardrails, holding
+    // writes is something an operator asks for, never something a pre-existing
+    // row inherits. Only the class flags reach the engine YAML;
+    // `expires_after_seconds` governs the approval row's lifetime and is
+    // control-plane only. `writes` is a DERIVED legacy mirror (true when any
+    // class is held) written alongside the class keys so a rollback to an app
+    // version that predates the split still reads the right posture — the
+    // expand half of expand/contract. Rows written before the split carry only
+    // `writes`, which validateApprovals reads as that value for all three
+    // classes. Hot-swappable via /admin/policy alongside the other blocks, so
+    // toggling it never respawns a warm container.
     approvals: jsonb("approvals")
       .$type<ApprovalsConfig>()
       .notNull()
-      .default(sql`'{"writes":false,"expires_after_seconds":1800}'::jsonb`),
+      .default(
+        sql`'{"row_changes":false,"whole_table_writes":false,"schema_changes":false,"expires_after_seconds":1800,"writes":false}'::jsonb`,
+      ),
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),
     // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse
     // new sessions after 70 minutes of KMS unreachability — see design doc

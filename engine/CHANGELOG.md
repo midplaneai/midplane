@@ -2,6 +2,27 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Write rules are stated per statement class.** A policy now says refuse / hold / allow for each of three classes independently, instead of one guardrail flag per destructive class plus one global approvals switch:
+
+  | class | statements | refuse | hold for a human |
+  | --- | --- | --- | --- |
+  | row changes | `INSERT` / `MERGE`, `UPDATE` / `DELETE` with a `WHERE` | `guardrails.block_dml` | `approvals.row_changes` |
+  | whole-table writes | `UPDATE` / `DELETE` with no `WHERE` | `guardrails.block_unqualified_dml` | `approvals.whole_table_writes` |
+  | schema changes | `DROP` / `TRUNCATE` / `ALTER` | `guardrails.block_ddl` | `approvals.schema_changes` |
+
+  - **`guardrails.block_dml`** is new and defaults **off** — the two destructive flags keep defaulting on, but refusing ordinary row changes is a deliberate lockdown, and defaulting it on would break every deployment that upgrades. It also covers writes the dialect emits no site for — `CREATE TABLE`, `CREATE TABLE AS`, `CREATE INDEX`, `SELECT … INTO` — which materialize data just as a row change does, so a database that refuses row changes can't be made to stage data in a new relation instead.
+  - **`approvals` accepts a class per key**, with `writes` kept as the umbrella: `writes: true` holds every class (exactly what it always meant), and a class key present overrides it. Holding schema changes no longer forces an operator to hold every `UPDATE`.
+  - **A statement carrying more than one class is held if ANY of its classes is held.** `WITH d AS (DELETE FROM audit_log) UPDATE orders SET … WHERE id=1` carries both a whole-table write and a row change; running it because only one of the two was configured to ask would be the worst answer available.
+  - **Refusal and holding cover the same ground, by construction.** Classification reads the same write sites the guardrail replays, so "what may be refused" and "what may be held" can never disagree about what a statement is — and, as with the 0.16.0 gate, neither is keyed on the statement keyword. A write the dialect emits no site for (the `CREATE` family) classifies as a row change AND is reached by `block_dml`, which is what makes the control **monotone**: tightening a rule from Ask to Refuse can never let a statement through that was being held. Enabling per-class holds also never holds *less* than `writes: true` did.
+  - **Refuse still outranks hold.** Guardrails run before the approval stage, so a refused statement never reaches a reviewer and no approval can buy a way past one. Refuse and hold are mutually exclusive values of one rule, so the two can't be configured to race.
+  - **`requires_features: [write_rules]`.** `block_dml`, and any per-class `approvals` set that isn't expressible as the old `writes` umbrella, carry the token — an engine that predates this release strips unknown keys rather than rejecting them, so it would silently refuse nothing and hold nothing. A policy that only says `writes: true` still needs no token and stays loadable by any 0.15+ engine.
+  - **`writes` is still written, derived.** The control plane keeps a `writes` mirror (true when any class is held) next to the class keys, so rolling an app version back to before the split reads the right posture instead of "no approvals". The engine prefers the class keys and only falls back to `writes` when they are absent, so carrying both is unambiguous. Expand/contract — a later release stops writing it.
+  - `POLICY_RELOADED` payloads and `list_databases` gained `block_dml` alongside the existing guardrail flags.
+
 ## [0.16.0] — 2026-08-07
 
 ### Added

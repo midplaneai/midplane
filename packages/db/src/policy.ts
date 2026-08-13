@@ -197,6 +197,41 @@ export function tenantScopeIsActive(config: TenantScopeConfig): boolean {
   return config.column !== null || Object.keys(config.overrides).length > 0;
 }
 
+// --- write classes -----------------------------------------------------------
+//
+// Every statement that writes falls into exactly one of three classes, and each
+// class is governed by one three-way rule: refuse / ask / allow. The classes are
+// what a person recognizes; the SQL underneath is the sub-label:
+//
+//   row_changes          INSERT / UPDATE / DELETE with a WHERE clause
+//   whole_table_writes   DELETE / UPDATE with no WHERE clause
+//   schema_changes       DROP / TRUNCATE / ALTER
+//
+// The three values are the same guarantees the engine already had, stated once
+// instead of split across two independent controls: a REFUSE is a guardrail (the
+// statement never runs and the agent is told immediately), an ASK is a write
+// approval (the statement is held until a human rules), and ALLOW is neither.
+// A stricter value is simply further left, which is the whole reason precedence
+// no longer needs explaining — refuse and ask are mutually exclusive per class,
+// so a guardrail can never race an approval.
+//
+// Storage keeps the engine's two vocabularies (`guardrails` refuses,
+// `approvals` asks) because that is what the YAML says and what the engine
+// enforces; WriteRules is the lossless join of the two. writeRulesFrom /
+// applyWriteRules are the only places the mapping lives.
+
+export const WRITE_CLASSES = [
+  "row_changes",
+  "whole_table_writes",
+  "schema_changes",
+] as const;
+export type WriteClass = (typeof WRITE_CLASSES)[number];
+
+export const WRITE_RULE_VALUES = ["refuse", "ask", "allow"] as const;
+export type WriteRuleValue = (typeof WRITE_RULE_VALUES)[number];
+
+export type WriteRules = Record<WriteClass, WriteRuleValue>;
+
 // --- guardrails --------------------------------------------------------------
 //
 // Dangerous-statement guardrails — OSS 0.9.0's `guardrails` YAML block.
@@ -206,23 +241,32 @@ export function tenantScopeIsActive(config: TenantScopeConfig): boolean {
 //   block_ddl               DROP / TRUNCATE / ALTER (CREATE stays allowed —
 //                           agents running migrations need it; revisit if
 //                           that proves wrong)
+//   block_dml               INSERT / UPDATE / DELETE with a WHERE clause — the
+//                           refuse value of the row_changes rule. CREATE-family
+//                           writes (CREATE TABLE, CREATE TABLE AS, CREATE INDEX)
+//                           are NOT row changes and this never refuses them.
 //
-// The engine defaults BOTH flags on when the section is omitted, and the
-// cloud stores the same default for every row — so the JSONB at rest, the
-// emitted YAML, and the engine's resolved posture agree. Keys mirror the
-// YAML 1:1, same convention as TableAccessPolicy.
+// The engine defaults the first two ON when the section is omitted and
+// block_dml OFF, and the cloud stores the same defaults for every row — so the
+// JSONB at rest, the emitted YAML, and the engine's resolved posture agree.
+// block_dml defaults off for the reason the other two default on: the safe
+// posture for an omitted flag is the one that surprises nobody, and every
+// database that predates this flag was running row changes.
+// Keys mirror the YAML 1:1, same convention as TableAccessPolicy.
 
 export interface GuardrailsConfig {
   block_unqualified_dml: boolean;
   block_ddl: boolean;
+  block_dml: boolean;
 }
 
-/** Mirror of the engine's default-ON posture for an omitted `guardrails`
+/** Mirror of the engine's default posture for an omitted `guardrails`
  *  section. Used as the column default for new project_databases rows
  *  and as the fallback when validating a null/undefined JSONB read. */
 export const DEFAULT_GUARDRAILS: GuardrailsConfig = {
   block_unqualified_dml: true,
   block_ddl: true,
+  block_dml: false,
 };
 
 export interface GuardrailsValidationError {
@@ -251,7 +295,11 @@ export function validateGuardrails(input: unknown): GuardrailsValidationResult {
   const obj = input as Record<string, unknown>;
   const errors: GuardrailsValidationError[] = [];
   const value: GuardrailsConfig = { ...DEFAULT_GUARDRAILS };
-  for (const key of ["block_unqualified_dml", "block_ddl"] as const) {
+  for (const key of [
+    "block_unqualified_dml",
+    "block_ddl",
+    "block_dml",
+  ] as const) {
     const v = obj[key];
     if (v === undefined) continue; // engine-side .default(true)
     if (typeof v !== "boolean") {
@@ -279,32 +327,53 @@ export function parseGuardrailsOrThrow(input: unknown): GuardrailsConfig {
 // Write approvals — hold a write the policy already permits until a human
 // approves it. See docs/designs/write-approvals-mlp.md.
 //
-//   writes                  every statement with a write target needs approval
+//   row_changes             hold INSERT / UPDATE / DELETE with a WHERE clause
+//   whole_table_writes      hold DELETE / UPDATE with no WHERE clause
+//   schema_changes          hold DROP / TRUNCATE / ALTER
 //   expires_after_seconds   how long a pending request lives before it denies
 //
 // Deliberately NOT a threshold. The trigger is categorical because the noise
 // floor is already set by table_access: only a table marked read_write can
 // produce a held write at all.
 //
-// `writes` is the only field the engine sees. `expires_after_seconds` is a
+// Per statement class rather than one switch, so "ask" is a value of the same
+// control that refuses and allows — an operator who wants a human on schema
+// changes should not have to hold every UPDATE to get one. A legacy row that
+// carries the original single `writes` boolean reads as that value for all
+// three classes, which is exactly what that row's engine was doing.
+//
+// Only the class flags cross into the engine. `expires_after_seconds` is a
 // control-plane concern (it governs the approval row's expires_at, not anything
 // the engine does — the engine's hold is a fixed short window), so it lives in
 // the same stored object but is never emitted into the policy YAML.
 //
-// OFF is the default and an off config emits NO yaml block, so a database that
-// doesn't use approvals produces byte-identical YAML to today.
+// OFF is the default and an all-off config emits NO yaml block, so a database
+// that doesn't use approvals produces byte-identical YAML to today.
 
-export interface ApprovalsConfig {
-  writes: boolean;
+export type ApprovalsConfig = Record<WriteClass, boolean> & {
   expires_after_seconds: number;
-}
+  /** Legacy mirror, DERIVED — true when any class is held. Written on every
+   *  save and never read in preference to the class keys (validateApprovals
+   *  only falls back to it when they are absent).
+   *
+   *  It exists for rollback: an app version that predates the split reads only
+   *  this key, so dropping it would leave a rolled-back deployment reading
+   *  "no approvals" and running writes that were being held. Deriving it as
+   *  "any class" errs toward over-holding on rollback, which is the safe
+   *  direction. Expand/contract — a later release can stop writing it once no
+   *  rollback target reads it. */
+  writes: boolean;
+};
 
 /** Off, with a 30-minute window when switched on. Long enough that an approver
  *  reached by email can still act, short enough that a forgotten request does
  *  not sit claimable for a working day. */
 export const DEFAULT_APPROVALS: ApprovalsConfig = {
-  writes: false,
+  row_changes: false,
+  whole_table_writes: false,
+  schema_changes: false,
   expires_after_seconds: 1800,
+  writes: false,
 };
 
 /** One minute floor — below this an agent's own retry cadence would outrun the
@@ -325,6 +394,12 @@ export type ApprovalsValidationResult =
 // resolves to DEFAULT_APPROVALS (off) — a row written before this column
 // existed reads as "no approvals", which matches what that row's engine was
 // actually doing.
+//
+// `writes` is the pre-per-class spelling and is still accepted: it seeds all
+// three classes, and any class key present overrides it. Rows written before
+// the split therefore keep enforcing exactly what they enforced — dropping the
+// key instead would silently stop holding writes on every project that had
+// approvals on.
 export function validateApprovals(input: unknown): ApprovalsValidationResult {
   // Spread, never the shared object — a caller mutating its result must not
   // poison the module-level default for the whole process.
@@ -343,8 +418,18 @@ export function validateApprovals(input: unknown): ApprovalsValidationResult {
     if (typeof obj.writes !== "boolean") {
       errors.push({ path: "writes", message: "must be a boolean" });
     } else {
-      value.writes = obj.writes;
+      for (const c of WRITE_CLASSES) value[c] = obj.writes;
     }
+  }
+
+  for (const c of WRITE_CLASSES) {
+    const v = obj[c];
+    if (v === undefined) continue;
+    if (typeof v !== "boolean") {
+      errors.push({ path: c, message: "must be a boolean" });
+      continue;
+    }
+    value[c] = v;
   }
 
   if (obj.expires_after_seconds !== undefined) {
@@ -368,6 +453,10 @@ export function validateApprovals(input: unknown): ApprovalsValidationResult {
   }
 
   if (errors.length > 0) return { ok: false, errors };
+  // Re-derive the legacy mirror from the resolved classes, whatever the input
+  // said. It is never authoritative, so a stale or contradictory `writes` on
+  // the way in must not survive on the way out.
+  value.writes = WRITE_CLASSES.some((c) => value[c]);
   return { ok: true, value };
 }
 
@@ -383,7 +472,107 @@ export function parseApprovalsOrThrow(input: unknown): ApprovalsConfig {
 /** True when this config asks the engine to do anything. Drives both the YAML
  *  block and the `write_approvals` feature token. */
 export function approvalsAreActive(config: ApprovalsConfig): boolean {
-  return config.writes;
+  return WRITE_CLASSES.some((c) => config[c]);
+}
+
+// --- write rules (the join of guardrails + approvals) ------------------------
+
+/** The three-way rule each write class is under, read off the two stored
+ *  configs. Refuse outranks ask because that is the order the engine runs them
+ *  in: a guardrail denies before the approval stage is ever reached, so a class
+ *  whose guardrail is on is refused no matter what approvals say. */
+export function writeRulesFrom(
+  guardrails: GuardrailsConfig,
+  approvals: ApprovalsConfig,
+): WriteRules {
+  const refusedBy: Record<WriteClass, boolean> = {
+    row_changes: guardrails.block_dml,
+    whole_table_writes: guardrails.block_unqualified_dml,
+    schema_changes: guardrails.block_ddl,
+  };
+  return {
+    row_changes: ruleFor("row_changes"),
+    whole_table_writes: ruleFor("whole_table_writes"),
+    schema_changes: ruleFor("schema_changes"),
+  };
+  function ruleFor(c: WriteClass): WriteRuleValue {
+    if (refusedBy[c]) return "refuse";
+    return approvals[c] ? "ask" : "allow";
+  }
+}
+
+/** Project a set of rules back onto the two stored configs. `prevApprovals`
+ *  carries `expires_after_seconds` through — it is control-plane-only state the
+ *  rules say nothing about, and rebuilding it from DEFAULT_APPROVALS would
+ *  silently reset a tuned window on every unrelated save. */
+export function applyWriteRules(
+  rules: WriteRules,
+  prevApprovals: ApprovalsConfig = DEFAULT_APPROVALS,
+): { guardrails: GuardrailsConfig; approvals: ApprovalsConfig } {
+  return {
+    guardrails: {
+      block_dml: rules.row_changes === "refuse",
+      block_unqualified_dml: rules.whole_table_writes === "refuse",
+      block_ddl: rules.schema_changes === "refuse",
+    },
+    approvals: {
+      row_changes: rules.row_changes === "ask",
+      whole_table_writes: rules.whole_table_writes === "ask",
+      schema_changes: rules.schema_changes === "ask",
+      expires_after_seconds: prevApprovals.expires_after_seconds,
+      // Legacy mirror for rollback safety — see ApprovalsConfig.writes.
+      writes: WRITE_CLASSES.some((c) => rules[c] === "ask"),
+    },
+  };
+}
+
+export interface WriteRulesValidationError {
+  path: string;
+  message: string;
+}
+export type WriteRulesValidationResult =
+  | { ok: true; value: WriteRules }
+  | { ok: false; errors: WriteRulesValidationError[] };
+
+/** Validate untrusted input into a typed WriteRules. Every class must be
+ *  present and name one of the three values — unlike the stored configs there
+ *  is no sensible default for a missing class here, because this shape only
+ *  ever arrives from an editor that renders all three. */
+export function validateWriteRules(input: unknown): WriteRulesValidationResult {
+  if (input == null || typeof input !== "object" || Array.isArray(input)) {
+    return {
+      ok: false,
+      errors: [{ path: "", message: "write rules must be an object" }],
+    };
+  }
+  const obj = input as Record<string, unknown>;
+  const errors: WriteRulesValidationError[] = [];
+  const value = {} as WriteRules;
+  for (const c of WRITE_CLASSES) {
+    const v = obj[c];
+    if (typeof v !== "string" || !isWriteRuleValue(v)) {
+      errors.push({
+        path: c,
+        message: `must be one of ${WRITE_RULE_VALUES.join(", ")}`,
+      });
+      continue;
+    }
+    value[c] = v;
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value };
+}
+
+function isWriteRuleValue(v: string): v is WriteRuleValue {
+  return (WRITE_RULE_VALUES as readonly string[]).includes(v);
+}
+
+/** Strict variant for the server-action boundary. */
+export function parseWriteRulesOrThrow(input: unknown): WriteRules {
+  const r = validateWriteRules(input);
+  if (r.ok) return r.value;
+  const summary = r.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+  throw new Error(`invalid write rules: ${summary}`);
 }
 
 export interface DatabaseEntry {
@@ -498,6 +687,14 @@ export function serializeMultiDbPolicyToYaml(
       `      block_unqualified_dml: ${db.guardrails.block_unqualified_dml}`,
     );
     lines.push(`      block_ddl: ${db.guardrails.block_ddl}`);
+    // Emitted only when ON, so a database that doesn't refuse row changes
+    // serializes byte-identically to a pre-write-rules policy. When it IS on it
+    // travels with the `write_rules` token below: an engine that predates the
+    // flag would strip the unknown key (zod, not strict) and run the writes
+    // this is meant to refuse.
+    if (db.guardrails.block_dml) {
+      lines.push(`      block_dml: true`);
+    }
     // ONE requires_features list per database, emitted before the sections that
     // need it. Every feature-gated section must contribute here rather than
     // writing its own key: two emitters each pushing `requires_features:` would
@@ -507,7 +704,7 @@ export function serializeMultiDbPolicyToYaml(
     const approvals = db.approvals ?? DEFAULT_APPROVALS;
     emitRequiresFeatures(lines, collectRequiredFeatures(db, masks, approvals));
     emitColumnMasks(lines, masks, db.maskSourceRewrite ?? false);
-    emitApprovals(lines, approvals);
+    emitApprovals(lines, approvals, db.guardrails);
   }
   return lines.join("\n") + "\n";
 }
@@ -528,7 +725,31 @@ function collectRequiredFeatures(
     if (db.maskSourceRewrite) features.push("mask_source_rewrite");
   }
   if (approvalsAreActive(approvals)) features.push("write_approvals");
+  if (needsWriteRulesFeature(db.guardrails, approvals)) {
+    features.push("write_rules");
+  }
   return features;
+}
+
+/** Whether this database's write rules use vocabulary an engine that predates
+ *  per-class rules would silently drop.
+ *
+ *  Two things are new: `guardrails.block_dml`, and approvals stated per class.
+ *  An old engine's zod schemas strip unknown keys rather than rejecting them,
+ *  so either one arrives as "no refusal" / "no approvals" — the two failure
+ *  modes this control can least afford. Both are therefore fenced behind the
+ *  token, which such an engine refuses outright.
+ *
+ *  What is NOT fenced: a per-class set that happens to be expressible as the
+ *  old single `writes` flag (see emitApprovals). That YAML means the same thing
+ *  to both engines, so requiring the token would fail an upgrade for no
+ *  enforcement gain. */
+function needsWriteRulesFeature(
+  guardrails: GuardrailsConfig,
+  approvals: ApprovalsConfig,
+): boolean {
+  if (guardrails.block_dml) return true;
+  return approvalsAreActive(approvals) && !umbrellaWrites(guardrails, approvals);
 }
 
 function emitRequiresFeatures(lines: string[], features: string[]): void {
@@ -543,12 +764,46 @@ function hasAnyMask(masks: ColumnMasksConfig): boolean {
 
 // Emit the approvals block. Skipped entirely when inactive so a database that
 // doesn't use approvals serializes exactly as it did before the feature existed.
-// Only `writes` crosses into the engine — expires_after_seconds governs the
-// control-plane approval row, which the engine never sees.
-function emitApprovals(lines: string[], approvals: ApprovalsConfig): void {
+// Only the class flags cross into the engine — expires_after_seconds governs
+// the control-plane approval row, which the engine never sees.
+//
+// When every class the guardrails don't already refuse is held, the block
+// collapses back to the original `writes: true`. That is not a compatibility
+// shim bolted on: it is the same statement in fewer words, and it keeps the
+// common "hold my writes" policy readable and free of a feature token.
+function emitApprovals(
+  lines: string[],
+  approvals: ApprovalsConfig,
+  guardrails: GuardrailsConfig,
+): void {
   if (!approvalsAreActive(approvals)) return;
   lines.push(`    approvals:`);
-  lines.push(`      writes: ${approvals.writes}`);
+  if (umbrellaWrites(guardrails, approvals)) {
+    lines.push(`      writes: true`);
+    return;
+  }
+  for (const c of WRITE_CLASSES) {
+    lines.push(`      ${c}: ${approvals[c]}`);
+  }
+}
+
+/** True when `writes: true` says exactly what the per-class flags say.
+ *
+ *  A class its guardrail refuses is a don't-care: the guardrail denies before
+ *  the approval stage runs, so whether the umbrella also marks it held changes
+ *  no decision. Only the classes that can actually reach the approval stage
+ *  have to agree — and they have to agree on `true`, since an inactive config
+ *  emits no block at all. */
+function umbrellaWrites(
+  guardrails: GuardrailsConfig,
+  approvals: ApprovalsConfig,
+): boolean {
+  const refusedBy: Record<WriteClass, boolean> = {
+    row_changes: guardrails.block_dml,
+    whole_table_writes: guardrails.block_unqualified_dml,
+    schema_changes: guardrails.block_ddl,
+  };
+  return WRITE_CLASSES.every((c) => refusedBy[c] || approvals[c]);
 }
 
 // Two identifier shapes drive tenant_scope validation:

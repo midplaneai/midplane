@@ -31,8 +31,8 @@ export function DeleteDatabaseButton({
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          Delete database
+        <Button variant="quiet" size="inline">
+          Delete
         </Button>
       </AlertDialogTrigger>
       <AlertDialogContent>

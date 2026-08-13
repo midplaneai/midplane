@@ -11,22 +11,22 @@ import {
   EMPTY_TENANT_SCOPE,
   getDb,
   indexerCursors,
-  validateApprovals,
+  applyWriteRules,
   validateColumnMasks,
-  validateGuardrails,
   validateIgnoredColumns,
   validatePolicy,
   validateTenantScope,
+  validateWriteRules,
   type AccessLevel,
   type ApprovalsConfig,
   type ColumnMasksConfig,
   type Customer,
   type DatabaseEntry,
-  type GuardrailsConfig,
   type IgnoredColumnsConfig,
   type MaskColumnTypes,
   type TableAccessPolicy,
   type TenantScopeConfig,
+  type WriteRules,
 } from "@midplane-cloud/db";
 import {
   encryptDsn,
@@ -98,7 +98,7 @@ const SAFE_DATABASE_COLUMNS = {
   // Scan-view dismissals — the exposure scan seeds these so masked/dismissed
   // columns render (and stay manageable) before any live scan is run.
   ignoredColumns: projectDatabases.ignoredColumns,
-  // Write approvals — the Database pane's toggle reads it.
+  // Write approvals — half of the pane's write rules (guardrails is the other).
   approvals: projectDatabases.approvals,
   rotatedAt: projectDatabases.rotatedAt,
   lastKmsSuccessAt: projectDatabases.lastKmsSuccessAt,
@@ -1060,8 +1060,18 @@ async function applyPolicyConfigChange(
   return { id: result.id };
 }
 
-// Replace the table_access policy on one DB of a project. See
+// Replace the enforced policy on one DB of a project — which tables an agent
+// may reach, and what a write may do — in ONE write. See
 // applyPolicyConfigChange for the hot-reload / fallback semantics.
+//
+// One setter, not three, because the pane saves once. Three independent saves
+// meant three engine pushes for one intent, three audit rows, and three chances
+// to leave the engine holding half a policy if the second push failed.
+//
+// `writeRules` is the three-way refuse/ask/allow per statement class; it
+// projects onto the two configs the engine actually reads (guardrails refuse,
+// approvals ask). `prevApprovals` carries the expiry window through, since the
+// rules say nothing about it.
 //
 // `dbName` defaults to "main" so existing single-DB callers keep
 // working; multi-DB callers pass the agent-facing alias explicitly.
@@ -1069,26 +1079,53 @@ async function applyPolicyConfigChange(
 // Validation runs here AND at the spawner boundary; the dashboard form
 // also validates before submitting, so a malformed policy reaches this
 // function only via a hostile / buggy non-browser caller.
-export async function setTableAccess(
+export async function setDatabasePolicy(
   customer: Customer,
   id: string,
-  policy: TableAccessPolicy,
+  next: {
+    tableAccess: TableAccessPolicy;
+    writeRules: WriteRules;
+    /** The approvals row as stored, so `expires_after_seconds` survives a save
+     *  that only touched the rules. Omitted ⇒ the default window. */
+    prevApprovals?: ApprovalsConfig;
+  },
   deps: PolicyPushDeps,
   actorUserId: string,
   dbName: string = DEFAULT_DATABASE_NAME,
 ): Promise<{ id: string } | null> {
-  const validation = validatePolicy(policy);
-  if (!validation.ok) {
-    const summary = validation.errors
+  const policy = validatePolicy(next.tableAccess);
+  if (!policy.ok) {
+    const summary = policy.errors
       .map((e) => `${e.path}: ${e.message}`)
       .join("; ");
     throw new Error(`invalid policy: ${summary}`);
   }
+  const rules = validateWriteRules(next.writeRules);
+  if (!rules.ok) {
+    const summary = rules.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`invalid write rules: ${summary}`);
+  }
+  const { guardrails, approvals } = applyWriteRules(
+    rules.value,
+    next.prevApprovals,
+  );
   return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
-    update: { tableAccess: validation.value },
+    update: { tableAccess: policy.value, guardrails, approvals },
+    // POLICY_CHANGED rather than a new event_type: a distinct type needs a
+    // CHECK-constraint migration, and the payload already makes the change
+    // legible. The keys stay `policy` / `guardrails` / `approvals` so the audit
+    // list's eventSummary recognizes the row by shape, exactly as it did when
+    // three setters wrote them separately.
     eventType: "POLICY_CHANGED",
-    payload: { policy: validation.value },
-    logPrefix: "[setTableAccess]",
+    payload: {
+      policy: policy.value,
+      guardrails,
+      approvals,
+      write_rules: rules.value,
+    },
+    logPrefix: "[setDatabasePolicy]",
   });
 }
 
@@ -1129,73 +1166,6 @@ export async function setTenantScope(
     eventType: "TENANT_SCOPE_CHANGED",
     payload: { config: validation.value },
     logPrefix: "[setTenantScope]",
-  });
-}
-
-// Replace the dangerous-statement guardrails on one DB of a project.
-//
-// OSS 0.9.0 semantics: both flags fire regardless of table_access /
-// tenant_scope; an omitted YAML section defaults BOTH on. The cloud
-// always emits the section explicitly, so turning a flag off here is
-// what makes the opt-out reach the engine.
-//
-// GUARDRAILS_CHANGED records "who turned the destructive-statement net
-// off (or back on)?" — an opt-out is exactly the kind of change an
-// audit reviewer wants attributed. The payload key is `guardrails` (not
-// the generic `config`) so the audit list's eventSummary can recognize
-// the row by shape — all cloud config events share the POLICY_RELOAD
-// status bucket.
-export async function setGuardrails(
-  customer: Customer,
-  id: string,
-  config: GuardrailsConfig,
-  deps: PolicyPushDeps,
-  actorUserId: string,
-  dbName: string = DEFAULT_DATABASE_NAME,
-): Promise<{ id: string } | null> {
-  const validation = validateGuardrails(config);
-  if (!validation.ok) {
-    const summary = validation.errors
-      .map((e) => `${e.path}: ${e.message}`)
-      .join("; ");
-    throw new Error(`invalid guardrails: ${summary}`);
-  }
-  return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
-    update: { guardrails: validation.value },
-    eventType: "GUARDRAILS_CHANGED",
-    payload: { guardrails: validation.value },
-    logPrefix: "[setGuardrails]",
-  });
-}
-
-// Write approvals (docs/designs/write-approvals-mlp.md). Same write path as
-// guardrails: validate, persist the approvals JSONB on the named database, and
-// hot-reload the running engine so the toggle lands on the next statement
-// instead of respawning and dropping the agent's session.
-//
-// Reuses POLICY_CHANGED rather than minting an APPROVALS_CHANGED event, for the
-// same reason column_masks did: a new event_type needs a CHECK-constraint
-// migration, and the payload already makes the change legible.
-export async function setApprovals(
-  customer: Customer,
-  id: string,
-  config: ApprovalsConfig,
-  deps: PolicyPushDeps,
-  actorUserId: string,
-  dbName: string = DEFAULT_DATABASE_NAME,
-): Promise<{ id: string } | null> {
-  const validation = validateApprovals(config);
-  if (!validation.ok) {
-    const summary = validation.errors
-      .map((e) => `${e.path}: ${e.message}`)
-      .join("; ");
-    throw new Error(`invalid approvals: ${summary}`);
-  }
-  return applyPolicyConfigChange(customer, id, deps, actorUserId, dbName, {
-    update: { approvals: validation.value },
-    eventType: "POLICY_CHANGED",
-    payload: { approvals: validation.value },
-    logPrefix: "[setApprovals]",
   });
 }
 

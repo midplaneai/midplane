@@ -27,12 +27,18 @@ export function DatabaseStrip({
   atCap = false,
   sample = false,
   newProjectHref = "/projects/new",
+  statusSlot,
 }: {
   databases: string[];
   current: string;
   projectId: string;
   addAction: (formData: FormData) => Promise<void>;
   showAdd?: boolean;
+  /** One line under the row, speaking for the CURRENT database — whether the
+   *  engine is enforcing what the pane below shows, and the links that check
+   *  it. Rendered here rather than in the pane body so it's read on arrival
+   *  instead of found after scrolling past the controls it describes. */
+  statusSlot?: React.ReactNode;
   /** Fixed per-project database ceiling reached (advisory pre-flight — the add
    *  path re-checks under a lock). Swaps the add affordance for a "create
    *  another project" link so the wall is visible BEFORE a filled-in form
@@ -141,6 +147,7 @@ export function DatabaseStrip({
           )
         ) : null}
       </div>
+      {statusSlot ? <div className="mt-2">{statusSlot}</div> : null}
     </div>
   );
 }

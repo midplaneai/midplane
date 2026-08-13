@@ -8,6 +8,8 @@ import {
   parseGuardrailsOrThrow,
   parseIgnoredColumnsOrThrow,
   parsePolicyOrThrow,
+  parseWriteRulesOrThrow,
+  writeRulesFrom,
   type MaskColumnTypes,
 } from "@midplane-cloud/db";
 import { mcpGenericUrl } from "@midplane-cloud/router";
@@ -26,17 +28,15 @@ import { ProjectSwitcher } from "@/components/projects/project-switcher";
 import { DeleteDatabaseButton } from "@/components/projects/delete-database-button";
 import { ExposureScan } from "@/components/projects/exposure-scan";
 import { MaskedPreviewPanel } from "@/components/projects/masked-preview-panel";
-import { TestPolicyPanel } from "@/components/projects/test-policy-panel";
+import { PolicyEditor } from "@/components/projects/policy-editor";
+import { TryStatement } from "@/components/projects/try-statement";
 import { TestReachabilityButton } from "@/components/projects/test-reachability-button";
 import { ServingStatus } from "@/components/dashboard/serving-status";
 import { RenameProjectInline } from "@/components/dashboard/rename-project-inline";
 import { DeleteProjectButton } from "@/components/delete-project-button";
 import { PauseProjectButton } from "@/components/projects/pause-project-button";
-import { GuardrailsToggles } from "@/components/guardrails-toggles";
-import { ApprovalsToggle } from "@/components/approvals-toggle";
 import { approvalGateConfigured } from "@/lib/approvals";
 import { Topbar, PageContainer } from "@/components/layout/app-shell";
-import { PermissionGrid } from "@/components/permission-grid";
 import { RenameDatabaseControl } from "@/components/projects/rename-database-control";
 import { RotateCredentialSheet } from "@/components/projects/rotate-credential-sheet";
 import { SampleProjectNotice } from "@/components/projects/sample-project-notice";
@@ -68,10 +68,8 @@ import {
   resumeProject,
   rotateProject,
   setColumnMasks,
-  setApprovals,
-  setGuardrails,
+  setDatabasePolicy,
   setIgnoredColumns,
-  setTableAccess,
 } from "@/lib/projects";
 import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
 import {
@@ -395,32 +393,77 @@ export default async function ProjectWorkspace({
   }
 
   // Per-DB actions target `selectedName` (closed over from ?db at render).
-  async function policyAction(formData: FormData) {
+  //
+  // ONE save for the whole policy — both lists, one write, one engine push.
+  // Returns state rather than throwing: a duplicate table name or an engine
+  // rejection is user-recoverable and belongs next to the Save bar, not in the
+  // Next runtime-error overlay.
+  async function policyAction(next: {
+    tableAccess: unknown;
+    writeRules: unknown;
+  }): Promise<{ ok: true } | { ok: false; error: string }> {
     "use server";
     const customer = await currentCustomer();
-    if (!customer) redirect("/");
+    if (!customer) return { ok: false, error: "not signed in" };
     const { userId } = await assertManager();
-    if (!selectedName) notFound();
-    const raw = formData.get("policy");
-    if (typeof raw !== "string") throw new Error("missing policy");
-    let parsed: unknown;
+    if (!selectedName) return { ok: false, error: "no database selected" };
+
+    let tableAccess;
+    let writeRules;
     try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error("policy is not valid JSON");
+      tableAccess = parsePolicyOrThrow(next.tableAccess);
+      writeRules = parseWriteRulesOrThrow(next.writeRules);
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "invalid policy",
+      };
     }
-    const policy = parsePolicyOrThrow(parsed);
+
+    // Refuse to enable a gate nobody can answer. Saving Ask on a deployment
+    // with no approval secret/origin leaves the engine with no gate, so every
+    // held write is refused forever and no request is ever created for a human
+    // to see. Moving OFF Ask is always allowed — that path is how you recover.
+    if (
+      Object.values(writeRules).includes("ask") &&
+      !approvalGateConfigured()
+    ) {
+      return {
+        ok: false,
+        error:
+          "Ask needs MIDPLANE_APPROVAL_SECRET and MIDPLANE_APP_ORIGIN set on this deployment. Without them the engine has no way to ask anyone, so every held write would be refused and no request would appear in Approvals.",
+      };
+    }
+
+    // Carry the stored expiry window through — it's control-plane state the
+    // rules say nothing about, and rebuilding it from the default would reset a
+    // tuned window on every unrelated save.
+    const current = await getProjectWithDatabase(customer, id, selectedName);
+    if (!current) return { ok: false, error: "not found" };
+
     const ctx = getMcpProxyContext();
-    const result = await setTableAccess(
-      customer,
-      id,
-      policy,
-      ctx,
-      userId,
-      selectedName,
-    );
-    if (!result) notFound();
+    try {
+      const result = await setDatabasePolicy(
+        customer,
+        id,
+        {
+          tableAccess,
+          writeRules,
+          prevApprovals: parseApprovalsOrThrow(current.database.approvals),
+        },
+        ctx,
+        userId,
+        selectedName,
+      );
+      if (!result) return { ok: false, error: "not found" };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Save failed",
+      };
+    }
     revalidatePath(`/projects/${id}`);
+    return { ok: true };
   }
 
   // Column masking write (design D3). Typed action (not formData) so the
@@ -551,72 +594,6 @@ export default async function ProjectWorkspace({
     return null;
   }
 
-  async function guardrailsAction(formData: FormData) {
-    "use server";
-    const customer = await currentCustomer();
-    if (!customer) redirect("/");
-    const { userId } = await assertManager();
-    if (!selectedName) notFound();
-    const raw = formData.get("guardrails");
-    if (typeof raw !== "string") throw new Error("missing guardrails");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error("guardrails is not valid JSON");
-    }
-    const config = parseGuardrailsOrThrow(parsed);
-    const ctx = getMcpProxyContext();
-    const result = await setGuardrails(
-      customer,
-      id,
-      config,
-      ctx,
-      userId,
-      selectedName,
-    );
-    if (!result) notFound();
-    revalidatePath(`/projects/${id}`);
-  }
-
-  async function approvalsAction(formData: FormData) {
-    "use server";
-    const customer = await currentCustomer();
-    if (!customer) redirect("/");
-    const { userId } = await assertManager();
-    if (!selectedName) notFound();
-    const raw = formData.get("approvals");
-    if (typeof raw !== "string") throw new Error("missing approvals");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error("approvals is not valid JSON");
-    }
-    const config = parseApprovalsOrThrow(parsed);
-    // Refuse to enable a gate nobody can answer. Saving `writes: true` on a
-    // deployment with no approval secret/origin leaves the engine with no gate,
-    // so every permitted write is refused forever and no request is ever
-    // created for a human to see. Turning it OFF is always allowed — that path
-    // is how you recover.
-    if (config.writes && !approvalGateConfigured()) {
-      throw new Error(
-        "Approvals need MIDPLANE_APPROVAL_SECRET and MIDPLANE_APP_ORIGIN set on this deployment. Without them the engine has no way to ask anyone, so every write would be refused and no request would appear here.",
-      );
-    }
-    const ctx = getMcpProxyContext();
-    const result = await setApprovals(
-      customer,
-      id,
-      config,
-      ctx,
-      userId,
-      selectedName,
-    );
-    if (!result) notFound();
-    revalidatePath(`/projects/${id}`);
-  }
-
   async function rotateAction(formData: FormData) {
     "use server";
     const customer = await currentCustomer();
@@ -741,9 +718,18 @@ export default async function ProjectWorkspace({
 
   // ---- panes -------------------------------------------------------------
 
+  // The pane's write rules — the join of the guardrails row (which classes are
+  // refused) and the approvals row (which are held).
+  const writeRules = selDb
+    ? writeRulesFrom(
+        parseGuardrailsOrThrow(selDb.guardrails),
+        parseApprovalsOrThrow(selDb.approvals),
+      )
+    : null;
+
   // Members see the database list (read-only) and a pointer to who manages the
-  // controls — never the policy/guardrails editors or the rename/rotate/delete
-  // actions. The DatabaseStrip's add affordance is suppressed (showAdd={false}).
+  // controls — never the policy editor or the rename/rotate/delete actions.
+  // The DatabaseStrip's add affordance is suppressed (showAdd={false}).
   const memberDatabasePane = selDb ? (
     <>
       <DatabaseStrip
@@ -754,13 +740,15 @@ export default async function ProjectWorkspace({
         showAdd={false}
       />
       <p className="text-sm text-muted-foreground">
-        Table permissions and guardrails for this database are managed by an
-        owner or admin.
+        Table access and write rules for this database are managed by an owner
+        or admin.
       </p>
     </>
   ) : null;
 
-  const managerDatabasePane = selDb ? (
+  // writeRules is derived from selDb, so it's non-null exactly when selDb is;
+  // naming both keeps TS narrowing them inside.
+  const managerDatabasePane = selDb && writeRules ? (
     <>
       <DatabaseStrip
         databases={dbNames}
@@ -770,131 +758,67 @@ export default async function ProjectWorkspace({
         atCap={dbAtCap}
         sample={conn.isSample}
         newProjectHref="/projects/new"
-      />
-      <div className="space-y-6">
-      <div className="space-y-3">
-        <SectionLabel>Policy</SectionLabel>
-      <section className={CARD}>
-        <h2 className="text-base font-medium text-foreground">
-          Table permissions
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Per-table read / write policy enforced by the Midplane engine.{" "}
-          <strong className="font-medium text-foreground">
-            Changes take effect immediately
-          </strong>{" "}
-          — the engine hot-swaps the policy on the next agent request, without
-          interrupting active sessions.
-        </p>
-        <div className="pt-3">
-          {/* key: the editors hold form state in useState — without a
-              remount on ?db= switch, React keeps the PREVIOUS database's
-              values and dirty baseline at the same tree position, and
-              Save would post them to the newly selected db. */}
-          <PermissionGrid
+        // "Why did my agent get denied?" — asked of the engine that decides,
+        // right under the database it decides for.
+        statusSlot={
+          <TryStatement
             key={selDb.name}
             projectId={conn.id}
-            dbName={selDb.name}
-            initialPolicy={parsePolicyOrThrow(selDb.tableAccess)}
-            action={policyAction}
+            database={selDb.name}
           />
-        </div>
-      </section>
-
-      <section className={CARD}>
-        <h2 className="text-base font-medium text-foreground">Guardrails</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Categorical blocks for destructive statements,{" "}
-          <strong className="font-medium text-foreground">
-            enforced regardless of the table permissions above
-          </strong>
-          . An agent with write access still can&apos;t wipe a table or drop
-          the schema unless you allow it here.
-        </p>
-        <div className="pt-3">
-          <GuardrailsToggles
-            key={selDb.name}
-            initialConfig={parseGuardrailsOrThrow(selDb.guardrails)}
-            action={guardrailsAction}
-          />
-        </div>
-      </section>
-
-      <section className={CARD}>
-        <h2 className="text-base font-medium text-foreground">Approvals</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Hold a write until a human says yes. The agent waits; nothing runs
-          unreviewed. Guardrails still win —{" "}
-          <strong className="font-medium text-foreground">
-            an approval cannot unblock what a guardrail refuses
-          </strong>
-          , so a blocked statement never reaches a person. Decide them in{" "}
-          <Link href="/approvals" className="underline underline-offset-2">
-            Approvals
-          </Link>
-          .
-        </p>
-        <div className="pt-3">
-          <ApprovalsToggle
-            key={selDb.name}
-            initialConfig={parseApprovalsOrThrow(selDb.approvals)}
-            action={approvalsAction}
-            gateConfigured={approvalGateConfigured()}
-          />
-        </div>
-      </section>
-
-      </div>
-
-      <TestPolicyPanel
-        projectId={conn.id}
-        databases={[
-          {
-            name: selDb.name,
-            policy: parsePolicyOrThrow(selDb.tableAccess),
-            guardrails: parseGuardrailsOrThrow(selDb.guardrails),
-          },
-        ]}
-        reachabilitySlot={
-          <TestReachabilityButton action={testReachabilityAction} />
         }
       />
 
-      <div className="space-y-2 pt-2">
-        <SectionLabel>Actions</SectionLabel>
-        <div className="flex flex-wrap items-center gap-2">
-          <RenameDatabaseControl
-            projectId={conn.id}
-            name={selDb.name}
-            action={renameDatabaseAction}
-          />
-          {conn.isSample ? null : (
-            <RotateCredentialSheet
-              id={conn.id}
-              dbName={selDb.name}
-              action={rotateAction}
-              lastRotatedLabel={
-                selDb.rotatedAt
-                  ? `Last rotated ${formatRelative(selDb.rotatedAt)}.`
-                  : undefined
-              }
-            />
-          )}
-          {conn.isSample ? null : (
-            <DeleteDatabaseButton
+      <div className="space-y-8">
+        {/* key: the editor holds the draft in useState — without a remount on
+            ?db= switch, React keeps the PREVIOUS database's values and dirty
+            baseline at the same tree position, and Save would post them to the
+            newly selected db. */}
+        <PolicyEditor
+          key={selDb.name}
+          projectId={conn.id}
+          dbName={selDb.name}
+          initialPolicy={parsePolicyOrThrow(selDb.tableAccess)}
+          initialRules={writeRules}
+          action={policyAction}
+          approvalsConfigured={approvalGateConfigured()}
+        />
+
+        <div className="space-y-2 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+            <TestReachabilityButton action={testReachabilityAction} />
+            <RenameDatabaseControl
+              projectId={conn.id}
               name={selDb.name}
-              action={deleteDatabaseAction}
-              isOnly={dbNames.length === 1}
+              action={renameDatabaseAction}
             />
-          )}
+            {conn.isSample ? null : (
+              <RotateCredentialSheet
+                id={conn.id}
+                dbName={selDb.name}
+                action={rotateAction}
+                lastRotatedLabel={
+                  selDb.rotatedAt
+                    ? `Last rotated ${formatRelative(selDb.rotatedAt)}.`
+                    : undefined
+                }
+              />
+            )}
+            {conn.isSample ? null : (
+              <DeleteDatabaseButton
+                name={selDb.name}
+                action={deleteDatabaseAction}
+                isOnly={dbNames.length === 1}
+              />
+            )}
+          </div>
+          {conn.isSample ? (
+            <p className="text-xs text-subtle">
+              The sample database can&apos;t be replaced or removed. Delete the
+              sample project from Settings to remove it.
+            </p>
+          ) : null}
         </div>
-        {conn.isSample ? (
-          <p className="text-xs text-subtle">
-            The sample database can&apos;t be replaced or removed. Delete the
-            sample project from Settings to remove it.
-          </p>
-        ) : null}
-      </div>
       </div>
     </>
   ) : null;

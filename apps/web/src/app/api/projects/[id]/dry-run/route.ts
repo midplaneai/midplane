@@ -1,10 +1,15 @@
-// POST /api/projects/:id/dry-run — policy verdicts for the test
-// panel. Body: { database, probes? | sql? } (exactly one). The verdict
+// POST /api/projects/:id/dry-run — one policy verdict for one statement,
+// behind the pane's "Try a statement". Body: { database, sql }. The verdict
 // is computed by the OSS engine via packages/router's dryRunPolicy
 // (acquire → pushPolicy → /admin/dry-run); this route owns auth,
 // ownership, rate limiting, request validation, and building the same
 // SpawnOptions the MCP proxy builds (every DB decrypted — the engine
 // container boots with the full set).
+//
+// The engine also accepts a structured `probes` matrix; the cloud no longer
+// sends one. Reconciling a matrix meant keeping a second, cloud-side model of
+// table-access semantics, and a disagreement between the two never said which
+// one was wrong.
 //
 // Status mapping:
 //   200 — verdicts (the engine answered)
@@ -15,9 +20,9 @@
 //   503 — engine unavailable (spawn failed, timeout, image predates
 //         dry-run, INDEXER_TOKEN unset) — retryable
 //
-// Nothing executes: probes and custom SQL stop at the decision step.
-// Tenant context is synthetic (nothing dials the customer DB), so no
-// real tenant value is ever needed here.
+// Nothing executes: the statement stops at the decision step. Tenant
+// context is synthetic (nothing dials the customer DB), so no real tenant
+// value is ever needed here.
 
 import { createHmac } from "node:crypto";
 
@@ -36,46 +41,21 @@ import { getProjectWithDatabasesAndCredentials } from "@/lib/projects";
 import { currentCustomer } from "@/lib/customer";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import {
-  MAX_GUARDRAIL_PROBES,
-  MAX_PROBES_PER_RUN,
-  PROBE_ACTIONS,
-  PROBE_TENANT_VALUE,
-} from "@/lib/probe-matrix";
-import {
   checkRateLimit,
   DRY_RUN_RATE_LIMIT,
   dryRunKey,
 } from "@/lib/rate-limit";
 
-const Probe = z.object({
-  table: z.string().min(1).max(128),
-  action: z.enum(PROBE_ACTIONS),
-  cross_tenant: z.boolean().optional(),
-});
+/** Synthetic tenant bound by the engine during dry-run. Nothing executes, so
+ *  no real tenant value is ever needed. */
+const PROBE_TENANT_VALUE = "__midplane_probe__";
 
-const Body = z
-  .object({
-    database: z.string().min(1).max(64),
-    probes: z.array(Probe).min(1).max(MAX_PROBES_PER_RUN).optional(),
-    sql: z.string().min(1).max(10_000).optional(),
-    // Guardrail checks riding along with a probe run: literal dangerous
-    // statements (the engine's probe vocabulary can't express them — its
-    // DML probes are deliberately WHERE-qualified). Each becomes one
-    // engine `sql` call inside this single cloud request, so a panel run
-    // stays one rate-limit unit. Same trust posture as `sql`: arbitrary
-    // strings are fine, nothing executes.
-    guardrail_sqls: z
-      .array(z.string().min(1).max(10_000))
-      .min(1)
-      .max(MAX_GUARDRAIL_PROBES)
-      .optional(),
-  })
-  .refine((b) => (b.probes === undefined) !== (b.sql === undefined), {
-    message: "exactly one of probes | sql",
-  })
-  .refine((b) => b.guardrail_sqls === undefined || b.probes !== undefined, {
-    message: "guardrail_sqls requires probes",
-  });
+const Body = z.object({
+  database: z.string().min(1).max(64),
+  // Arbitrary strings are fine: nothing executes, and an unparseable statement
+  // comes back as a parse_error verdict rather than an error.
+  sql: z.string().min(1).max(10_000),
+});
 
 // 503 details the client may see. dryRunPolicy's other details carry
 // raw spawner/Fly error text — operationally useful in logs, but an
@@ -216,21 +196,13 @@ export async function POST(
     maskSalt = createHmac("sha256", master).update(conn.id).digest("hex");
   }
 
-  // One engine call per request: the probe matrix (or custom statement)
-  // first, then each guardrail statement as its own single-statement
-  // `sql` request. The router pays acquire + push once for the sequence
-  // and returns the verdicts concatenated in this order.
-  const base = {
-    database: parsed.data.database,
-    tenant_context: { value: PROBE_TENANT_VALUE },
-  };
+  // One statement, one engine call. The router pays acquire + push for it.
   const requests: DryRunRequest[] = [
     {
-      ...base,
-      ...(parsed.data.probes ? { probes: parsed.data.probes } : {}),
-      ...(parsed.data.sql ? { sql: parsed.data.sql } : {}),
+      database: parsed.data.database,
+      tenant_context: { value: PROBE_TENANT_VALUE },
+      sql: parsed.data.sql,
     },
-    ...(parsed.data.guardrail_sqls ?? []).map((sql) => ({ ...base, sql })),
   ];
 
   // Re-read of the policy entries right before the router's push. The

@@ -83,7 +83,7 @@ function spawnOpts(overrides: Partial<SpawnOptions> = {}): SpawnOptions {
         dsn: "postgres://user:pw@localhost:5432/app",
         tableAccess: { default: "read", tables: {} },
         tenantScope: { column: null, overrides: {}, exempt: [] },
-        guardrails: { block_unqualified_dml: true, block_ddl: true },
+        guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
       },
     ],
     ...overrides,

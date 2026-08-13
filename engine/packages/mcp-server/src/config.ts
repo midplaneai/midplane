@@ -17,7 +17,11 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import yaml from "js-yaml";
-import { PSEUDONYMIZE_KINDS, type MaskRule } from "@midplane/engine";
+import {
+  PSEUDONYMIZE_KINDS,
+  type ApprovalConfig,
+  type MaskRule,
+} from "@midplane/engine";
 
 export const TransportSchema = z.enum(["stdio", "http"]);
 export type Transport = z.infer<typeof TransportSchema>;
@@ -99,14 +103,22 @@ const TableAccessSchema = z.object({
   tables: z.record(z.string(), TableAccessLevelSchema).default({}),
 });
 
-// Destructive-statement guardrails (0.9.0). Categorical blocks that fire
+// Write-class refusals (0.9.0's `guardrails`). Categorical blocks that fire
 // REGARDLESS of table_access / tenant_scope — the "an agent can't nuke prod"
-// net. Both flags default ON, and crucially the whole section defaults ON when
-// OMITTED (see resolveGuardrails): a self-host deployment is protected out of
-// the box without writing any YAML. An operator opts OUT explicitly per flag.
+// net. The two destructive flags default ON, and crucially the whole section
+// defaults ON when OMITTED (see resolveGuardrails): a self-host deployment is
+// protected out of the box without writing any YAML. An operator opts OUT
+// explicitly per flag.
+//
+// block_dml is the exception and defaults OFF: refusing ordinary row changes is
+// a deliberate lockdown, not a safety net, and defaulting it on would break
+// every deployment that upgrades. A policy that sets it must also declare the
+// `write_rules` feature — see ENGINE_FEATURES — so an older engine that would
+// silently strip the key refuses the policy instead.
 const GuardrailsSchema = z.object({
   block_unqualified_dml: z.boolean().default(true), // DELETE/UPDATE with no WHERE
   block_ddl: z.boolean().default(true), // DROP / TRUNCATE / ALTER
+  block_dml: z.boolean().default(false), // INSERT/UPDATE/DELETE with a WHERE
 });
 
 // Write approvals — hold a write the policy already permits until a human
@@ -121,8 +133,18 @@ const GuardrailsSchema = z.object({
 // An operator who sets this needs a gate wired (MIDPLANE_APPROVAL_URL +
 // MIDPLANE_APPROVAL_TOKEN); the server refuses to boot otherwise rather than
 // hold every write against a gate that will never answer.
+//
+// Stated per write class, with `writes` as the umbrella: `writes: true` holds
+// every class, and any class key present overrides it for that class. The
+// umbrella is the original spelling and stays the canonical way to say "hold my
+// writes" — a policy that only needs that needs no feature token. A policy that
+// holds SOME classes must declare `write_rules`, because an engine that predates
+// the split strips the class keys and would resolve to holding nothing.
 const ApprovalsSchema = z.object({
   writes: z.boolean().default(false),
+  row_changes: z.boolean().optional(),
+  whole_table_writes: z.boolean().optional(),
+  schema_changes: z.boolean().optional(),
 });
 
 // Column masking (decision A2). A sibling of table_access: "schema.table" ->
@@ -185,6 +207,9 @@ const ENGINE_FEATURES = new Set<string>([
   "column_masks",
   "mask_source_rewrite",
   "write_approvals",
+  // Per-write-class rules: `guardrails.block_dml`, and `approvals` stated per
+  // class instead of the single `writes` umbrella.
+  "write_rules",
 ]);
 
 function assertFeaturesSupported(
@@ -274,15 +299,17 @@ export interface TenantScopeSpec {
 export interface GuardrailsSpec {
   blockUnqualifiedDml: boolean;
   blockDdl: boolean;
+  blockDml: boolean;
 }
 
-// Default-ON posture for an omitted `guardrails` section: block both
-// whole-table DML and DDL. This is the policy decision that makes "an agent
+// Default posture for an omitted `guardrails` section: block whole-table DML
+// and DDL, allow row changes. This is the policy decision that makes "an agent
 // can't nuke prod" true without any YAML — the server (not the engine library)
 // owns it, mirroring how table_access defaults to deny-all-writes.
 export const DEFAULT_GUARDRAILS: GuardrailsSpec = {
   blockUnqualifiedDml: true,
   blockDdl: true,
+  blockDml: false,
 };
 
 // One resolved DB. The loader produces N>=1 of these from a YAML doc:
@@ -621,26 +648,42 @@ function resolveTenantScope(
 // Resolved approvals config the engine's approval stage reads. Always
 // well-formed; an omitted `approvals` section resolves to OFF, so every policy
 // written before this feature existed keeps behaving exactly as it did.
-export interface ApprovalsSpec {
-  writes: boolean;
-}
+export type ApprovalsSpec = ApprovalConfig;
 
-export const DEFAULT_APPROVALS: ApprovalsSpec = { writes: false };
+export const DEFAULT_APPROVALS: ApprovalsSpec = {
+  rowChanges: false,
+  wholeTableWrites: false,
+  schemaChanges: false,
+};
+
+/** True when any class is held — the trigger for requiring a gate at boot. */
+export function approvalsEnabled(spec: ApprovalsSpec): boolean {
+  return spec.rowChanges || spec.wholeTableWrites || spec.schemaChanges;
+}
 
 // Normalize a parsed `approvals` block into an ApprovalsSpec. Unlike guardrails,
 // an omitted section resolves to OFF — holding writes is something an operator
 // asks for, never something they inherit by saying nothing.
+//
+// `writes` is the umbrella: it seeds all three classes, and a class key present
+// in the document overrides it. So `writes: true` holds everything (what it
+// always meant), and `{writes: true, row_changes: false}` holds everything but
+// ordinary row changes.
 function resolveApprovals(
-  raw: { writes: boolean } | undefined,
+  raw: z.infer<typeof ApprovalsSchema> | undefined,
 ): ApprovalsSpec {
   if (!raw) return DEFAULT_APPROVALS;
-  return { writes: raw.writes };
+  return {
+    rowChanges: raw.row_changes ?? raw.writes,
+    wholeTableWrites: raw.whole_table_writes ?? raw.writes,
+    schemaChanges: raw.schema_changes ?? raw.writes,
+  };
 }
 
 // Normalize a parsed `guardrails` block into a GuardrailsSpec. An OMITTED
-// section (raw === undefined) resolves to DEFAULT_GUARDRAILS (both ON) — the
-// out-of-the-box safety net. A present section keeps zod's per-flag defaults
-// (each flag independently defaults true), so `guardrails: { block_ddl: false }`
+// section (raw === undefined) resolves to DEFAULT_GUARDRAILS (destructive
+// classes ON, row changes allowed) — the out-of-the-box safety net. A present
+// section keeps zod's per-flag defaults, so `guardrails: { block_ddl: false }`
 // disables only DDL blocking.
 function resolveGuardrails(
   raw: z.infer<typeof GuardrailsSchema> | undefined,
@@ -649,6 +692,7 @@ function resolveGuardrails(
   return {
     blockUnqualifiedDml: raw.block_unqualified_dml,
     blockDdl: raw.block_ddl,
+    blockDml: raw.block_dml,
   };
 }
 

@@ -14,12 +14,55 @@ import {
   policyReloadSummary,
 } from "../src/components/audit/status-badge.tsx";
 
+describe("eventSummary — policy saves carrying write rules", () => {
+  it("says where each of the three classes landed", () => {
+    expect(
+      eventSummary("POLICY_RELOAD", {
+        project_id: "conn-1",
+        database_name: "main",
+        guardrails: {
+          block_unqualified_dml: true,
+          block_ddl: false,
+          block_dml: false,
+        },
+        write_rules: {
+          row_changes: "allow",
+          whole_table_writes: "refuse",
+          schema_changes: "ask",
+        },
+      }),
+    ).toBe(
+      "write rules updated — row changes allowed, whole-table writes refused, schema changes held",
+    );
+  });
+
+  it("prefers the rules over the raw flags, which can't express 'held'", () => {
+    // Both are in the payload. The flags would render "DDL blocked" for a
+    // class the operator actually routed to a human — the reviewer would read
+    // it as stricter than it is.
+    const s = eventSummary("POLICY_RELOAD", {
+      guardrails: {
+        block_unqualified_dml: true,
+        block_ddl: false,
+        block_dml: false,
+      },
+      write_rules: {
+        row_changes: "allow",
+        whole_table_writes: "refuse",
+        schema_changes: "ask",
+      },
+    });
+    expect(s).not.toContain("guardrails updated");
+    expect(s).toContain("schema changes held");
+  });
+});
+
 describe("eventSummary — GUARDRAILS_CHANGED rows", () => {
   it("says both nets hold when both flags are on", () => {
     const s = eventSummary("POLICY_RELOAD", {
       project_id: "conn-1",
       database_name: "main",
-      guardrails: { block_unqualified_dml: true, block_ddl: true },
+      guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
     });
     expect(s).toBe(
       "guardrails updated — DML with no WHERE blocked, DDL blocked",
@@ -28,14 +71,14 @@ describe("eventSummary — GUARDRAILS_CHANGED rows", () => {
 
   it("surfaces an opt-out as 'allowed' — the line a reviewer cares about", () => {
     const s = eventSummary("POLICY_RELOAD", {
-      guardrails: { block_unqualified_dml: true, block_ddl: false },
+      guardrails: { block_unqualified_dml: true, block_ddl: false, block_dml: false },
     });
     expect(s).toBe(
       "guardrails updated — DML with no WHERE blocked, DDL allowed",
     );
     expect(
       eventSummary("POLICY_RELOAD", {
-        guardrails: { block_unqualified_dml: false, block_ddl: false },
+        guardrails: { block_unqualified_dml: false, block_ddl: false, block_dml: false },
       }),
     ).toBe("guardrails updated — DML with no WHERE allowed, DDL allowed");
   });

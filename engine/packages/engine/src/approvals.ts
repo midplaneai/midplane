@@ -107,8 +107,25 @@ export const REFUSING_APPROVAL_GATE: ApprovalGate = {
 };
 
 /** Engine-side approval settings, mirroring the `approvals:` policy block.
- *  Absent = off = the stage never runs and costs nothing. */
+ *  All-off = the stage never runs and costs nothing.
+ *
+ *  Per write class rather than one flag, so "ask a human" is a value of the
+ *  same rule that refuses and allows: holding schema changes should not force
+ *  an operator to hold every UPDATE. A statement carrying more than one class
+ *  is held if ANY of its classes is set. */
 export interface ApprovalConfig {
-  /** Every statement with a write target needs a human. */
-  writes: boolean;
+  /** WHERE-qualified INSERT / UPDATE / DELETE / MERGE, and CREATE-family
+   *  writes — everything that changes rows rather than the schema. */
+  rowChanges: boolean;
+  /** DELETE / UPDATE with no WHERE clause. */
+  wholeTableWrites: boolean;
+  /** DROP / TRUNCATE / ALTER. */
+  schemaChanges: boolean;
 }
+
+/** Nothing held. The shape an embedder that never heard of approvals gets. */
+export const NO_APPROVALS: ApprovalConfig = {
+  rowChanges: false,
+  wholeTableWrites: false,
+  schemaChanges: false,
+};

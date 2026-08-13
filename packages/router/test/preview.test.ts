@@ -23,7 +23,7 @@ const DB = {
   dsn: "postgres://x",
   tableAccess: { default: "read" as const, tables: {} },
   tenantScope: { column: null, overrides: {}, exempt: [] },
-  guardrails: { block_unqualified_dml: true, block_ddl: true },
+  guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
   columnMasks: { "public.users": { email: "full-redact" as const } },
 };
 
