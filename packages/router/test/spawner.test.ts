@@ -19,7 +19,7 @@ describe("toDatabaseEntry (ISSUE-007 launch: source-rewrite on)", () => {
     dsn: "postgres://x",
     tableAccess: { default: "read", tables: {} },
     tenantScope: { column: null, overrides: {}, exempt: [] },
-    guardrails: { block_unqualified_dml: true, block_ddl: true },
+    guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
   };
 
   it("turns source-rewrite ON (maskSourceRewrite: true) and carries every field through", () => {
@@ -79,7 +79,7 @@ const opts = (
       dsn: "postgres://x",
       tableAccess: { default: "deny", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
-      guardrails: { block_unqualified_dml: true, block_ddl: true },
+      guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
       ...(mask?.columnMasks ? { columnMasks: mask.columnMasks } : {}),
     },
   ],

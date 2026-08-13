@@ -47,8 +47,8 @@ export function RenameDatabaseControl({
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-      Rename database
+    <Button variant="quiet" size="inline" onClick={() => setEditing(true)}>
+      Rename
     </Button>
   );
 }

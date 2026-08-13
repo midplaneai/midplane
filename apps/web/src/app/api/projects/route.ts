@@ -42,7 +42,7 @@ const Body = z.object({
     })
     .optional(),
   // Initial default access level for unlisted tables. Editable later
-  // from the permission grid on the detail page. Defaults to `read`.
+  // from the Table access list on the detail page. Defaults to `read`.
   default_access: z.enum(ACCESS_LEVELS).optional(),
 });
 

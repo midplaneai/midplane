@@ -23,12 +23,21 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50",
         ghost: "hover:bg-accent hover:text-accent-foreground disabled:opacity-50",
         link: "text-primary underline-offset-4 hover:underline disabled:opacity-50",
+        // Occasional maintenance actions — rename, rotate, delete, test the
+        // credential. Underlined muted text, no chrome: they belong at the foot
+        // of a pane where the one solid button is the pane's actual verb, and a
+        // row of outline buttons next to Save reads as four more Saves.
+        quiet:
+          "text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:opacity-50",
       },
       size: {
         default: "h-10 px-4 py-2",
         sm: "h-9 px-3",
         lg: "h-11 px-8",
         icon: "h-10 w-10 rounded-full",
+        // No height/padding box — a text link sits in a row of text links,
+        // not in a row of buttons.
+        inline: "h-auto p-0",
       },
     },
     defaultVariants: {

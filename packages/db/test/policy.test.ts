@@ -180,10 +180,10 @@ describe("validateGuardrails", () => {
     const r = validateGuardrails({ block_ddl: false });
     expect(r.ok).toBe(true);
     if (r.ok)
-      expect(r.value).toEqual({ block_unqualified_dml: true, block_ddl: false });
+      expect(r.value).toEqual({ block_unqualified_dml: true, block_ddl: false, block_dml: false });
   });
 
-  it("accepts explicit opt-out of both flags", () => {
+  it("accepts explicit opt-out of the destructive flags", () => {
     const r = validateGuardrails({
       block_unqualified_dml: false,
       block_ddl: false,
@@ -193,7 +193,19 @@ describe("validateGuardrails", () => {
       expect(r.value).toEqual({
         block_unqualified_dml: false,
         block_ddl: false,
+        // Absent means allow. Row changes are what an agent with write access
+        // is for, so the flag that refuses them is the one that defaults off.
+        block_dml: false,
       });
+  });
+
+  it("accepts block_dml and leaves the destructive defaults alone", () => {
+    const r = validateGuardrails({ block_dml: true });
+    expect(r.ok && r.value).toEqual({
+      block_unqualified_dml: true,
+      block_ddl: true,
+      block_dml: true,
+    });
   });
 
   it("rejects non-boolean flags (engine parity: z.boolean())", () => {
@@ -219,7 +231,7 @@ describe("validateGuardrails", () => {
 describe("parseGuardrailsOrThrow", () => {
   it("returns the typed value on success", () => {
     const v = parseGuardrailsOrThrow({ block_unqualified_dml: false });
-    expect(v).toEqual({ block_unqualified_dml: false, block_ddl: true });
+    expect(v).toEqual({ block_unqualified_dml: false, block_ddl: true, block_dml: false });
   });
 
   it("throws with a useful message on failure", () => {
@@ -310,7 +322,7 @@ describe("serializeMultiDbPolicyToYaml", () => {
       projectDatabaseId: "01HXYZ123ABC456DEF789GHI01",
       tableAccess: { default: "read", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
-      guardrails: { block_unqualified_dml: true, block_ddl: true },
+      guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
       ...overrides,
     };
   }
@@ -336,7 +348,7 @@ describe("serializeMultiDbPolicyToYaml", () => {
   it("emits guardrails opt-outs literally — false must reach the engine, since an omitted section defaults ON", () => {
     const yaml = serializeMultiDbPolicyToYaml([
       entry({
-        guardrails: { block_unqualified_dml: false, block_ddl: false },
+        guardrails: { block_unqualified_dml: false, block_ddl: false, block_dml: false },
       }),
     ]);
     expect(yaml).toContain("      block_unqualified_dml: false");

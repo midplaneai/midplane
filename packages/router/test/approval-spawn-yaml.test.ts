@@ -17,6 +17,20 @@ import { load as loadYaml } from "js-yaml";
 import { serializeMultiDbPolicyToYaml } from "@midplane-cloud/db/policy";
 import { toDatabaseEntry, type SpawnDatabase } from "../src/spawner.ts";
 
+const ALL_CLASSES = {
+  row_changes: true,
+  whole_table_writes: true,
+  schema_changes: true,
+  // Derived legacy mirror, written for rollback safety — see ApprovalsConfig.
+  writes: true,
+} as const;
+const NO_CLASSES = {
+  row_changes: false,
+  whole_table_writes: false,
+  schema_changes: false,
+  writes: false,
+} as const;
+
 function spawnDb(overrides: Partial<SpawnDatabase> = {}): SpawnDatabase {
   return {
     name: "main",
@@ -24,7 +38,7 @@ function spawnDb(overrides: Partial<SpawnDatabase> = {}): SpawnDatabase {
     dsn: "postgres://stub",
     tableAccess: { default: "read", tables: { orders: "read_write" } },
     tenantScope: { column: null, overrides: {}, exempt: [] },
-    guardrails: { block_unqualified_dml: true, block_ddl: true },
+    guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
     ...overrides,
   };
 }
@@ -40,7 +54,7 @@ function yamlFor(db: SpawnDatabase): Record<string, unknown> {
 describe("spawn → engine YAML carries approvals", () => {
   it("emits the block AND the feature token when approvals are on", () => {
     const entry = yamlFor(
-      spawnDb({ approvals: { writes: true, expires_after_seconds: 1800 } }),
+      spawnDb({ approvals: { ...ALL_CLASSES, expires_after_seconds: 1800 } }),
     );
     expect(entry.approvals).toEqual({ writes: true });
     // The token is the fail-closed interlock: an engine that does not know
@@ -51,7 +65,7 @@ describe("spawn → engine YAML carries approvals", () => {
 
   it("emits nothing when approvals are off", () => {
     const entry = yamlFor(
-      spawnDb({ approvals: { writes: false, expires_after_seconds: 1800 } }),
+      spawnDb({ approvals: { ...NO_CLASSES, expires_after_seconds: 1800 } }),
     );
     expect(entry.approvals).toBeUndefined();
     expect(entry.requires_features).toBeUndefined();
@@ -62,20 +76,20 @@ describe("spawn → engine YAML carries approvals", () => {
     // forgets toDatabaseEntry again, the two objects below diverge.
     const omitted = yamlFor(spawnDb());
     const off = yamlFor(
-      spawnDb({ approvals: { writes: false, expires_after_seconds: 1800 } }),
+      spawnDb({ approvals: { ...NO_CLASSES, expires_after_seconds: 1800 } }),
     );
     expect(omitted).toEqual(off);
   });
 
   it("toDatabaseEntry forwards approvals rather than defaulting it", () => {
-    const on = { writes: true, expires_after_seconds: 600 };
+    const on = { ...ALL_CLASSES, expires_after_seconds: 600 };
     expect(toDatabaseEntry(spawnDb({ approvals: on })).approvals).toEqual(on);
   });
 
   it("coexists with column masks on one requires_features list", () => {
     const entry = yamlFor(
       spawnDb({
-        approvals: { writes: true, expires_after_seconds: 1800 },
+        approvals: { ...ALL_CLASSES, expires_after_seconds: 1800 },
         columnMasks: { "public.customers": { email: "full-redact" } },
       }),
     );

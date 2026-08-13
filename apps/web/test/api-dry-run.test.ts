@@ -3,7 +3,7 @@
 // engine error mapping, is pinned in packages/router/test/dry-run.test.ts).
 //
 // Pins: auth/ownership gates, the per-project 429, request
-// validation (exactly one of probes|sql), the proxy-identical spawn
+// validation, the proxy-identical spawn
 // construction (decrypted DSNs, synthetic tenant), and the
 // outcome → HTTP status map (ok→200, engine_rejected→400 verbatim,
 // engine_unavailable→503 retryable).
@@ -16,10 +16,6 @@ import {
   dryRunKey,
   resetRateLimits,
 } from "../src/lib/rate-limit.ts";
-import {
-  MAX_GUARDRAIL_PROBES,
-  PROBE_TENANT_VALUE,
-} from "../src/lib/probe-matrix.ts";
 
 const customer = {
   id: "01HZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -122,49 +118,42 @@ function jsonRequest(body: unknown): Request {
   });
 }
 
-const PROBES_BODY = {
-  database: "main",
-  probes: [{ table: "orders", action: "select" }],
-};
+// The engine also accepts a structured probe matrix; the cloud stopped
+// sending one, so `sql` is the whole request surface now.
+const PROBE_TENANT_VALUE = "__midplane_probe__";
+
+const SQL_BODY = { database: "main", sql: "select 1 from orders" };
 
 describe("POST /api/projects/[id]/dry-run", () => {
   it("401 when no session", async () => {
     currentCustomerMock = vi.fn(async () => null);
     const { POST } = await loadRoute();
-    expect((await POST(jsonRequest(PROBES_BODY), params)).status).toBe(401);
+    expect((await POST(jsonRequest(SQL_BODY), params)).status).toBe(401);
   });
 
-  it("400 unless exactly one of probes|sql is present", async () => {
+  it("400 on a body without a statement", async () => {
     const { POST } = await loadRoute();
-    const both = await POST(
-      jsonRequest({ ...PROBES_BODY, sql: "select 1" }),
-      params,
-    );
-    expect(both.status).toBe(400);
     const neither = await POST(jsonRequest({ database: "main" }), params);
     expect(neither.status).toBe(400);
-    const badAction = await POST(
-      jsonRequest({
-        database: "main",
-        probes: [{ table: "orders", action: "truncate" }],
-      }),
+    const empty = await POST(
+      jsonRequest({ database: "main", sql: "" }),
       params,
     );
-    expect(badAction.status).toBe(400);
+    expect(empty.status).toBe(400);
     expect(dryRunMock).not.toHaveBeenCalled();
   });
 
   it("404 for foreign project and for a database not on the project", async () => {
     const { POST } = await loadRoute();
     getConnMock = vi.fn(async () => null);
-    expect((await POST(jsonRequest(PROBES_BODY), params)).status).toBe(404);
+    expect((await POST(jsonRequest(SQL_BODY), params)).status).toBe(404);
 
     getConnMock = vi.fn(async () => ({
       project: CONN,
       databases: [makeDb("main")],
     }));
     const unknownDb = await POST(
-      jsonRequest({ ...PROBES_BODY, database: "nope" }),
+      jsonRequest({ ...SQL_BODY, database: "nope" }),
       params,
     );
     expect(unknownDb.status).toBe(404);
@@ -175,7 +164,7 @@ describe("POST /api/projects/[id]/dry-run", () => {
       checkRateLimit(dryRunKey(customer.id, CONN.id), DRY_RUN_RATE_LIMIT);
     }
     const { POST } = await loadRoute();
-    const res = await POST(jsonRequest(PROBES_BODY), params);
+    const res = await POST(jsonRequest(SQL_BODY), params);
     expect(res.status).toBe(429);
     expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(dryRunMock).not.toHaveBeenCalled();
@@ -192,14 +181,14 @@ describe("POST /api/projects/[id]/dry-run", () => {
       );
     }
     const { POST } = await loadRoute();
-    const res = await POST(jsonRequest(PROBES_BODY), params);
+    const res = await POST(jsonRequest(SQL_BODY), params);
     expect(res.status).toBe(200);
   });
 
   it("503 when a credential can't be decrypted or stored policy is malformed", async () => {
     const { POST } = await loadRoute();
     resolveMock = vi.fn(async () => ({ ok: false }));
-    const cred = await POST(jsonRequest(PROBES_BODY), params);
+    const cred = await POST(jsonRequest(SQL_BODY), params);
     expect(cred.status).toBe(503);
     expect(await cred.json()).toMatchObject({ error: "engine_unavailable" });
 
@@ -208,7 +197,7 @@ describe("POST /api/projects/[id]/dry-run", () => {
       project: CONN,
       databases: [makeDb("main", { default: "everything", tables: 7 })],
     }));
-    const badPolicy = await POST(jsonRequest(PROBES_BODY), params);
+    const badPolicy = await POST(jsonRequest(SQL_BODY), params);
     expect(badPolicy.status).toBe(503);
     expect(dryRunMock).not.toHaveBeenCalled();
   });
@@ -219,7 +208,7 @@ describe("POST /api/projects/[id]/dry-run", () => {
       databases: [makeDb("analytics"), makeDb("main")],
     }));
     const { POST } = await loadRoute();
-    const res = await POST(jsonRequest(PROBES_BODY), params);
+    const res = await POST(jsonRequest(SQL_BODY), params);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ verdicts: [], truncated: false });
 
@@ -236,11 +225,13 @@ describe("POST /api/projects/[id]/dry-run", () => {
     expect(spawn.databases.every((d) => d.dsn === "postgres://decrypted")).toBe(
       true,
     );
-    // A row predating the guardrails column resolves to the default-ON
-    // posture (mirrors the engine's omitted-section default).
+    // A row predating the guardrails column resolves to the default posture
+    // (mirrors the engine's omitted-section default): the destructive classes
+    // refused, row changes allowed.
     expect(spawn.databases[0]!.guardrails).toEqual({
       block_unqualified_dml: true,
       block_ddl: true,
+      block_dml: false,
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.database).toBe("main");
@@ -256,7 +247,7 @@ describe("POST /api/projects/[id]/dry-run", () => {
         databases: [makeDb("main", undefined, { "public.users": { email: "full-redact" } })],
       }));
       const { POST } = await loadRoute();
-      const res = await POST(jsonRequest(PROBES_BODY), params);
+      const res = await POST(jsonRequest(SQL_BODY), params);
       expect(res.status).toBe(200);
       const [spawn] = dryRunMock.mock.calls[0] as unknown as [
         { databases: Array<{ columnMasks?: unknown }>; maskSalt?: string },
@@ -281,7 +272,7 @@ describe("POST /api/projects/[id]/dry-run", () => {
         databases: [makeDb("main", undefined, { "public.users": { email: "full-redact" } })],
       }));
       const { POST } = await loadRoute();
-      const res = await POST(jsonRequest(PROBES_BODY), params);
+      const res = await POST(jsonRequest(SQL_BODY), params);
       expect(res.status).toBe(503);
       expect(await res.json()).toMatchObject({ detail: "masking misconfigured" });
       expect(dryRunMock).not.toHaveBeenCalled();
@@ -291,15 +282,9 @@ describe("POST /api/projects/[id]/dry-run", () => {
     }
   });
 
-  it("fans guardrail_sqls out as single-statement sql requests after the probe matrix", async () => {
+  it("sends exactly one engine request, carrying the statement and the synthetic tenant", async () => {
     const { POST } = await loadRoute();
-    const res = await POST(
-      jsonRequest({
-        ...PROBES_BODY,
-        guardrail_sqls: ["delete from orders", "drop table orders"],
-      }),
-      params,
-    );
+    const res = await POST(jsonRequest(SQL_BODY), params);
     expect(res.status).toBe(200);
 
     const [, requests] = dryRunMock.mock.calls[0] as unknown as [
@@ -307,64 +292,24 @@ describe("POST /api/projects/[id]/dry-run", () => {
       Array<{
         database: string;
         tenant_context?: { value: string };
-        probes?: unknown[];
         sql?: string;
       }>,
     ];
-    expect(requests).toHaveLength(3);
-    expect(requests[0]!.probes).toHaveLength(1);
-    expect(requests[0]!.sql).toBeUndefined();
-    expect(requests[1]).toMatchObject({
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
       database: "main",
-      sql: "delete from orders",
+      sql: "select 1 from orders",
+      tenant_context: { value: PROBE_TENANT_VALUE },
     });
-    expect(requests[2]).toMatchObject({
-      database: "main",
-      sql: "drop table orders",
-    });
-    // Every engine call carries the synthetic tenant — guardrail
-    // statements still bind the dry-run context.
-    expect(
-      requests.every((r) => r.tenant_context?.value === PROBE_TENANT_VALUE),
-    ).toBe(true);
   });
 
-  it("400 when guardrail_sqls is sent without probes (it rides the matrix run only)", async () => {
+  it("400 on a statement past the length ceiling", async () => {
     const { POST } = await loadRoute();
     const res = await POST(
-      jsonRequest({
-        database: "main",
-        sql: "select 1",
-        guardrail_sqls: ["delete from orders"],
-      }),
+      jsonRequest({ database: "main", sql: "s".repeat(10_001) }),
       params,
     );
     expect(res.status).toBe(400);
-    expect(dryRunMock).not.toHaveBeenCalled();
-  });
-
-  it("400 when guardrail_sqls is empty or exceeds MAX_GUARDRAIL_PROBES", async () => {
-    const { POST } = await loadRoute();
-    // min(1): an empty array is a caller bug, not "no guardrail checks" —
-    // omit the field for that.
-    const empty = await POST(
-      jsonRequest({ ...PROBES_BODY, guardrail_sqls: [] }),
-      params,
-    );
-    expect(empty.status).toBe(400);
-    // max(MAX_GUARDRAIL_PROBES): the ceiling is sized to the worst-case
-    // buildGuardrailProbes output; anything larger is fan-out abuse.
-    const over = await POST(
-      jsonRequest({
-        ...PROBES_BODY,
-        guardrail_sqls: Array.from(
-          { length: MAX_GUARDRAIL_PROBES + 1 },
-          () => "drop table orders",
-        ),
-      }),
-      params,
-    );
-    expect(over.status).toBe(400);
     expect(dryRunMock).not.toHaveBeenCalled();
   });
 
@@ -394,7 +339,7 @@ describe("POST /api/projects/[id]/dry-run", () => {
       detail: "engine timed out",
     }));
     const { POST } = await loadRoute();
-    const res = await POST(jsonRequest(PROBES_BODY), params);
+    const res = await POST(jsonRequest(SQL_BODY), params);
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({
       error: "engine_unavailable",
@@ -409,7 +354,7 @@ describe("POST /api/projects/[id]/dry-run", () => {
       detail: "Fly Machines API 422: capacity exhausted in fra region",
     }));
     const { POST } = await loadRoute();
-    const res = await POST(jsonRequest(PROBES_BODY), params);
+    const res = await POST(jsonRequest(SQL_BODY), params);
     expect(res.status).toBe(503);
     const body = (await res.json()) as { error: string; detail?: string };
     expect(body.error).toBe("engine_unavailable");

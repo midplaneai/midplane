@@ -325,16 +325,17 @@ describe("guardrails resolution", () => {
   test("omitted guardrails section → default ON (the safety net)", () => {
     const p = parsePolicyYaml("table_access:\n  default: read\n", "test");
     expect(p.hasGuardrails).toBe(false);
-    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true, blockDml: false });
     expect(p.databases[0]!.guardrails).toEqual({
       blockUnqualifiedDml: true,
       blockDdl: true,
+      blockDml: false,
     });
   });
 
   test("empty document → guardrails still default ON", () => {
     const p = parsePolicyYaml("", "test");
-    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true, blockDml: false });
   });
 
   test("explicit per-flag opt-out keeps the other flag on", () => {
@@ -343,16 +344,16 @@ describe("guardrails resolution", () => {
       "test",
     );
     expect(p.hasGuardrails).toBe(true);
-    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: false });
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: false, blockDml: false });
   });
 
-  test("empty guardrails block → both flags default ON", () => {
+  test("empty guardrails block → the destructive flags default ON", () => {
     const p = parsePolicyYaml(
       "table_access:\n  default: read\nguardrails: {}\n",
       "test",
     );
     expect(p.hasGuardrails).toBe(true);
-    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+    expect(p.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true, blockDml: false });
   });
 
   test("per-DB guardrails resolve independently (omit → ON, explicit → as set)", () => {
@@ -365,9 +366,9 @@ describe("guardrails resolution", () => {
     const a = p.databases.find((d) => d.name === "a")!;
     const b = p.databases.find((d) => d.name === "b")!;
     expect(a.hasGuardrails).toBe(false);
-    expect(a.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true });
+    expect(a.guardrails).toEqual({ blockUnqualifiedDml: true, blockDdl: true, blockDml: false });
     expect(b.hasGuardrails).toBe(true);
-    expect(b.guardrails).toEqual({ blockUnqualifiedDml: false, blockDdl: false });
+    expect(b.guardrails).toEqual({ blockUnqualifiedDml: false, blockDdl: false, blockDml: false });
   });
 
   test("non-boolean flag is a schema error", () => {

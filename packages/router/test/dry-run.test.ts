@@ -22,7 +22,7 @@ const SPAWN: SpawnOptions = {
       dsn: "postgres://x",
       tableAccess: { default: "read", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
-      guardrails: { block_unqualified_dml: true, block_ddl: true },
+      guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
     },
   ],
 };
@@ -294,7 +294,7 @@ describe("dryRunPolicy", () => {
           tableAccess: { default: "read", tables: {} },
           tenantScope: { column: null, overrides: {}, exempt: [] },
           // Differs from SPAWN's snapshot (both true) — the re-read wins.
-          guardrails: { block_unqualified_dml: true, block_ddl: false },
+          guardrails: { block_unqualified_dml: true, block_ddl: false, block_dml: false },
         },
       ],
     });

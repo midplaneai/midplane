@@ -16,7 +16,7 @@ const oneDb = [
     dsn: "postgres://x",
     tableAccess: { default: "read" as const, tables: {} },
     tenantScope: { column: null, overrides: {}, exempt: [] },
-    guardrails: { block_unqualified_dml: true, block_ddl: true },
+    guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
   },
 ];
 
@@ -179,7 +179,7 @@ describe("FlyMachineSpawner", () => {
           dsn: "postgres://example",
           tableAccess: { default: "read", tables: { orders: "read_write" } },
           tenantScope: { column: null, overrides: {}, exempt: [] },
-          guardrails: { block_unqualified_dml: true, block_ddl: true },
+          guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
         },
       ],
     });
@@ -228,7 +228,7 @@ describe("FlyMachineSpawner", () => {
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
-            guardrails: { block_unqualified_dml: true, block_ddl: true },
+            guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
           },
         ],
       }),
@@ -289,7 +289,7 @@ describe("FlyMachineSpawner", () => {
             dsn: "postgres://x",
             tableAccess: { default: "deny", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
-            guardrails: { block_unqualified_dml: true, block_ddl: true },
+            guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
           },
         ],
       }),
@@ -370,7 +370,7 @@ describe("FlyMachineSpawner", () => {
           dsn: "postgres://x",
           tableAccess: { default: "read", tables: {} },
           tenantScope: { column: null, overrides: {}, exempt: [] },
-          guardrails: { block_unqualified_dml: true, block_ddl: false },
+          guardrails: { block_unqualified_dml: true, block_ddl: false, block_dml: false },
         },
       ],
     });
@@ -461,7 +461,7 @@ describe("FlyMachineSpawner", () => {
             dsn: "postgres://x",
             tableAccess: { default: "read", tables: {} },
             tenantScope: { column: null, overrides: {}, exempt: [] },
-            guardrails: { block_unqualified_dml: true, block_ddl: true },
+            guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
           },
         ],
       })

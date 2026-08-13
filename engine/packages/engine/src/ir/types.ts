@@ -92,14 +92,21 @@ export type ScopeUnit =
   | { kind: "insert"; shape: InsertShape }
   | { kind: "merge"; target: TableRef };
 
-// One destructive-operation site the `dangerous_statement` guardrail may block,
-// in the adapter's walk order. The dialect emits these UNCONDITIONALLY (it does
-// not read policy); the rule decides whether the matching guardrail
-// (block_unqualified_dml / block_ddl) is enabled and denies on the first match.
+// One write site the write-rule layer may refuse or hold, in the adapter's walk
+// order. The dialect emits these UNCONDITIONALLY (it does not read policy); the
+// `dangerous_statement` rule decides whether the matching guardrail
+// (block_dml / block_unqualified_dml / block_ddl) is enabled and denies on the
+// first match, and the approval stage reads the same list to decide which
+// statement classes need a human.
+//
 // Surfaced as its own IR field — rather than reusing `scopeUnits.predicates` —
 // because "has a WHERE clause at all" is a different question than the
 // equality-only predicates tenant_scope tracks (a `DELETE … WHERE status <> 'x'`
 // has a WHERE but no equality predicate, so it is NOT unqualified).
+//   • "row_dml"        — an INSERT / MERGE, or an UPDATE / DELETE that DOES have
+//      a WHERE clause: a write scoped to some rows. Off by default (no guardrail
+//      blocks it unless block_dml is set) but always emitted, because the
+//      approval stage classifies from this list.
 //   • "unqualified_dml" — a DELETE or UPDATE with NO WHERE clause (the
 //      whole-table write). `operation` is the keyword; `table` is the target,
 //      schema-qualified when written that way. Detected at every DELETE/UPDATE
@@ -107,8 +114,15 @@ export type ScopeUnit =
 //      CTE wipes the table just the same), so the guard is fail-closed.
 //   • "ddl"            — a DROP / TRUNCATE / ALTER statement. `operation` is the
 //      human keyword for the message (e.g. "DROP TABLE", "TRUNCATE",
-//      "ALTER TABLE"). CREATE is intentionally NOT included in v1.
+//      "ALTER TABLE"). CREATE is intentionally NOT included — it destroys
+//      nothing, so it is not DDL for the purpose of block_ddl. It is still a
+//      write: block_dml reaches it via accessChecks (see dangerous-statement).
 export type DangerousStatement =
+  | {
+      kind: "row_dml";
+      operation: "INSERT" | "UPDATE" | "DELETE" | "MERGE";
+      table: string;
+    }
   | { kind: "unqualified_dml"; operation: "DELETE" | "UPDATE"; table: string }
   | { kind: "ddl"; operation: string };
 
