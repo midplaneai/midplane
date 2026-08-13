@@ -4,8 +4,10 @@
 // the "an agent can't nuke prod" safety net. Three independently-toggled
 // guards, one per write class:
 //   • block_dml             — INSERT / MERGE / WHERE-qualified UPDATE / DELETE
-//     (a row-scoped change). Default OFF; the other two default ON. CREATE-family
-//     writes are never refused by it — the dialect emits no site for them.
+//     (a row-scoped change), AND any other write the dialect emits no site for
+//     (CREATE TABLE / CREATE TABLE AS / SELECT … INTO). Default OFF; the other
+//     two default ON. It must reach exactly what the approval stage classifies
+//     as a row change, or moving the rule from Ask to Refuse would permit more.
 //   • block_unqualified_dml — DELETE/UPDATE with no WHERE clause (whole-table
 //     write).
 //   • block_ddl             — DROP / TRUNCATE / ALTER (schema-changing DDL).
@@ -73,8 +75,40 @@ export function dangerousStatement(source?: DangerousStatementSource): Rule {
           return denyDdl(d);
         }
       }
+      // A write the dialect emitted no site for — CREATE TABLE, CREATE TABLE
+      // AS, CREATE INDEX, SELECT … INTO. It is a write, and the approval stage
+      // already classifies it as a row change (policy/index.ts), so refusal has
+      // to reach it too. Otherwise moving row changes from Ask to the stricter
+      // Refuse would let these EXECUTE where they had been held for a human —
+      // a stricter setting permitting strictly more, which is the one thing a
+      // three-way control must never do.
+      //
+      // Guarded on there being no sites at all, mirroring the classifier: a
+      // no-WHERE DELETE is a whole-table write and must not be refused by the
+      // row-change flag.
+      if (
+        cfg.blockDml &&
+        program.dangerousStatements.length === 0 &&
+        program.accessChecks.some((c) => c.kind === "write")
+      ) {
+        return denyBareWrite();
+      }
       return { decision: "ALLOW" };
     },
+  };
+}
+
+function denyBareWrite(): RuleVerdict {
+  return {
+    decision: "DENY",
+    reason: PolicyRule.DANGEROUS_STATEMENT,
+    message:
+      `Midplane denied this query because it writes, and this database ` +
+      `refuses writes regardless of table-access policy. That covers ` +
+      `creating a relation (\`CREATE TABLE\`, \`CREATE TABLE AS\`, ` +
+      `\`SELECT … INTO\`), which materializes data just as a row change ` +
+      `does. Reads are unaffected. Set \`guardrails.block_dml: false\` in ` +
+      `your policy YAML to allow writes.`,
   };
 }
 
@@ -87,9 +121,9 @@ function denyDml(
     message:
       `Midplane denied this query because \`${d.operation}\` on ` +
       `\`${d.table}\` changes rows, and this database refuses row changes ` +
-      `regardless of table-access policy. Reads are unaffected; so is ` +
-      `creating a table. Set \`guardrails.block_dml: false\` in your policy ` +
-      `YAML to allow row changes.`,
+      `regardless of table-access policy. Reads are unaffected. Set ` +
+      `\`guardrails.block_dml: false\` in your policy YAML to allow row ` +
+      `changes.`,
   };
 }
 

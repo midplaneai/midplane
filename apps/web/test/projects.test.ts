@@ -1939,6 +1939,10 @@ describe("setDatabasePolicy — write rules", () => {
     expect(set.approvals).toEqual({
       ...optOutApprovals,
       schema_changes: true,
+      // The legacy `writes` mirror rides along, derived as "any class held",
+      // so a rollback to pre-split app code reads "approvals on" rather than
+      // "no approvals" and running the writes this save meant to hold.
+      writes: true,
     });
     expect(set.tableAccess).toEqual({ default: "read", tables: {} });
   });

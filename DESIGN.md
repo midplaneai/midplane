@@ -70,6 +70,26 @@ Help text and descriptions bold the load-bearing phrase via `<strong className="
 
 Each semantic color is used with `hsl(var(--name) / 0.08)` for badge/banner fills (Tailwind's arbitrary-value alpha syntax — no separate `--{name}-bg` tokens).
 
+**Verdicts get hues; config gets a ramp.** `--allow` / `--deny` state what a query
+actually *did* — audit log, badges, decision rows. A config surface where you
+*pick* a level (the policy pane's Table access and write rules) is not a verdict,
+and painting a choice green would collide with the log's meaning of green. Those
+controls escalate in one hue instead, strictest on the left, with three agreeing
+cues per step:
+
+| step | wash | 2px inset rule | text |
+|---|---|---|---|
+| safe floor (deny, refuse) | `--foreground` 10% | none | `--foreground` |
+| middle (read, ask) | `--warn` 14% | `--warn` 45% | `--foreground` |
+| elevated (read+write, allow) | `--warn` 22% | `--warn` 100% | `--warn` |
+
+One dimension of difference (how much the agent may do), one hue — but more than
+one cue, because wash alone can't carry it: `--foreground` is warm off-white, so
+its 10% wash composites to `#322e2b` and a light amber to `#362c1e`, a 1.017:1
+luminance ratio. Don't push the top wash past ~22%: `--warn` text on a `--warn`
+wash falls below WCAG AA beyond it (measured 4.92:1 at 22%). Reserve a hue change
+for an actual change of kind, never for a step along a ramp.
+
 ### Region — "where data lives"
 First-class tokens, intentionally distinct from semantic `--allow`/`--deny` so a region badge can't be misread as a policy outcome.
 
@@ -96,7 +116,9 @@ First-class tokens, intentionally distinct from semantic `--allow`/`--deny` so a
   - `6px` — buttons. Matches the landing's `.ebtn` so the primary CTA reads as the same control across `/` and `/dashboard`.
   - `50%` — avatars and icon-only buttons (`<Button size="icon">`).
   - Implementation: `--radius: 0` in `globals.css`. Tailwind's `rounded-lg`/`md`/`sm` therefore all collapse to `0`. Buttons opt back in with explicit `rounded-[6px]`; badges with `rounded-[3px]`; round elements with `rounded-full`. Don't reintroduce a non-zero `--radius`.
-- **Hairlines, not shadows.** `1px solid var(--border)`. No `box-shadow` on cards. The 3px selection rail on active rows / radio cards / sidebar items is the one accepted use of `box-shadow` (inset, brand). Elevation comes from the surface ramp (`--background` → `--card` → `--popover`), not blur.
+- **Hairlines, not shadows.** `1px solid var(--border)`. No `box-shadow` on cards. Elevation comes from the surface ramp (`--background` → `--card` → `--popover`), not blur. Two accepted uses, both **inset** — no drop shadows anywhere:
+  - **The 3px brand selection rail** on active rows / radio cards / sidebar items. It means "this is the selected item" in a list with ONE active item. Not for segmented controls: one selected cell per row across ten-plus rows turns an accent into a field of blue ticks, and a segmented control already says which cell is chosen by filling exactly one of them.
+  - **A 2px inset rule carrying *degree*** inside a segmented control (the policy pane's Table access / write rules): `--warn` at 45% on the middle rung, full on the most permissive, none on the safe floor. Distinct from the brand rail in width, hue and meaning — it escalates rather than being uniform, so it reads as "how much" and not as "which one is on". Load-bearing, not decoration: the two lower fills composite to `#322e2b` and `#362c1e`, a **1.017:1** luminance ratio, so without the rule they are the same swatch to the eye. See the ramp table under Color.
 
 ## Motion
 - **Approach:** Minimal-functional. The only motion that ships by default is the freshness pulse and spinners.
@@ -182,3 +204,4 @@ The previous four-quadrant window-mullion `.mark` glyph has been retired.
 | 2026-05-22 | Adopted the locked-in `midplane-brand` package (see `apps/web/public/brand/`). Wordmark becomes `mid:plane` with a blue colon — the wordmark is now the mark on light/auth chrome, no separate icon glyph beside it. Four-quadrant window-mullion `.mark` retired. Square `icon.svg` (ink + blue colon) reserved for favicon / OG / Slack / GitHub. Favicons + OG meta wired in `app/layout.tsx`. | Brand exploration converged on "the colon is the brand" — a single, distinctive typesetting move instead of a separate glyph that competes with the wordmark. Keeping the wordmark text-based (not an `<img>`) preserves font scaling, selection, and accessibility. |
 | 2026-05-22 | Re-skin to warm dark. Adopted `#161412` background (warm-dark twin of the landing's `--ink`). Mono lowercase on field labels, sidebar section labels, table column headers, and breadcrumb segments. Colon separator in breadcrumb (`<Breadcrumb>` primitive). Region colours promoted to first-class tokens (`--region-eu` / `--region-us`); kept distinct from semantic allow/deny. Mixed radius: 0 on cards / inputs / panels, 6px on buttons (matches landing `.ebtn`), 3px on badges, 50% on avatars. Accent (`#1d4eff`) restricted to decorative surfaces — colon, two-dot mark, 3px selection rail, focus rings, selected radio dot — never on small text. Dark-tuned semantic values (`#5a9c6e`, `#c87070`) kept; not replaced with paper literals (`#1f6f47`, `#c4321e`) which read muddy on dark. Two-blue-dots `WorkspaceMark` replaces the lucide `Building2` in the sidebar workspace switcher. Active sidebar / radio / row selection is a 3px inset rail (`box-shadow`) instead of a full outline. Help text bolds one load-bearing phrase per paragraph (security guarantee / recommended default / hard warning). Clerk theme hex re-pinned to match (Clerk doesn't read CSS custom properties). | Marketing and product had the same logo but read as different companies — cold-charcoal SaaS vs warm-paper editorial. Re-skin closes the gap by making the product the dark twin of the landing palette, not a separate aesthetic. Accent stays the literal landing blue (rather than the AA-lifted `#4a78ff`) because the brand restriction (decorative only) means small-text contrast isn't the deciding constraint; verified AA holds for body / muted-body against the new `--background`. |
 | 2026-07-08 | Normalized the project-workspace section eyebrows (`project`, `database`, `policy`, `actions`, `pii exposure`, `masked preview`) from 10px UPPERCASE sans to the standard lowercase-mono label token (`font-mono 11.5px lowercase tracking-[0.04em] text-subtle`). | Two micro-label voices had drifted into one view (the eyebrows disagreed with the breadcrumb/sidebar beside them, and with each other on tracking). Lowercase mono is the documented runtime voice; 45 sites conformed vs 6 drifted. Badges, acronyms/region codes, and SQL keywords keep UPPERCASE per the existing exceptions. |
+| 2026-08-12 | Segmented policy controls (Database pane) escalate in ONE hue — neutral wash → `--warn` 14% → `--warn` 22%, strictest left — each step carrying a 2px inset `--warn` rule that grows with it. Green leaves config surfaces. No 3px brand rail on segmented controls, and no drop shadow on the sticky save bar (surface ramp + hairline instead). Carve-outs written into the shadow rule and the color section. | Merging three policy cards into two segmented lists exposed three things. (1) The brand rail is sized for one-active-item lists; one selected cell per row across ten-plus rows reads as a field of ticks, and a segmented control already shows selection by filling one cell. (2) The three options differ in one way only — how much the agent may do — so a hue per option read as a change of KIND, and green collided with the audit log's "this query was allowed". (3) Wash alone couldn't separate the two lower steps: they composite 1.017:1 in luminance, so the inset rule is load-bearing rather than decorative. |

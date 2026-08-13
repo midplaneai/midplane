@@ -107,17 +107,69 @@ describe("refuse — the guardrail per class", () => {
     ).toBe(true);
   });
 
-  test("creating a table is never refused, whatever the row rule says", async () => {
-    // A promise the UI makes in so many words. An agent that can't create a
-    // table can't run a migration, and CREATE destroys nothing.
+  test("block_dml refuses writes the dialect emits no site for", async () => {
+    // CREATE TABLE / CREATE TABLE AS / SELECT … INTO have no destructive
+    // operation to name, so they emit no site — but they materialize data, and
+    // the approval stage classifies them as row changes. Refusal has to reach
+    // the same set. See the monotonicity test below for why.
     const { engine } = refuseEngine({
-      blockUnqualifiedDml: true,
+      blockUnqualifiedDml: false,
       blockDdl: false,
       blockDml: true,
     });
-    expect((await engine.handle({ sql: CREATE, ctx: baseCtx })).allowed).toBe(
+    for (const sql of [
+      CREATE,
+      "CREATE TABLE staging AS SELECT * FROM orders",
+      "SELECT id, email INTO snapshot FROM orders",
+    ]) {
+      const d = await engine.handle({ sql, ctx: baseCtx });
+      expect(d.allowed).toBe(false);
+      expect((d as { reason: string }).reason).toBe("dangerous_statement");
+    }
+    // Still allowed when the row rule isn't refusing.
+    const { engine: permissive } = refuseEngine({
+      blockUnqualifiedDml: true,
+      blockDdl: true,
+      blockDml: false,
+    });
+    expect((await permissive.handle({ sql: CREATE, ctx: baseCtx })).allowed).toBe(
       true,
     );
+  });
+
+  test("MONOTONICITY: Refuse never permits what Ask would have held", async () => {
+    // The invariant a three-way control cannot violate. Tightening row changes
+    // from Ask to Refuse must never let a statement through that was being held
+    // for a human. This regressed once: CREATE TABLE classified as a row change
+    // for approvals but emitted no site for refusal, so Ask held it and Refuse
+    // ran it unreviewed.
+    const held: string[] = [];
+    const { engine: asking, gate } = askEngine({ ...NONE, rowChanges: true });
+    const { engine: refusing } = refuseEngine({
+      blockUnqualifiedDml: false,
+      blockDdl: false,
+      blockDml: true,
+    });
+    const corpus = [
+      ROW_CHANGE,
+      INSERT,
+      HIDDEN_ROW_CHANGE,
+      CREATE,
+      "CREATE TABLE staging AS SELECT * FROM orders",
+      "SELECT id INTO snapshot FROM orders",
+      "CREATE INDEX idx ON orders (id)",
+    ];
+    for (const sql of corpus) {
+      gate.seen.length = 0;
+      await asking.handle({ sql, ctx: baseCtx });
+      if (gate.seen.length > 0) held.push(sql);
+    }
+    // Everything Ask held, Refuse must deny.
+    expect(held.length).toBe(corpus.length);
+    for (const sql of held) {
+      const d = await refusing.handle({ sql, ctx: baseCtx });
+      expect(d.allowed).toBe(false);
+    }
   });
 
   test("refusing row changes leaves the other two classes to their own flags", async () => {

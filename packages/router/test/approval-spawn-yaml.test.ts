@@ -21,11 +21,14 @@ const ALL_CLASSES = {
   row_changes: true,
   whole_table_writes: true,
   schema_changes: true,
+  // Derived legacy mirror, written for rollback safety — see ApprovalsConfig.
+  writes: true,
 } as const;
 const NO_CLASSES = {
   row_changes: false,
   whole_table_writes: false,
   schema_changes: false,
+  writes: false,
 } as const;
 
 function spawnDb(overrides: Partial<SpawnDatabase> = {}): SpawnDatabase {

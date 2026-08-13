@@ -230,15 +230,18 @@ export const projectDatabases = pgTable(
     // writes is something an operator asks for, never something a pre-existing
     // row inherits. Only the class flags reach the engine YAML;
     // `expires_after_seconds` governs the approval row's lifetime and is
-    // control-plane only. Rows written before the per-class split carry a
-    // single `writes` boolean, which validateApprovals reads as that value for
-    // all three classes. Hot-swappable via /admin/policy alongside the other
-    // blocks, so toggling it never respawns a warm container.
+    // control-plane only. `writes` is a DERIVED legacy mirror (true when any
+    // class is held) written alongside the class keys so a rollback to an app
+    // version that predates the split still reads the right posture — the
+    // expand half of expand/contract. Rows written before the split carry only
+    // `writes`, which validateApprovals reads as that value for all three
+    // classes. Hot-swappable via /admin/policy alongside the other blocks, so
+    // toggling it never respawns a warm container.
     approvals: jsonb("approvals")
       .$type<ApprovalsConfig>()
       .notNull()
       .default(
-        sql`'{"row_changes":false,"whole_table_writes":false,"schema_changes":false,"expires_after_seconds":1800}'::jsonb`,
+        sql`'{"row_changes":false,"whole_table_writes":false,"schema_changes":false,"expires_after_seconds":1800,"writes":false}'::jsonb`,
       ),
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),
     // Per-credential KMS grace tracking (10-min TTL + 60-min grace; refuse

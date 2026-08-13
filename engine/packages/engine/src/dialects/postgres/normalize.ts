@@ -684,8 +684,9 @@ function dmlTargetName(node: Record<string, unknown>): string {
 // whichever guardrail is enabled.
 //
 // CREATE-family writes (CREATE TABLE, CREATE TABLE AS, CREATE INDEX, …) emit no
-// site at all. They are writes as far as table_access is concerned, but no
-// write rule refuses them.
+// site at all — there is no destructive operation to name. They are still
+// writes to table_access, and the dangerous_statement rule reaches them through
+// accessChecks when block_dml is on, so "no site" does not mean "not refusable".
 function collectDangerousStatements(
   stmts: Array<{ stmt: Record<string, unknown> }>,
 ): DangerousStatement[] {

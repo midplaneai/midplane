@@ -114,8 +114,9 @@ export type ScopeUnit =
 //      CTE wipes the table just the same), so the guard is fail-closed.
 //   • "ddl"            — a DROP / TRUNCATE / ALTER statement. `operation` is the
 //      human keyword for the message (e.g. "DROP TABLE", "TRUNCATE",
-//      "ALTER TABLE"). CREATE is intentionally NOT included: an agent running
-//      migrations needs it, and it destroys nothing.
+//      "ALTER TABLE"). CREATE is intentionally NOT included — it destroys
+//      nothing, so it is not DDL for the purpose of block_ddl. It is still a
+//      write: block_dml reaches it via accessChecks (see dangerous-statement).
 export type DangerousStatement =
   | {
       kind: "row_dml";

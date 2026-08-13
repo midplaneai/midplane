@@ -164,10 +164,16 @@ export function PolicyEditor({
 
       {/* Sticky, because the two lists are longer than a viewport and a Save
           you have to scroll to find is one you forget to press. Only rendered
-          when dirty, so a pane you're only reading has no bar at all. */}
+          when dirty, so a pane you're only reading has no bar at all.
+
+          Lifted off the page by the surface ramp and a strong hairline, not a
+          drop shadow (DESIGN.md: "Hairlines, not shadows" — elevation comes
+          from --background → --card → --popover). --popover is the top of that
+          ramp, so the bar reads as the nearest surface while the lists behind
+          it sit on --card. */}
       {dirty || error ? (
         <div
-          className="sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-lg border border-border-strong bg-card px-4 py-3 shadow-lg"
+          className="sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-lg border border-border-strong bg-popover px-4 py-3"
           data-testid="policy-save-bar"
         >
           {/* role="status" on the text, not the bar: a live region wrapping the

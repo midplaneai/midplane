@@ -1,5 +1,5 @@
 // Live end-to-end: open MCP session → query a `read` table → flip the
-// table to `deny` via setTableAccess → re-query in the SAME session →
+// table to `deny` via setDatabasePolicy → re-query in the SAME session →
 // expect the deny decision WITHOUT a session reset.
 //
 // The whole point of /admin/policy: policy edits don't drop the agent's
@@ -55,7 +55,7 @@ test.beforeAll(async () => {
 
   const customerDsn = `postgres://postgres:${PG_PASSWORD}@host.docker.internal:${pgPort}/${PG_DB}`;
   // Seed permissive (default 'read') so the first query succeeds; the
-  // test flips a specific table to 'deny' via setTableAccess.
+  // test flips a specific table to 'deny' via setDatabasePolicy.
   const seeded = await seedProject({ region: "eu", dsn: customerDsn });
   customerId = seeded.customerId;
   projectId = seeded.projectId;
@@ -148,7 +148,7 @@ test("policy hot-reload preserves the agent's MCP session", async ({
   expect(JSON.stringify(allowedBody)).toContain("42");
 
   // 3. Hot-reload the policy → deny `t`.
-  const { setTableAccess } = await import(
+  const { setDatabasePolicy } = await import(
     "../apps/web/src/lib/projects.ts"
   );
   const { getMcpProxyContext } = await import(
@@ -160,12 +160,28 @@ test("policy hot-reload preserves the agent's MCP session", async ({
     orgId: `org_policy-e2e-${customerId}`,
     email: `policy-e2e-${customerId}@example.test`,
     region: "eu" as const,
+    // Inert here (the setter reads id + region), but the Customer type wants
+    // them and this file isn't covered by any tsconfig — so state them rather
+    // than let the caller drift out of type again.
+    planOverride: null,
+    plan: "free" as const,
+    ownerEmail: null,
     createdAt: new Date(),
   };
-  const updated = await setTableAccess(
+  // The pane saves table access and write rules together, so the setter takes
+  // both. Write rules are held at the engine's default posture here — this test
+  // is about table_access hot-reloading without a respawn.
+  const updated = await setDatabasePolicy(
     customer,
     projectId,
-    { default: "read", tables: { t: "deny" } },
+    {
+      tableAccess: { default: "read", tables: { t: "deny" } },
+      writeRules: {
+        row_changes: "allow",
+        whole_table_writes: "refuse",
+        schema_changes: "refuse",
+      },
+    },
     ctx,
     `user_e2e-policy-${customerId}`,
   );

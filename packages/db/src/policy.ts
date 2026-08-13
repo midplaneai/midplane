@@ -352,6 +352,17 @@ export function parseGuardrailsOrThrow(input: unknown): GuardrailsConfig {
 
 export type ApprovalsConfig = Record<WriteClass, boolean> & {
   expires_after_seconds: number;
+  /** Legacy mirror, DERIVED — true when any class is held. Written on every
+   *  save and never read in preference to the class keys (validateApprovals
+   *  only falls back to it when they are absent).
+   *
+   *  It exists for rollback: an app version that predates the split reads only
+   *  this key, so dropping it would leave a rolled-back deployment reading
+   *  "no approvals" and running writes that were being held. Deriving it as
+   *  "any class" errs toward over-holding on rollback, which is the safe
+   *  direction. Expand/contract — a later release can stop writing it once no
+   *  rollback target reads it. */
+  writes: boolean;
 };
 
 /** Off, with a 30-minute window when switched on. Long enough that an approver
@@ -362,6 +373,7 @@ export const DEFAULT_APPROVALS: ApprovalsConfig = {
   whole_table_writes: false,
   schema_changes: false,
   expires_after_seconds: 1800,
+  writes: false,
 };
 
 /** One minute floor — below this an agent's own retry cadence would outrun the
@@ -441,6 +453,10 @@ export function validateApprovals(input: unknown): ApprovalsValidationResult {
   }
 
   if (errors.length > 0) return { ok: false, errors };
+  // Re-derive the legacy mirror from the resolved classes, whatever the input
+  // said. It is never authoritative, so a stale or contradictory `writes` on
+  // the way in must not survive on the way out.
+  value.writes = WRITE_CLASSES.some((c) => value[c]);
   return { ok: true, value };
 }
 
@@ -504,6 +520,8 @@ export function applyWriteRules(
       whole_table_writes: rules.whole_table_writes === "ask",
       schema_changes: rules.schema_changes === "ask",
       expires_after_seconds: prevApprovals.expires_after_seconds,
+      // Legacy mirror for rollback safety — see ApprovalsConfig.writes.
+      writes: WRITE_CLASSES.some((c) => rules[c] === "ask"),
     },
   };
 }

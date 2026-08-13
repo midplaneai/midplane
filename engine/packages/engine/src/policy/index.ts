@@ -63,10 +63,10 @@ export interface EvaluateResult {
   // slip through because only one of the two is held.
   //
   // A write with no site at all (CREATE TABLE, CREATE TABLE AS, CREATE INDEX)
-  // reports "row_changes". Those are not refusable — no guardrail emits a site
-  // for them — but they ARE writes, and letting them fall out of the classified
-  // set would silently stop holding statements a single `writes: true` used to
-  // hold.
+  // reports "row_changes" — they ARE writes, and letting them fall out of the
+  // classified set would silently stop holding statements a single
+  // `writes: true` used to hold. block_dml refuses the same case, so the two
+  // ends of the rule cover identical ground.
   writeClasses: WriteClass[];
 }
 
@@ -125,7 +125,9 @@ function classifyWriteClasses(
   }
   // A write the dialect emitted no site for is still a write (CREATE TABLE and
   // friends). Classify it as a row change so it stays inside the approval
-  // stage's reach; nothing refuses it, because refusal reads sites, not this.
+  // stage's reach — and the guardrail rule applies block_dml to the same case,
+  // so Refuse reaches exactly what Ask reaches. They must agree: if Ask held a
+  // statement that Refuse let run, tightening the rule would permit more.
   if (classes.size === 0 && hasWriteTarget) classes.add("row_changes");
   return [...classes];
 }

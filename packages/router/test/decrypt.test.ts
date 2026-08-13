@@ -47,6 +47,7 @@ const cdb: ProjectDatabase = {
     whole_table_writes: false,
     schema_changes: false,
     expires_after_seconds: 1800,
+    writes: false,
   },
   columnMasks: {},
   ignoredColumns: {},

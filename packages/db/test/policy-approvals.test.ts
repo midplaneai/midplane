@@ -31,6 +31,7 @@ const ON: ApprovalsConfig = {
   whole_table_writes: true,
   schema_changes: true,
   expires_after_seconds: 1800,
+  writes: true,
 };
 
 describe("validateApprovals", () => {
@@ -71,6 +72,7 @@ describe("validateApprovals", () => {
         whole_table_writes: true,
         schema_changes: true,
         expires_after_seconds: 600,
+        writes: true,
       },
     });
     expect(validateApprovals({ writes: false })).toEqual({
@@ -86,6 +88,7 @@ describe("validateApprovals", () => {
       whole_table_writes: true,
       schema_changes: true,
       expires_after_seconds: 1800,
+      writes: true,
     });
   });
 
@@ -96,7 +99,25 @@ describe("validateApprovals", () => {
       whole_table_writes: false,
       schema_changes: true,
       expires_after_seconds: 1800,
+      writes: true,
     });
+  });
+
+  it("derives the legacy `writes` mirror from the classes, ignoring the input's", () => {
+    // Rollback safety: an app version that predates the split reads only this
+    // key. Dropping it would leave a rolled-back deployment reading "no
+    // approvals" and running writes that were being held — so it is written on
+    // every save, derived as "any class held" (over-holding on rollback is the
+    // safe direction).
+    const held = validateApprovals({ schema_changes: true });
+    expect(held.ok && held.value.writes).toBe(true);
+    const none = validateApprovals({ row_changes: false });
+    expect(none.ok && none.value.writes).toBe(false);
+    // A contradictory input must not survive: the classes are authoritative.
+    const lying = validateApprovals({ writes: true, row_changes: false, whole_table_writes: false, schema_changes: false });
+    expect(lying.ok && lying.value.writes).toBe(false);
+    const alsoLying = validateApprovals({ writes: false, schema_changes: true });
+    expect(alsoLying.ok && alsoLying.value.writes).toBe(true);
   });
 
   it("rejects a non-boolean class flag", () => {
@@ -394,6 +415,8 @@ describe("write rules", () => {
       // Control-plane-only state the rules say nothing about: rebuilding it
       // from the default would reset a tuned window on every unrelated save.
       expires_after_seconds: 600,
+      // Legacy mirror, derived: any class held.
+      writes: true,
     });
     expect(writeRulesFrom(guardrails, approvals)).toEqual(rules);
   });

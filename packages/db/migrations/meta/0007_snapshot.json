@@ -1,5 +1,5 @@
 {
-  "id": "3971da9d-6b5a-49a6-b79b-4cf5f94955c0",
+  "id": "dc0fd23a-9bc5-4589-9d5a-b141461077b4",
   "prevId": "59cc99ac-5cf1-4137-9d56-c9e0ec0ca9e5",
   "version": "7",
   "dialect": "postgresql",
@@ -984,7 +984,7 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true,
-          "default": "'{\"row_changes\":false,\"whole_table_writes\":false,\"schema_changes\":false,\"expires_after_seconds\":1800}'::jsonb"
+          "default": "'{\"row_changes\":false,\"whole_table_writes\":false,\"schema_changes\":false,\"expires_after_seconds\":1800,\"writes\":false}'::jsonb"
         },
         "rotated_at": {
           "name": "rotated_at",
