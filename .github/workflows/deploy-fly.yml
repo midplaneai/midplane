@@ -71,6 +71,11 @@ on:
         type: boolean
         required: true
         default: false
+      allow_engine_pin_mismatch:
+        description: "Escape hatch: roll out an image_tag that DISAGREES with the dispatched ref's OSS_ENGINE_IMAGE. Normally this combination is refused (see the pin-agreement preflight). Only for a deliberate incident action where you have reasoned about which policies the two versions can load. Leave OFF."
+        type: boolean
+        required: true
+        default: false
 
 concurrency:
   # One Fly rollout at a time. Do NOT cancel an in-flight deploy mid-bluegreen —
@@ -91,6 +96,66 @@ jobs:
       # rather than "whatever that tag points at when a machine happens to spawn".
       digest: ${{ steps.inspect.outputs.digest }}
     steps:
+      - name: Checkout (read the dispatched ref's engine pin)
+        uses: actions/checkout@v5
+
+      # The engine version and the web code are ONE release, but nothing used to
+      # say so: image_tag is a free-form dispatch string whose `default:` merely
+      # mirrors the pin, and the rest of preflight only proves the tag exists in
+      # the registry. Nothing compared it against the ref actually being built.
+      # The bluegreen cutover can't catch the mismatch either — it gates on
+      # /api/health, which is process liveness and never spawns an engine or
+      # loads a policy. So a web-at-HEAD / engine-one-release-back rollout went
+      # fully green and only failed later, on a customer's first policy save.
+      #
+      # That failure is not recoverable by retrying. saveDatabasePolicy commits
+      # project_databases BEFORE the hot push and deliberately skips the respawn
+      # fallback on a reject (a cold spawn would re-read the same rejected
+      # config), so a policy carrying a requires_features token the running
+      # engine doesn't know leaves that project unable to start until the engine
+      # is upgraded. Refusing the rollout is much cheaper than unwinding it.
+      - name: Engine pin agrees with the dispatched ref
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ALLOW_MISMATCH: ${{ inputs.allow_engine_pin_mismatch }}
+        run: |
+          set -euo pipefail
+          PIN_FILE="packages/router/src/oss-image.ts"
+          # Same shape scripts/check-image-pin.ts parses: the SSOT constant, tag
+          # part only. Anchored to the export so a version quoted inside the
+          # file's long explanatory comment can't be picked up instead, and
+          # tolerant of a trailing @sha256: the way the drift check's
+          # split("@")[0] is, so committing a digest here degrades to a normal
+          # comparison rather than an unparseable-file failure.
+          PIN_VERSION="$(sed -n 's/^export const OSS_ENGINE_IMAGE = "midplane\/midplane:\([0-9][0-9.]*\)[^"]*".*/\1/p' "$PIN_FILE")"
+          if [ -z "$PIN_VERSION" ]; then
+            echo "::error::could not parse OSS_ENGINE_IMAGE out of $PIN_FILE. If the constant's shape changed, update this check — do not delete it."
+            exit 1
+          fi
+          echo "Dispatched ref pins: $PIN_VERSION"
+          echo "Requested image_tag: $IMAGE_TAG"
+
+          if [ "$PIN_VERSION" = "$IMAGE_TAG" ]; then
+            echo "OK: engine pin and requested tag agree."
+            exit 0
+          fi
+
+          if [ "$ALLOW_MISMATCH" = "true" ]; then
+            echo "::warning::Rolling out engine $IMAGE_TAG against a ref that pins $PIN_VERSION (allow_engine_pin_mismatch=true). The web code and the engine are from different releases."
+            {
+              echo "## ⚠ Engine pin mismatch (explicitly allowed)"
+              echo ""
+              echo "- **Ref pins:** \`$PIN_VERSION\`"
+              echo "- **Rolling out:** \`$IMAGE_TAG\`"
+              echo ""
+              echo "A policy this web version writes may name an enforcement feature this engine does not support. The engine refuses the whole policy, and the refusal is not self-healing."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::error::Engine pin mismatch. This ref pins midplane/midplane:$PIN_VERSION but the rollout requested :$IMAGE_TAG. Dispatch from the commit whose OSS_ENGINE_IMAGE matches the engine you mean to run — a legitimate rollback re-deploys a matching ref, so it needs no override. If you genuinely intend to split them, re-run with allow_engine_pin_mismatch=true."
+          exit 1
+
       - name: Inspect midplane/midplane:${{ inputs.image_tag }} on Docker Hub
         id: inspect
         env:
