@@ -2,6 +2,7 @@ import { Database } from "lucide-react";
 import Link from "next/link";
 
 import { buttonVariants } from "@/components/ui/button";
+import { UPGRADE_URL } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 // Shown on the hosted sample project (projects.is_sample). The sample is a
@@ -12,8 +13,17 @@ import { cn } from "@/lib/utils";
 // project. Placed on the surface a sample user lands on (the Connect pane).
 export function SampleProjectNotice({
   newProjectHref = "/projects/new",
+  projectAtCap = false,
+  upgradeHref = UPGRADE_URL,
 }: {
   newProjectHref?: string;
+  /** The plan's project cap is reached, so the graduate-off-the-sample button
+   *  can't do what it says. It points at billing and says so instead — this is
+   *  the sample's whole purpose (try it, then bring your own data), and it's
+   *  precisely the moment a Free workspace with one real project hits the
+   *  limit. */
+  projectAtCap?: boolean;
+  upgradeHref?: string;
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-md border border-[hsl(var(--brand)/0.2)] bg-[hsl(var(--brand)/0.05)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -29,19 +39,21 @@ export function SampleProjectNotice({
           </p>
           <p className="text-xs text-muted-foreground">
             It&apos;s a read-only demo and doesn&apos;t count toward your
-            project limit. When you&apos;re ready, connect your own Postgres in
-            a new project.
+            project limit.{" "}
+            {projectAtCap
+              ? "Connecting your own Postgres needs a project slot, and your plan's are all in use."
+              : "When you're ready, connect your own Postgres in a new project."}
           </p>
         </div>
       </div>
       <Link
-        href={newProjectHref}
+        href={projectAtCap ? upgradeHref : newProjectHref}
         className={cn(
           buttonVariants({ variant: "default", size: "sm" }),
           "shrink-0 self-start sm:self-auto",
         )}
       >
-        Connect your own database
+        {projectAtCap ? "Upgrade to connect your own" : "Connect your own database"}
         <span aria-hidden className="ml-2 font-mono">
           →
         </span>

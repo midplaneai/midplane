@@ -91,7 +91,7 @@ export async function enforceSelfHostSignupGate(email: string): Promise<void> {
   // genuinely first signup gets a spurious "already has an owner", bricking the
   // instance. Rather than hang a P0 invariant on build-tool file discovery,
   // self-heal case (b): when the row is absent, seed it (idempotent — the same
-  // org + customer + Default project the boot hook seeds) and retry the SAME
+  // org + customer the boot hook seeds) and retry the SAME
   // atomic claim, turning "bricked" into "first request seeds". Case (a) skips
   // the reseed entirely (the row is present) and falls through to the throw, so
   // a real second owner is still rejected and the abusive reject path stays

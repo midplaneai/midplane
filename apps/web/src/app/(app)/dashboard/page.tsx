@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { RegionBadge } from "@/components/ui/region-badge";
+import { SectionLabel } from "@/components/ui/section-label";
 import {
   type DashboardProjectRow,
   type DashboardDatabase,
@@ -32,8 +33,8 @@ import { currentCustomer } from "@/lib/customer";
 import { assertManager, isManager } from "@/lib/org-auth";
 import { projectLabel, formatRelative } from "@/lib/format";
 import { projectQuota, resolvePlan, UPGRADE_URL } from "@/lib/plan";
+import { groupProjectsBySample } from "@/lib/project-groups";
 import { revalidateProjectsChrome } from "@/lib/revalidate";
-import { wantsProjectList } from "@/lib/routes";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
@@ -45,24 +46,9 @@ import { cn } from "@/lib/utils";
 // per-row URL display are removed from this page; PR3 owns the token
 // management surface (list / create / revoke) that replaces them.
 
-export default async function Dashboard({
-  searchParams,
-}: {
-  searchParams: Promise<{ setup?: string | string[]; list?: string | string[] }>;
-}) {
+export default async function Dashboard() {
   const customer = await currentCustomer();
   if (!customer) redirect("/signup");
-
-  // An older create flow redirected to /dashboard?setup=<id> to auto-open
-  // the agent setup sheet. New projects now land on the project's Connect
-  // tab instead. Strip the stale param if a bookmarked URL still carries it.
-  //
-  // ?list=1 is the explicit "show me the list" intent: it skips the
-  // single-project bounce below so the list — with its N / cap counter and
-  // create/upgrade CTA — stays reachable from the breadcrumb even when the
-  // account holds exactly one project.
-  const { list } = await searchParams;
-  const wantList = wantsProjectList(list);
 
   // Owner/admin can add, pause, and delete projects; a member operates them
   // (connects agents, runs queries) but sees no management controls.
@@ -74,40 +60,36 @@ export default async function Dashboard({
     caps.auditRetentionDays,
   );
 
-  // D1 (plan-design-review): a single-project customer skips the one-row list
-  // and lands on the project itself — the container stays invisible until there
-  // is more than one. An empty default project renders its own setup hero (see
-  // the projects/[id] empty state). ?list=1 (the breadcrumb's explicit intent)
-  // bypasses the bounce; without it a single-project account could never see
-  // the list at all.
-  if (rows.length === 1 && !wantList) {
-    redirect(`/projects/${rows[0]!.project.id}`);
-  }
+  // A single-project customer used to be bounced straight to that project, so
+  // "Projects" in the nav led somewhere different depending on how many you
+  // had — and it hid this page's counter and create/upgrade CTA from exactly
+  // the accounts nearest their cap (Free, one project). The list is now always
+  // the list; the sidebar's per-project rows and the switcher are the direct
+  // routes into a project.
 
   // Surface the project cap in the header so the limit is visible before
-  // the user tries to add one (and the create form already guards the same
-  // cap on /projects/new). Unlimited (Team) shows no counter. atLimit
-  // only fires when rows is non-empty, so it never collides with the
-  // empty-state branch below.
+  // the user tries to add one (and the create form guards the same cap on
+  // /projects/new). Unlimited (Team) shows no counter.
   const projectLimit = caps.projects;
-  // A projects-cap block is advisory-cleared when a reusable EMPTY project
-  // exists: createProject attaches the first database to it without consuming
-  // a slot (the same clearing /projects/new applies), so the CTA must stay
-  // "New project" — a fresh Free workspace reaching this list via ?list=1
-  // would otherwise see an upgrade wall for a create that succeeds. The rows
-  // already carry each project's databases, so this costs no extra query.
-  const hasReusableEmpty = rows.some((r) => r.databases.length === 0);
-  // The sample project doesn't count against the plan cap (createProject /
-  // getPlanUsage exclude it), so the header counter and the at-limit gate
-  // count only real projects — otherwise a user who tried the sample sees a
-  // wrong "2 / 1" or a bogus upgrade wall when adding their first real one.
-  const billableProjects = rows.filter((r) => !r.project.isSample).length;
-  // Shared at-cap unit (D2), fed the billable + empty counts the dashboard
-  // already derived from listDashboardProjects — no extra query (D2=A keeps
-  // the dashboard's own rows as the source).
+  // The sample project doesn't count against the plan cap (createProject
+  // excludes it), so the header counter and the at-limit gate count only real
+  // projects — otherwise a user who tried the sample sees a wrong "2 / 1" or a
+  // bogus upgrade wall when adding their first real one. The same model decides
+  // that the sample renders in its own group below rather than as a peer card,
+  // so the counter can't be contradicted by the list next to it.
+  const {
+    billable,
+    samples,
+    billableCount,
+    hasSample,
+    showBillableGroup,
+    showSampleGroup,
+    showGroupSeparator,
+  } = groupProjectsBySample(rows, (r) => r.project.isSample);
+  // Shared at-cap unit (D2), fed the billable count the dashboard already
+  // derived from listDashboardProjects — no extra query.
   const { atCap: atProjectLimit } = projectQuota({
-    billableProjects,
-    hasEmpty: hasReusableEmpty,
+    billableProjects: billableCount,
     caps,
     plan,
   });
@@ -134,7 +116,7 @@ export default async function Dashboard({
             <div className="flex items-center gap-3">
               {Number.isFinite(projectLimit) ? (
                 <span className="font-mono text-[11px] uppercase tracking-[0.04em] text-subtle">
-                  {billableProjects} / {projectLimit}
+                  {billableCount} / {projectLimit}
                 </span>
               ) : null}
               {/* Members can't add projects — show the counter, hide the CTA. */}
@@ -191,18 +173,49 @@ export default async function Dashboard({
           />
         ) : (
           <DashboardFreshnessProvider initial={initialFreshness(rows)}>
-            <ul className="space-y-3">
-              {rows.map((row) => (
-                <ProjectCard
-                  key={row.project.id}
-                  row={row}
-                  canManage={canManage}
-                  deleteAction={deleteAction}
-                  pauseAction={pauseAction}
-                  resumeAction={resumeAction}
-                />
-              ))}
-            </ul>
+            {/* The counter above deliberately excludes the sample, so the
+                sample must not sit in the list as a peer card — "2 projects
+                listed, 1 / 1 used" reads as a bug. It gets its own group
+                below instead, which is also what it is: a demo, not part of
+                the workspace's real inventory. The rule is only spelled out
+                in words at the cap, where the user is being told no and the
+                exclusion is the difference between a wall and a way through. */}
+            {atProjectLimit && hasSample ? (
+              <p className="mb-4 text-sm text-muted-foreground">
+                Sample projects don&apos;t count toward your plan limit.
+              </p>
+            ) : null}
+            {showBillableGroup ? (
+              <ul className="space-y-3">
+                {billable.map((row) => (
+                  <ProjectCard
+                    key={row.project.id}
+                    row={row}
+                    canManage={canManage}
+                    deleteAction={deleteAction}
+                    pauseAction={pauseAction}
+                    resumeAction={resumeAction}
+                  />
+                ))}
+              </ul>
+            ) : null}
+            {showSampleGroup ? (
+              <div className={showGroupSeparator ? "mt-8" : undefined}>
+                <SectionLabel className="mb-2">Demo</SectionLabel>
+                <ul className="space-y-3">
+                  {samples.map((row) => (
+                    <ProjectCard
+                      key={row.project.id}
+                      row={row}
+                      canManage={canManage}
+                      deleteAction={deleteAction}
+                      pauseAction={pauseAction}
+                      resumeAction={resumeAction}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </DashboardFreshnessProvider>
         )}
       </PageContainer>

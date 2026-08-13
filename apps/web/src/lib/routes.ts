@@ -8,21 +8,8 @@
  *  regional host served the request. */
 export const UPGRADE_URL = "/billing";
 
-/** The explicit "show me the projects list" intent. /dashboard auto-opens a
- *  single-project account's only project; this param skips that bounce so
- *  the list — with its N / cap counter and create/upgrade CTA — stays
- *  reachable from the breadcrumbs. */
-export const PROJECT_LIST_PARAM = "list";
-export const PROJECT_LIST_VALUE = "1";
-export const PROJECTS_LIST_HREF = `/dashboard?${PROJECT_LIST_PARAM}=${PROJECT_LIST_VALUE}`;
-
-/** Whether the ?list= search param asks for the list view. Next.js delivers
- *  a duplicated param as string[] — accept the value anywhere in the array
- *  so ?list=1&list=1 still reads as "list". */
-export function wantsProjectList(
-  list: string | string[] | undefined,
-): boolean {
-  return Array.isArray(list)
-    ? list.includes(PROJECT_LIST_VALUE)
-    : list === PROJECT_LIST_VALUE;
-}
+/** The projects list. Plain /dashboard: it used to carry ?list=1 because the
+ *  dashboard bounced a single-project account straight to its only project,
+ *  and the breadcrumbs needed a way to say "no, the list". The bounce is gone,
+ *  so the param is too — one destination, one URL. */
+export const PROJECTS_LIST_HREF = "/dashboard";

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { AddDatabaseSheet } from "@/components/projects/add-database-sheet";
 import { SectionLabel } from "@/components/ui/section-label";
 import { computeDbTabs } from "@/lib/db-tabs";
+import { UPGRADE_URL } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 // The headline of the Database pane: which database you're configuring,
@@ -25,8 +26,10 @@ export function DatabaseStrip({
   addAction,
   showAdd = true,
   atCap = false,
+  projectAtCap = false,
   sample = false,
   newProjectHref = "/projects/new",
+  upgradeHref = UPGRADE_URL,
   statusSlot,
 }: {
   databases: string[];
@@ -40,17 +43,26 @@ export function DatabaseStrip({
    *  instead of found after scrolling past the controls it describes. */
   statusSlot?: React.ReactNode;
   /** Fixed per-project database ceiling reached (advisory pre-flight — the add
-   *  path re-checks under a lock). Swaps the add affordance for a "create
-   *  another project" link so the wall is visible BEFORE a filled-in form
-   *  fails against it. The ceiling is plan-independent, so the remedy is
-   *  another project, not an upgrade. */
+   *  path re-checks under a lock). Swaps the add affordance for the next step
+   *  out, so the wall is visible BEFORE a filled-in form fails against it. The
+   *  ceiling is plan-independent, so the first remedy is another project, not
+   *  an upgrade — unless `projectAtCap` says another project isn't creatable
+   *  either. */
   atCap?: boolean;
+  /** The plan's PROJECT cap is also reached. Only read when `atCap` is true,
+   *  and only to keep that link honest: "create another project to add more"
+   *  pointed at /projects/new regardless, so a user already at their project
+   *  limit was invited to do the one thing that route would refuse. At both
+   *  caps the remedy really is an upgrade, so the link says so and goes to
+   *  billing. */
+  projectAtCap?: boolean;
   /** This is the hosted sample project. Adding a database is refused on the
    *  server (it's our shared read-only demo), so instead of an add control we
    *  point at a real new project — the "graduate off the sample" path, placed
    *  exactly where a user would look to bring in their own data. */
   sample?: boolean;
   newProjectHref?: string;
+  upgradeHref?: string;
 }) {
   function go(name: string) {
     if (name === current) return;
@@ -119,11 +131,18 @@ export function DatabaseStrip({
         ) : null}
         {showAdd ? (
           sample ? (
+            // Same honesty rule as the at-cap link below, on the path that
+            // actually gets walked: try the sample, then graduate off it. A
+            // Free workspace whose real project already fills the plan can't
+            // create a second one, so an unconditional "connect your own
+            // database" would hand the funnel's key step a route that refuses.
             <Link
-              href={newProjectHref}
+              href={projectAtCap ? upgradeHref : newProjectHref}
               className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[hsl(var(--brand)/0.35)] px-3 py-2 text-sm text-subtle transition-colors hover:border-[hsl(var(--brand)/0.6)] hover:bg-[hsl(var(--brand)/0.05)] hover:text-foreground"
             >
-              Connect your own database
+              {projectAtCap
+                ? "Upgrade to connect your own database"
+                : "Connect your own database"}
               <ArrowUpRight
                 className="h-3.5 w-3.5"
                 strokeWidth={1.5}
@@ -132,10 +151,12 @@ export function DatabaseStrip({
             </Link>
           ) : atCap ? (
             <Link
-              href={newProjectHref}
+              href={projectAtCap ? upgradeHref : newProjectHref}
               className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-3 py-2 text-sm text-subtle transition-colors hover:border-border-strong hover:text-foreground"
             >
-              Create another project to add more
+              {projectAtCap
+                ? "Upgrade to add more"
+                : "Create another project to add more"}
               <ArrowUpRight
                 className="h-3.5 w-3.5"
                 strokeWidth={1.5}

@@ -800,33 +800,16 @@ describe("createProject one sample per customer", () => {
   });
 });
 
-describe("ensureDefaultProject", () => {
-  it("seeds one empty project (no DB, no token) and is idempotent", async () => {
-    const { ensureDefaultProject } = await import("../src/lib/projects.ts");
-    const {
-      projects: projectsTable,
-      projectDatabases,
-      mcpTokens,
-    } = await import("@midplane-cloud/db");
-    // First onboarding: no project yet → seed one empty project.
-    handle.queueSelect([]); // existence check → none
-    await ensureDefaultProject(customer.id, customer.region);
-    const seeded = handle.calls.filter((c) => c.op === "insert");
-    expect(
-      seeded.some((c) => c.table === projectsTable),
-      "an empty project is inserted",
-    ).toBe(true);
-    // Empty by construction: no database, no token minted — so it never reaches
-    // the proxy / spawner zero-database invariants (the D6 safety property).
-    expect(seeded.some((c) => c.table === projectDatabases)).toBe(false);
-    expect(seeded.some((c) => c.table === mcpTokens)).toBe(false);
-    // Second call (returning user / double-submitted onboard): a project already
-    // exists → no-op, no second insert.
-    const before = handle.calls.filter((c) => c.op === "insert").length;
-    handle.queueSelect([{ id: "existing" }]); // existence check → found
-    await ensureDefaultProject(customer.id, customer.region);
-    const after = handle.calls.filter((c) => c.op === "insert").length;
-    expect(after, "idempotent: no second project inserted").toBe(before);
+describe("onboarding seeds no project", () => {
+  it("exports no ensureDefaultProject — a first project comes from a create", async () => {
+    // The seed used to hand every new customer an empty "Default" project.
+    // On Free (cap 1) that consumed the only slot before they had created
+    // anything, which forced projectQuota to carry a `hasEmpty` waiver so the
+    // counter could read 1/1 while "New project" stayed clickable and quietly
+    // filled the placeholder. Both are gone; this guards the seed staying gone,
+    // since re-adding it silently reintroduces the 1/1-with-nothing-in-it state.
+    const mod = await import("../src/lib/projects.ts");
+    expect("ensureDefaultProject" in mod).toBe(false);
   });
 });
 
@@ -2982,14 +2965,12 @@ describe("listProjectSwitcherRows", () => {
         label: "prod",
         serving: "ready",
         isSample: false,
-        isEmpty: false,
       },
       {
         id: "01HSWITCHUNNAMEDXXXXXXXXXX",
         label: "01HSWITCHUNN",
         serving: "ready",
         isSample: true,
-        isEmpty: false,
       },
     ]);
   });

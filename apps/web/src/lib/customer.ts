@@ -16,7 +16,6 @@ import {
   SELF_HOST_ORG_ID,
   SELF_HOST_REGION,
 } from "./self-host.ts";
-import { ensureDefaultProject } from "./projects.ts";
 import {
   slugifyWorkspaceName,
   suggestWorkspaceName,
@@ -125,9 +124,10 @@ export async function ensureImplicitCustomer(): Promise<void> {
       region: SELF_HOST_REGION,
     })
     .onConflictDoNothing();
-  // Seed the empty Default project at boot so a fresh self-host lands on a
-  // ready project (D6/D7-A). Idempotent + uncapped.
-  await ensureDefaultProject(SELF_HOST_CUSTOMER_ID, SELF_HOST_REGION);
+  // No project is seeded here. A fresh self-host lands on the dashboard's
+  // "No projects yet" state and creates its first project explicitly — the same
+  // path cloud takes. (Self-host is uncapped, so the old seed never tripped a
+  // limit; it's dropped for one onboarding path, not for the cap.)
 }
 
 // Create the customer row for the current org, OR return the existing row if
@@ -207,12 +207,10 @@ export async function upsertCustomerRegion(
     customer = winner;
   }
 
-  // Deliberately NOT seeding the Default project here: the caller runs its
-  // once-per-customer side effects (funnel event, welcome email) right after
-  // this returns, and those key off `created`. If seeding ran first and threw,
-  // the user's retry would see created=false and silently lose them forever —
-  // seeding is idempotent and heals on retry; the created-gated effects don't.
-  // The signup action calls ensureDefaultProject after its side effects.
+  // No project is seeded on this path (or anywhere else at onboarding) — a
+  // customer's first project comes from an explicit create, so the plan
+  // counter reads 0/N until they make one. See projects.ts's note where
+  // ensureDefaultProject used to live.
 
   return { customer, created: Boolean(winner) };
 }
