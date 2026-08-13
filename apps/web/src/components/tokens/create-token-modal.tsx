@@ -190,9 +190,11 @@ export function CreateTokenModal({
         s.access !== "none",
       );
     // Require at least one database when this project has any — a token with
-    // no databases selected would be useless, and (because empty PAT grants
-    // mean "unscoped = full" on the proxy) silently full-access, the opposite
-    // of what picking "no access" everywhere implies.
+    // no databases selected reaches nothing, so minting one is a wasted step.
+    // (This used to guard something sharper: empty PAT grants meant "unscoped
+    // = full" on the proxy, so picking "no access" everywhere silently minted
+    // a FULL-access token. The proxy now sends an empty grant set as `{}`, so
+    // this is back to being a plain usability check.)
     if (databases.length > 0 && selections.length === 0) {
       setError("Grant the agent access to at least one database.");
       return;

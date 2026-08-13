@@ -61,7 +61,6 @@ import {
   maskConfigAddsMasking,
   isValidDatabaseName,
   isValidDsn,
-  LastDatabaseProtected,
   pauseProject,
   removeDatabase,
   renameProject,
@@ -166,46 +165,6 @@ export default async function ProjectWorkspace({
   if (agents === null) notFound();
 
   const label = projectLabel(conn);
-
-  // D2 (plan-design-review): an empty project (no databases yet — the
-  // auto-seeded Default a new customer just landed on, or a project whose
-  // databases were all removed) shows a focused setup hero instead of empty
-  // data/token panes. The CTA routes to the paste-DSN flow, which reuses THIS
-  // empty project (createProject) and mints the default token on the first
-  // database — never the tokenless addDatabaseFromForm path.
-  if (databases.length === 0) {
-    return (
-      <>
-        <Topbar>
-          <Breadcrumb
-            items={[
-              { label: "Projects", href: PROJECTS_LIST_HREF },
-              { label },
-            ]}
-          />
-        </Topbar>
-        <PageContainer>
-          <EmptyState
-            title="Add your first database"
-            description="Paste a Postgres connection string to connect your agent to your data. We encrypt it at rest and mint your agent's access token."
-            action={
-              <div className="flex flex-wrap items-center justify-center gap-3">
-                <Link href="/projects/new">
-                  <Button size="sm">Add a database</Button>
-                </Link>
-                {/* Owner/admin only, and only when the hosted sample is
-                    configured. One click creates a sample project server-side
-                    (the DSN never reaches the browser). */}
-                {canManage && process.env.MIDPLANE_SAMPLE_DSN ? (
-                  <SampleProjectButton entry="project_empty" />
-                ) : null}
-              </div>
-            }
-          />
-        </PageContainer>
-      </>
-    );
-  }
 
   // `paused` gates the Resume affordance in the rail header. The serving
   // status headline, the demoted audit-log line, and a manual "Test
@@ -710,22 +669,12 @@ export default async function ProjectWorkspace({
     await assertManager();
     if (!selectedName) notFound();
     const ctx = getMcpProxyContext();
-    try {
-      const result = await removeDatabase(customer, id, selectedName, ctx);
-      if (!result) notFound();
-    } catch (err) {
-      // Disabled in the UI on the last DB, so this throw is tamper/race-only.
-      if (err instanceof LastDatabaseProtected) {
-        throw new Error(
-          "Can't remove the only database. Add another first or delete the project.",
-        );
-      }
-      throw err;
-    }
+    const result = await removeDatabase(customer, id, selectedName, ctx);
+    if (!result) notFound();
     revalidatePath("/dashboard");
     revalidatePath(`/projects/${id}`);
     // ?db pointed at the deleted database — drop it so the pane falls back to
-    // the first remaining one.
+    // the first remaining one, or to the setup hero when that was the last one.
     redirect(`/projects/${id}?section=database`);
   }
 
@@ -855,16 +804,18 @@ export default async function ProjectWorkspace({
                 }
               />
             )}
-            <DeleteDatabaseButton
-              name={selDb.name}
-              action={deleteDatabaseAction}
-              disabled={dbNames.length <= 1}
-            />
+            {conn.isSample ? null : (
+              <DeleteDatabaseButton
+                name={selDb.name}
+                action={deleteDatabaseAction}
+                isOnly={dbNames.length === 1}
+              />
+            )}
           </div>
-          {dbNames.length <= 1 ? (
+          {conn.isSample ? (
             <p className="text-xs text-subtle">
-              Delete is unavailable on the only database — add another, or
-              delete the whole project from Settings.
+              The sample database can&apos;t be replaced or removed. Delete the
+              sample project from Settings to remove it.
             </p>
           ) : null}
         </div>
@@ -872,10 +823,34 @@ export default async function ProjectWorkspace({
     </>
   ) : null;
 
+  // An empty project renders the setup hero as its Database pane — NOT as a
+  // whole-page early return, which is what this used to be. That was right
+  // when the only way to reach this state was the auto-seeded Default a new
+  // customer just landed on: nothing to manage, so a bare hero was the whole
+  // page. A project emptied by removeDatabase() keeps its name, its remaining
+  // tokens, its OAuth grants and its audit history, and an early return would
+  // leave the owner unable to revoke a retained credential or delete the
+  // project without first adding a database back. Every pane here guards on
+  // `selDb`, so the normal shell (Connect → agent list + revoke, Settings →
+  // delete project) renders fine with zero databases.
   const databasePane = !selDb ? (
-    <p className="text-sm text-muted-foreground">
-      No database on this project yet.
-    </p>
+    <EmptyState
+      title="Add your first database"
+      description="Paste a Postgres connection string to connect your agent to your data. We encrypt it at rest and mint your agent's access token."
+      action={
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Link href="/projects/new">
+            <Button size="sm">Add a database</Button>
+          </Link>
+          {/* Owner/admin only, and only when the hosted sample is configured.
+              One click creates a sample project server-side (the DSN never
+              reaches the browser). */}
+          {canManage && process.env.MIDPLANE_SAMPLE_DSN ? (
+            <SampleProjectButton entry="project_empty" />
+          ) : null}
+        </div>
+      }
+    />
   ) : canManage ? (
     managerDatabasePane
   ) : (

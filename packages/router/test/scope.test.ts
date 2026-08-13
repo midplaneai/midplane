@@ -106,7 +106,21 @@ describe("scopeHeaderValue", () => {
     expect(JSON.parse(value!)).toEqual({ main: "read", analytics: "write" });
   });
 
-  it("returns null for an empty scope (= unscoped, full access)", () => {
-    expect(scopeHeaderValue(new Map())).toBeNull();
+  it("serializes an EMPTY scope to `{}` — scope active, zero databases", () => {
+    // The security-critical case. `{}` is present-but-empty, which
+    // parseMcpScopeHeader reads as "scope active, zero DBs" = reaches nothing.
+    // Returning null here would send NO header, which the engine reads as
+    // unscoped = FULL access — so a credential whose grants were all cascaded
+    // away (its only granted database was deleted) would come back with more
+    // access than it was ever given.
+    expect(scopeHeaderValue(new Map())).toBe("{}");
+  });
+
+  it("never returns null — 'send no header' is the caller's decision", () => {
+    // Self-host owner-all is the only path that legitimately sends no header,
+    // and it does that by passing null itself. Keeping this serializer total
+    // stops an empty grant set from silently taking that branch.
+    expect(scopeHeaderValue(new Map())).not.toBeNull();
+    expect(scopeHeaderValue(new Map([["main", "read"]] as const))).not.toBeNull();
   });
 });

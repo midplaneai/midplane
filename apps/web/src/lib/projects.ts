@@ -4,6 +4,7 @@ import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
+  mcpTokens,
   projectDatabases,
   projects,
   customers,
@@ -365,14 +366,32 @@ export async function createProject(
     // enforced ONLY when we insert a new project below. This is what lets a
     // Free customer (cap = 1, auto-seeded at signup) add their first database
     // instead of tripping the cap with a second project.
+    //
+    // Ordering matters now that removeDatabase() can empty a NAMED project:
+    // prefer the unnamed/"Default" placeholder, then the oldest, so a customer
+    // who empties "prod" and then creates a genuinely new project doesn't get
+    // silently dropped back inside "prod". A named empty is still reusable (it
+    // has to be — it's what clears the projects cap for a Free customer whose
+    // only project is the emptied one), just never chosen ahead of a
+    // placeholder.
     const emptyProject = await tx
       .select({ id: projects.id, name: projects.name })
       .from(projects)
       .where(
         and(
           eq(projects.customerId, customer.id),
+          // Never reuse a sample: attaching a real database to a sample-flagged
+          // project would hand the customer a cap-excluded project with the
+          // sample's restricted UI. removeDatabase refuses to empty a sample, so
+          // this is belt-and-suspenders — the isSample flow reaches its own
+          // project through the existing-sample branch above, not through here.
+          eq(projects.isSample, false),
           sql`NOT EXISTS (SELECT 1 FROM project_databases pd WHERE pd.project_id = ${projects.id})`,
         ),
+      )
+      .orderBy(
+        sql`CASE WHEN ${projects.name} IS NULL OR ${projects.name} = 'Default' THEN 0 ELSE 1 END`,
+        asc(projects.createdAt),
       )
       .limit(1);
     if (emptyProject[0]) {
@@ -443,15 +462,29 @@ export async function createProject(
     if (!mintDefaultToken || !mintMaterial)
       return { created: true, tokenPlaintext: null };
     // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
-    // race). This is the project's FIRST token — an empty (reused or new)
-    // project has none, so the "default" name can't collide; ownership is
-    // guaranteed (the project belongs to this customer), so no pre-check needed.
+    // race). Ownership is guaranteed (the project belongs to this customer),
+    // so no ownership pre-check is needed.
+    //
+    // The name DOES need a pre-check. "default" is free on a new project, and
+    // used to be free on every reused one too — a reused project was always a
+    // freshly seeded placeholder with no tokens. removeDatabase() can now empty
+    // a project that still carries the tokens it accumulated, and
+    // mcp_tokens_name_per_project_uq is (project_id, name) across ALL rows,
+    // revoked ones included. Without this, POST /api/projects reusing an
+    // emptied project would 500 on a raw unique violation.
+    const existingTokenNames = await tx
+      .select({ name: mcpTokens.name })
+      .from(mcpTokens)
+      .where(eq(mcpTokens.projectId, resolvedProjectId));
+    const tokenName = firstFreeDefaultName(
+      existingTokenNames.map((r) => r.name),
+    );
     const minted = await insertTokenRow(
       tx,
       {
         id: defaultTokenId,
         projectId: resolvedProjectId,
-        name: "default",
+        name: tokenName,
         createdByUserId: actorUserId,
         expiresAt,
         env: tokenEnvFromConfig(process.env),
@@ -487,12 +520,30 @@ export async function createProject(
   return { id: resolvedProjectId, defaultTokenPlaintext, created };
 }
 
+/** First free name given the names already on a project: "default", else
+ *  "default-2", "default-3", … Only a reused project that was emptied by
+ *  removeDatabase() can have the base name taken — a new project has no tokens
+ *  at all — so this normally returns "default" on the first check. */
+function firstFreeDefaultName(takenNames: readonly string[]): string {
+  const taken = new Set(takenNames);
+  if (!taken.has("default")) return "default";
+  for (let n = 2; n <= 1000; n++) {
+    const candidate = `default-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  // Unreachable under any plan's token cap; keeps the insert from throwing a
+  // raw unique violation if it somehow is.
+  return `default-${ulid().slice(-8).toLowerCase()}`;
+}
+
 // Idempotently seed an empty "Default" project for a customer at onboarding so a
 // new customer lands on a ready project ("add a database / connect your agent")
-// instead of having to create a container first (decision D6/D7-A). An EMPTY
-// project carries no token and triggers no engine spawn, so it never reaches the
-// proxy/spawner zero-database invariants — the first database + default token are
-// minted later by createProject(), which reuses this project.
+// instead of having to create a container first (decision D6/D7-A). A project
+// seeded HERE carries no token, so nothing can reach the proxy on its behalf and
+// no engine spawn is attempted — the first database + default token are minted
+// later by createProject(), which reuses this project. (A project emptied by
+// removeDatabase() reaches the same database-less shape but KEEPS its tokens, so
+// it does hit the zero-database branch in proxy.ts forwardResolved().)
 //
 // Race-safe: an xact-scoped advisory lock keyed on the customer serializes
 // concurrent onboards (a double-submitted region form, two tabs) so they can't
@@ -1541,17 +1592,6 @@ export class DatabaseNameTaken extends Error {
   }
 }
 
-/** Returned when removeDatabase would leave a project child-less.
- *  The OSS engine spawn requires `databases:` to be non-empty, so we
- *  block the last delete cloud-side rather than letting the container
- *  fail to start on next agent call. */
-export class LastDatabaseProtected extends Error {
-  constructor() {
-    super("a project must have at least one database");
-    this.name = "LastDatabaseProtected";
-  }
-}
-
 // Postgres error code for unique_violation, plus the constraint name on
 // the (project_id, name) index in project_databases. Used as a
 // belt-and-suspenders catch around add/rename — the FOR UPDATE lock on
@@ -1714,14 +1754,26 @@ export async function addDatabase(
 
 // Remove a named DB from a project. The project itself is
 // preserved — only the child row goes away (FK cascade deletes any
-// per-DB state we add later). Audit history stays in
-// audit_events_index keyed on the (customer, region, database) tuple,
-// which is the compliance posture we want.
+// per-DB state we add later, including that DB's mcp_scope_grants).
+// Audit history stays in audit_events_index keyed on the (customer,
+// region, database) tuple, which is the compliance posture we want.
 //
-// Throws LastDatabaseProtected if the named child is the only DB on
-// the project (the OSS spawn requires `databases:` non-empty).
-// Returns null when the project is unknown / foreign or the child
-// doesn't exist on it.
+// Removing the LAST database is allowed: it returns the project to the
+// same database-less state ensureDefaultProject() seeds at onboarding,
+// which the project page renders as a setup hero and createProject()
+// reuses without consuming a plan slot. The difference from a freshly
+// seeded project is that an emptied one may still carry tokens — those
+// land on the zero-database branch in proxy.ts forwardResolved(), which
+// answers 404 rather than spawning a container with no DSN.
+//
+// A credential scoped to ONLY this database keeps existing and simply reaches
+// nothing: the FK cascade takes its mcp_scope_grants rows, and an empty grant
+// set is sent to the engine as `{}` — scope active, zero databases — never as
+// "unscoped, full access" (see proxyMcp in proxy.ts). Widening it again is an
+// explicit scope edit, not a side effect of adding a database.
+//
+// Refuses the hosted sample project, and returns null when the project is
+// unknown / foreign or the child doesn't exist on it.
 export async function removeDatabase(
   customer: Customer,
   projectId: string,
@@ -1732,13 +1784,10 @@ export async function removeDatabase(
   const result = await db.transaction(async (tx) => {
     // Lock the parent project row at the top of the txn so any
     // concurrent add/remove/rename on the same project serializes
-    // through here. Without this, two parallel removeDatabase calls
-    // on a 2-DB project can each see siblings.length === 2 in
-    // their own snapshot, each delete one row, and leave the
-    // project child-less — violating LastDatabaseProtected and
-    // breaking the next engine spawn.
+    // through here — a concurrent add and remove must not interleave
+    // into a YAML `databases:` block that reflects neither outcome.
     const parent = await tx
-      .select({ id: projects.id })
+      .select({ id: projects.id, isSample: projects.isSample })
       .from(projects)
       .where(
         and(
@@ -1749,19 +1798,15 @@ export async function removeDatabase(
       .for("update")
       .limit(1);
     if (parent.length === 0) return null;
-
-    // Count siblings BEFORE the delete so we can block the last-DB
-    // case. The parent lock above guarantees no other txn can change
-    // this count until we commit. N is small (single digits in
-    // practice); reading rows and checking length is cheaper to
-    // reason about than a raw count() expression.
-    const siblings = await tx
-      .select({ id: projectDatabases.id })
-      .from(projectDatabases)
-      .where(eq(projectDatabases.projectId, projectId));
-    if (siblings.length <= 1) {
-      return { error: "last_database" as const };
-    }
+    // The hosted sample is a shared read-only demo the customer takes or
+    // discards whole, never curates: addDatabase already refuses to attach
+    // databases to it, so a sample always has exactly the one — and it isn't
+    // the customer's to remove. Emptying it would also strand the sample flow,
+    // because the existing-sample branch in createProject returns the row
+    // WITHOUT attaching a database, so "Try the sample database" would land
+    // back on a permanently empty project. Refuse with the same leakage-safe
+    // null addDatabase uses; Settings → delete project removes the sample.
+    if (parent[0]!.isSample) return null;
 
     const deleted = await tx
       .delete(projectDatabases)
@@ -1777,7 +1822,6 @@ export async function removeDatabase(
   });
 
   if (!result) return null;
-  if ("error" in result) throw new LastDatabaseProtected();
 
   try {
     await deps.registry.invalidate(result.id);

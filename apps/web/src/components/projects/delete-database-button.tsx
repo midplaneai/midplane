@@ -15,23 +15,23 @@ import { Button } from "@/components/ui/button";
 
 // Delete one database off a project, from the workspace's Database pane.
 // Mirrors DeleteProjectButton (AlertDialog confirm → server action), but
-// scoped to a single child DB. Disabled when it's the only database — the
-// server still enforces this (LastDatabaseProtected); the disabled trigger
-// just keeps the dead path out of normal UI.
+// scoped to a single child DB. Deleting the only database is allowed and
+// leaves the project in its setup state, so `isOnly` only changes the
+// consequence the confirm spells out — never whether the action is offered.
 
 export function DeleteDatabaseButton({
   name,
   action,
-  disabled,
+  isOnly,
 }: {
   name: string;
   action: (formData: FormData) => Promise<void>;
-  disabled?: boolean;
+  isOnly?: boolean;
 }) {
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
-        <Button variant="quiet" size="inline" disabled={disabled}>
+        <Button variant="quiet" size="inline">
           Delete
         </Button>
       </AlertDialogTrigger>
@@ -39,9 +39,25 @@ export function DeleteDatabaseButton({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Agents lose access to this database immediately. Its policy and
-            encrypted credential are removed. The project and its other
-            databases are untouched. This can&apos;t be undone.
+            {isOnly ? (
+              <>
+                Agents lose access immediately. Its policy and encrypted
+                credential are removed, and any token scoped to only this
+                database is left reaching nothing until you grant it another.
+                This is the project&apos;s only database, so the project stays —
+                with its name, its tokens and its audit history — but nothing
+                can be queried through it until you add another. This
+                can&apos;t be undone.
+              </>
+            ) : (
+              <>
+                Agents lose access to this database immediately. Its policy and
+                encrypted credential are removed, and any token scoped to only
+                this database is left reaching nothing until you grant it
+                another. The project and its other databases are untouched.
+                This can&apos;t be undone.
+              </>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
