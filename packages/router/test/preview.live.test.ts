@@ -48,7 +48,7 @@ const SPAWN: SpawnOptions = {
       dsn: ENGINE_DSN,
       tableAccess: { default: "read", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
-      guardrails: { block_unqualified_dml: true, block_ddl: true },
+      guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
       columnMasks: {
         "public.users": { email: "full-redact", ssn: "consistent-hash" },
       },

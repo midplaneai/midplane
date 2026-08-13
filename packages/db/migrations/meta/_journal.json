@@ -50,6 +50,13 @@
       "when": 1786107985408,
       "tag": "0006_flashy_meggan",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786545390600,
+      "tag": "0007_write_rules",
+      "breakpoints": true
     }
   ]
 }

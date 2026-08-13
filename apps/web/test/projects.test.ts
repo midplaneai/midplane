@@ -934,7 +934,15 @@ const inertScope = { column: null, overrides: {}, exempt: [] };
 
 const ACTOR = "user_clerk-actor";
 
-describe("setTableAccess", () => {
+// Write rules that change no engine posture, for the table-access tests: they
+// are about the write path, not about what a write may do.
+const ALLOW_ALL = {
+  row_changes: "allow",
+  whole_table_writes: "allow",
+  schema_changes: "allow",
+} as const;
+
+describe("setDatabasePolicy — table access", () => {
   // Shape returned by the in-txn siblings select. Mirrors the post-update
   // state, since Postgres reads see writes within the same txn.
   const mainSibling = {
@@ -958,13 +966,13 @@ describe("setTableAccess", () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setTableAccess(
+    const result = await setDatabasePolicy(
       customer,
       "conn-1",
-      goodPolicy,
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
       deps,
       ACTOR,
     );
@@ -978,13 +986,13 @@ describe("setTableAccess", () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps({ delivered: false });
 
-    const result = await setTableAccess(
+    const result = await setDatabasePolicy(
       customer,
       "conn-1",
-      goodPolicy,
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
       deps,
       ACTOR,
     );
@@ -998,7 +1006,7 @@ describe("setTableAccess", () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setTableAccess, EnginePolicyRejected } = await import(
+    const { setDatabasePolicy, EnginePolicyRejected } = await import(
       "../src/lib/projects.ts"
     );
     const deps = makePolicyDeps({
@@ -1007,7 +1015,13 @@ describe("setTableAccess", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      setTableAccess(customer, "conn-1", goodPolicy, deps, ACTOR),
+      setDatabasePolicy(
+        customer,
+        "conn-1",
+        { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
+        deps,
+        ACTOR,
+      ),
     ).rejects.toBeInstanceOf(EnginePolicyRejected);
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
     errorSpy.mockRestore();
@@ -1017,16 +1031,16 @@ describe("setTableAccess", () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps(() => {
       throw new Error("ECONNREFUSED");
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await setTableAccess(
+    const result = await setDatabasePolicy(
       customer,
       "conn-1",
-      goodPolicy,
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
       deps,
       ACTOR,
     );
@@ -1041,13 +1055,13 @@ describe("setTableAccess", () => {
     handle.setChildUpdateResult([]); // child UPDATE matches 0 rows
     // No siblings queue entry needed — the txn short-circuits before
     // the siblings select runs.
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps();
 
-    const result = await setTableAccess(
+    const result = await setDatabasePolicy(
       customer,
       "conn-1",
-      goodPolicy,
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
       deps,
       ACTOR,
       "analytics",
@@ -1070,14 +1084,14 @@ describe("setTableAccess", () => {
         tenantScope: inertScope,
       },
     ]);
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const { projectDatabases } = await import("@midplane-cloud/db");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setTableAccess(
+    const result = await setDatabasePolicy(
       customer,
       "conn-1",
-      goodPolicy,
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
       deps,
       ACTOR,
       "analytics",
@@ -1120,13 +1134,13 @@ describe("setTableAccess", () => {
         },
       },
     ]);
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setTableAccess(
+    const result = await setDatabasePolicy(
       customer,
       "conn-1",
-      goodPolicy,
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
       deps,
       ACTOR,
     );
@@ -1149,13 +1163,13 @@ describe("setTableAccess", () => {
 
   it("404 path: returns null and skips push/invalidate when ownership mismatches", async () => {
     handle.queueSelect([]); // parent ownership check returns no row
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps();
 
-    const result = await setTableAccess(
+    const result = await setDatabasePolicy(
       customer,
       "conn-other",
-      goodPolicy,
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
       deps,
       ACTOR,
     );
@@ -1166,16 +1180,17 @@ describe("setTableAccess", () => {
   });
 
   it("rejects malformed policies before touching Postgres", async () => {
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps();
 
     await expect(
-      setTableAccess(
+      setDatabasePolicy(
         customer,
         "conn-1",
-        { default: "bogus", tables: {} } as unknown as Parameters<
-          typeof setTableAccess
-        >[2],
+        {
+          tableAccess: { default: "bogus", tables: {} },
+          writeRules: ALLOW_ALL,
+        } as unknown as Parameters<typeof setDatabasePolicy>[2],
         deps,
         ACTOR,
       ),
@@ -1184,15 +1199,43 @@ describe("setTableAccess", () => {
     expect(deps.pushPolicy).not.toHaveBeenCalled();
   });
 
+  it("rejects a malformed write rule before touching Postgres", async () => {
+    // Both halves are validated by the one setter, so neither can reach
+    // Postgres on the strength of the other being well-formed.
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
+    const deps = makePolicyDeps();
+
+    await expect(
+      setDatabasePolicy(
+        customer,
+        "conn-1",
+        {
+          tableAccess: goodPolicy,
+          writeRules: { ...ALLOW_ALL, schema_changes: "hold" },
+        } as unknown as Parameters<typeof setDatabasePolicy>[2],
+        deps,
+        ACTOR,
+      ),
+    ).rejects.toThrow(/invalid write rules/);
+    expect(handle.calls).toHaveLength(0);
+    expect(deps.pushPolicy).not.toHaveBeenCalled();
+  });
+
   it("emits POLICY_CHANGED audit row stamped with the actor", async () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const { auditEventsIndex } = await import("@midplane-cloud/db");
     const deps = makePolicyDeps({ delivered: true });
 
-    await setTableAccess(customer, "conn-1", goodPolicy, deps, ACTOR);
+    await setDatabasePolicy(
+      customer,
+      "conn-1",
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
+      deps,
+      ACTOR,
+    );
 
     const audit = handle.calls.find(
       (c) => c.op === "insert" && c.table === auditEventsIndex,
@@ -1239,11 +1282,18 @@ describe("setTableAccess", () => {
         tenantScope: inertScope,
       },
     ]);
-    const { setTableAccess } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const { auditEventsIndex } = await import("@midplane-cloud/db");
     const deps = makePolicyDeps({ delivered: true });
 
-    await setTableAccess(customer, "conn-1", goodPolicy, deps, ACTOR, "analytics");
+    await setDatabasePolicy(
+      customer,
+      "conn-1",
+      { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
+      deps,
+      ACTOR,
+      "analytics",
+    );
 
     const audit = handle.calls.find(
       (c) => c.op === "insert" && c.table === auditEventsIndex,
@@ -1258,7 +1308,7 @@ describe("setTableAccess", () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setTableAccess, EnginePolicyRejected } = await import(
+    const { setDatabasePolicy, EnginePolicyRejected } = await import(
       "../src/lib/projects.ts"
     );
     const { auditEventsIndex } = await import("@midplane-cloud/db");
@@ -1268,7 +1318,13 @@ describe("setTableAccess", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      setTableAccess(customer, "conn-1", goodPolicy, deps, ACTOR),
+      setDatabasePolicy(
+        customer,
+        "conn-1",
+        { tableAccess: goodPolicy, writeRules: ALLOW_ALL },
+        deps,
+        ACTOR,
+      ),
     ).rejects.toBeInstanceOf(EnginePolicyRejected);
     const audit = handle.calls.find(
       (c) => c.op === "insert" && c.table === auditEventsIndex,
@@ -1655,8 +1711,21 @@ describe("setTenantScope", () => {
   });
 });
 
-describe("setGuardrails", () => {
-  const optOut = { block_unqualified_dml: true, block_ddl: false };
+describe("setDatabasePolicy — write rules", () => {
+  // Refuse whole-table writes, allow the rest — the shape the pane produces
+  // when someone moves one row and leaves the others alone.
+  const optOutRules = {
+    row_changes: "allow",
+    whole_table_writes: "refuse",
+    schema_changes: "allow",
+  } as const;
+  const optOut = { block_unqualified_dml: true, block_ddl: false, block_dml: false };
+  const optOutApprovals = {
+    row_changes: false,
+    whole_table_writes: false,
+    schema_changes: false,
+    expires_after_seconds: 1800,
+  };
   // Post-update sibling row — post-0021 rows always carry guardrails.
   const mainSibling = {
     id: "cdb-main-1",
@@ -1671,10 +1740,16 @@ describe("setGuardrails", () => {
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
     const { projectDatabases } = await import("@midplane-cloud/db");
-    const { setGuardrails } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    const result = await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+    const result = await setDatabasePolicy(
+      customer,
+      "conn-1",
+      { tableAccess: { default: "read", tables: {} }, writeRules: optOutRules },
+      deps,
+      ACTOR,
+    );
 
     expect(result).toMatchObject({ id: "conn-1" });
     expect(deps.pushPolicy).toHaveBeenCalledWith("conn-1", [
@@ -1707,13 +1782,19 @@ describe("setGuardrails", () => {
         name: "analytics",
         tableAccess: { default: "deny", tables: {} },
         tenantScope: inertScope,
-        guardrails: { block_unqualified_dml: true, block_ddl: true },
+        guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
       },
     ]);
-    const { setGuardrails } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps({ delivered: true });
 
-    await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+    await setDatabasePolicy(
+      customer,
+      "conn-1",
+      { tableAccess: { default: "read", tables: {} }, writeRules: optOutRules },
+      deps,
+      ACTOR,
+    );
 
     expect(deps.pushPolicy).toHaveBeenCalledWith("conn-1", [
       {
@@ -1728,7 +1809,7 @@ describe("setGuardrails", () => {
         projectDatabaseId: "cdb-analytics-1",
         tableAccess: { default: "deny", tables: {} },
         tenantScope: inertScope,
-        guardrails: { block_unqualified_dml: true, block_ddl: true },
+        guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
       },
     ]);
   });
@@ -1737,7 +1818,7 @@ describe("setGuardrails", () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setGuardrails, EnginePolicyRejected } = await import(
+    const { setDatabasePolicy, EnginePolicyRejected } = await import(
       "../src/lib/projects.ts"
     );
     const { auditEventsIndex } = await import("@midplane-cloud/db");
@@ -1747,7 +1828,13 @@ describe("setGuardrails", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      setGuardrails(customer, "conn-1", optOut, deps, ACTOR),
+      setDatabasePolicy(
+        customer,
+        "conn-1",
+        { tableAccess: { default: "read", tables: {} }, writeRules: optOutRules },
+        deps,
+        ACTOR,
+      ),
     ).rejects.toBeInstanceOf(EnginePolicyRejected);
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
     // Same convention the sibling setters pin: recording "guardrails
@@ -1763,13 +1850,19 @@ describe("setGuardrails", () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setGuardrails } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps(() => {
       throw new Error("ECONNREFUSED");
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+    const result = await setDatabasePolicy(
+      customer,
+      "conn-1",
+      { tableAccess: { default: "read", tables: {} }, writeRules: optOutRules },
+      deps,
+      ACTOR,
+    );
     expect(result).toMatchObject({ id: "conn-1" });
     expect(deps.registry.invalidate).toHaveBeenCalledWith("conn-1");
     errorSpy.mockRestore();
@@ -1778,13 +1871,13 @@ describe("setGuardrails", () => {
   it("dbName not found / foreign owner: returns null and skips push", async () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([]); // 0 rows matched the dbName
-    const { setGuardrails } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps();
 
-    const result = await setGuardrails(
+    const result = await setDatabasePolicy(
       customer,
       "conn-1",
-      optOut,
+      { tableAccess: { default: "read", tables: {} }, writeRules: optOutRules },
       deps,
       ACTOR,
       "ghost-db",
@@ -1796,13 +1889,13 @@ describe("setGuardrails", () => {
 
   it("404 path: returns null and skips push/invalidate when ownership mismatches", async () => {
     handle.queueSelect([]); // parent ownership check returns no row
-    const { setGuardrails } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps();
 
-    const result = await setGuardrails(
+    const result = await setDatabasePolicy(
       customer,
       "conn-other",
-      optOut,
+      { tableAccess: { default: "read", tables: {} }, writeRules: optOutRules },
       deps,
       ACTOR,
     );
@@ -1812,37 +1905,84 @@ describe("setGuardrails", () => {
     expect(deps.registry.invalidate).not.toHaveBeenCalled();
   });
 
-  it("rejects non-boolean flags before touching Postgres", async () => {
-    const { setGuardrails } = await import("../src/lib/projects.ts");
+  it("projects the rules onto BOTH stored configs in one child write", async () => {
+    // The rules are the pane's vocabulary; guardrails + approvals are the
+    // engine's. If a save wrote only one of them, a class moved from Ask to
+    // Refuse would refuse AND stay held — the engine reads both.
+    handle.queueSelect([{ id: "conn-1", region: "eu" }]);
+    handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
+    handle.queueSelect([mainSibling]);
+    const { projectDatabases } = await import("@midplane-cloud/db");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
+    const deps = makePolicyDeps({ delivered: true });
+
+    await setDatabasePolicy(
+      customer,
+      "conn-1",
+      {
+        tableAccess: { default: "read", tables: {} },
+        writeRules: { ...optOutRules, schema_changes: "ask" },
+      },
+      deps,
+      ACTOR,
+    );
+
+    const childUpdate = handle.calls.find(
+      (c) => c.op === "update" && c.table === projectDatabases,
+    );
+    const set = childUpdate?.set as {
+      guardrails: typeof optOut;
+      approvals: typeof optOutApprovals;
+      tableAccess: unknown;
+    };
+    expect(set.guardrails).toEqual(optOut);
+    expect(set.approvals).toEqual({
+      ...optOutApprovals,
+      schema_changes: true,
+    });
+    expect(set.tableAccess).toEqual({ default: "read", tables: {} });
+  });
+
+  it("rejects an unknown rule value before touching Postgres", async () => {
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const deps = makePolicyDeps();
 
     await expect(
-      setGuardrails(
+      setDatabasePolicy(
         customer,
         "conn-1",
-        { block_unqualified_dml: "yes", block_ddl: true } as never,
+        {
+          tableAccess: { default: "read", tables: {} },
+          writeRules: { ...optOutRules, whole_table_writes: "block" },
+        } as unknown as Parameters<typeof setDatabasePolicy>[2],
         deps,
         ACTOR,
       ),
-    ).rejects.toThrow(/invalid guardrails/);
+    ).rejects.toThrow(/invalid write rules/);
     expect(handle.calls).toHaveLength(0);
     expect(deps.pushPolicy).not.toHaveBeenCalled();
   });
 
-  it("emits GUARDRAILS_CHANGED audit row stamped with the actor and the resulting flags", async () => {
+  it("emits a POLICY_CHANGED audit row stamped with the actor and the resulting flags", async () => {
     handle.queueSelect([{ id: "conn-1", region: "eu" }]);
     handle.setChildUpdateResult([{ id: "cdb-main-1" }]);
     handle.queueSelect([mainSibling]);
-    const { setGuardrails } = await import("../src/lib/projects.ts");
+    const { setDatabasePolicy } = await import("../src/lib/projects.ts");
     const { auditEventsIndex } = await import("@midplane-cloud/db");
     const deps = makePolicyDeps({ delivered: true });
 
-    await setGuardrails(customer, "conn-1", optOut, deps, ACTOR);
+    await setDatabasePolicy(
+      customer,
+      "conn-1",
+      { tableAccess: { default: "read", tables: {} }, writeRules: optOutRules },
+      deps,
+      ACTOR,
+    );
 
     const audit = handle.calls.find(
       (c) => c.op === "insert" && c.table === auditEventsIndex,
     );
-    expect(audit, "GUARDRAILS_CHANGED audit row must be inserted").toBeDefined();
+    expect(audit, "POLICY_CHANGED audit row must be inserted").toBeDefined();
     const row = audit?.set as
       | {
           eventType: string;
@@ -1852,13 +1992,17 @@ describe("setGuardrails", () => {
             project_id: string;
             database_name: string;
             guardrails: typeof optOut;
+            write_rules: typeof optOutRules;
           };
         }
       | undefined;
-    expect(row?.eventType).toBe("GUARDRAILS_CHANGED");
+    expect(row?.eventType).toBe("POLICY_CHANGED");
     expect(row?.tenantId).toBe("conn-1");
     expect(row?.actorUserId).toBe(ACTOR);
+    // Both vocabularies in the payload: the flags a reviewer can compare to
+    // the engine's own POLICY_RELOADED row, and the rules the pane showed.
     expect(row?.payload.guardrails).toEqual(optOut);
+    expect(row?.payload.write_rules).toEqual(optOutRules);
   });
 });
 

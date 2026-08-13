@@ -121,10 +121,20 @@ export function eventSummary(status: QueryStatus, payload: unknown): string {
       if (Array.isArray(p?.sections_changed)) {
         return policyReloadSummary(payload);
       }
-      // GUARDRAILS_CHANGED rows carry the resulting flags — say where each
-      // landed, since an opt-out is the part a reviewer cares about. SQL
-      // keywords / acronyms keep their caps inside the lowercase prose
-      // (same code-vs-label split as the guardrails card).
+      // A policy save carries the write rules it landed on. Read those in
+      // preference to the raw flags: the rules are what the operator chose,
+      // and "held" is a state the two boolean columns can't express between
+      // them. Checked before the guardrails sniff because a save carries both.
+      if (p?.write_rules && typeof p.write_rules === "object") {
+        const r = p.write_rules as Record<string, unknown>;
+        const state = (v: unknown) =>
+          v === "refuse" ? "refused" : v === "ask" ? "held" : "allowed";
+        return `write rules updated — row changes ${state(r.row_changes)}, whole-table writes ${state(r.whole_table_writes)}, schema changes ${state(r.schema_changes)}`;
+      }
+      // Rows written before write rules existed carry the resulting flags —
+      // say where each landed, since an opt-out is the part a reviewer cares
+      // about. SQL keywords / acronyms keep their caps inside the lowercase
+      // prose (the same code-vs-label split the pane uses).
       if (p?.guardrails && typeof p.guardrails === "object") {
         const g = p.guardrails as Record<string, unknown>;
         const state = (v: unknown) => (v === false ? "allowed" : "blocked");

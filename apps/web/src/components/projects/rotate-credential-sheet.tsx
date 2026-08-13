@@ -34,8 +34,8 @@ export function RotateCredentialSheet({
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="outline" size="sm">
-          Rotate connection string…
+        <Button variant="quiet" size="inline">
+          Rotate connection string
         </Button>
       </SheetTrigger>
       <SheetContent>

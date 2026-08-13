@@ -1,6 +1,6 @@
 // GET /api/projects/:id/tables?q=<substring>&db=<name> — table-name
-// suggestions for the permission-grid autocomplete on the per-DB page,
-// and the table source for the policy test panel's probe matrix.
+// suggestions for the Table access list's autocomplete on the per-DB page,
+// and the table source for the engine check's probe matrix.
 //
 // Auth: session via currentCustomer; ownership-checked against
 // projects.customer_id. Same 404-on-foreign-row leakage shape as the

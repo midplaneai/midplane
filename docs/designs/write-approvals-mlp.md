@@ -317,6 +317,17 @@ Mirrors `guardrails` exactly — `ApprovalsConfig` type, `validateApprovals`, `D
 means it **hot-reloads via `pushPolicy`** and does not enter `bootFingerprint`, so toggling
 approvals does not respawn a warm container and drop the agent's session.
 
+> **Superseded (write rules).** The toggle became the middle value of a
+> three-way rule per statement class — Refuse / Ask / Allow for row changes,
+> whole-table writes, and schema changes — so approval is no longer one global
+> switch and no longer needs prose explaining that guardrails outrank it (refuse
+> and ask are values of the same rule). `approvals` now carries a key per class,
+> with `writes: true` kept as the umbrella that sets all three; `guardrails`
+> gained `block_dml` as the refuse value for row changes. Everything below about
+> the gate, the ticket, and the non-decisions is unchanged. See the engine
+> CHANGELOG's write-rules entry and `writeRulesFrom` / `applyWriteRules` in
+> `packages/db/src/policy.ts`.
+
 `MIDPLANE_APPROVAL_URL` / `MIDPLANE_APPROVAL_TOKEN` are per-deployment constants injected at
 spawn across all three backends (docker / fly / process), not per-project — the control plane
 resolves project identity from the authenticated request.

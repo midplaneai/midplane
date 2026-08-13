@@ -338,7 +338,7 @@ describe("serializeMultiDbPolicyToYaml + column_masks", () => {
       projectDatabaseId: "01HXYZ123ABC456DEF789GHI01",
       tableAccess: { default: "read", tables: {} },
       tenantScope: { column: null, overrides: {}, exempt: [] },
-      guardrails: { block_unqualified_dml: true, block_ddl: true },
+      guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
       ...overrides,
     };
   }

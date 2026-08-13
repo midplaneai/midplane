@@ -2,7 +2,7 @@
 
 // Masked preview (design D2 / eng-review E1) — the PROOF surface for masking.
 //
-// The Test panel (test-policy-panel.tsx) reconciles policy verdicts but never
+// The engine check (engine-check.tsx) reconciles policy verdicts but never
 // executes, so it cannot show a masked value. This panel does: it POSTs a
 // read-only SELECT to /api/projects/:id/preview, which runs it through the SAME
 // `query` tool the agent uses (execute + maskResultSet), and renders the rows
@@ -18,7 +18,7 @@
 //
 // Calibrated to DESIGN.md: table-first, lowercase-mono headers (the `Th`
 // helper), semantic allow/deny/warn (no fourth color), hairlines, 0-radius,
-// and a persistent result-redaction note. Sibling of test-policy-panel.tsx.
+// and a persistent result-redaction note. Sibling of engine-check.tsx.
 //
 // Types come from the pure @midplane-cloud/db/policy subpath — never the root
 // entrypoint in a client component (see CLAUDE.md).
