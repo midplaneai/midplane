@@ -42,15 +42,17 @@ export function DeleteDatabaseButton({
             {isOnly ? (
               <>
                 Agents lose access immediately. Its policy and encrypted
-                credential are removed. This is the project&apos;s only
-                database, so the project stays — with its name, tokens and
-                audit history — but nothing can be queried through it until you
-                add another. This can&apos;t be undone.
+                credential are removed, and any machine token scoped to only
+                this database is revoked. This is the project&apos;s only
+                database, so the project stays — with its name, its other
+                tokens and its audit history — but nothing can be queried
+                through it until you add another. This can&apos;t be undone.
               </>
             ) : (
               <>
                 Agents lose access to this database immediately. Its policy and
-                encrypted credential are removed. The project and its other
+                encrypted credential are removed, and any machine token scoped
+                to only this database is revoked. The project and its other
                 databases are untouched. This can&apos;t be undone.
               </>
             )}

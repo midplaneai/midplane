@@ -4,6 +4,8 @@ import { ulid } from "ulid";
 
 import {
   auditEventsIndex,
+  mcpScopeGrants,
+  mcpTokens,
   projectDatabases,
   projects,
   customers,
@@ -461,15 +463,29 @@ export async function createProject(
     if (!mintDefaultToken || !mintMaterial)
       return { created: true, tokenPlaintext: null };
     // Default token, ATOMIC with the cap check + DB insert (closes the over-cap
-    // race). This is the project's FIRST token — an empty (reused or new)
-    // project has none, so the "default" name can't collide; ownership is
-    // guaranteed (the project belongs to this customer), so no pre-check needed.
+    // race). Ownership is guaranteed (the project belongs to this customer),
+    // so no ownership pre-check is needed.
+    //
+    // The name DOES need a pre-check. "default" is free on a new project, and
+    // used to be free on every reused one too — a reused project was always a
+    // freshly seeded placeholder with no tokens. removeDatabase() can now empty
+    // a project that still carries the tokens it accumulated, and
+    // mcp_tokens_name_per_project_uq is (project_id, name) across ALL rows,
+    // revoked ones included. Without this, POST /api/projects reusing an
+    // emptied project would 500 on a raw unique violation.
+    const existingTokenNames = await tx
+      .select({ name: mcpTokens.name })
+      .from(mcpTokens)
+      .where(eq(mcpTokens.projectId, resolvedProjectId));
+    const tokenName = firstFreeDefaultName(
+      existingTokenNames.map((r) => r.name),
+    );
     const minted = await insertTokenRow(
       tx,
       {
         id: defaultTokenId,
         projectId: resolvedProjectId,
-        name: "default",
+        name: tokenName,
         createdByUserId: actorUserId,
         expiresAt,
         env: tokenEnvFromConfig(process.env),
@@ -503,6 +519,22 @@ export async function createProject(
   }
 
   return { id: resolvedProjectId, defaultTokenPlaintext, created };
+}
+
+/** First free name given the names already on a project: "default", else
+ *  "default-2", "default-3", … Only a reused project that was emptied by
+ *  removeDatabase() can have the base name taken — a new project has no tokens
+ *  at all — so this normally returns "default" on the first check. */
+function firstFreeDefaultName(takenNames: readonly string[]): string {
+  const taken = new Set(takenNames);
+  if (!taken.has("default")) return "default";
+  for (let n = 2; n <= 1000; n++) {
+    const candidate = `default-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  // Unreachable under any plan's token cap; keeps the insert from throwing a
+  // raw unique violation if it somehow is.
+  return `default-${ulid().slice(-8).toLowerCase()}`;
 }
 
 // Idempotently seed an empty "Default" project for a customer at onboarding so a
@@ -1765,14 +1797,19 @@ export async function addDatabase(
 // land on the zero-database branch in proxy.ts forwardResolved(), which
 // answers 404 rather than spawning a container with no DSN.
 //
-// Returns null when the project is unknown / foreign or the child
-// doesn't exist on it.
+// Any headless PAT whose ONLY scope grant was on this database is revoked in
+// the same transaction — see the comment at the query below; leaving it would
+// silently promote a single-database token to full access. `revokedTokens` is
+// how many were revoked, so the caller can tell the user.
+//
+// Refuses the hosted sample project, and returns null when the project is
+// unknown / foreign or the child doesn't exist on it.
 export async function removeDatabase(
   customer: Customer,
   projectId: string,
   dbName: string,
   deps: DatabaseMutationDeps,
-): Promise<{ id: string } | null> {
+): Promise<{ id: string; revokedTokens: number } | null> {
   const db = getDb(customer.region);
   const result = await db.transaction(async (tx) => {
     // Lock the parent project row at the top of the txn so any
@@ -1801,6 +1838,55 @@ export async function removeDatabase(
     // null addDatabase uses; Settings → delete project removes the sample.
     if (parent[0]!.isSample) return null;
 
+    // Resolve the child BEFORE deleting it: the FK cascade takes its
+    // mcp_scope_grants rows with it, and we need to know which credentials
+    // those rows belonged to while they still exist.
+    const target = await tx
+      .select({ id: projectDatabases.id })
+      .from(projectDatabases)
+      .where(
+        and(
+          eq(projectDatabases.projectId, projectId),
+          eq(projectDatabases.name, dbName),
+        ),
+      )
+      .limit(1);
+    if (target.length === 0) return null;
+    const targetId = target[0]!.id;
+
+    // Headless PATs whose ONLY grant is on the database being deleted.
+    //
+    // The proxy grandfathers a PAT with zero grant rows as UNSCOPED — no
+    // X-Midplane-Scope header, which the engine reads as full access (see
+    // proxyMcp in proxy.ts). That rule exists for tokens minted before
+    // per-agent scope existed. It means a token deliberately scoped to ONE
+    // database would, the moment the cascade empties its grant set, come
+    // back as a FULL-ACCESS token — silently widening to whatever database
+    // is added to the project next. Revoke it instead: its entire authorized
+    // surface is gone, so the honest state is "authorizes nothing", not
+    // "authorizes everything".
+    //
+    // OAuth grants need no equivalent handling: the cloud OAuth path already
+    // fail-closes on an empty scope with a 403 (see forwardOAuthForProject).
+    //
+    // This is not specific to deleting the LAST database — a token scoped to
+    // one database of several has always been orphaned this way. Lifting the
+    // last-database rule just makes it the common path.
+    const orphaned = await tx
+      .select({ tokenId: mcpScopeGrants.mcpTokenId })
+      .from(mcpScopeGrants)
+      .where(
+        and(
+          eq(mcpScopeGrants.projectDatabaseId, targetId),
+          isNotNull(mcpScopeGrants.mcpTokenId),
+          sql`NOT EXISTS (
+            SELECT 1 FROM mcp_scope_grants g2
+            WHERE g2.mcp_token_id = ${mcpScopeGrants.mcpTokenId}
+              AND g2.project_database_id <> ${targetId}
+          )`,
+        ),
+      );
+
     const deleted = await tx
       .delete(projectDatabases)
       .where(
@@ -1811,7 +1897,27 @@ export async function removeDatabase(
       )
       .returning({ id: projectDatabases.id });
     if (deleted.length === 0) return null;
-    return { id: parent[0]!.id };
+
+    const orphanedIds = orphaned
+      .map((r) => r.tokenId)
+      .filter((id): id is string => id !== null);
+    if (orphanedIds.length > 0) {
+      await tx
+        .update(mcpTokens)
+        .set({
+          status: "revoked",
+          revokedAt: new Date(),
+          revokedReason: "sole granted database deleted",
+        })
+        .where(
+          and(
+            inArray(mcpTokens.id, orphanedIds),
+            eq(mcpTokens.status, "active"),
+          ),
+        );
+    }
+
+    return { id: parent[0]!.id, revokedTokens: orphanedIds.length };
   });
 
   if (!result) return null;
@@ -1822,7 +1928,7 @@ export async function removeDatabase(
     console.error("[removeDatabase] registry.invalidate failed", err);
   }
 
-  return { id: result.id };
+  return { id: result.id, revokedTokens: result.revokedTokens };
 }
 
 // Rename a DB alias. The OSS engine treats `database` as the agent-facing

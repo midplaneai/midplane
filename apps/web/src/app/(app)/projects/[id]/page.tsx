@@ -168,46 +168,6 @@ export default async function ProjectWorkspace({
 
   const label = projectLabel(conn);
 
-  // D2 (plan-design-review): an empty project (no databases yet — the
-  // auto-seeded Default a new customer just landed on, or a project whose
-  // databases were all removed) shows a focused setup hero instead of empty
-  // data/token panes. The CTA routes to the paste-DSN flow, which reuses THIS
-  // empty project (createProject) and mints the default token on the first
-  // database — never the tokenless addDatabaseFromForm path.
-  if (databases.length === 0) {
-    return (
-      <>
-        <Topbar>
-          <Breadcrumb
-            items={[
-              { label: "Projects", href: PROJECTS_LIST_HREF },
-              { label },
-            ]}
-          />
-        </Topbar>
-        <PageContainer>
-          <EmptyState
-            title="Add your first database"
-            description="Paste a Postgres connection string to connect your agent to your data. We encrypt it at rest and mint your agent's access token."
-            action={
-              <div className="flex flex-wrap items-center justify-center gap-3">
-                <Link href="/projects/new">
-                  <Button size="sm">Add a database</Button>
-                </Link>
-                {/* Owner/admin only, and only when the hosted sample is
-                    configured. One click creates a sample project server-side
-                    (the DSN never reaches the browser). */}
-                {canManage && process.env.MIDPLANE_SAMPLE_DSN ? (
-                  <SampleProjectButton entry="project_empty" />
-                ) : null}
-              </div>
-            }
-          />
-        </PageContainer>
-      </>
-    );
-  }
-
   // `paused` gates the Resume affordance in the rail header. The serving
   // status headline, the demoted audit-log line, and a manual "Test
   // connection" (wake) all live in the <ServingStatus> popover below.
@@ -939,10 +899,34 @@ export default async function ProjectWorkspace({
     </>
   ) : null;
 
+  // An empty project renders the setup hero as its Database pane — NOT as a
+  // whole-page early return, which is what this used to be. That was right
+  // when the only way to reach this state was the auto-seeded Default a new
+  // customer just landed on: nothing to manage, so a bare hero was the whole
+  // page. A project emptied by removeDatabase() keeps its name, its remaining
+  // tokens, its OAuth grants and its audit history, and an early return would
+  // leave the owner unable to revoke a retained credential or delete the
+  // project without first adding a database back. Every pane here guards on
+  // `selDb`, so the normal shell (Connect → agent list + revoke, Settings →
+  // delete project) renders fine with zero databases.
   const databasePane = !selDb ? (
-    <p className="text-sm text-muted-foreground">
-      No database on this project yet.
-    </p>
+    <EmptyState
+      title="Add your first database"
+      description="Paste a Postgres connection string to connect your agent to your data. We encrypt it at rest and mint your agent's access token."
+      action={
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Link href="/projects/new">
+            <Button size="sm">Add a database</Button>
+          </Link>
+          {/* Owner/admin only, and only when the hosted sample is configured.
+              One click creates a sample project server-side (the DSN never
+              reaches the browser). */}
+          {canManage && process.env.MIDPLANE_SAMPLE_DSN ? (
+            <SampleProjectButton entry="project_empty" />
+          ) : null}
+        </div>
+      }
+    />
   ) : canManage ? (
     managerDatabasePane
   ) : (
