@@ -36,6 +36,13 @@ const SITES = [
   "fly-web-eu.toml",
   "fly-web-us.toml",
   "README.md",
+  // The ops runbook carries prod MIDPLANE_OSS_IMAGE literals in copy-pasteable
+  // `fly secrets set` blocks, so a stale tag here is a stale tag an operator
+  // pastes into prod during bootstrap or manual recovery. It was bumped by hand
+  // for three releases before this; the scanner validates the tag part only, so
+  // the bare-tag bootstrap examples (no digest to reference before the first
+  // deploy) pass unchanged.
+  "docs/deploy.md",
   ".github/workflows/deploy-fly.yml",
   "e2e/hot-policy-reload.live.e2e.ts",
   "e2e/mcp-proxy.live.e2e.ts",

@@ -25,7 +25,7 @@ primary_region = "iad"
   # The digest is intentionally dropped between releases. RELEASE STEP: publish
   # the pinned tag (engine-v<version>), then re-pin the @sha256 digest here + in
   # fly-eu.toml and re-run scripts/check-image-pin.ts (it validates the tag part).
-  image = "midplane/midplane:0.16.0@sha256:bdbcdc0d5194bedeb14571e5858f2b15991f1c9ecc529103522c301271f13c1e"
+  image = "midplane/midplane:0.17.0"
 
 [env]
   PORT = "8080"
