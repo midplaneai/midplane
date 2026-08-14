@@ -88,7 +88,7 @@ import {
   resolvePlan,
   UPGRADE_URL,
 } from "@/lib/plan";
-import { groupProjects } from "@/lib/project-groups";
+import { connectOwnDataTarget, groupProjects } from "@/lib/project-groups";
 import { PROJECTS_LIST_HREF } from "@/lib/routes";
 import { getPostHog } from "@/lib/posthog";
 import {
@@ -185,12 +185,23 @@ export default async function ProjectWorkspace({
   // the strip has to know before it picks a label. Samples are off the cap
   // (createProject excludes them), so the counter and the gate see only real
   // projects — the sample still lists, just not against the limit.
-  const { billableCount } = groupProjects(switcherRows);
+  const { billable, billableCount } = groupProjects(switcherRows);
   const { atCap: atProjectCap, quotaLine: projectQuotaLine } = projectQuota({
     billableProjects: billableCount,
     caps,
     plan,
   });
+  // Graduating off the sample: a new project normally, or an existing one at
+  // the project cap. Deliberately never billing — the project cap doesn't gate
+  // adding a database to a project they already own (see connectOwnDataTarget).
+  const connectTarget = connectOwnDataTarget(atProjectCap, billable);
+  const sampleConnect =
+    connectTarget.kind === "existing-project"
+      ? {
+          href: `/projects/${connectTarget.project.id}?section=database`,
+          intoExistingProject: true,
+        }
+      : { href: "/projects/new", intoExistingProject: false };
 
   // Which database the per-DB panes target. Trust ?db only if it names a db
   // on this project; otherwise fall back to the first.
@@ -772,6 +783,7 @@ export default async function ProjectWorkspace({
         atCap={dbAtCap}
         projectAtCap={atProjectCap}
         sample={conn.isSample}
+        sampleConnect={sampleConnect}
         newProjectHref="/projects/new"
         // "Why did my agent get denied?" — asked of the engine that decides,
         // right under the database it decides for.
@@ -903,6 +915,7 @@ export default async function ProjectWorkspace({
         atCap={dbAtCap}
         projectAtCap={atProjectCap}
         sample={conn.isSample}
+        sampleConnect={sampleConnect}
         newProjectHref="/projects/new"
       />
       {canManage ? (
@@ -948,8 +961,8 @@ export default async function ProjectWorkspace({
     <div className="space-y-6">
       {conn.isSample && canManage ? (
         <SampleProjectNotice
-          newProjectHref="/projects/new"
-          projectAtCap={atProjectCap}
+          connectHref={sampleConnect.href}
+          intoExistingProject={sampleConnect.intoExistingProject}
         />
       ) : null}
 

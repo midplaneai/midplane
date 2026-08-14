@@ -6,9 +6,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  connectOwnDataTarget,
   groupProjects,
   groupProjectsBySample,
 } from "../src/lib/project-groups.ts";
+
+import { CAPS, projectQuota } from "../src/lib/plan.ts";
 
 function row(id: string, isSample = false) {
   return { id, isSample };
@@ -84,6 +87,45 @@ describe("groupProjects", () => {
     ]);
     expect(g.billable.map((r) => r.id)).toEqual(["a", "b", "c"]);
     expect(g.samples.map((r) => r.id)).toEqual(["s1", "s2"]);
+  });
+});
+
+describe("connectOwnDataTarget", () => {
+  it("sends you to a new project when you have room", () => {
+    const t = connectOwnDataTarget(false, [row("prod")]);
+    expect(t).toEqual({ kind: "new-project" });
+  });
+
+  it("sends you to an existing project at the cap — never to billing", () => {
+    // The regression this guards: the at-cap branch used to route the sample's
+    // "connect your own database" CTA to /billing. Bringing your own Postgres
+    // needs a project SLOT only when there's nowhere to put it; at the cap
+    // there is somewhere, and the database ceiling is per-project, not per-plan.
+    const t = connectOwnDataTarget(true, [row("prod"), row("staging")]);
+    expect(t).toEqual({ kind: "existing-project", project: row("prod") });
+  });
+
+  it("at-cap always has a project to offer — the invariant behind the fix", () => {
+    // atProjectCap can only be true when billableCount >= caps.projects, and
+    // every plan's cap is >= 1. So the CTA never fires with an empty list, and
+    // "upgrade to connect your own data" was wrong in 100% of the cases where
+    // it rendered. Assert the implication across the real cap table.
+    for (const plan of ["free", "pro"] as const) {
+      const caps = CAPS[plan];
+      const billable = Array.from({ length: caps.projects }, (_, i) =>
+        row(`p${i}`),
+      );
+      expect(projectQuota({ billableProjects: billable.length, caps, plan }).atCap).toBe(
+        true,
+      );
+      expect(connectOwnDataTarget(true, billable).kind).toBe("existing-project");
+    }
+  });
+
+  it("falls back to a new project if the list somehow holds no real project", () => {
+    // Defensive: the invariant above says this can't happen, but a caller
+    // passing a sample-only list must not produce a link to nothing.
+    expect(connectOwnDataTarget(true, []).kind).toBe("new-project");
   });
 });
 

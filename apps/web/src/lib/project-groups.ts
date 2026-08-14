@@ -73,3 +73,30 @@ export function groupProjects<T extends SampleFlagged>(
 ): ProjectGrouping<T> {
   return groupProjectsBySample(rows, (r) => r.isSample);
 }
+
+/** Where "connect your own database" goes from the sample project.
+ *
+ *  This is NOT an upgrade decision, and treating it as one is a trap worth
+ *  spelling out. Connecting your own Postgres needs a project SLOT only when
+ *  there's no project to put it in. At the project cap there provably is one:
+ *  the cap is reached by OWNING projects, and every plan's cap is at least 1,
+ *  so `atProjectCap` implies at least one real project exists. Databases are
+ *  capped per project (MAX_DATABASES_PER_PROJECT), never by plan — so the
+ *  remedy at the cap is "add it to a project you already have", not "pay us".
+ *  Routing this CTA to billing meant the single moment it fired was the single
+ *  moment the user could already do the thing it was refusing them.
+ *
+ *  Below the cap the answer is a new project: that keeps their own data out of
+ *  the shared demo container and is a slot they demonstrably have. */
+export function connectOwnDataTarget<T extends { id: string }>(
+  atProjectCap: boolean,
+  billable: readonly T[],
+): { kind: "new-project" } | { kind: "existing-project"; project: T } {
+  // Defensive on `billable[0]`: the invariant above says it's present whenever
+  // atProjectCap holds, but a caller passing a sample-only list must fall back
+  // to the create path rather than render a link to nothing.
+  const existing = atProjectCap ? billable[0] : undefined;
+  return existing
+    ? { kind: "existing-project", project: existing }
+    : { kind: "new-project" };
+}
