@@ -6,6 +6,7 @@ import Link from "next/link";
 import { AddDatabaseSheet } from "@/components/projects/add-database-sheet";
 import { SectionLabel } from "@/components/ui/section-label";
 import { computeDbTabs } from "@/lib/db-tabs";
+import { UPGRADE_URL } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 // The headline of the Database pane: which database you're configuring,
@@ -25,8 +26,11 @@ export function DatabaseStrip({
   addAction,
   showAdd = true,
   atCap = false,
+  projectAtCap = false,
   sample = false,
+  sampleConnect,
   newProjectHref = "/projects/new",
+  upgradeHref = UPGRADE_URL,
   statusSlot,
 }: {
   databases: string[];
@@ -40,17 +44,32 @@ export function DatabaseStrip({
    *  instead of found after scrolling past the controls it describes. */
   statusSlot?: React.ReactNode;
   /** Fixed per-project database ceiling reached (advisory pre-flight — the add
-   *  path re-checks under a lock). Swaps the add affordance for a "create
-   *  another project" link so the wall is visible BEFORE a filled-in form
-   *  fails against it. The ceiling is plan-independent, so the remedy is
-   *  another project, not an upgrade. */
+   *  path re-checks under a lock). Swaps the add affordance for the next step
+   *  out, so the wall is visible BEFORE a filled-in form fails against it. The
+   *  ceiling is plan-independent, so the first remedy is another project, not
+   *  an upgrade — unless `projectAtCap` says another project isn't creatable
+   *  either. */
   atCap?: boolean;
+  /** The plan's PROJECT cap is also reached. Only read when `atCap` is true,
+   *  and only to keep that link honest: "create another project to add more"
+   *  pointed at /projects/new regardless, so a user already at their project
+   *  limit was invited to do the one thing that route would refuse. At both
+   *  caps the remedy really is an upgrade, so the link says so and goes to
+   *  billing. */
+  projectAtCap?: boolean;
   /** This is the hosted sample project. Adding a database is refused on the
    *  server (it's our shared read-only demo), so instead of an add control we
-   *  point at a real new project — the "graduate off the sample" path, placed
-   *  exactly where a user would look to bring in their own data. */
+   *  point at the customer's own data — the "graduate off the sample" path,
+   *  placed exactly where a user would look to bring it in. */
   sample?: boolean;
+  /** Where that graduate-off-the-sample link goes, from connectOwnDataTarget
+   *  (lib/project-groups.ts): a new project, or an existing one when the plan's
+   *  project cap is reached. Never billing — the project cap doesn't gate
+   *  adding a database to a project the customer already has. Omitted (or on a
+   *  non-sample project) falls back to newProjectHref. */
+  sampleConnect?: { href: string; intoExistingProject: boolean };
   newProjectHref?: string;
+  upgradeHref?: string;
 }) {
   function go(name: string) {
     if (name === current) return;
@@ -119,11 +138,19 @@ export function DatabaseStrip({
         ) : null}
         {showAdd ? (
           sample ? (
+            // Graduating off the sample never depends on the PLAN — only on
+            // where the database lands. At the project cap it goes into a
+            // project the customer already owns (databases are capped per
+            // project, not per plan); below the cap it gets its own new one.
+            // Routing this to billing would refuse the funnel's key step at
+            // exactly the moment the customer could already complete it.
             <Link
-              href={newProjectHref}
+              href={sampleConnect?.href ?? newProjectHref}
               className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[hsl(var(--brand)/0.35)] px-3 py-2 text-sm text-subtle transition-colors hover:border-[hsl(var(--brand)/0.6)] hover:bg-[hsl(var(--brand)/0.05)] hover:text-foreground"
             >
-              Connect your own database
+              {sampleConnect?.intoExistingProject
+                ? "Add your own database"
+                : "Connect your own database"}
               <ArrowUpRight
                 className="h-3.5 w-3.5"
                 strokeWidth={1.5}
@@ -132,10 +159,12 @@ export function DatabaseStrip({
             </Link>
           ) : atCap ? (
             <Link
-              href={newProjectHref}
+              href={projectAtCap ? upgradeHref : newProjectHref}
               className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-3 py-2 text-sm text-subtle transition-colors hover:border-border-strong hover:text-foreground"
             >
-              Create another project to add more
+              {projectAtCap
+                ? "Upgrade to add more"
+                : "Create another project to add more"}
               <ArrowUpRight
                 className="h-3.5 w-3.5"
                 strokeWidth={1.5}

@@ -29,6 +29,7 @@ import {
   resolvePlan,
   UPGRADE_URL,
 } from "@/lib/plan";
+import { groupProjects } from "@/lib/project-groups";
 import { revalidateProjectsChrome } from "@/lib/revalidate";
 import { PROJECTS_LIST_HREF } from "@/lib/routes";
 import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
@@ -53,23 +54,18 @@ export default async function NewProject() {
   // projectCreateBlock here used to wall off token-capped orgs whose create
   // would have succeeded.
   const { caps, plan } = await resolvePlan();
-  // A projects-cap block is cleared when the customer has a reusable empty
-  // project: createProject attaches the first DB to it without consuming a
-  // new slot, so the DSN form must stay open. Without this, a fresh Free
-  // customer (auto-seeded Default, 1/1) is wrongly told they're at their
-  // project limit and can't add a first database.
-  // Billable count AND "has an empty project" (isEmpty) both come from ONE
-  // switcher-rows query (D9) — replacing the old getPlanUsage (which re-COUNTed
-  // and ran an unused token query) + a separate hasEmptyProject. projectQuota
-  // is the shared at-cap unit (D2).
+  // This route creates PROJECTS, and now only that. It used to double as the
+  // "add your first database" destination (the empty-project hero linked
+  // here), which is why the cap check had to be waived whenever a reusable
+  // empty project existed — otherwise onboarding hit an upgrade wall. Adding a
+  // database is the project page's own affordance now, so this page can gate
+  // on the plain project count and say no when the answer is no.
   const switcherRows = await listProjectSwitcherRows(customer);
-  const billableProjects = switcherRows.filter((r) => !r.isSample).length;
-  const { atCap } = projectQuota({
-    billableProjects,
-    hasEmpty: switcherRows.some((r) => r.isEmpty),
-    caps,
-    plan,
-  });
+  // Same grouping model the dashboard and switcher use — samples never count.
+  // `hasSample` is read only in the at-cap branch below, where a listed-but-
+  // uncounted sample would otherwise make the limit look mis-computed.
+  const { billableCount, hasSample } = groupProjects(switcherRows);
+  const { atCap } = projectQuota({ billableProjects: billableCount, caps, plan });
   const block = atCap ? { limit: caps.projects } : null;
 
   return (
@@ -124,6 +120,10 @@ export default async function NewProject() {
                     {block.limit} {block.limit === 1 ? "project" : "projects"}
                   </strong>
                   . Upgrade to add more, or delete one you no longer use.
+                  {hasSample ? " Sample projects don't count toward the limit." : ""}
+                  {" "}Adding another database to a project you already have
+                  doesn&apos;t need a new project — do that from the project
+                  itself.
                 </>
               }
               action={

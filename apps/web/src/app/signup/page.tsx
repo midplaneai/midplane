@@ -14,7 +14,6 @@ import { RegionBadge } from "@/components/ui/region-badge";
 import { RegionFlag } from "@/components/ui/region-flag";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
 import { upsertCustomerRegion } from "@/lib/customer";
-import { ensureDefaultProject } from "@/lib/projects";
 import { bootRegion } from "@/lib/region-context";
 import { isSelfHost } from "@/lib/self-host";
 import { suggestWorkspaceName } from "@/lib/workspace-name";
@@ -271,14 +270,10 @@ async function pickRegionAuthed(formData: FormData) {
     });
   }
 
-  // Seed the customer's empty Default project (D6/D7-A) so they land on a
-  // ready project. Runs AFTER the created-gated side effects above: seeding is
-  // idempotent and heals on a retry pass; the once-per-customer effects don't,
-  // so nothing fallible may sit between the INSERT and them. Accepted residual
-  // window: a process crash in the milliseconds between the INSERT committing
-  // and the sends — welcome email lost, not user data.
-  await ensureDefaultProject(customer.id, customer.region);
-
+  // No Default project is seeded: a placeholder nobody asked for consumed the
+  // Free plan's only project slot, so the counter read 1/1 on a workspace with
+  // nothing in it. They land on the dashboard's "No projects yet" state and
+  // create their first project explicitly.
   redirect("/dashboard");
 }
 

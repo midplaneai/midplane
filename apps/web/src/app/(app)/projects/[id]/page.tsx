@@ -23,6 +23,7 @@ import {
   PROJECT_SECTIONS,
   type ProjectSection,
 } from "@/components/projects/project-sections";
+import { AddDatabaseSheet } from "@/components/projects/add-database-sheet";
 import { DatabaseStrip } from "@/components/projects/database-strip";
 import { ProjectSwitcher } from "@/components/projects/project-switcher";
 import { DeleteDatabaseButton } from "@/components/projects/delete-database-button";
@@ -46,7 +47,6 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { SectionLabel } from "@/components/ui/section-label";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -88,6 +88,7 @@ import {
   resolvePlan,
   UPGRADE_URL,
 } from "@/lib/plan";
+import { connectOwnDataTarget, groupProjects } from "@/lib/project-groups";
 import { PROJECTS_LIST_HREF } from "@/lib/routes";
 import { getPostHog } from "@/lib/posthog";
 import {
@@ -173,10 +174,34 @@ export default async function ProjectWorkspace({
   const dbNames = databases.map((d) => d.name);
 
   // Per-project database ceiling pre-flight: at the cap the strip swaps its
-  // "+ Add database" for a "create another project" link (addDatabase
-  // re-checks under a lock — this only decides which affordance renders). The
-  // ceiling is fixed and plan-independent, so this reads no caps.
+  // "+ Add database" for the next step out (addDatabase re-checks under a
+  // lock — this only decides which affordance renders). The ceiling is fixed
+  // and plan-independent, so this reads no caps.
   const dbAtCap = databaseAddBlock({ databases: databases.length }) !== null;
+
+  // Project quota, resolved HERE (not next to the rail header that renders the
+  // switcher) because the DatabaseStrip needs it too: "create another project
+  // to add more" is only true when another project is actually creatable, and
+  // the strip has to know before it picks a label. Samples are off the cap
+  // (createProject excludes them), so the counter and the gate see only real
+  // projects — the sample still lists, just not against the limit.
+  const { billable, billableCount } = groupProjects(switcherRows);
+  const { atCap: atProjectCap, quotaLine: projectQuotaLine } = projectQuota({
+    billableProjects: billableCount,
+    caps,
+    plan,
+  });
+  // Graduating off the sample: a new project normally, or an existing one at
+  // the project cap. Deliberately never billing — the project cap doesn't gate
+  // adding a database to a project they already own (see connectOwnDataTarget).
+  const connectTarget = connectOwnDataTarget(atProjectCap, billable);
+  const sampleConnect =
+    connectTarget.kind === "existing-project"
+      ? {
+          href: `/projects/${connectTarget.project.id}?section=database`,
+          intoExistingProject: true,
+        }
+      : { href: "/projects/new", intoExistingProject: false };
 
   // Which database the per-DB panes target. Trust ?db only if it names a db
   // on this project; otherwise fall back to the first.
@@ -756,7 +781,9 @@ export default async function ProjectWorkspace({
         projectId={conn.id}
         addAction={addDatabaseAction}
         atCap={dbAtCap}
+        projectAtCap={atProjectCap}
         sample={conn.isSample}
+        sampleConnect={sampleConnect}
         newProjectHref="/projects/new"
         // "Why did my agent get denied?" — asked of the engine that decides,
         // right under the database it decides for.
@@ -833,22 +860,38 @@ export default async function ProjectWorkspace({
   // project without first adding a database back. Every pane here guards on
   // `selDb`, so the normal shell (Connect → agent list + revoke, Settings →
   // delete project) renders fine with zero databases.
+  //
+  // The action is the add-database SHEET, not a link to /projects/new. That
+  // link was the bug: it sent "Add a database" to the route that creates
+  // projects, so the same destination served two different promises and — on a
+  // Free workspace already at 1/1 — either quietly reused this project or
+  // showed an upgrade wall for a database the plan does allow. Databases are
+  // capped per project (MAX_DATABASES_PER_PROJECT), never by plan, so this
+  // affordance owes nothing to the project quota.
   const databasePane = !selDb ? (
     <EmptyState
       title="Add your first database"
       description="Paste a Postgres connection string to connect your agent to your data. We encrypt it at rest and mint your agent's access token."
       action={
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          <Link href="/projects/new">
-            <Button size="sm">Add a database</Button>
-          </Link>
-          {/* Owner/admin only, and only when the hosted sample is configured.
-              One click creates a sample project server-side (the DSN never
-              reaches the browser). */}
-          {canManage && process.env.MIDPLANE_SAMPLE_DSN ? (
-            <SampleProjectButton entry="project_empty" />
-          ) : null}
-        </div>
+        canManage ? (
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <AddDatabaseSheet
+              first
+              projectId={conn.id}
+              addAction={addDatabaseAction}
+            />
+            {/* Only when the hosted sample is configured. One click creates a
+                sample project server-side (the DSN never reaches the
+                browser). */}
+            {process.env.MIDPLANE_SAMPLE_DSN ? (
+              <SampleProjectButton entry="project_empty" />
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            An owner or admin adds the first database to this project.
+          </p>
+        )
       }
     />
   ) : canManage ? (
@@ -870,7 +913,9 @@ export default async function ProjectWorkspace({
         addAction={addDatabaseAction}
         showAdd={canManage}
         atCap={dbAtCap}
+        projectAtCap={atProjectCap}
         sample={conn.isSample}
+        sampleConnect={sampleConnect}
         newProjectHref="/projects/new"
       />
       {canManage ? (
@@ -915,7 +960,10 @@ export default async function ProjectWorkspace({
   const connectPane = (
     <div className="space-y-6">
       {conn.isSample && canManage ? (
-        <SampleProjectNotice newProjectHref="/projects/new" />
+        <SampleProjectNotice
+          connectHref={sampleConnect.href}
+          intoExistingProject={sampleConnect.intoExistingProject}
+        />
       ) : null}
 
       {justCreated ? (
@@ -1069,29 +1117,10 @@ export default async function ProjectWorkspace({
   );
 
   // The project's identity doubles as the project switcher — the chevron
-  // teaches that the account can hold more than one project even while it
-  // holds exactly one (the dashboard auto-opens a single project, so this
-  // is the only always-visible multi-project affordance). The quota line +
+  // teaches that the account can hold more than one project. The quota line +
   // create/upgrade row live in the dropdown, next to where the container
-  // concept forms.
-  // Cap block advisory-cleared when a reusable EMPTY project exists —
-  // createProject attaches the first database to it without consuming a
-  // slot, so "New project" still succeeds (mirrors /projects/new and the
-  // dashboard list).
-  // Samples are off the project cap (createProject / getPlanUsage exclude
-  // them), so the switcher's quota line and its at-cap gate count only real
-  // projects — the sample row still lists, just not against the limit.
-  const billableProjects = switcherRows.filter((r) => !r.isSample).length;
-  // hasEmpty comes free from the switcher rows' count aggregate (isEmpty) — no
-  // separate hasEmptyProject query (D9). projectQuota is the shared unit (D2):
-  // the same at-cap + quota-line the dashboard and /projects/new use.
-  const { atCap: atProjectCap, quotaLine: projectQuotaLine } = projectQuota({
-    billableProjects,
-    hasEmpty: switcherRows.some((r) => r.isEmpty),
-    caps,
-    plan,
-  });
-
+  // concept forms. (atProjectCap / projectQuotaLine are resolved up with
+  // dbAtCap — the DatabaseStrip needs the same answer.)
   const railHeader = (
     <div>
       <ProjectSwitcher

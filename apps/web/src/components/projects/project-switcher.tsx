@@ -15,16 +15,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SectionLabel } from "@/components/ui/section-label";
 import { SERVING_COLORS, SERVING_LABELS } from "@/lib/freshness";
+import { groupProjects } from "@/lib/project-groups";
 import type { ProjectSwitcherRow } from "@/lib/projects";
 import { UPGRADE_URL } from "@/lib/routes";
 
 // The rail header's project name as a switcher — the same affordance the
 // database tabs give one level down. The chevron is the teaching device: it
-// says "there can be more of these" even while the account has one project
-// (the dashboard auto-opens a single project, so without this the container
-// stays invisible). The dropdown doubles as a fleet glance (per-project
-// freshness dots) and carries the create/upgrade affordance plus the plan's
-// project quota, so the wall is visible where the mental model forms.
+// says "there can be more of these" even while the account has one project.
+// The dropdown doubles as a fleet glance (per-project freshness dots) and
+// carries the create/upgrade affordance plus the plan's project quota, so the
+// wall is visible where the mental model forms.
 
 export function ProjectSwitcher({
   projects,
@@ -48,6 +48,12 @@ export function ProjectSwitcher({
 }) {
   const current = projects.find((p) => p.id === currentId);
   const currentLabel = current?.label ?? currentId.slice(0, 12);
+  // Samples are off the plan cap, so they list apart from the projects the
+  // quota line counts. Which groups and headings render is decided by the pure
+  // model (lib/project-groups.ts) and unit-tested there; this component just
+  // maps over the result.
+  const { billable, samples, showBillableGroup, showSampleGroup, showGroupSeparator } =
+    groupProjects(projects);
 
   return (
     <div>
@@ -90,39 +96,23 @@ export function ProjectSwitcher({
           align="start"
           className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[210px] overflow-y-auto"
         >
-          <DropdownMenuLabel className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
-            projects
-          </DropdownMenuLabel>
-          {projects.map((p) => (
-            <DropdownMenuItem key={p.id} asChild>
-              <Link
-                href={`/projects/${p.id}`}
-                aria-current={p.id === currentId ? "page" : undefined}
-                title={p.label}
-                className="gap-2"
-              >
-                {/* Serving-readiness headline dot (Axis 1) — quiet (no
-                    pulse) inside a menu of many rows. */}
-                <StatusDot
-                  colorClass={SERVING_COLORS[p.serving]}
-                  label={SERVING_LABELS[p.serving]}
-                />
-                <span className="min-w-0 flex-1 truncate">{p.label}</span>
-                {p.isSample ? (
-                  <Badge withDot={false} className="flex-shrink-0">
-                    Sample
-                  </Badge>
-                ) : null}
-                {p.id === currentId ? (
-                  <Check
-                    aria-hidden
-                    className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
-                    strokeWidth={1.5}
-                  />
-                ) : null}
-              </Link>
-            </DropdownMenuItem>
-          ))}
+          {showBillableGroup ? (
+            <>
+              <DropdownMenuLabel className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
+                projects
+              </DropdownMenuLabel>
+              {billable.map((p) => projectRow(p, currentId))}
+            </>
+          ) : null}
+          {showSampleGroup ? (
+            <>
+              {showGroupSeparator ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuLabel className="font-mono text-[11.5px] font-medium lowercase tracking-[0.04em] text-subtle">
+                demo
+              </DropdownMenuLabel>
+              {samples.map((p) => projectRow(p, currentId))}
+            </>
+          ) : null}
           {canManage ? (
             <>
               <DropdownMenuSeparator />
@@ -162,5 +152,38 @@ export function ProjectSwitcher({
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  );
+}
+
+// One project row, shared by the counted list and the demo group. The "Sample"
+// badge is deliberately absent: inside the demo group the label already says
+// it, and the badge is what made these read as peers of the counted projects
+// in the first place. The trigger keeps its badge — it has no group around it
+// to carry the meaning.
+function projectRow(p: ProjectSwitcherRow, currentId: string) {
+  return (
+    <DropdownMenuItem key={p.id} asChild>
+      <Link
+        href={`/projects/${p.id}`}
+        aria-current={p.id === currentId ? "page" : undefined}
+        title={p.label}
+        className="gap-2"
+      >
+        {/* Serving-readiness headline dot (Axis 1) — quiet (no pulse) inside a
+            menu of many rows. */}
+        <StatusDot
+          colorClass={SERVING_COLORS[p.serving]}
+          label={SERVING_LABELS[p.serving]}
+        />
+        <span className="min-w-0 flex-1 truncate">{p.label}</span>
+        {p.id === currentId ? (
+          <Check
+            aria-hidden
+            className="h-3.5 w-3.5 flex-shrink-0 text-subtle"
+            strokeWidth={1.5}
+          />
+        ) : null}
+      </Link>
+    </DropdownMenuItem>
   );
 }

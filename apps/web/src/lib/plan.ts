@@ -217,8 +217,8 @@ export function projectAddBlock(
 /** The project-quota facts a surface needs to render the cap: whether a create
  *  is currently blocked, the "N/M projects" usage line, and the raw limit. */
 export interface ProjectQuota {
-  /** Cap reached AND no reusable empty project to absorb the next database
-   *  (advisory pre-flight; createProject's locked count is the real enforcer). */
+  /** Cap reached (advisory pre-flight; createProject's locked count is the
+   *  real enforcer). */
   atCap: boolean;
   /** Footer usage line, e.g. "free plan · 1/1 projects". Null on an unlimited
    *  (Infinity) tier — no counter to show. */
@@ -228,26 +228,33 @@ export interface ProjectQuota {
 }
 
 /** Pure consolidation of the at-cap + quota-line logic that was inline-
- *  duplicated at the dashboard, project-detail, and new-project sites. Takes
- *  counts the caller already has in hand — `billableProjects` (samples already
- *  excluded) and `hasEmpty` (a reusable database-less project exists, which
- *  clears the cap because createProject attaches the first DB to it without
- *  consuming a slot) — so it stays db-free and unit-testable. The quota line
- *  mirrors the ProjectSwitcher format ("<plan> plan · N/M projects"). Advisory
- *  UX only. */
+ *  duplicated at the dashboard, project-detail, and new-project sites. Takes a
+ *  count the caller already has in hand (`billableProjects` — samples already
+ *  excluded) so it stays db-free and unit-testable. The quota line mirrors the
+ *  ProjectSwitcher format ("<plan> plan · N/M projects"). Advisory UX only.
+ *
+ *  A PURE COUNT: "N/M projects" and "at cap" agree, always. This used to carry
+ *  a `hasEmpty` escape hatch — a reusable database-less project cleared the cap,
+ *  because createProject attaches the first DB to such a project without
+ *  consuming a slot. It existed to keep onboarding unblocked when signup seeded
+ *  every customer an empty "Default": a Free customer read 1/1 while a live
+ *  "New project" button quietly filled Default instead of creating anything.
+ *  The seed is gone (a customer's first project is now created by an actual
+ *  create), and adding a database to an existing project is the project page's
+ *  own affordance — so no surface needs the escape hatch to stay reachable, and
+ *  the button's label can match what it does. createProject still reuses an
+ *  empty project (removeDatabase can leave one behind); we just no longer
+ *  advertise that reuse as headroom the counter denies. */
 export function projectQuota({
   billableProjects,
-  hasEmpty,
   caps,
   plan,
 }: {
   billableProjects: number;
-  hasEmpty: boolean;
   caps: PlanCaps;
   plan: Plan;
 }): ProjectQuota {
-  const atCap =
-    projectAddBlock({ projects: billableProjects }, caps) !== null && !hasEmpty;
+  const atCap = projectAddBlock({ projects: billableProjects }, caps) !== null;
   const quotaLine = Number.isFinite(caps.projects)
     ? `${plan} plan · ${billableProjects}/${caps.projects} projects`
     : null;

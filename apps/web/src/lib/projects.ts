@@ -311,8 +311,8 @@ export async function createProject(
 
   const db = getDb(customer.region);
   // The project the first DB + default token attach to: a reused empty project
-  // (the auto-seeded "Default") or, failing that, a newly inserted one.
-  // Assigned inside the txn below.
+  // (one whose databases were all removed) or, failing that, a newly inserted
+  // one. Assigned inside the txn below.
   let resolvedProjectId = id;
   // `created` is false only when an existing sample short-circuits the insert
   // (see the one-sample-per-customer guard) — the caller uses it to skip
@@ -359,21 +359,26 @@ export async function createProject(
         return { created: false, tokenPlaintext: null };
       }
     }
-    // Reuse the customer's empty (database-less) project if one exists — the
-    // auto-seeded "Default" (ensureDefaultProject), or any project with no
-    // databases yet. Attaching the first DB + default token to an existing
-    // project does NOT consume a new project slot, so the project cap is
-    // enforced ONLY when we insert a new project below. This is what lets a
-    // Free customer (cap = 1, auto-seeded at signup) add their first database
-    // instead of tripping the cap with a second project.
+    // Reuse the customer's empty (database-less) project if one exists — a
+    // project whose databases were all removed. Attaching the first DB +
+    // default token to an existing project does NOT consume a new project
+    // slot, so the project cap is enforced ONLY when we insert a new project
+    // below; a customer at their limit whose one project sits empty can still
+    // fill it back up.
     //
-    // Ordering matters now that removeDatabase() can empty a NAMED project:
-    // prefer the unnamed/"Default" placeholder, then the oldest, so a customer
+    // Reuse is now an INTERNAL convergence, not something the UI advertises.
+    // Onboarding used to seed an empty "Default" (ensureDefaultProject), which
+    // made this branch the normal first-run path — and forced the quota
+    // preflight to waive the cap whenever an empty project existed, so a Free
+    // customer read "1/1 projects" beside a "New project" button that landed
+    // here instead of creating anything. No seed, no waiver: the surfaces gate
+    // on the plain count, and adding a database to an existing project is the
+    // project page's own affordance rather than a trip through this route.
+    //
+    // Ordering matters because removeDatabase() can empty a NAMED project:
+    // prefer an unnamed/"Default" placeholder, then the oldest, so a customer
     // who empties "prod" and then creates a genuinely new project doesn't get
-    // silently dropped back inside "prod". A named empty is still reusable (it
-    // has to be — it's what clears the projects cap for a Free customer whose
-    // only project is the emptied one), just never chosen ahead of a
-    // placeholder.
+    // silently dropped back inside "prod".
     const emptyProject = await tx
       .select({ id: projects.id, name: projects.name })
       .from(projects)
@@ -536,62 +541,19 @@ function firstFreeDefaultName(takenNames: readonly string[]): string {
   return `default-${ulid().slice(-8).toLowerCase()}`;
 }
 
-// Idempotently seed an empty "Default" project for a customer at onboarding so a
-// new customer lands on a ready project ("add a database / connect your agent")
-// instead of having to create a container first (decision D6/D7-A). A project
-// seeded HERE carries no token, so nothing can reach the proxy on its behalf and
-// no engine spawn is attempted — the first database + default token are minted
-// later by createProject(), which reuses this project. (A project emptied by
-// removeDatabase() reaches the same database-less shape but KEEPS its tokens, so
-// it does hit the zero-database branch in proxy.ts forwardResolved().)
+// Onboarding used to seed every customer an empty "Default" project here, so a
+// new customer landed on a ready project instead of creating a container first
+// (decision D6/D7-A). That seed is GONE: it made a Free customer read "1/1
+// projects" against a plan cap of 1 before they had created anything, which in
+// turn forced the quota preflight to carry a `hasEmpty` escape hatch (see
+// plan.ts projectQuota) so a live "New project" button could quietly fill the
+// placeholder instead of creating a project. Counter and button now both tell
+// the truth: a customer's first project comes from an actual create, and a
+// database-less project is reachable only via removeDatabase().
 //
-// Race-safe: an xact-scoped advisory lock keyed on the customer serializes
-// concurrent onboards (a double-submitted region form, two tabs) so they can't
-// each seed a different default — mirrors getOrCreateOrgForUser. No-op when the
-// customer already has any project. Used by both the cloud signup path
-// (upsertCustomerRegion) and self-host boot (ensureImplicitCustomer); self-host
-// is uncapped, so the seed never trips a plan limit.
-export async function ensureDefaultProject(
-  customerId: string,
-  region: Region,
-): Promise<void> {
-  await getDb(region).transaction(async (tx) => {
-    await tx.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtextextended(${customerId}, 0))`,
-    );
-    const existing = await tx
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.customerId, customerId))
-      .limit(1);
-    if (existing[0]) return;
-    await tx.insert(projects).values({
-      id: ulid(),
-      customerId,
-      region,
-      name: "Default",
-    });
-  });
-}
-
-// Does the customer have a reusable empty (database-less) project? createProject
-// attaches the first DB + token to such a project WITHOUT consuming a new
-// project slot, so a projects-cap preflight must treat "has an empty project" as
-// "can still add a database" — otherwise a fresh Free customer (auto-seeded
-// Default, projects 1/1) is wrongly told the DSN form is at its project limit.
-export async function hasEmptyProject(customer: Customer): Promise<boolean> {
-  const rows = await getDb(customer.region)
-    .select({ id: projects.id })
-    .from(projects)
-    .where(
-      and(
-        eq(projects.customerId, customer.id),
-        sql`NOT EXISTS (SELECT 1 FROM project_databases pd WHERE pd.project_id = ${projects.id})`,
-      ),
-    )
-    .limit(1);
-  return rows.length > 0;
-}
+// createProject still reuses an empty project when one exists — that path is
+// what keeps an emptied project usable — it is just no longer something
+// onboarding manufactures.
 
 export function isValidDsn(s: unknown): s is string {
   return typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8;
@@ -670,14 +632,14 @@ export interface ProjectSwitcherRow {
    *  broken) — the switcher is a fleet of headline dots, so it renders
    *  Axis 1, never audit-drain health (see lib/freshness.ts). */
   serving: ServingState;
-  /** Hosted read-only sample project — badged in the switcher and excluded
-   *  from the header's project-quota line. */
+  /** Hosted read-only sample project — grouped apart from the counted
+   *  projects in the switcher and on the dashboard, and excluded from the
+   *  project-quota line. */
   isSample: boolean;
-  /** No databases yet (a reusable "empty" project — the auto-seeded Default, or
-   *  one whose databases were all removed). Derived from the same grouped
-   *  count(project_databases) the serving dot uses, so callers get the
-   *  "has an empty project" signal WITHOUT a separate hasEmptyProject query. */
-  isEmpty: boolean;
+  // No `isEmpty` here on purpose. It used to carry the "customer has a
+  // database-less project" signal to the quota preflight, which waived the
+  // project cap whenever one existed. That waiver is gone (see plan.ts
+  // projectQuota), and re-deriving the flag is the easy way to bring it back.
 }
 
 /** The customer's projects with the light facts the rail-header switcher
@@ -718,7 +680,6 @@ export const listProjectSwitcherRows = cache(
           databaseCount,
         }).state,
         isSample: r.isSample,
-        isEmpty: databaseCount === 0,
       };
     });
   },

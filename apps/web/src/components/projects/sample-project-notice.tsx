@@ -11,9 +11,18 @@ import { cn } from "@/lib/utils";
 // gives the one action that graduates the user to their own data — a real new
 // project. Placed on the surface a sample user lands on (the Connect pane).
 export function SampleProjectNotice({
-  newProjectHref = "/projects/new",
+  connectHref = "/projects/new",
+  intoExistingProject = false,
 }: {
-  newProjectHref?: string;
+  /** Where graduating off the sample goes — a new project, or one the customer
+   *  already owns. Decided by connectOwnDataTarget (lib/project-groups.ts). */
+  connectHref?: string;
+  /** The target is an existing project rather than a new one, because the plan's
+   *  project cap is reached. This is a routing difference, NOT a paywall: the
+   *  database ceiling is per-project and plan-independent, so bringing your own
+   *  Postgres is still available at the cap — it just lands in a project the
+   *  customer already has. */
+  intoExistingProject?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-md border border-[hsl(var(--brand)/0.2)] bg-[hsl(var(--brand)/0.05)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -29,19 +38,23 @@ export function SampleProjectNotice({
           </p>
           <p className="text-xs text-muted-foreground">
             It&apos;s a read-only demo and doesn&apos;t count toward your
-            project limit. When you&apos;re ready, connect your own Postgres in
-            a new project.
+            project limit.{" "}
+            {intoExistingProject
+              ? "When you're ready, add your own Postgres to one of your projects."
+              : "When you're ready, connect your own Postgres in a new project."}
           </p>
         </div>
       </div>
       <Link
-        href={newProjectHref}
+        href={connectHref}
         className={cn(
           buttonVariants({ variant: "default", size: "sm" }),
           "shrink-0 self-start sm:self-auto",
         )}
       >
-        Connect your own database
+        {intoExistingProject
+          ? "Add your own database"
+          : "Connect your own database"}
         <span aria-hidden className="ml-2 font-mono">
           →
         </span>

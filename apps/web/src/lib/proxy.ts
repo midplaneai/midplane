@@ -564,8 +564,9 @@ async function forwardResolved(
   const { project, databases, tokenId, scopeHeader } = resolved;
   if (databases.length === 0) {
     // A database-less project is a legitimate state, not corruption: it's what
-    // onboarding seeds (ensureDefaultProject) and what removeDatabase leaves
-    // behind when the last database is deleted. The token outlives the
+    // removeDatabase leaves behind when the last database is deleted. (It used
+    // to also be what onboarding seeded for every new customer; that seed is
+    // gone, so this state is now owner-initiated only.) The token outlives the
     // database, so it reaches here — and there is no DSN to spawn a container
     // with. 404 (same leakage shape as an unknown project) rather than a
     // spawn attempt; the owner's remedy is to add a database, which the
