@@ -6,6 +6,11 @@ import { useId, useState } from "react";
 import { CopyButton } from "@/components/copy-button";
 import { buttonVariants } from "@/components/ui/button";
 import { DOCS_CONNECT_AGENT_URL } from "@/lib/docs";
+import {
+  cursorInstallLink,
+  mcpServerKey,
+  vscodeInstallLink,
+} from "@/lib/install-links";
 import { cn } from "@/lib/utils";
 
 // The canonical "connect an agent" card (OAuth). One component, one place the
@@ -62,14 +67,6 @@ const CLAUDE_CONNECTOR_DOC_URL =
 const CHATGPT_DEV_MODE_DOC_URL =
   "https://developers.openai.com/api/docs/guides/developer-mode";
 
-function slugify(name: string | null | undefined): string {
-  const base = (name ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return base ? `midplane-${base}` : "midplane";
-}
-
 export function OAuthConnectGuide({
   projectName,
   mcpUrl,
@@ -82,7 +79,7 @@ export function OAuthConnectGuide({
   const [active, setActive] = useState<Client>("cursor");
   const tablistId = useId();
 
-  const serverKey = slugify(projectName);
+  const serverKey = mcpServerKey(projectName);
   // Named in the copy so the user picks the right project at the consent screen
   // (the URL is account-wide, not project-specific).
   const projectLabel = projectName?.trim() || "this project";
@@ -101,12 +98,9 @@ export function OAuthConnectGuide({
     // keep the fallback
   }
 
-  const cursorDeeplink =
-    `cursor://anysphere.cursor-deeplink/mcp/install?name=${encodeURIComponent(serverKey)}` +
-    `&config=${btoa(JSON.stringify({ url: mcpUrl }))}`;
-  const vscodeDeeplink = `vscode:mcp/install?${encodeURIComponent(
-    JSON.stringify({ name: serverKey, type: "http", url: mcpUrl }),
-  )}`;
+  // Encoding rules + the round-trip tests live in lib/install-links.ts.
+  const cursorDeeplink = cursorInstallLink(serverKey, mcpUrl);
+  const vscodeDeeplink = vscodeInstallLink(serverKey, mcpUrl);
 
   // Cursor auto-detects the HTTP transport, so the config carries the url only.
   const cursorJson = `{
