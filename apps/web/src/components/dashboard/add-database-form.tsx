@@ -5,9 +5,11 @@ import { Plus, X } from "lucide-react";
 
 import { AccessRadio } from "@/components/access-radio";
 import { TestDsnButton } from "@/components/projects/test-dsn-button";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 
 // Inline expansion form rendered under each project's DB list. Two
 // surfaces in one component: the toggle button (when collapsed) and
@@ -46,7 +48,12 @@ export function AddDatabaseForm({
 }) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  // Message plus optional remedy: a format problem carries both (see
+  // lib/dsn-format.ts), a server-thrown error only the one line.
+  const [error, setError] = useState<{
+    message: string;
+    hint?: string;
+  } | null>(null);
   // Remount key for TestDsnButton — bumping it clears a stale
   // "✓ reachable" the moment any input changes.
   const [testVersion, setTestVersion] = useState(0);
@@ -65,13 +72,13 @@ export function AddDatabaseForm({
     return (
       <div className="border-t border-border px-3 py-2">
         {justAdded ? (
-          <div
-            className="mb-2 rounded-md border border-[hsl(var(--allow)/0.4)] bg-[hsl(var(--allow)/0.08)] px-2.5 py-1.5 text-xs text-[hsl(var(--allow))] motion-safe:animate-in motion-safe:fade-in"
-            role="status"
+          <Alert
+            tone="allow"
+            className="mb-2 py-1.5 motion-safe:animate-in motion-safe:fade-in"
           >
             <span className="font-mono">{justAdded}</span> added · agent can
             reach it on next call
-          </div>
+          </Alert>
         ) : null}
         <button
           type="button"
@@ -103,19 +110,23 @@ export function AddDatabaseForm({
     const form = event.currentTarget;
     const fd = new FormData(form);
     const name = (fd.get("name") ?? "").toString().trim();
-    const dsn = (fd.get("dsn") ?? "").toString();
+    const dsn = normalizeDsn((fd.get("dsn") ?? "").toString());
     if (!DB_NAME_RE.test(name)) {
-      setError(
-        "Name must be 1–32 lowercase letters / digits / _ - , starting with a letter.",
-      );
+      setError({
+        message:
+          "Name must be 1–32 lowercase letters / digits / _ - , starting with a letter.",
+      });
       return;
     }
-    if (!dsn.startsWith("postgres://") && !dsn.startsWith("postgresql://")) {
-      setError("DSN must be a postgres:// or postgresql:// URL.");
+    // Same checker the field's blur handler and the server action run.
+    const dsnProblem = describeDsnProblem(dsn);
+    if (dsnProblem) {
+      setError(dsnProblem);
       return;
     }
 
     fd.set("projectId", projectId);
+    fd.set("dsn", dsn);
 
     startTransition(async () => {
       try {
@@ -133,7 +144,9 @@ export function AddDatabaseForm({
           setJustAdded(name);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "add failed");
+        setError({
+          message: e instanceof Error ? e.message : "The database wasn't added.",
+        });
       }
     });
   }
@@ -200,6 +213,15 @@ export function AddDatabaseForm({
               placeholder="postgres://user:pass@host:5432/db"
               className="font-mono"
               onChange={reset}
+              // Format feedback on leaving the field, not on submit — same
+              // beat as the new-project form. Uncontrolled, so the trim is
+              // written straight back to the node.
+              onBlur={(e) => {
+                const trimmed = normalizeDsn(e.target.value);
+                if (trimmed !== e.target.value) e.target.value = trimmed;
+                const problem = trimmed ? describeDsnProblem(trimmed) : null;
+                if (problem) setError(problem);
+              }}
             />
           </div>
         </div>
@@ -246,8 +268,12 @@ export function AddDatabaseForm({
           >
             Cancel
           </Button>
+          {/* basis-full: the message gets its own row under the buttons
+              instead of being truncated beside them. */}
           {error ? (
-            <span className="text-xs text-destructive">{error}</span>
+            <Alert tone="deny" className="basis-full" hint={error.hint}>
+              {error.message}
+            </Alert>
           ) : null}
         </div>
       </form>

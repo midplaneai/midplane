@@ -1,30 +1,12 @@
 "use client";
 
-import { useFormStatus } from "react-dom";
-
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { createSampleProject } from "@/lib/sample-project";
 
-// Importing the server action into a client component gives us useFormStatus'
-// pending state (and double-submit protection) while keeping the sample DSN on
+// Importing the server action into a client component keeps the sample DSN on
 // the server — the "use server" boundary means the browser gets an RPC stub,
-// not the action's implementation or its db imports.
-function Submit({
-  label,
-  variant,
-  size,
-}: {
-  label: string;
-  variant: "default" | "outline";
-  size: "sm" | "lg";
-}) {
-  const { pending } = useFormStatus();
-  return (
-    <Button type="submit" variant={variant} size={size} disabled={pending}>
-      {pending ? "Setting up…" : label}
-    </Button>
-  );
-}
+// not the action's implementation or its db imports. Progress + double-submit
+// protection come from SubmitButton's useFormStatus.
 
 /**
  * One-click "Try the sample database" CTA. Render only when the hosted sample
@@ -53,7 +35,9 @@ export function SampleProjectButton({
   return (
     <form action={createSampleProject}>
       <input type="hidden" name="entry" value={entry} />
-      <Submit label={label} variant={variant} size={size} />
+      <SubmitButton variant={variant} size={size} pendingLabel="Setting up…">
+        {label}
+      </SubmitButton>
     </form>
   );
 }

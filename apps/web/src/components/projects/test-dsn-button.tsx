@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 
 // Pre-submit [Test connection] button shared by the new-project form
 // and the add-database form. Reads the `dsn` field from its enclosing
@@ -11,16 +13,21 @@ import { Button } from "@/components/ui/button";
 // input edits by bumping their `key` — a stale "✓ reachable" next to an
 // edited DSN would be a small lie.
 //
+// Format problems never leave the browser: describeDsnProblem runs first, so a
+// typo answers instantly and doesn't spend a slot in the shared per-customer
+// ping budget. The endpoint runs the same check server-side for non-browser
+// callers.
+//
 // Endpoints differ per surface (raw /api/projects/test-dsn before a
 // project exists; /api/projects/:id/databases/test under a
-// parent) but share the response shape {ok, error?} and the same
+// parent) but share the response shape {ok, error?, hint?} and the same
 // SSRF-guarded ping underneath.
 
 export type TestState =
   | { kind: "idle" }
   | { kind: "pending" }
   | { kind: "ok" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; title?: string; message: string; hint?: string };
 
 export function TestDsnButton({
   endpoint,
@@ -33,14 +40,19 @@ export function TestDsnButton({
 
   async function run(form: HTMLFormElement) {
     const fd = new FormData(form);
-    const dsn = fd.get("dsn");
-    if (typeof dsn !== "string" || dsn.length === 0) {
+    const raw = fd.get("dsn");
+    const problem = describeDsnProblem(raw);
+    if (problem) {
       setTest({
         kind: "error",
-        message: "Paste a connection string before testing.",
+        title: "Check the connection string",
+        message: problem.message,
+        hint: problem.hint,
       });
       return;
     }
+    // describeDsnProblem returning null guarantees a usable string.
+    const dsn = normalizeDsn(String(raw));
     setTest({ kind: "pending" });
     try {
       const res = await fetch(endpoint, {
@@ -48,19 +60,29 @@ export function TestDsnButton({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ dsn }),
       });
-      const body = (await res.json()) as { ok?: boolean; error?: string };
+      const body = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        hint?: string;
+      };
       if (res.ok && body.ok) {
         setTest({ kind: "ok" });
       } else {
         setTest({
           kind: "error",
-          message: body.error ?? `HTTP ${res.status}`,
+          title: "Couldn't reach the database",
+          message: body.error ?? `The test failed (HTTP ${res.status}).`,
+          hint: body.hint,
         });
       }
     } catch (e) {
       setTest({
         kind: "error",
-        message: e instanceof Error ? e.message : "test failed",
+        title: "Couldn't reach the database",
+        message:
+          e instanceof Error
+            ? e.message
+            : "The test request didn't complete. Check your network and try again.",
       });
     }
   }
@@ -85,8 +107,25 @@ export function TestDsnButton({
 }
 
 /** Shared by TestDsnButton and TestReachabilityButton — one rendering
- *  of "✓ reachable" / "✗ message" across all three ping surfaces. */
-export function TestStatus({ state }: { state: TestState }) {
+ *  of the outcome across all three ping surfaces.
+ *
+ *  `variant` is about the space available, not the severity. "block" (the
+ *  form surfaces) gives a failure its own full-width row under the buttons:
+ *  these messages are sentences — a driver's "password authentication failed
+ *  for user …", the guard's "Could not connect. Check the host, port, …", a
+ *  format problem plus its remedy — and squeezing them into a flex row beside
+ *  the button truncated the part that told the user what to do. It relies on
+ *  the host being a `flex flex-wrap` row (basis-full then claims a new line).
+ *  "inline" stays a small span for the maintenance row on the database page,
+ *  where the control is one text link among several. Success is compact in
+ *  both: "reachable" needs no elaboration. */
+export function TestStatus({
+  state,
+  variant = "block",
+}: {
+  state: TestState;
+  variant?: "block" | "inline";
+}) {
   if (state.kind === "idle" || state.kind === "pending") return null;
   if (state.kind === "ok") {
     return (
@@ -95,9 +134,21 @@ export function TestStatus({ state }: { state: TestState }) {
       </span>
     );
   }
+  if (variant === "inline") {
+    return (
+      <span className="text-xs text-destructive" title={state.message}>
+        ✗ {state.message}
+      </span>
+    );
+  }
   return (
-    <span className="text-xs text-destructive" title={state.message}>
-      ✗ {state.message}
-    </span>
+    <Alert
+      tone="deny"
+      className="basis-full"
+      title={state.title ? `✗ ${state.title}` : undefined}
+      hint={state.hint}
+    >
+      {state.message}
+    </Alert>
   );
 }

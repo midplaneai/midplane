@@ -46,6 +46,7 @@ import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { SectionLabel } from "@/components/ui/section-label";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,7 +61,6 @@ import {
   listProjectSwitcherRows,
   maskConfigAddsMasking,
   isValidDatabaseName,
-  isValidDsn,
   pauseProject,
   removeDatabase,
   renameProject,
@@ -71,6 +71,11 @@ import {
   setDatabasePolicy,
   setIgnoredColumns,
 } from "@/lib/projects";
+import {
+  describeDsnProblem,
+  dsnProblemText,
+  normalizeDsn,
+} from "@/lib/dsn-format";
 import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
 import {
   getConnectStatus,
@@ -625,9 +630,13 @@ export default async function ProjectWorkspace({
     if (!customer) redirect("/");
     const { userId } = await assertManager();
     if (!selectedName) notFound();
-    const dsn = formData.get("dsn");
-    if (!isValidDsn(dsn)) {
-      throw new Error("DSN must be a postgres:// or postgresql:// URL");
+    const dsnRaw = formData.get("dsn");
+    const dsn = typeof dsnRaw === "string" ? normalizeDsn(dsnRaw) : "";
+    // Thrown, not returned: RotateProjectForm wraps the call in try/catch and
+    // renders the message inline (see CLAUDE.md on server-action error shape).
+    const dsnProblem = describeDsnProblem(dsn);
+    if (dsnProblem) {
+      throw new Error(dsnProblemText(dsnProblem));
     }
     const ctx = getMcpProxyContext();
     const rotated = await rotateProject(customer, id, dsn, ctx, selectedName);
@@ -1077,9 +1086,13 @@ export default async function ProjectWorkspace({
             </p>
             <form action={resumeAction}>
               <input type="hidden" name="id" value={conn.id} />
-              <Button type="submit" variant="outline" size="sm">
+              <SubmitButton
+                variant="outline"
+                size="sm"
+                pendingLabel="Resuming…"
+              >
                 Resume project
-              </Button>
+              </SubmitButton>
             </form>
           </>
         ) : (
@@ -1152,9 +1165,14 @@ export default async function ProjectWorkspace({
         // (the freshness dot above already reads "Paused").
         <form action={resumeAction} className="mt-2">
           <input type="hidden" name="id" value={conn.id} />
-          <Button type="submit" variant="outline" size="sm" className="w-full">
+          <SubmitButton
+            variant="outline"
+            size="sm"
+            className="w-full"
+            pendingLabel="Resuming…"
+          >
             Resume
-          </Button>
+          </SubmitButton>
         </form>
       ) : (
         <p className="mt-2 text-[11px] leading-snug text-subtle">

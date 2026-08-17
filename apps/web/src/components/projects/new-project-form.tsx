@@ -4,20 +4,27 @@ import { useActionState, useState } from "react";
 
 import { AccessRadio } from "@/components/access-radio";
 import { TestDsnButton } from "@/components/projects/test-dsn-button";
-import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SubmitButton } from "@/components/ui/submit-button";
+import { describeDsnProblem, type DsnProblem } from "@/lib/dsn-format";
 import { slugifyDatabaseName } from "@/lib/project-name";
 
 // Server-action result used by useActionState. On validation failure the
-// action returns `{ error }` and the form renders it inline. On success
-// the action calls redirect(), which Next handles outside this state
-// channel — so a successful submit never resolves to a state object.
+// action returns `{ error }` (plus `hint` when there's a concrete remedy) and
+// the form renders it inline. On success the action calls redirect(), which
+// Next handles outside this state channel — so a successful submit never
+// resolves to a state object.
 //
 // `upgradeUrl` is set when the failure is a plan cap (not a validation
 // error): the form renders an upgrade link alongside the message so a
 // capped user has a one-click path to /billing.
-export type NewProjectFormState = { error?: string; upgradeUrl?: string };
+export type NewProjectFormState = {
+  error?: string;
+  hint?: string;
+  upgradeUrl?: string;
+};
 
 const initialState: NewProjectFormState = {};
 
@@ -40,6 +47,13 @@ export function NewProjectForm({
   // `name` also powers the live alias preview + blur-slugify below.
   const [name, setName] = useState("");
   const [dsn, setDsn] = useState("");
+  // Shape problem with the pasted DSN, found on blur — leaving the field is
+  // the moment the user is done with it, and it beats spending a
+  // Test-connection round trip (or a submit) to be told about a typo. Cleared
+  // on every edit so it never contradicts what's in the box. Not enforced
+  // here: submit stays enabled and the action re-checks with the same
+  // function, so this is a heads-up, not a gate.
+  const [dsnProblem, setDsnProblem] = useState<DsnProblem | null>(null);
   // The agent-facing alias the name resolves to (engine grammar). Empty when
   // the input has no usable characters — the server then derives the alias
   // from the DSN's database name, which the hint surfaces.
@@ -111,17 +125,43 @@ export function NewProjectForm({
           autoCorrect="off"
           placeholder="postgres://readonly_agent:pass@host:5432/db?sslmode=require"
           className="font-mono"
-          aria-invalid={state.error ? true : undefined}
-          aria-describedby={state.error ? "new-project-error" : undefined}
+          aria-invalid={state.error || dsnProblem ? true : undefined}
+          aria-describedby={
+            dsnProblem
+              ? "new-project-dsn-problem"
+              : state.error
+                ? "new-project-error"
+                : undefined
+          }
           disabled={pending}
           value={dsn}
           onChange={(e) => {
             setDsn(e.target.value);
+            setDsnProblem(null);
             // Editing the DSN invalidates a prior "✓ reachable" — bump the
             // key so the test status resets.
             setTestVersion((v) => v + 1);
           }}
+          onBlur={() => {
+            // Trim in place: a copy out of a shell or an env file carries
+            // whitespace, and normalizing where the user can see it beats
+            // silently rewriting what they submit.
+            const trimmed = dsn.trim();
+            if (trimmed !== dsn) setDsn(trimmed);
+            // Blurring an untouched field isn't a mistake — `required` and the
+            // action cover the empty case.
+            setDsnProblem(trimmed ? describeDsnProblem(trimmed) : null);
+          }}
         />
+        {dsnProblem ? (
+          <Alert
+            id="new-project-dsn-problem"
+            tone="deny"
+            hint={dsnProblem.hint}
+          >
+            {dsnProblem.message}
+          </Alert>
+        ) : null}
         <p className="text-xs text-muted-foreground">
           <strong className="font-medium text-foreground">Best practice:</strong>{" "}
           a least-privilege role. Midplane enforces the access level you pick
@@ -179,11 +219,15 @@ export function NewProjectForm({
           />
         </div>
       </fieldset>
-      {state.error ? (
-        <p
+      {/* Submitting with a known-bad DSN gets the same sentence back from the
+          action (one checker, both sides) — render it once, next to the field
+          it's about, and keep this slot for everything else (plan cap, role). */}
+      {state.error && state.error !== dsnProblem?.message ? (
+        <Alert
           id="new-project-error"
-          role="alert"
-          className="text-sm text-destructive"
+          tone="deny"
+          hint={state.hint}
+          className="text-sm"
         >
           {state.error}
           {state.upgradeUrl ? (
@@ -198,12 +242,12 @@ export function NewProjectForm({
               .
             </>
           ) : null}
-        </p>
+        </Alert>
       ) : null}
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" size="lg" arrow disabled={pending}>
-          {pending ? "Connecting…" : "Connect"}
-        </Button>
+        <SubmitButton size="lg" arrow pendingLabel="Connecting…">
+          Connect
+        </SubmitButton>
         <TestDsnButton
           key={testVersion}
           endpoint="/api/projects/test-dsn"

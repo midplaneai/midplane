@@ -11,7 +11,7 @@
 import { getOrgContext } from "@/lib/org-context";
 import { z } from "zod";
 
-import { isValidDsn } from "@/lib/projects";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 import { currentCustomer } from "@/lib/customer";
 import { pingDsnGuarded } from "@/lib/ping-guard";
 import { analyticsGroups } from "@/lib/analytics";
@@ -22,11 +22,11 @@ import {
   pingTestKey,
 } from "@/lib/rate-limit";
 
-const TestBody = z.object({
-  dsn: z.string().refine(isValidDsn, {
-    message: "must be a postgres:// or postgresql:// URL",
-  }),
-});
+// Shape only. The DSN's own validity is checked with describeDsnProblem below
+// so the 400 can carry the sentence the form shows the user — a zod refine
+// buries its message in `issues`, and the client was rendering the envelope
+// ("invalid body") instead.
+const TestBody = z.object({ dsn: z.string() });
 
 export async function POST(req: Request) {
   const customer = await currentCustomer();
@@ -59,8 +59,18 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  const dsn = normalizeDsn(parsed.data.dsn);
+  const problem = describeDsnProblem(dsn);
+  if (problem) {
+    // Renderable sentence + remedy, in the same `{error, hint}` shape the
+    // probe result uses — the button shows one block either way.
+    return Response.json(
+      { ok: false, error: problem.message, hint: problem.hint },
+      { status: 400 },
+    );
+  }
 
-  const result = await pingDsnGuarded(parsed.data.dsn);
+  const result = await pingDsnGuarded(dsn);
 
   if (userId) {
     getPostHog()?.capture({

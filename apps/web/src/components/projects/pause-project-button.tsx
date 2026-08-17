@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
+
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -12,6 +13,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 
 // Pause button + AlertDialog confirmation. Pause is reversible, so this is
 // NOT a destructive (red) action — but it does cut off live agent traffic
@@ -29,8 +31,10 @@ export function PauseProjectButton({
   id: string;
   action: (formData: FormData) => Promise<void>;
 }) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <AlertDialog>
+    <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogTrigger asChild>
         <Button variant="outline" size="sm">
           Pause project
@@ -49,9 +53,14 @@ export function PauseProjectButton({
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <form action={action}>
             <input type="hidden" name="id" value={id} />
-            <AlertDialogAction type="submit">
+            {/* Pausing tears down the running engine session, so it isn't
+                instant — the dialog holds until the action settles. */}
+            <SubmitButton
+              pendingLabel="Pausing…"
+              onSettled={() => setOpen(false)}
+            >
               Pause project
-            </AlertDialogAction>
+            </SubmitButton>
           </form>
         </AlertDialogFooter>
       </AlertDialogContent>

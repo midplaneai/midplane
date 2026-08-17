@@ -7,9 +7,9 @@ import { sendLoopsEvent } from "@/lib/loops";
 import { getPostHog } from "@/lib/posthog";
 
 import { BrandLockup } from "@/components/layout/brand-mark";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { RegionBadge } from "@/components/ui/region-badge";
 import { RegionFlag } from "@/components/ui/region-flag";
 import { defaultRegionForCountry, REGION_LABELS } from "@/lib/region";
@@ -120,9 +120,20 @@ export default async function RegionPicker() {
               <RegionCard region="us" suggested={suggested} />
             </>
           )}
-          <Button type="submit" className="sm:col-span-2" size="lg">
+          {/* This submit is the slowest button in the product's first five
+              minutes: the authed pass creates the org, writes the customer row,
+              signs the region cookie and fires the welcome mail before it
+              redirects. Left as a plain Button it stayed lit and clickable
+              through all of it, which reads as "nothing happened". */}
+          <SubmitButton
+            className="sm:col-span-2"
+            size="lg"
+            pendingLabel={
+              userId ? "Setting up your workspace…" : "Taking you to sign-up…"
+            }
+          >
             Continue
-          </Button>
+          </SubmitButton>
         </form>
       </section>
     </main>

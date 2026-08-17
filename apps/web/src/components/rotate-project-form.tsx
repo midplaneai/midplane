@@ -2,9 +2,11 @@
 
 import { useState, useTransition } from "react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 
 // Inline rotate form rendered on the per-DB detail page. The Server Action
 // passed in via `action` closes over the URL's project id + db name,
@@ -35,7 +37,10 @@ export function RotateProjectForm({
 }) {
   const [dsn, setDsn] = useState("");
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{
+    message: string;
+    hint?: string;
+  } | null>(null);
 
   const dirty = dsn.trim().length > 0;
 
@@ -43,9 +48,18 @@ export function RotateProjectForm({
     event.preventDefault();
     setError(null);
 
+    const normalized = normalizeDsn(dsn);
+    // Answer a bad paste here rather than after a round trip that ends in the
+    // error boundary — same checker the action re-runs.
+    const problem = describeDsnProblem(normalized);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+
     const fd = new FormData();
     fd.set("id", id);
-    fd.set("dsn", dsn);
+    fd.set("dsn", normalized);
 
     startTransition(async () => {
       try {
@@ -55,7 +69,12 @@ export function RotateProjectForm({
         setDsn("");
         onSuccess?.();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "rotation failed");
+        setError({
+          message:
+            e instanceof Error
+              ? e.message
+              : "The connection string wasn't rotated.",
+        });
       }
     });
   }
@@ -87,7 +106,18 @@ export function RotateProjectForm({
           autoCorrect="off"
           placeholder="postgres://user:pass@host:5432/db"
           className="font-mono"
+          aria-invalid={error ? true : undefined}
+          onBlur={() => {
+            const trimmed = normalizeDsn(dsn);
+            if (trimmed !== dsn) setDsn(trimmed);
+            if (trimmed) setError(describeDsnProblem(trimmed));
+          }}
         />
+        {error ? (
+          <Alert tone="deny" hint={error.hint}>
+            {error.message}
+          </Alert>
+        ) : null}
       </div>
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" disabled={pending || !dirty}>
@@ -104,9 +134,6 @@ export function RotateProjectForm({
             Cancel
           </Button>
         )}
-        {error ? (
-          <span className="text-sm text-destructive">{error}</span>
-        ) : null}
       </div>
     </form>
   );

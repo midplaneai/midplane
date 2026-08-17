@@ -62,12 +62,9 @@ vi.mock("@/lib/posthog", () => ({
   getPostHog: () => null,
 }));
 
-// isValidDsn is the only @/lib/projects symbol the test-dsn route
-// needs; keep the real implementation, skip the heavy module graph.
-vi.mock("@/lib/projects", () => ({
-  isValidDsn: (s: unknown) =>
-    typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8,
-}));
+// Neither route imports @/lib/projects any more — DSN shape now comes from the
+// dependency-free @/lib/dsn-format, which loads for real (that's the point:
+// the 400 body has to carry the sentence that module produces).
 
 // The per-conn route does its ownership SELECT directly via getDb —
 // fake the minimal chain shape.
@@ -138,6 +135,25 @@ describe("POST /api/projects/test-dsn", () => {
     expect(pingGuardedMock).not.toHaveBeenCalled();
   });
 
+  // Regression: the DSN rejection used to answer `{error: "invalid body"}`
+  // with the actual reason buried in a zod `issues` array the client didn't
+  // read, so the form rendered "✗ invalid body" next to Test connection.
+  it("400 body carries the reason and a remedy, not 'invalid body'", async () => {
+    const { POST } = await loadTestDsnRoute();
+    const res = await POST(jsonRequest({ dsn: "mysql://nope" }));
+    const body = (await res.json()) as { error?: string; hint?: string };
+    expect(body.error).not.toBe("invalid body");
+    expect(body.error).toMatch(/mysql:\/\/ url/i);
+    expect(body.hint).toMatch(/postgres:\/\//i);
+  });
+
+  it("normalizes a DSN pasted with surrounding whitespace", async () => {
+    const { POST } = await loadTestDsnRoute();
+    const res = await POST(jsonRequest({ dsn: `  ${GOOD_DSN}\n` }));
+    expect(res.status).toBe(200);
+    expect(pingGuardedMock).toHaveBeenCalledWith(GOOD_DSN);
+  });
+
   it("passes the guarded ping result through verbatim", async () => {
     pingGuardedMock = vi.fn(async () => ({
       ok: false,
@@ -188,6 +204,15 @@ describe("POST /api/projects/[id]/databases/test (regression: guard + 429)", () 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(pingGuardedMock).toHaveBeenCalledWith(GOOD_DSN);
+  });
+
+  it("rejects a bad DSN with the reason, before the ownership SELECT", async () => {
+    const { POST } = await loadPerConnRoute();
+    const res = await POST(jsonRequest({ dsn: "not-a-url" }), params);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toMatch(/starts with postgres:\/\//i);
+    expect(pingGuardedMock).not.toHaveBeenCalled();
   });
 
   it("shares the test-dsn budget — 429 after the window is spent elsewhere", async () => {
