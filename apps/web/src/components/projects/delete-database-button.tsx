@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
+
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -12,9 +13,11 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 
 // Delete one database off a project, from the workspace's Database pane.
-// Mirrors DeleteProjectButton (AlertDialog confirm → server action), but
+// Mirrors DeleteProjectButton (AlertDialog confirm → server action + a
+// SubmitButton that holds the dialog open while the teardown runs), but
 // scoped to a single child DB. Deleting the only database is allowed and
 // leaves the project in its setup state, so `isOnly` only changes the
 // consequence the confirm spells out — never whether the action is offered.
@@ -28,8 +31,10 @@ export function DeleteDatabaseButton({
   action: (formData: FormData) => Promise<void>;
   isOnly?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <AlertDialog>
+    <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogTrigger asChild>
         <Button variant="quiet" size="inline">
           Delete
@@ -63,7 +68,12 @@ export function DeleteDatabaseButton({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <form action={action}>
-            <AlertDialogAction type="submit">Delete database</AlertDialogAction>
+            <SubmitButton
+              pendingLabel="Deleting…"
+              onSettled={() => setOpen(false)}
+            >
+              Delete database
+            </SubmitButton>
           </form>
         </AlertDialogFooter>
       </AlertDialogContent>

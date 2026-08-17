@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
+
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -12,6 +13,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { useProjectFreshness } from "@/components/dashboard/freshness-provider";
 
 // Compact Pause/Resume control for the dashboard project header, sitting
@@ -39,20 +41,21 @@ export function ProjectServiceControl({
 }) {
   const live = useProjectFreshness(projectId);
   const pausedAt = live ? live.pausedAt : initialPausedAt;
+  const [open, setOpen] = useState(false);
 
   if (pausedAt != null) {
     return (
       <form action={resumeAction}>
         <input type="hidden" name="id" value={projectId} />
-        <Button type="submit" variant="outline" size="sm">
+        <SubmitButton variant="outline" size="sm" pendingLabel="Resuming…">
           Resume
-        </Button>
+        </SubmitButton>
       </form>
     );
   }
 
   return (
-    <AlertDialog>
+    <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogTrigger asChild>
         <Button variant="ghost" size="sm" className="text-subtle">
           Pause
@@ -71,9 +74,12 @@ export function ProjectServiceControl({
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <form action={pauseAction}>
             <input type="hidden" name="id" value={projectId} />
-            <AlertDialogAction type="submit">
+            <SubmitButton
+              pendingLabel="Pausing…"
+              onSettled={() => setOpen(false)}
+            >
               Pause project
-            </AlertDialogAction>
+            </SubmitButton>
           </form>
         </AlertDialogFooter>
       </AlertDialogContent>
