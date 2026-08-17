@@ -20,7 +20,7 @@ import { and, eq } from "drizzle-orm";
 
 import { projects, getDb } from "@midplane-cloud/db";
 
-import { isValidDsn } from "@/lib/projects";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 import { currentCustomer } from "@/lib/customer";
 import { pingDsnGuarded } from "@/lib/ping-guard";
 import { analyticsGroups } from "@/lib/analytics";
@@ -31,11 +31,9 @@ import {
   pingTestKey,
 } from "@/lib/rate-limit";
 
-const TestBody = z.object({
-  dsn: z.string().refine(isValidDsn, {
-    message: "must be a postgres:// or postgresql:// URL",
-  }),
-});
+// Shape only — the DSN's validity is checked with describeDsnProblem below so
+// the 400 can carry a sentence the form can show (see the raw-DSN sibling).
+const TestBody = z.object({ dsn: z.string() });
 
 export async function POST(
   req: Request,
@@ -82,6 +80,14 @@ export async function POST(
       { status: 400 },
     );
   }
+  const dsn = normalizeDsn(parsed.data.dsn);
+  const problem = describeDsnProblem(dsn);
+  if (problem) {
+    return Response.json(
+      { ok: false, error: problem.message, hint: problem.hint },
+      { status: 400 },
+    );
+  }
 
   // Ownership gate — same leakage shape as the rest of the projects API.
   const db = getDb(customer.region);
@@ -97,7 +103,7 @@ export async function POST(
   // Guarded since the projects-ux PR: this route previously pinged
   // arbitrary pasted DSNs with only an ownership gate — an internal-
   // network reachability oracle for any signed-in customer.
-  const result = await pingDsnGuarded(parsed.data.dsn);
+  const result = await pingDsnGuarded(dsn);
 
   if (userId) {
     getPostHog()?.capture({

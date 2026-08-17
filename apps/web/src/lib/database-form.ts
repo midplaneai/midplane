@@ -8,8 +8,8 @@ import {
   addDatabase,
   DatabaseNameTaken,
   isValidDatabaseName,
-  isValidDsn,
 } from "@/lib/projects";
+import { describeDsnProblem, dsnProblemText, normalizeDsn } from "@/lib/dsn-format";
 import type { Customer } from "@midplane-cloud/db";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { DatabaseLimitError } from "@/lib/plan";
@@ -45,9 +45,13 @@ export async function addDatabaseFromForm(
     );
   }
   const dbName = nameRaw.trim();
-  const dsn = formData.get("dsn");
-  if (!isValidDsn(dsn)) {
-    throw new Error("DSN must be a postgres:// or postgresql:// URL");
+  const dsnRaw = formData.get("dsn");
+  const dsn = typeof dsnRaw === "string" ? normalizeDsn(dsnRaw) : "";
+  // Message + remedy in one string: this path throws, and the client form
+  // renders a thrown error as a single line (see add-database-form.tsx).
+  const dsnProblem = describeDsnProblem(dsn);
+  if (dsnProblem) {
+    throw new Error(dsnProblemText(dsnProblem));
   }
   // The form posts a string; validate against the canonical enum so a
   // tampered request can't smuggle in something the spawner would

@@ -25,20 +25,18 @@ import { z } from "zod";
 import {
   deleteProject,
   getProjectWithFirstDatabase,
-  isValidDsn,
   rotateProject,
 } from "@/lib/projects";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 import { currentCustomer } from "@/lib/customer";
 import { requireManagerRest } from "@/lib/org-auth";
 import { getMcpProxyContext } from "@/lib/mcp-proxy";
 import { analyticsGroups } from "@/lib/analytics";
 import { getPostHog } from "@/lib/posthog";
 
-const RotateBody = z.object({
-  dsn: z.string().refine(isValidDsn, {
-    message: "must be a postgres:// or postgresql:// URL",
-  }),
-});
+// Shape only; the DSN itself is checked with describeDsnProblem below so the
+// 400 carries a renderable sentence instead of "invalid body".
+const RotateBody = z.object({ dsn: z.string() });
 
 export async function PATCH(
   req: Request,
@@ -70,6 +68,14 @@ export async function PATCH(
       { status: 400 },
     );
   }
+  const dsn = normalizeDsn(parsed.data.dsn);
+  const problem = describeDsnProblem(dsn);
+  if (problem) {
+    return Response.json(
+      { error: problem.message, hint: problem.hint },
+      { status: 400 },
+    );
+  }
 
   // This route has no db param — it targets the project's database (the
   // only one for a single-DB project). Resolve its name so rotation doesn't
@@ -84,7 +90,7 @@ export async function PATCH(
   const rotated = await rotateProject(
     customer,
     id,
-    parsed.data.dsn,
+    dsn,
     ctx,
     target.database.name,
   );

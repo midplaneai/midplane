@@ -555,9 +555,12 @@ function firstFreeDefaultName(takenNames: readonly string[]): string {
 // what keeps an emptied project usable — it is just no longer something
 // onboarding manufactures.
 
-export function isValidDsn(s: unknown): s is string {
-  return typeof s === "string" && /^postgres(ql)?:\/\//i.test(s) && s.length >= 8;
-}
+// Re-exported, not implemented here: the checks are shared with the browser
+// (blur-time format feedback, probe pre-flight) and this module pulls in the
+// `postgres` driver, so the rules live in the dependency-free
+// lib/dsn-format.ts. Importers of "@/lib/projects" keep working; client
+// components import from "@/lib/dsn-format" directly.
+export { isValidDsn } from "./dsn-format.ts";
 
 /** Read-only plan usage for pre-flight UX gating (current project +
  *  usable-token counts for the customer's region). NOT authoritative: the

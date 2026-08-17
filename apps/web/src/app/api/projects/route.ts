@@ -4,6 +4,7 @@ import { ACCESS_LEVELS } from "@midplane-cloud/db";
 import { mintMcpUrl } from "@midplane-cloud/router";
 
 import { createProject, isValidDatabaseName } from "@/lib/projects";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 import { analyticsGroups, groupIdentifyProject } from "@/lib/analytics";
 import { currentCustomer } from "@/lib/customer";
 import { requireManagerRest } from "@/lib/org-auth";
@@ -26,12 +27,10 @@ import { getPostHog } from "@/lib/posthog";
 // digest; there's no path to re-fetch the plaintext.
 
 const Body = z.object({
-  dsn: z
-    .string()
-    .min(8)
-    .refine((s) => /^postgres(ql)?:\/\//i.test(s), {
-      message: "must be a postgres:// or postgresql:// URL",
-    }),
+  // Shape only — the DSN itself is checked with describeDsnProblem below, the
+  // same checker the browser form and the ping probes run, so one paste can't
+  // be accepted here and rejected there (and the 400 says which part is wrong).
+  dsn: z.string(),
   // Agent-facing alias for the first database. Omit it and createProject
   // derives the alias from the DSN's database name. Must match the engine's
   // DB name grammar.
@@ -74,6 +73,14 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  const dsn = normalizeDsn(parsed.data.dsn);
+  const dsnProblem = describeDsnProblem(dsn);
+  if (dsnProblem) {
+    return Response.json(
+      { error: dsnProblem.message, hint: dsnProblem.hint },
+      { status: 400 },
+    );
+  }
 
   const entitlement = await resolvePlan();
   let id: string;
@@ -81,7 +88,7 @@ export async function POST(req: Request) {
   try {
     ({ id, defaultTokenPlaintext } = await createProject(
       customer,
-      parsed.data.dsn,
+      dsn,
       parsed.data.name ?? null,
       parsed.data.default_access ?? "read",
       userId,

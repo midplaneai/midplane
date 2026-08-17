@@ -19,10 +19,10 @@ import { currentCustomer } from "@/lib/customer";
 import { isManager, requireManager } from "@/lib/org-auth";
 import {
   createProject,
-  isValidDsn,
   listProjectSwitcherRows,
   slugifyDatabaseName,
 } from "@/lib/projects";
+import { describeDsnProblem, normalizeDsn } from "@/lib/dsn-format";
 import {
   projectQuota,
   PlanLimitError,
@@ -194,9 +194,14 @@ async function createAction(
   const gate = await requireManager("Only an owner or admin can add projects.");
   if ("error" in gate) return { error: gate.error };
 
-  const dsn = formData.get("dsn");
-  if (!isValidDsn(dsn)) {
-    return { error: "DSN must be a postgres:// or postgresql:// URL." };
+  // Same checker the field runs on blur and the probe runs pre-flight, so the
+  // sentence the user already saw is the sentence the submit repeats — see
+  // lib/dsn-format.ts.
+  const dsnRaw = formData.get("dsn");
+  const dsn = typeof dsnRaw === "string" ? normalizeDsn(dsnRaw) : "";
+  const dsnProblem = describeDsnProblem(dsn);
+  if (dsnProblem) {
+    return { error: dsnProblem.message, hint: dsnProblem.hint };
   }
   // The optional name is the first database's agent-facing alias (the string
   // the agent uses to address it). Coerce it to the engine's name grammar

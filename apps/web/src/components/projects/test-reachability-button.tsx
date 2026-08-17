@@ -59,7 +59,9 @@ export function TestReachabilityButton({
       >
         {test.kind === "pending" ? "Testing…" : "Test connection"}
       </Button>
-      <TestStatus state={test} />
+      {/* inline: this control lives in a row of text links on the database
+          page, so its outcome stays a span rather than claiming a row. */}
+      <TestStatus state={test} variant="inline" />
     </span>
   );
 }
