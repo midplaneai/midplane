@@ -94,7 +94,11 @@ export function tenantScope(source?: TenantScopeSource): Rule {
   };
 }
 
-// The single deny verdict for a tenant-scope failure.
+// The single deny verdict for a tenant-scope failure. Entirely agent-actionable
+// — every sentence describes a change to the STATEMENT, which is why this
+// message keeps its advice where table_access and the guardrails dropped theirs.
+// The one operator-facing clause (list the table under `tenant_scope.exempt`)
+// was removed for the reason given in table-access.ts's messageFor.
 function denyTenantScope(f: ScopeFailure): RuleVerdict {
   return {
     decision: "DENY",
@@ -107,9 +111,7 @@ function denyTenantScope(f: ScopeFailure): RuleVerdict {
       `reference, including subqueries, CTEs, and UNION arms. For ` +
       `INSERT, include \`${f.column}\` in the column list and set it ` +
       `to the tenant id in every VALUES row. MERGE on tenant-scoped ` +
-      `tables is not supported — \`exempt\` the table to use it. To ` +
-      `exempt this table entirely, list it under \`tenant_scope.exempt\` ` +
-      `in your policy YAML.`,
+      `tables is not supported.`,
   };
 }
 

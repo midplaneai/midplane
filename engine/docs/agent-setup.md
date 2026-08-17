@@ -105,9 +105,11 @@ User: *"confirm delete all users"*
 
 > Called midplane (ctrl+o to expand)
 >
-> ⏺ Midplane blocked it. The denial reason it returned: *"Midplane denied this query because writes to table `users` are not allowed by the table-access policy (`users` resolves to `read`; mark it `read_write` in your MIDPLANE_POLICY_FILE to grant writes)."* The DELETE was audited but not executed.
+> ⏺ Midplane blocked it. The denial reason it returned: *"Midplane denied this query because writes to table `users` are not allowed by the table-access policy (`users` resolves to `read`, which permits reads only). Another write to `users` will be denied the same way."* The DELETE was audited but not executed.
 
-Two enforcement layers visible to the user: Claude Code's own confirmation prompt before any destructive call, then Midplane's policy denial. The denial reason is a full sentence that names the offending table and the YAML key the user would need to flip — designed to be paraphrased by the agent into a clear suggestion (e.g., "Midplane is configured to leave `users` read-only; if you want me to actually wipe it, edit your policy YAML and set `tables.users: read_write`").
+Two enforcement layers visible to the user: Claude Code's own confirmation prompt before any destructive call, then Midplane's policy denial. The denial reason is a full sentence that names the offending table and the permission it resolved to, so the agent can paraphrase it accurately (e.g., "Midplane is configured to leave `users` read-only, so the DELETE didn't run — reads still work").
+
+The message deliberately does **not** tell the agent how to widen the policy. The policy is the operator's deliberate configuration, and an agent that is handed a lever tends to reach for it — offering to go edit a config file rather than reporting the denial and moving on. Changing policy is a human's job, done through whatever surface that deployment uses, and it is documented in [`policy-rules.md`](./policy-rules.md) rather than in a message addressed to an agent.
 
 ### Quirks
 
