@@ -25,6 +25,11 @@ import {
 } from "./email";
 import { reconcileLoopbackPortRegistration } from "./mcp-loopback-port";
 import { repairedLoopbackRedirect } from "./mcp-redirect";
+import { expirePredecessorRefreshToken } from "./mcp-refresh-rotation";
+import {
+  MCP_ACCESS_TOKEN_TTL_SECONDS,
+  MCP_REFRESH_TOKEN_TTL_SECONDS,
+} from "./mcp-token-lifetimes";
 import { getPostHog } from "./posthog";
 import { hasEntitlement } from "./plan";
 import { bootRegion } from "./region-context";
@@ -347,6 +352,31 @@ function createAuth() {
           };
         }
       }),
+      after: createAuthMiddleware(async (ctx) => {
+        // Invalidate the predecessor after a successful refresh rotation.
+        // Better Auth mints the new token pair as a NEW row and leaves the old
+        // one valid for its full idle window, so without this a copied refresh
+        // token is replayable for the whole 90 days
+        // (lib/mcp-token-lifetimes.ts) no matter how often the real client
+        // rotates. Why expire-with-grace rather than delete, and what this
+        // deliberately does NOT do (reuse detection): lib/mcp-refresh-rotation.ts.
+        if (ctx.path !== "/mcp/token") return;
+        const body = ctx.body as Record<string, unknown> | undefined;
+        if (body?.grant_type !== "refresh_token") return;
+        // Only on success. A rejected exchange returns an APIError rather than
+        // the token payload, and must leave the presented token exactly as it
+        // was — expiring it here would let an attacker burn a victim's live
+        // token by POSTing it with a bad client_id.
+        const returned = ctx.context.returned as
+          | { access_token?: unknown }
+          | undefined;
+        if (!returned || typeof returned.access_token !== "string") return;
+
+        await expirePredecessorRefreshToken(
+          typeof body.refresh_token === "string" ? body.refresh_token : undefined,
+          ctx.context.adapter,
+        );
+      }),
     },
     databaseHooks: {
       user: {
@@ -530,6 +560,13 @@ function createAuth() {
           loginPage: "/sign-in",
           consentPage: "/oauth/consent",
           requirePKCE: true,
+          // Token lifetimes. MUST stay explicit: omit either and Better Auth's
+          // defaults silently take over, and the 7-day refresh default expires
+          // an idle agent's credentials — the client reports needsAuth, which
+          // reads as a broken server. Rationale + the guard test live in
+          // lib/mcp-token-lifetimes.ts.
+          accessTokenExpiresIn: MCP_ACCESS_TOKEN_TTL_SECONDS,
+          refreshTokenExpiresIn: MCP_REFRESH_TOKEN_TTL_SECONDS,
           // The `mcp` capability scope — the proxy REQUIRES it on the access
           // token before granting MCP access (lib/proxy.ts proxyMcpOAuth). Listed
           // alongside the plugin defaults (openid/profile/email/offline_access)
