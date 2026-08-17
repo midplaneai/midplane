@@ -27,7 +27,7 @@
 // midplane/midplane:<v>` — the top-level `Digest:` line; deploy-fly.yml reads
 // the same value from the registry's Docker-Content-Digest header), then run
 // scripts/check-image-pin.ts.
-export const OSS_ENGINE_IMAGE = "midplane/midplane:0.17.0";
+export const OSS_ENGINE_IMAGE = "midplane/midplane:0.18.0";
 
 // GHCR mirror of the same engine artifact, published in lockstep by
 // engine-publish.yml (same build, two tags). When MIDPLANE_ENGINE_USE_GHCR=1

@@ -100,8 +100,11 @@ check. Bumping the engine:
 - Literal sites the drift check enforces: `scripts/dev-image.sh`,
   `scripts/bootstrap.sh`, `.env.example`,
   `fly-eu.toml`, `fly-us.toml`, `fly-web-eu.toml`, `fly-web-us.toml`,
-  `README.md`, `.github/workflows/deploy-fly.yml` (the bare `default: "X.Y.Z"`),
-  `e2e/hot-policy-reload.live.e2e.ts`, `e2e/mcp-proxy.live.e2e.ts`.
+  `README.md`, `docs/deploy.md` (the "router spawns" line plus the two
+  copy-pasteable `fly secrets set` blocks — a stale tag here is one an operator
+  pastes into prod), `.github/workflows/deploy-fly.yml` (the bare
+  `default: "X.Y.Z"`), `e2e/hot-policy-reload.live.e2e.ts`,
+  `e2e/mcp-proxy.live.e2e.ts`.
   (`.env.self-host.example` is not a pin site: self-host process-spawns the
   in-image compiled binary, so it carries no image tag.)
 
