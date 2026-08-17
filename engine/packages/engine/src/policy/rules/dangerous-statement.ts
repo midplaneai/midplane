@@ -98,6 +98,13 @@ export function dangerousStatement(source?: DangerousStatementSource): Rule {
   };
 }
 
+// These messages name the guardrail that fired and what it covers, and stop
+// there — they used to close by naming the `guardrails.*` key to flip. Same
+// reasoning as table_access's messageFor: the reader is an agent that cannot
+// edit the policy, and on a control-plane deployment the YAML is generated, so
+// naming a key sends it after something it will never find. Advice the agent
+// CAN act on stays — denyUnqualifiedDml still asks for a WHERE clause, which is
+// a fix to the statement rather than to the policy.
 function denyBareWrite(): RuleVerdict {
   return {
     decision: "DENY",
@@ -107,8 +114,7 @@ function denyBareWrite(): RuleVerdict {
       `refuses writes regardless of table-access policy. That covers ` +
       `creating a relation (\`CREATE TABLE\`, \`CREATE TABLE AS\`, ` +
       `\`SELECT … INTO\`), which materializes data just as a row change ` +
-      `does. Reads are unaffected. Set \`guardrails.block_dml: false\` in ` +
-      `your policy YAML to allow writes.`,
+      `does. Reads are unaffected.`,
   };
 }
 
@@ -121,9 +127,7 @@ function denyDml(
     message:
       `Midplane denied this query because \`${d.operation}\` on ` +
       `\`${d.table}\` changes rows, and this database refuses row changes ` +
-      `regardless of table-access policy. Reads are unaffected. Set ` +
-      `\`guardrails.block_dml: false\` in your policy YAML to allow row ` +
-      `changes.`,
+      `regardless of table-access policy. Reads are unaffected.`,
   };
 }
 
@@ -138,8 +142,7 @@ function denyUnqualifiedDml(
       `\`${d.table}\` has no WHERE clause, which would affect every row in ` +
       `the table. Add a WHERE clause that scopes the rows you intend to ` +
       `change. This guardrail blocks whole-table writes regardless of ` +
-      `table-access policy; set \`guardrails.block_unqualified_dml: false\` ` +
-      `in your policy YAML to disable it.`,
+      `table-access policy.`,
   };
 }
 
@@ -150,7 +153,6 @@ function denyDdl(d: Extract<DangerousStatement, { kind: "ddl" }>): RuleVerdict {
     message:
       `Midplane denied this query because \`${d.operation}\` is a ` +
       `schema-changing (DDL) operation, which Midplane blocks regardless of ` +
-      `table-access policy. Set \`guardrails.block_ddl: false\` in your ` +
-      `policy YAML to allow DROP/TRUNCATE/ALTER.`,
+      `table-access policy.`,
   };
 }

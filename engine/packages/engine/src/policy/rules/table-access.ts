@@ -54,8 +54,10 @@ type DenialCause =
   | { kind: "read_blocked"; table: string; resolved: TableAccessLevel }
   // The table_access POLICY permits the write, but this session's credential
   // is scoped read-only by the cloud per-agent grant (ctx.scope_max_access ===
-  // "read"). Distinct from write_blocked so the message doesn't tell the
-  // operator to mark a table read_write when it already is.
+  // "read"). Distinct from write_blocked so the message names the credential
+  // rather than the policy — the two are fixed in different places, and
+  // reporting "the table is read-only" for a table that is marked read_write
+  // would send the reader after the wrong thing.
   | { kind: "scope_read_only"; table: string }
   | { kind: "no_target"; statement: string };
 
@@ -124,21 +126,40 @@ export function tableAccess(source?: TableAccessConfigSource): Rule {
   };
 }
 
+// Denial messages state the decision and the resolved permission, and stop
+// there. They deliberately name no lever to pull: the policy is the operator's
+// deliberate configuration, and the agent reading this can't edit it. Naming one
+// (this used to point at MIDPLANE_POLICY_FILE) reads to an agent as a suggested
+// next step, so it goes off hunting for a file that, on every control-plane
+// deployment, is generated and mounted read-only. What the agent CAN act on
+// stays: the resolved level tells it which operations are still open, and the
+// closing clause tells it not to burn turns re-shaping the same operation.
+// Remediation the OPERATOR performs belongs in the docs and the policy surface,
+// not in a message addressed to an agent.
+//
+// The closing clause is scoped to the DENIED OPERATION, never to the table. On a
+// `read` table, "rewriting the statement will not change this" would contradict
+// the clause right before it — reads ARE permitted, so re-shaping the denied
+// INSERT into a SELECT changes the outcome completely. Saying another WRITE
+// will be denied keeps the anti-retry steer without talking the agent out of the
+// read-only alternative that would have worked.
 function messageFor(cause: DenialCause): string {
   switch (cause.kind) {
     case "write_blocked":
       return (
         `Midplane denied this query because writes to table \`${cause.table}\` ` +
         `are not allowed by the table-access policy ` +
-        `(\`${cause.table}\` resolves to \`${cause.resolved}\`; mark it ` +
-        `\`read_write\` in your MIDPLANE_POLICY_FILE to grant writes).`
+        `(\`${cause.table}\` resolves to \`${cause.resolved}\`, ` +
+        `${permits(cause.resolved)}). ` +
+        `Another write to \`${cause.table}\` will be denied the same way.`
       );
     case "read_blocked":
       return (
         `Midplane denied this query because reads from table \`${cause.table}\` ` +
         `are not allowed by the table-access policy ` +
-        `(\`${cause.table}\` resolves to \`${cause.resolved}\`; mark it ` +
-        `\`read\` or \`read_write\` to grant access).`
+        `(\`${cause.table}\` resolves to \`${cause.resolved}\`, ` +
+        `${permits(cause.resolved)}). ` +
+        `Another read of \`${cause.table}\` will be denied the same way.`
       );
     case "scope_read_only":
       return (
@@ -153,8 +174,25 @@ function messageFor(cause: DenialCause): string {
         `has no per-table target the table-access policy can grant. ` +
         `Side-effect statements (CALL, EXECUTE, NOTIFY, LISTEN, UNLISTEN, ` +
         `LOCK, COPY, DO, SET, CREATE/DROP/GRANT on non-table objects) deny ` +
-        `regardless of YAML config.`
+        `regardless of policy configuration.`
       );
+  }
+}
+
+// Spell out what the resolved level still allows, so the reader learns which
+// operations are open from the same sentence that denies this one — a `deny`
+// table is worth not SELECTing either. Derived rather than hardcoded per
+// message: `read_blocked` only ever carries `deny` today, but writing that
+// assumption into its prose would make the message wrong the moment a level
+// blocking reads-but-not-writes existed.
+function permits(level: TableAccessLevel): string {
+  switch (level) {
+    case "deny":
+      return "which permits neither reads nor writes";
+    case "read":
+      return "which permits reads only";
+    case "read_write":
+      return "which permits reads and writes";
   }
 }
 

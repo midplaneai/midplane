@@ -28,9 +28,12 @@ describe("table_access — scope_max_access read-only ceiling", () => {
     expect(d.allowed).toBe(false);
     if (!d.allowed) {
       expect(d.reason).toBe("table_access");
-      // Distinct scope message — NOT the "mark it read_write" policy message.
+      // Distinct scope message — names the CREDENTIAL, not the policy. Asserted
+      // against the policy message's own wording (it no longer names a config
+      // location, so keying this on "MIDPLANE_POLICY_FILE" would now pass
+      // vacuously for any message at all).
       expect(d.message).toContain("scoped to read-only");
-      expect(d.message).not.toContain("MIDPLANE_POLICY_FILE");
+      expect(d.message).not.toContain("not allowed by the table-access policy");
     }
   });
 

@@ -2,6 +2,25 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Denial messages no longer tell the reader how to widen the policy.** A denial is read by an AGENT, which cannot edit policy — and 0.1.x's "points at the YAML key to flip" wording had the effect that naming a lever invites pulling it: agents reported the block and then offered to go find and edit `MIDPLANE_POLICY_FILE`. On every control-plane deployment that file does not exist as anything a user edits; it is generated from the database and mounted read-only, so the offer sends the user somewhere that isn't there. The messages now state the decision and stop.
+
+  | rule | dropped | kept |
+  | --- | --- | --- |
+  | `table_access` (write) | "mark it `read_write` in your MIDPLANE_POLICY_FILE to grant writes" | the resolved level, now spelled out — "resolves to `read`, which permits reads only" |
+  | `table_access` (read) | "mark it `read` or `read_write` to grant access" | the resolved level and what it permits |
+  | `table_access` (no target) | "regardless of YAML config" → "regardless of policy configuration" | the full side-effect statement list |
+  | `dangerous_statement` (×4) | "Set `guardrails.block_ddl: false` in your policy YAML …" and the `block_dml` / `block_unqualified_dml` equivalents | which guardrail fired, what it covers, "Reads are unaffected" |
+  | `tenant_scope_missing` | "list it under `tenant_scope.exempt` in your policy YAML" | the entire predicate instruction — see below |
+
+  - **Advice the agent can act on is kept, and only that.** The line is whether the fix is to the STATEMENT or to the POLICY. `tenant_scope_missing` keeps every word about adding the `tenant_id` predicate, and the unqualified-DML guardrail still asks for a `WHERE` clause, because those are rewrites the agent performs. Nothing that requires an operator survives.
+  - **The two `table_access` messages close by scoping the denial to the OPERATION** — "Another write to `users` will be denied the same way." Removing the lever without saying this left agents retrying `INSERT` variants against a table that denies every one of them. Scoped to the operation rather than the table on purpose: a blanket "rewriting will not change this" would contradict the clause before it on a `read` table, where re-shaping the denied write into a `SELECT` is exactly the move that works.
+  - **`policy_rule` is unchanged**, so anything branching on the wire-level identifier rather than the prose is unaffected. Allow/deny outcomes do not move — this release changes only the sentence a denial carries.
+  - Operator-facing remediation still lives where an operator will find it: [`docs/policy-rules.md`](./docs/policy-rules.md) and the `midplane policy` CLI.
+
 ## [0.17.0] — 2026-08-13
 
 ### Added
