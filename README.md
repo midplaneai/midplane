@@ -21,10 +21,10 @@ event-sourced audit log of which agent ran what, **before** the query executes.
 
 AI coding agents are being plugged into production Postgres without an audit trail
 or a safety layer. The deprecated Anthropic reference Postgres MCP shipped a
-stacked-statement injection vector (Datadog Security Labs, 2025); the Supabase
-service-role pattern has been used to exfiltrate cross-tenant data. Midplane parses
-every query as an AST, denies the dangerous shapes, and writes a durable audit row
-**before** the query reaches your database.
+stacked-statement injection vector (Datadog Security Labs, 2025); the common
+service-role setup hands an agent a connection that can read and write every table.
+Midplane parses every query as an AST, denies the dangerous shapes, and writes a
+durable audit row **before** the query reaches your database.
 
 ## What it blocks
 
@@ -33,8 +33,9 @@ every query as an AST, denies the dangerous shapes, and writes a durable audit r
 - **Whole-table wipes and schema destruction** — no-`WHERE` `DELETE` / `UPDATE`
   and all `DROP` / `TRUNCATE` / `ALTER`, regardless of table policy.
 - **Stacked-statement injection** — `SELECT 1; DROP TABLE users` denied at parse time.
-- **Cross-tenant exfiltration** — map a tenant column once; unscoped queries are
-  denied at any AST depth (subqueries, CTEs, JOINs).
+- **Writes hidden inside a read** — `WITH x AS (DELETE FROM users RETURNING *)
+  SELECT * FROM x` is denied at the inner `DELETE`, not the outer `SELECT`. The
+  same recursive walk covers subqueries, UNION arms, and JOINs.
 
 The full policy model, the parse → policy → audit pipeline, and the adversarial
 corpus that pins it are documented at [midplane.ai/docs](https://midplane.ai/docs).
@@ -92,7 +93,8 @@ Midplane is **open core, MIT, and self-hostable.** Everything outside
 uncapped when self-hosted. `apps/web/src/ee/` is the commercial Enterprise Edition
 (SSO/SAML today; the governance band over time); deleting it leaves a working MIT
 build. The managed cloud is the same codebase and the supported, paid path. See
-[`LICENSE`](./LICENSE).
+[`LICENSE`](./LICENSE) for the MIT terms and [`NOTICE`](./NOTICE) for the `ee/`
+carve-out.
 
 ## Architecture
 
@@ -128,8 +130,9 @@ don't open a public issue.
 ## License
 
 MIT — see [`LICENSE`](./LICENSE). No copyleft, no BSL, no source-available rug-pull.
-The one carve-out is `apps/web/src/ee/` (the commercial Enterprise Edition); deleting
-it leaves a fully working MIT build.
+The one carve-out is `apps/web/src/ee/` (the commercial Enterprise Edition, governed
+by [`apps/web/src/ee/LICENSE`](./apps/web/src/ee/LICENSE) and recorded in
+[`NOTICE`](./NOTICE)); deleting it leaves a fully working MIT build.
 
 ---
 

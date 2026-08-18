@@ -20,7 +20,7 @@ Implemented and live on the hosted product. Billing runs on the **@better-auth/s
 | Seats | 1 | 10 | unlimited |
 | Audit retention | 7 days | 30 days | 90 days |
 | Policy engine (allow/deny/warn) | ✓ | ✓ | ✓ |
-| Per-table access + tenant scope (parser-level) | ✓ | ✓ | ✓ |
+| Per-table access (parser-level) | ✓ | ✓ | ✓ |
 | Dangerous-statement guardrails (DML with no WHERE; DROP / TRUNCATE / ALTER) | ✓ | ✓ | ✓ |
 | SSO / SAML | — | — | ✓ |
 | Support | community | email | priority email |
