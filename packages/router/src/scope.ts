@@ -36,8 +36,10 @@ export type ScopeSubject =
 /** Resolve the per-agent scope for a credential over a project's databases.
  *  Returns a NAME→access map of ONLY the granted subset. EMPTY when the
  *  credential has no grant for any of the project's DBs — the caller decides
- *  what empty means for its path (OAuth in cloud → 403; PAT or self-host →
- *  full access). A DB the project has but the grant omits is simply absent
+ *  what empty means for its path, and in cloud every path fails CLOSED:
+ *  OAuth → 403 no_database_grant; PAT → `{}` header, which the engine answers
+ *  in-band. Only self-host treats empty as full access (single-tenant owner,
+ *  no header at all). A DB the project has but the grant omits is simply absent
  *  from the map (the engine gates it out). */
 export async function resolveScope(
   db: Db,

@@ -50,15 +50,28 @@ just to ownership:
 - The proxy resolves the grant (`resolveScope`) and passes it to the engine as
   `X-Midplane-Scope`. It **deletes any client-supplied value first**, so an
   unscoped credential cannot smuggle a scope in. Scope only ever narrows.
-- A headless token with **no** grant rows resolves to `{}` — scope active, zero
-  databases — not "unscoped". Deleting a database cascades its grants, so a token
-  scoped to exactly that database fails closed rather than widening.
-- A credential that reaches a project it has no grant for gets a 403-equivalent
-  `insufficient_scope` challenge telling the agent to re-connect and choose
-  databases.
+An empty grant set always fails closed, but *how* it fails differs by path,
+because the two paths can surface an error to the agent in different ways:
 
-The remaining unscoped case is a credential with a `null` grant, which predates
-the scope model and is treated as full access for continuity.
+- **Interactive (OAuth), cloud.** Consent is forced on every authorize and the
+  picker writes a row per chosen database, so an empty grant means "approved no
+  databases". The proxy answers **403 `no_database_grant`** with an
+  `insufficient_scope` challenge telling the agent to re-connect and choose
+  databases. Fail closed, not a project-probing 404.
+- **Headless (PAT), cloud.** No 403 here — the proxy sends the header as `{}`
+  (scope active, zero databases) and lets the **engine answer in-band**: "no
+  databases are in scope for this credential — adjust the scope in the token's
+  settings." That is a deliberately better failure than a transport-level 403,
+  which a headless caller would surface as an opaque auth error. The `{}` is
+  what makes it fail closed: sending *no* header would mean unscoped/full
+  access. This matters because a PAT's grant set can empty out on its own —
+  deleting a database cascades its grants, so a token scoped to exactly that
+  database is left with none, and the older empty→no-header rule handed it full
+  access to whatever database the project held next.
+
+The only unscoped case is **self-host**, on both paths (`isSelfHost()` → no
+header at all). It is single-tenant, so the owner is unscoped by definition;
+sending `{}` would lock them out of their own data.
 
 ## The model
 
