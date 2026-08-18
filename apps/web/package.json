@@ -2,6 +2,7 @@
   "name": "@midplane-cloud/web",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT AND LicenseRef-Midplane-EE",
   "type": "module",
   "scripts": {
     "dev": "bun --env-file=../../.env.local --bun next dev --turbo --port 3000",

@@ -1,0 +1,25 @@
+Midplane — licensing notices
+
+The MIT license in `LICENSE` governs this repository, with one exception, noted
+below. This file records where the non-MIT terms live; it does not add to or
+modify the MIT grant.
+
+Enterprise Edition carve-out
+----------------------------
+
+The files under `apps/web/src/ee/` are NOT covered by the MIT license in
+`LICENSE`. They are the commercial Enterprise Edition and are governed solely
+by the separate license at `apps/web/src/ee/LICENSE`. Deleting the `ee/`
+directory leaves a fully working MIT build.
+
+In SPDX terms that license is `LicenseRef-Midplane-EE`, and its text is
+`apps/web/src/ee/LICENSE`. The `apps/web` package declares
+`MIT AND LicenseRef-Midplane-EE` because it is the one package whose tree spans
+both; every other package in this repository is plain `MIT`.
+
+Engine subtree
+--------------
+
+`engine/` is the query-path engine. It ships as its own deliverable (the
+`midplane/midplane` Docker image) and carries its own license file at
+`engine/LICENSE`. It is MIT — no carve-out.

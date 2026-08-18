@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Hosted Midplane. Sign up, paste a Postgres URL, get an MCP endpoint that runs the OSS engine with your credentials.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "workspaces": [
     "apps/*",

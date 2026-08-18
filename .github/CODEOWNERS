@@ -13,6 +13,7 @@
 
 # Licensing, governance, and security posture.
 /LICENSE                             @midplaneai/maintainers
+/NOTICE                              @midplaneai/maintainers
 /CODE_OF_CONDUCT.md                  @midplaneai/maintainers
 /CONTRIBUTING.md                     @midplaneai/maintainers
 /SECURITY.md                         @midplaneai/maintainers

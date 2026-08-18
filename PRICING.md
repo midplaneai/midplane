@@ -20,7 +20,7 @@ Implemented and live on the hosted product. Billing runs on the **@better-auth/s
 | Seats | 1 | 10 | unlimited |
 | Audit retention | 7 days | 30 days | 90 days |
 | Policy engine (allow/deny/warn) | ✓ | ✓ | ✓ |
-| Per-table access + tenant scope (parser-level) | ✓ | ✓ | ✓ |
+| Per-table access (parser-level) | ✓ | ✓ | ✓ |
 | Dangerous-statement guardrails (DML with no WHERE; DROP / TRUNCATE / ALTER) | ✓ | ✓ | ✓ |
 | SSO / SAML | — | — | ✓ |
 | Support | community | email | priority email |
@@ -41,22 +41,9 @@ The Pro → Team transition is intentionally a *compliance/team-process* moment,
 
 **Databases per project: a fixed 10 on every plan** (unlimited only on self-host). Deliberately *not* a tier lever, so it's absent from the table above — it's a structural ceiling, identical on Free, Pro, and Team. Adding a database spawns no new container: all of a project's databases share one per-project engine machine, so database *count* carries no compute cost and has no business being a paid axis. The ceiling only bounds the per-DB machinery that does grow with it — a KMS key, an encrypted DSN, an indexer cursor, scope grants, policy-YAML size, plus the OAuth consent screen and the database-strip tabs. Ten clears every realistic single-project shape (app DB + analytics + replica + a couple service DBs); past it, the isolation model wants a second project (its own MCP URL / policy / tokens), not a wider one. At the ceiling the UI points to "create another project," never an upgrade — upgrading wouldn't raise it.
 
-**Pro: 10 projects / 50 machine tokens / 10 seats at $49/mo** sits in the middle of the dev-infra Pro band. Machine tokens run 5× the project count because a project often has several backend services wired to it — and the machine-token cap should never be the thing that forces a Pro→Team upgrade (that's a capability/compliance moment, not a counter). Comparables:
+**Pro: 10 projects / 50 machine tokens / 10 seats at $49/mo.** Machine tokens run 5× the project count because a project often has several backend services wired to it — and the machine-token cap should never be the thing that forces a Pro→Team upgrade (that's a capability/compliance moment, not a counter).
 
-| Product | Pro / mo |
-|---|---|
-| Sentry Team | $26 |
-| Supabase Pro | $25 / project |
-| Neon Launch | $19 |
-| Clerk Pro | $25 + per-MAU |
-| PlanetScale Scaler | $39 |
-| LangSmith Plus | $39 + overage |
-| Langfuse Core | $59 |
-| Helicone Growth | $80 |
-
-$29 reads "hobby-tier" for a compliance-positioned product; the indie/post-MVP buyer pays $20–40 each for Vercel, Sentry, Clerk, PlanetScale without flinching. $49 is in the swimlane.
-
-**Unlimited Team at $399/mo** sits on the lower end of the dev-infra Team band (Sentry Business $80, Langfuse Team $499, Supabase Team $599). Conservative for a newer product; leaves room to raise once SSO + RBAC are battle-tested. Team also triples audit retention over Pro (90 days vs 30) — the premium tier has to out-deliver Pro on the exact axis the compliance buyer is paying for, and extending it is nearly free since retention is a query-time visibility clamp, not storage (the rows already persist; pruning is a separate, later decision).
+**Unlimited Team at $399/mo.** Team triples audit retention over Pro (90 days vs 30) — the premium tier has to out-deliver Pro on the exact axis the compliance buyer is paying for.
 
 ## What we deliberately did not gate
 
@@ -67,10 +54,6 @@ $29 reads "hobby-tier" for a compliance-positioned product; the indie/post-MVP b
 - **Policy expressiveness.** Same engine across tiers. Hiding policy features behind a paywall hides the product.
 - **RBAC beyond the org plugin's default `owner`/`admin`/`member`.** Custom role layers (policy editor vs. viewer, audit reader, project admin) don't exist yet. Slots into Team when built.
 
-## Fair-use cap
-
-To prevent a single free customer from driving infrastructure cost, the free tier has a soft cap (no hard rejection) on sustained query rate. The number is set high enough that real agent workflows never hit it. Calibrate against actual usage data once the cap exists.
-
 ## Implementation (as built)
 
 - **`customers.plan` is the entitlement source of truth.** A text enum (`free` | `pro` | `team`) on the `customers` row, written ONLY by the @better-auth/stripe plugin's subscription-lifecycle hooks — the plugin owns `/api/auth/stripe/webhook` (signature-verified), and `resolvePlan()` (`apps/web/src/lib/plan.ts`) reads the column per-request, defaulting to Free. The status→tier map is pure (`planFromSubscription`): `active` / `trialing` grant the tier, everything else (`past_due`, `canceled`, `unpaid`, `incomplete`, `paused`) → Free, so a replayed webhook is a no-op. Pricing is **flat per org**: each tier is a plain Stripe `priceId` (no `seatPriceId`), billed as one fixed-quantity-1 subscription per org regardless of member count; self-serve Checkout + the Customer Portal are the plugin's hosted surfaces, so we wire no custom checkout UI.
@@ -79,7 +62,6 @@ To prevent a single free customer from driving infrastructure cost, the free tie
 - **Database add is separate — a structural cap, not a plan lever.** It locks the parent *project* row and counts siblings under that lock against the fixed `MAX_DATABASES_PER_PROJECT` (10, plan-independent; Infinity on self-host), throwing `DatabaseLimitError` over the ceiling. Because the ceiling is identical on every plan, this is **not** a 402 and **not** an upgrade prompt: the pre-flight twin `databaseAddBlock` swaps the "+ Add database" affordance for a *"create another project"* link, and the server action renders the same structural message on a race.
 - **Seats are our membership cap, not a billing metric.** `CAPS.seats` (1 / 10 / ∞) bounds org members per tier, enforced on the invite/accept path via Better Auth `organization.membershipLimit` → `seatCapForOrg` (`lib/seats.ts`). It's fully decoupled from Stripe — the price is flat per org, so the cap only limits head count; it never changes the bill. (Going per-seat later is one field: re-add `seatPriceId` to the plan config.)
 - **Audit retention is a query-time visibility clamp, not storage deletion.** The `lib/audit.ts` read helpers (and `lib/projects.ts` last-query freshness) take a `retentionDays` and clamp the `since` bound to the tier window. Old rows persist; storage pruning is a follow-up in `TODOS.md`.
-- **Founder / internal override is the `customers.plan_override` column, not an env var.** `resolvePlan()` reads `plan_override` (set it to `free` / `pro` / `team`); a valid value BEATS the subscription-backed `plan` in either direction — force `team` to test unlimited, or `free` to exercise the capped UI on a paying account.
 - **Enterprise contact path** is `mailto:info@midplane.ai?subject=Enterprise` on the landing-page Enterprise card; the in-app `/billing` Enterprise card offers sales@midplane.ai plus a [book-a-call link](https://calendar.app.google/NaSZgsxq9ptBYrLy6). No forms.
 
 ## Still TODO (not yet a row, per principle 3)

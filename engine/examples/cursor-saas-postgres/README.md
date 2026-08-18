@@ -89,6 +89,6 @@ You'll see `ATTEMPTED` followed by `DECIDED` with `decision=DENY`, `policy_rule=
 
 ## What to do next
 
-- **Add a tenant-scope rule** if you're a multi-tenant SaaS. One YAML mapping turns "agent can read all tenants" into "agent can only read its own tenant." See [docs/policy-rules.md](../../docs/policy-rules.md) and [docs/self-host.md#configuration](../../docs/self-host.md#configuration).
+- **Deny the tables the agent has no business reading.** `table_access` takes a per-table `deny` on top of the `read` / `read_write` grants, so secrets, billing, and audit tables can be cut out of the agent's world entirely. See [docs/policy-rules.md](../../docs/policy-rules.md) and [docs/self-host.md#configuration](../../docs/self-host.md#configuration).
 - **Ship audit to your SIEM.** Midplane exposes pull endpoints (`GET /audit/since`, `DELETE /audit/before`) gated by an `INDEXER_TOKEN` so an external collector can mirror rows out. See [docs/self-host.md#shipping-audit-to-your-own-collector](../../docs/self-host.md#shipping-audit-to-your-own-collector).
 - **Wire it into Claude Code or Claude Desktop** instead of (or in addition to) Cursor. The Midplane endpoint stays the same; only the agent config changes. See [docs/agent-setup.md](../../docs/agent-setup.md).
