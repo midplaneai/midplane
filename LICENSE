@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Carve-out: the files under `apps/web/src/ee/` are NOT covered by this MIT
-license. They are the commercial Enterprise Edition and are governed solely by
-the separate license at `apps/web/src/ee/LICENSE`. Deleting the `ee/` directory
-leaves a fully working MIT build.

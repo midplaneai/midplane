@@ -6,7 +6,7 @@ this document, that's a bug — file it.
 
 Client implementation lives in
 [`packages/mcp-server/src/telemetry/`](./packages/mcp-server/src/telemetry/).
-The receiver at `t.midplane.ai` is operated by Midplane Inc and not part of
+The receiver at `t.midplane.ai` is operated by Deekard GmbH and not part of
 this MIT-licensed repository — its job is described below in
 [Receiver-side handling](#receiver-side-handling).
 
@@ -213,7 +213,7 @@ entry in CHANGELOG.md before the first release that contains it.
 - The receiver never returns a body. Validation failures, malformed JSON,
   and missing-method requests all collapse to `204 No Content` so a client
   learns nothing about why a payload was rejected.
-- The receiver source is operated by Midplane Inc and lives in a separate
+- The receiver source is operated by Deekard GmbH and lives in a separate
   closed-source repository. Aggregates are retained per the vendor's
   product-analytics retention setting.
 

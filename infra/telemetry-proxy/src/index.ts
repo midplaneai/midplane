@@ -3,7 +3,7 @@
 //
 // Why this code lives in the closed cloud repo instead of OSS: it carries
 // the PostHog project key, picks our analytics vendor, and is operated only
-// by Midplane Inc. The wire contract (TELEMETRY.md, schema.ts) lives in the
+// by Deekard GmbH. The wire contract (TELEMETRY.md, schema.ts) lives in the
 // OSS repo at github.com/midplaneai/midplane and is the source of truth;
 // src/schema.ts and src/sanitizer.ts here are byte-identical mirrors.
 
