@@ -12,6 +12,11 @@ The files under `apps/web/src/ee/` are NOT covered by the MIT license in
 by the separate license at `apps/web/src/ee/LICENSE`. Deleting the `ee/`
 directory leaves a fully working MIT build.
 
+In SPDX terms that license is `LicenseRef-Midplane-EE`, and its text is
+`apps/web/src/ee/LICENSE`. The `apps/web` package declares
+`MIT AND LicenseRef-Midplane-EE` because it is the one package whose tree spans
+both; every other package in this repository is plain `MIT`.
+
 Engine subtree
 --------------
 

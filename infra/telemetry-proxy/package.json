@@ -2,6 +2,7 @@
   "name": "@midplane-cloud/telemetry-proxy",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
