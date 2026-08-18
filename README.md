@@ -15,8 +15,7 @@ event-sourced audit log of which agent ran what, **before** the query executes.
 > agent setup, the policy reference, self-hosting, deployment, and the threat model.
 > This README is just the orientation.
 
-<!-- TODO(screenshot): a dashboard audit-log or denied-query view belongs here.
-     Open-core dashboards convert on a visual; highest-leverage single addition. -->
+<img width="960" height="540" alt="midplane-chat-demo" src="https://github.com/user-attachments/assets/d9800b2a-dc45-4a6e-a0b2-3aa219b1009a" />
 
 ## Why this exists
 
