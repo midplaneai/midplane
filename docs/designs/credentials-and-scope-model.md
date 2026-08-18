@@ -1,16 +1,20 @@
 ---
-status: DRAFT
+status: PARTIALLY IMPLEMENTED
 ---
 # Credentials & scope model: interactive vs headless agents
 
-Branch: `lange-labs/mcp-oauth-launch` | Drafted 2026-06-17, after P6 (MCP OAuth at launch) shipped.
+Captures the credential model behind the MCP OAuth path and sequences three
+related follow-ups: the consent-time scope picker, the connection→database
+flattening, and headless (machine) credentials.
 
-Captures the model the P6 OAuth work points toward, and sequences three related
-follow-ups so they land as one coherent plan rather than three ad-hoc changes:
-the consent-time scope picker, the connection→database flattening, and headless
-(machine) credentials.
+> **Two notes before reading.** (1) The per-agent scope picker described under
+> "Open design decisions → A" has since **shipped** — see "Per-agent scope
+> (shipped)" below; the coarse per-user grant it describes is no longer the
+> enforced model. (2) This document predates the **connection → project**
+> rename. Where it says "connection", read "project": the container object that
+> holds one or more databases.
 
-## What shipped (P6)
+## What shipped first (OAuth)
 
 The `/mcp` proxy is now an OAuth 2.1 resource server (Better Auth `mcp` plugin).
 An interactive agent (Claude Code, Cursor, Claude Desktop) points at a
@@ -22,13 +26,39 @@ checks they own the connection, mints one `kind='oauth'` attribution row per
 `mcp_token_id` the URL-token path stamps. The legacy `…/mcp/<token>` HMAC path is
 preserved.
 
-Two properties of this v1 are deliberately coarse, and motivate the model below:
+Two properties of that first cut were deliberately coarse, and motivated the
+model below:
 
-1. **The token authorizes the *user*, not a connection.** The per-connection URL
-   selects what the agent talks to, but the same bearer works on any connection
-   the user owns (the proxy checks ownership, not a per-grant restriction).
-2. **The connection id is no longer a secret.** Auth is the OAuth sign-in, so the
-   URL is just an address — shown openly with a copy button, no show-once.
+1. **The token authorized the *user*, not a project.** The per-project URL
+   selected what the agent talked to, but the same bearer worked on any project
+   the user owned (the proxy checked ownership, not a per-grant restriction).
+   **This is no longer the case — see below.**
+2. **The project id is not a secret.** Auth is the OAuth sign-in, so the URL is
+   just an address — shown openly with a copy button, no show-once.
+
+## Per-agent scope (shipped)
+
+Property 1 above has been closed. Access is now bound to the *credential*, not
+just to ownership:
+
+- `mcp_scope_grants` (migration 0028) stores, per credential, which databases it
+  may reach and at what access level. `setOAuthGrants` writes the interactive
+  side (keyed `client_id` + `user_id`, chosen in the consent DB picker);
+  `setTokenGrants` writes the headless side (keyed `mcp_token_id`, chosen at
+  token creation). Both are replace-all within their key, so re-consenting never
+  leaves stale rows, and every selection is ownership-validated before it lands.
+- The proxy resolves the grant (`resolveScope`) and passes it to the engine as
+  `X-Midplane-Scope`. It **deletes any client-supplied value first**, so an
+  unscoped credential cannot smuggle a scope in. Scope only ever narrows.
+- A headless token with **no** grant rows resolves to `{}` — scope active, zero
+  databases — not "unscoped". Deleting a database cascades its grants, so a token
+  scoped to exactly that database fails closed rather than widening.
+- A credential that reaches a project it has no grant for gets a 403-equivalent
+  `insufficient_scope` challenge telling the agent to re-connect and choose
+  databases.
+
+The remaining unscoped case is a credential with a `null` grant, which predates
+the scope model and is treated as full access for continuity.
 
 ## The model
 
@@ -56,7 +86,10 @@ the model. Keep it; give it a scope.
 
 ## Open design decisions (the follow-ups)
 
-### A. Consent-time scope picker  (the least-privilege upgrade)
+### A. Consent-time scope picker  (the least-privilege upgrade) — **SHIPPED**
+
+> Implemented as described. See "Per-agent scope (shipped)" above for the
+> as-built behaviour; the rest of this section is the original reasoning.
 
 Let the consent screen pick which database(s) — and read/write — an agent may
 use, instead of the coarse per-user grant.
@@ -101,13 +134,14 @@ OAuth endpoint; **consent/scope picks which databases** an agent may touch.
 
 ## Sequencing (incremental, each step ships value)
 
-1. **Shipped:** OAuth per-connection URL + the connect guide (interactive agents
-   above, headless API tokens below) on the connection page.
-2. **Next:** the consent-time scope picker at **database** granularity (A) —
+1. **Shipped:** OAuth per-project URL + the connect guide (interactive agents
+   above, headless API tokens below) on the project page.
+2. **Shipped:** the consent-time scope picker at **database** granularity (A) —
    simultaneously the least-privilege win *and* the wedge toward the flat model.
-3. **Then:** put API tokens in a header + give them a DB scope (C) — the headless
-   half of the same scope mechanism.
-4. **Then:** retire the user-facing "connection" object once the picker makes it
+3. **Shipped (scope half):** headless tokens carry a DB scope via the same
+   `mcp_scope_grants` mechanism (`setTokenGrants`). Moving the token itself from
+   the URL path into an `Authorization: Bearer` header (C) is still open.
+4. **Open:** retire the user-facing project container once the picker makes it
    vestigial (B) — collapse the UI to a flat database list; one container per
    customer. No big-bang migration; it falls away.
 
