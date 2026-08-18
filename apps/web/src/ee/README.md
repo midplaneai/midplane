@@ -66,5 +66,4 @@ guarantees nothing else needs touching.
 The signed-license verifier is deferred (design doc, D3). Self-host stays keyless
 (flag unset) — SSO dark, core uncapped.
 
-See: `~/.gstack/projects/midplaneai-midplane-cloud/` — open-core design doc +
-feature manifest + eng plan.
+See `AGENTS.md` (repo root) for the monorepo layout and the open-core split.

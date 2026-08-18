@@ -1,13 +1,9 @@
 # Design: write approvals (MLP)
 
-**Status:** built except the engine publish (step 9). Engine 1020 tests, control plane 1250, all green.
-**Branch:** `lange-labs/write-approvals`
-**Supersedes for v1:** the two-rung plan in
-`~/.gstack/projects/midplaneai-midplane/dustinlange-lange-labs-write-approval-queue-design-20260803-000000.md`
-**Prior art:** `lange-labs/write-approval-queue` — a complete, green implementation
-(1,144 engine tests, 55 control-plane approval tests, ~18k lines). This document
-deliberately builds a smaller thing and explains, per subsystem, what it takes from
-that branch and what it leaves.
+The design record for the write-approval path: how a held write is classified,
+queued, surfaced for a decision, and released or denied. The implementation lives
+in `apps/web/src/lib/approvals.ts`, `engine/packages/engine/src/approvals.ts`, and
+the `write_approvals` table in `packages/db/src/schema.ts`.
 
 ---
 

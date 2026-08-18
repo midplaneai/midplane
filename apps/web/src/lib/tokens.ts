@@ -1,9 +1,7 @@
 // CRUD library for mcp_tokens — the multi-token-per-project model that
 // replaces the single plaintext mcp_token bearer URL. PR1 of N (schema +
 // helpers); PR2 wires the proxy resolveByToken / spawner / indexer onto
-// this surface, and PR3 builds the dashboard UX. See the design doc at
-// dustinlange-lange-labs-mcp-url-auth-security-design-20260520-104330.md
-// for the full ratification context.
+// this surface, and PR3 builds the dashboard UX.
 //
 // Conventions mirror apps/web/src/lib/projects.ts:
 //   - All mutations run inside db.transaction(...) with FOR UPDATE on the

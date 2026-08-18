@@ -1,9 +1,9 @@
 # Design System — Midplane
 
 The single source of truth for visual decisions. Read this before changing anything
-that renders. The token values here mirror those mocked up in
-`~/.gstack/projects/midplaneai-midplane/designs/midplane-tokens.css` and applied in
-`apps/web/src/app/globals.css`.
+that renders. The token values here are wired into
+`apps/web/src/app/globals.css` and exposed to Tailwind via
+`apps/web/tailwind.config.ts`.
 
 ## Product Context
 - **What this is:** A safety layer between AI coding agents (Cursor, Claude Code) and Postgres. Parses SQL via AST, denies destructive writes by default, audits everything.
