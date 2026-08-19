@@ -164,6 +164,51 @@ describe("nextSteps", () => {
     expect(parsed.mcpServers.midplane.args).toEqual([entry, "server", "--stdio"]);
   });
 
+  // A path with a space in it (~/My Project/…) would otherwise split into the
+  // wrong arguments in every generated shell line, while the JSON snippet — which
+  // JSON.stringify already quotes — looked fine.
+  test("paths with spaces are shell-quoted in the commands, raw in the JSON", () => {
+    const spacey = "/Users/dev/My Project/midplane.policy.yaml";
+    const out = npx({ policyPath: spacey });
+    expect(out).toContain(`-e MIDPLANE_POLICY_FILE='${spacey}' \\`);
+    expect(out).toContain(`export MIDPLANE_POLICY_FILE='${spacey}'`);
+    const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as {
+      mcpServers: { midplane: { env: Record<string, string> } };
+    };
+    expect(parsed.mcpServers.midplane.env.MIDPLANE_POLICY_FILE).toBe(spacey);
+
+    // Same for the interpreter path of a checkout living under a spacey dir,
+    // in both the `--` tail and the verification commands.
+    const entry = "/Users/dev/My Project/engine/src/cli.ts";
+    const source = npx({ shape: "source", cliArgv: ["bun", entry], policyPath: spacey });
+    expect(source).toContain(`-- bun '${entry}' server --stdio`);
+    expect(source).toContain(`bun '${entry}' doctor`);
+
+    // And the docker mount source, which is a shell argument too.
+    const docker = nextSteps({
+      shape: "docker",
+      cliArgv: ["midplane"],
+      policyPath: spacey,
+      dsnFromEnv: true,
+    });
+    expect(docker).toContain(`-v '${spacey}':/policy.yaml`);
+  });
+
+  test("an embedded single quote can't break out of the quoting", () => {
+    const nasty = "/Users/dev/it's here/midplane.policy.yaml";
+    const out = npx({ policyPath: nasty });
+    expect(out).toContain(`export MIDPLANE_POLICY_FILE='/Users/dev/it'\\''s here/midplane.policy.yaml'`);
+  });
+
+  // Quoting only where it's needed — an ordinary path must stay bare, or every
+  // copyable command grows noise.
+  test("ordinary paths are left unquoted", () => {
+    const out = npx();
+    expect(out).toContain(`export MIDPLANE_POLICY_FILE=${POLICY}`);
+    expect(out).toContain("-- npx -y midplane server --stdio");
+  });
+
   test('DSN in the env → "$DATABASE_URL"; typed at the prompt → export it', () => {
     expect(npx({ dsnFromEnv: true })).toContain('-e DATABASE_URL="$DATABASE_URL"');
     expect(npx({ dsnFromEnv: true })).not.toContain("export DATABASE_URL");
@@ -172,6 +217,18 @@ describe("nextSteps", () => {
     const typed = npx({ dsnFromEnv: false });
     expect(typed).not.toContain('"$DATABASE_URL"');
     expect(typed).toContain("export DATABASE_URL");
+  });
+
+  // The client has to store the DSN to hand it to the server it spawns, and
+  // `"$DATABASE_URL"` doesn't change that — it only keeps the literal out of the
+  // terminal and the history file. Say so rather than implying the credential
+  // stays put, and point at the mitigation that actually works.
+  test("says where the credential ends up, on both DSN paths", () => {
+    for (const dsnFromEnv of [true, false]) {
+      const out = npx({ dsnFromEnv });
+      expect(out).toContain("the client stores DATABASE_URL in its own config file");
+      expect(out).toContain("least-privilege Postgres role");
+    }
   });
 
   test("verification commands are runnable as printed", () => {

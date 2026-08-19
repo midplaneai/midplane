@@ -338,14 +338,14 @@ export interface NextStepsInput {
  */
 export function nextSteps(input: NextStepsInput): string {
   const { policyPath, dsnFromEnv } = input;
-  const cli = input.cliArgv.join(" ");
+  const cli = input.cliArgv.map(shq).join(" ");
 
   if (input.shape === "docker") {
     return [
       "Run the server (docker):",
       "  docker run --env-file .env -p 8080:8080 \\",
       "    -v midplane-audit:/data \\",
-      `    -v ${policyPath}:/policy.yaml -e MIDPLANE_POLICY_FILE=/policy.yaml \\`,
+      `    -v ${shq(policyPath)}:/policy.yaml -e MIDPLANE_POLICY_FILE=/policy.yaml \\`,
       "    midplane/midplane:latest",
       "",
       "Point your agent at it:",
@@ -393,23 +393,32 @@ export function nextSteps(input: NextStepsInput): string {
     "",
     "Claude Code:",
     "  claude mcp add midplane \\",
-    // With the DSN in the environment, "$DATABASE_URL" keeps the secret off the
-    // command line (and out of `ps aux` and shell history). Without it, that
-    // would expand to empty and register a broken server, so ask for the value.
+    // `"$DATABASE_URL"` keeps the literal out of the terminal and the shell's
+    // history file. It does NOT keep it out of this command's argv — the shell
+    // expands before exec — and `claude mcp add` stores the value in the
+    // client's config either way. That much is inherent to MCP: the client
+    // spawns the server and hands it this env block, so the credential has to
+    // live somewhere the client can read. Hence the least-privilege line below.
+    // Without the DSN in the environment the variable would expand to empty and
+    // register a silently broken server, so ask for the value instead.
     dsnFromEnv
       ? '    -e DATABASE_URL="$DATABASE_URL" \\'
       : "    -e DATABASE_URL='postgres://user:pass@host:5432/db' \\",
-    `    -e MIDPLANE_POLICY_FILE=${policyPath} \\`,
-    `    -- ${[command, ...serverArgs].join(" ")}`,
+    `    -e MIDPLANE_POLICY_FILE=${shq(policyPath)} \\`,
+    `    -- ${[command, ...serverArgs].map(shq).join(" ")}`,
     "",
     'Cursor, Claude Desktop, or any client taking an "mcpServers" block:',
     ...clientConfig,
+    "",
+    "Either way the client stores DATABASE_URL in its own config file, so give",
+    "midplane its own least-privilege Postgres role: it governs which SQL runs,",
+    "not what the role underneath it can reach.",
     "",
     "Verify end to end:",
     ...(dsnFromEnv
       ? []
       : ["  export DATABASE_URL=…   # this shell doesn't have it — nothing stored it"]),
-    `  export MIDPLANE_POLICY_FILE=${policyPath}`,
+    `  export MIDPLANE_POLICY_FILE=${shq(policyPath)}`,
     "  export MIDPLANE_TRANSPORT=stdio",
     `  ${cli} doctor`,
     `  ${cli} query --stdio --sql "SELECT 1"`,
@@ -417,6 +426,24 @@ export function nextSteps(input: NextStepsInput): string {
     "Prefer a long-running HTTP server? The same engine ships as a container:",
     "  https://midplane.ai/docs",
   ].join("\n");
+}
+
+/**
+ * POSIX-quote one token of a command line the user is meant to copy. Safe
+ * characters pass through bare so the common case stays readable; anything
+ * else gets single-quoted, with an embedded single quote closed and reopened
+ * the only way POSIX allows.
+ *
+ * The paths here are not hypothetical: `~/My Project/midplane.policy.yaml` and
+ * a checkout under a directory with a space in it both produce a command that
+ * silently splits into the wrong arguments. The JSON snippet is unaffected —
+ * JSON.stringify already quotes — which is exactly why the shell lines need
+ * their own pass.
+ */
+function shq(token: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(token)
+    ? token
+    : `'${token.replaceAll("'", `'\\''`)}'`;
 }
 
 // Clack returns a cancel symbol when the user hits ctrl-c/esc; every answer
