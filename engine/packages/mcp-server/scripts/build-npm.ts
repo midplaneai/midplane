@@ -152,6 +152,37 @@ for (const f of ["README.md", "LICENSE"]) {
   }
 }
 
+// npm runs a content classifier over published tarballs, and it reads literal
+// destructive SQL as an attack payload rather than as documentation. The 0.19.0
+// release was blocked by exactly this: a README illustrating what the engine
+// BLOCKS ("DELETE FROM users", "SELECT 1; DROP TABLE users") was refused with a
+// bare 403 whose body the npm CLI never surfaces — it took a publish-bisect to
+// find. Being a security tool is what makes us prone to it.
+//
+// So this README describes the guarantees instead of demonstrating them, and
+// points at the docs and the repo README for worked examples. Those two are NOT
+// published to npm and keep their concrete SQL.
+//
+// Checked at build time rather than in CI alone, because the failure mode is a
+// release that dies at the npm step with the image already published.
+const readme = await Bun.file(join(PKG_DIR, "README.md")).text();
+const FLAGGED = [
+  /\bDELETE\s+FROM\s+\w/i,
+  /\bDROP\s+TABLE\s+\w/i,
+  /\bTRUNCATE\s+TABLE?\s+\w/i,
+  /;\s*DROP\b/i,
+];
+for (const re of FLAGGED) {
+  const m = readme.match(re);
+  if (m) {
+    problems.push(
+      `README.md contains literal destructive SQL (${JSON.stringify(m[0])}), which npm's ` +
+        `content classifier rejects with a 403 at publish time. Describe the behavior ` +
+        `instead, and link to the docs for the worked example.`,
+    );
+  }
+}
+
 if (problems.length > 0) {
   for (const p of problems) console.error(`[build-npm] ${p}`);
   process.exit(1);
