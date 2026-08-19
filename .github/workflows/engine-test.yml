@@ -157,7 +157,14 @@ jobs:
       - name: Manifest survives npm's publish-time normalization
         working-directory: engine/packages/mcp-server
         run: |
-          out="$(npm publish --dry-run 2>&1)"
+          # `|| true` matters: this step exists ONLY to read npm's manifest
+          # normalization warnings. The dry run itself exits non-zero for
+          # reasons that say nothing about the manifest — this job holds no npm
+          # token, and once the version exists on the registry npm objects to
+          # republishing it. Under `bash -e` that killed the step at this
+          # assignment, before the grep, and turned main red the moment 0.19.0
+          # was published.
+          out="$(npm publish --dry-run 2>&1 || true)"
           echo "$out"
           if grep -qi "auto-corrected" <<<"$out"; then
             echo "::error::npm rewrote package.json on publish — see the warnings above. Run 'npm pkg fix'."
