@@ -6,13 +6,17 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { parseArgs } from "../src/argv.ts";
 import {
+  CONTAINER_AUDIT_DB_PATH,
   DEFAULT_DB_NAME,
+  defaultAuditDbPath,
   loadConfig,
   loadPolicyFile,
   parsePolicyYaml,
   resolveDatabasesFromConfig,
+  transportFromFlags,
 } from "../src/config.ts";
 
 describe("loadConfig", () => {
@@ -25,7 +29,14 @@ describe("loadConfig", () => {
     expect(cfg.databaseUrl).toBe("postgres://x");
     expect(cfg.port).toBe(8080);
     expect(cfg.host).toBe("0.0.0.0");
-    expect(cfg.dbPath).toBe("/data/audit.db");
+    expect(cfg.dbPath).toBe(defaultAuditDbPath());
+    // Pin the resolution itself, not just that the default is wired up.
+    // CI and dev machines run outside a container, so the home-dir branch is
+    // the one under test here; the container branch is asserted by inspection
+    // of CONTAINER_AUDIT_DB_PATH, which the image's ENV and both Fly configs
+    // must keep matching.
+    expect(cfg.dbPath).toBe(join(homedir(), ".midplane", "audit.db"));
+    expect(cfg.dbPath).not.toBe(CONTAINER_AUDIT_DB_PATH);
     expect(cfg.tenantId).toBe("__self_host__");
     expect(cfg.transport).toBe("http");
     expect(cfg.policyFile).toBeUndefined();
@@ -375,5 +386,41 @@ describe("guardrails resolution", () => {
     expect(() =>
       parsePolicyYaml("guardrails:\n  block_ddl: maybe\n", "test"),
     ).toThrow(/guardrails/);
+  });
+});
+
+// `midplane server --stdio` is the form an MCP client config can express in a
+// single command line (see transportFromFlags). The parser lives in argv.ts, so
+// these go through it rather than hand-building the flags map.
+describe("transportFromFlags", () => {
+  const flagsOf = (argv: string[]) => parseArgs(argv).flags;
+
+  test("--stdio and --http each select their transport", () => {
+    expect(transportFromFlags(flagsOf(["--stdio"]))).toBe("stdio");
+    expect(transportFromFlags(flagsOf(["--http"]))).toBe("http");
+  });
+
+  test("neither flag defers to MIDPLANE_TRANSPORT / the schema default", () => {
+    expect(transportFromFlags(flagsOf([]))).toBeUndefined();
+    expect(loadConfig({ DATABASE_URL: "postgres://x" }).transport).toBe("http");
+    expect(
+      loadConfig({ DATABASE_URL: "postgres://x", MIDPLANE_TRANSPORT: "stdio" })
+        .transport,
+    ).toBe("stdio");
+  });
+
+  test("both flags is an error, not a silent last-one-wins", () => {
+    expect(() => transportFromFlags(flagsOf(["--stdio", "--http"]))).toThrow(
+      /mutually exclusive/,
+    );
+  });
+
+  // Regression guard: both flags are in argv.ts's BOOLEAN_FLAGS, so neither may
+  // swallow the token after it. `server --stdio` with a trailing positional
+  // must still read as stdio.
+  test("--stdio does not consume a following token", () => {
+    const { flags, positionals } = parseArgs(["--stdio", "extra"]);
+    expect(transportFromFlags(flags)).toBe("stdio");
+    expect(positionals).toEqual(["extra"]);
   });
 });
