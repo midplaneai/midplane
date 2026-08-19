@@ -2,6 +2,48 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — 2026-08-19
+
+### Added
+
+- **Midplane is on npm as [`midplane`](https://www.npmjs.com/package/midplane), so `npx` is now the shortest way in.** Until now the only ways to run the engine were `docker run` or cloning the repo, and both are too much to ask of someone deciding whether this is worth their afternoon. An MCP client config is now the whole install:
+
+  ```json
+  {
+    "mcpServers": {
+      "midplane": {
+        "command": "npx",
+        "args": ["-y", "midplane", "server", "--stdio"],
+        "env": { "DATABASE_URL": "postgres://user:pass@host:5432/db" }
+      }
+    }
+  }
+  ```
+
+  The package is a single ~80 KB bundle with no install scripts and no native modules, published with [provenance attestations](https://docs.npmjs.com/generating-provenance-statements). It is not minified: this is a security tool, and someone evaluating what `npx midplane` does should be able to read the artifact. Its eight runtime dependencies stay external rather than vendored, so `npm audit` and Dependabot can see them — see [`THREAT_MODEL.md`](./THREAT_MODEL.md) for what that does and doesn't buy you.
+
+- **The engine runs on Node, not just Bun.** This is what the npm package required, and it was six places, not a rewrite: the SQLite audit writer now resolves `bun:sqlite` or `node:sqlite` per runtime through one shim (`sqlite-driver.ts`, which also normalizes the two API deltas — `DatabaseSync`, and `get()` answering `null` vs `undefined`), and `Bun.sleep` / `Bun.version` / `import.meta.dir` / `import.meta.main` / `process.versions.bun` moved to portable forms. The specifier for the SQLite builtin is computed rather than literal, because a literal `import "node:sqlite"` breaks `bun build --compile` and a literal `import "bun:sqlite"` breaks Node at import time — neither bundler may see the other runtime's builtin. Node 22.16+ or 24+ is required (`node:sqlite`); Bun 1.3+ is unchanged, and the Docker image still compiles from the same source to the same self-contained binary.
+
+- **`midplane server --stdio` / `--http`**, overriding `MIDPLANE_TRANSPORT`. The transport was env-only, which is right for a container and wrong for how an MCP client launches a server: a client config is a command line plus an env block, and the command comes first. `--stdio` is one copy-pasteable token; the env-var form needs a second field the user has to know exists.
+
+- **[`server.json`](../server.json) for the official MCP registry**, published as `ai.midplane/midplane` under DNS-verified ownership of `midplane.ai`. It declares both artifacts and the transport each actually speaks: the npm package over stdio, the Docker image over Streamable HTTP.
+
+### Changed
+
+- **`DB_PATH` defaults to `~/.midplane/audit.db` outside a container** (`/data/audit.db` inside one, unchanged). `/data` is not writable on a developer's machine, so the old default made `npx midplane` fail at boot on the audit log. Every packaged deployment — the image's `ENV`, both Fly configs, both spawners — sets `DB_PATH` explicitly and is unaffected. `midplane audit` resolves the same default as the server, so the reader and the writer cannot point at different files.
+
+- **The startup telemetry event names its runtime.** `bun_version` is replaced by `runtime` (`bun` | `node`) + `runtime_version`; a field named for one runtime cannot describe two. Both shapes stay valid at the receiver — installs predating this release keep sending `bun_version` for as long as they run — and an event carrying neither is now rejected rather than accepted as an unidentified runtime. Full schema in [`TELEMETRY.md`](./TELEMETRY.md).
+
+- **One engine release now publishes three artifacts from one `engine-v*` tag** — image, npm package, registry entry — in that order, each gated on the one before. `scripts/check-image-pin.ts` holds their versions and identities together (including the two ownership proofs the registry checks: `mcpName` in the npm package and the `io.modelcontextprotocol.server.name` image annotation), because two of the three are immutable once published.
+
+- **The package formerly known as `@midplane/mcp-server` is now `midplane`**, matching what it publishes as. `@midplane/engine` stays a private workspace package, bundled into the npm artifact rather than published alongside it.
+
+### Fixed
+
+- **`midplane query --stdio` and `doctor`'s stdio canary were broken in the compiled binary.** Both re-spawn `midplane server` as a child, and both passed the entry script's path as an argument — but inside a `bun build --compile` binary that path is a virtual `/$bunfs/root/cli.ts` that exists only in the running process, so the child received it as its subcommand and exited with "unknown command". The compiled binary is its own CLI and now takes the subcommand directly; the source and npm builds pass their real entry script. (`runtime.ts` owns the three cases.)
+
+- **`midplane server` could run every query twice.** `src/index.ts` started the server when it detected it was the entry point, which made it a second way into the process alongside `cli.ts`. Harmless while the two were separate files — and a trap once bundled, because the npm build inlines `index.ts` into `dist/cli.js`, where any "am I the entry?" test is true for both. Two servers then came up on one stdio pipe and each answered every request: correct-looking results, two audit trails, two executions of every allowed write. `cli.ts` is now the only entry point, and the Node smoke test asserts one tool call produces exactly one query id.
+
 ## [0.18.0] — 2026-08-17
 
 ### Changed
