@@ -56,6 +56,18 @@ export const SqlstateClass = z.string().regex(/^[0-9A-Z]{2}$/);
 
 // ─── Event 1: startup ──────────────────────────────────────────────────────
 
+// The runtime identifier is a two-shape field, and both shapes stay valid
+// forever. Midplane ran only on Bun until the `midplane` npm package added a
+// Node consumer path, so every engine built before that reports `bun_version`
+// and nothing else — those installs keep sending it for as long as they run,
+// which is why it can't simply be replaced. Current engines send `runtime` +
+// `runtime_version` instead, which names the runtime rather than assuming it.
+//
+// Both are optional so either shape validates; the refine below rejects an
+// event carrying neither, so "unidentified runtime" can't slip through as a
+// silently-absent field. Kept as one additive schema rather than a
+// schema_version bump + union: nothing about the OTHER fields changed, and the
+// proxy spreads whatever properties are present straight into PostHog.
 export const StartupEventSchema = z
   .object({
     schema_version: z.literal(2),
@@ -63,14 +75,26 @@ export const StartupEventSchema = z
     install_id: InstallId,
     ts: z.number().int().nonnegative(),
     version: z.string().min(1).max(64),
-    bun_version: z.string().min(1).max(64),
+    // Sent by engines predating the Node consumer path. Receive-only now.
+    bun_version: z.string().min(1).max(64).optional(),
+    runtime: z.enum(["bun", "node"]).optional(),
+    runtime_version: z.string().min(1).max(64).optional(),
     os: z.enum(["darwin", "linux", "win32", "other"]),
     arch: z.enum(["x64", "arm64", "other"]),
     transport: z.enum(["stdio", "http"]),
     container: z.boolean(),
     ci: z.boolean(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (e) =>
+      e.bun_version !== undefined ||
+      (e.runtime !== undefined && e.runtime_version !== undefined),
+    {
+      message:
+        "startup event must identify its runtime: either bun_version, or runtime + runtime_version",
+    },
+  );
 export type StartupEvent = z.infer<typeof StartupEventSchema>;
 
 // ─── Event 2: heartbeat ────────────────────────────────────────────────────

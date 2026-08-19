@@ -19,6 +19,7 @@
 
 import { existsSync } from "node:fs";
 import type { AuditWriter } from "@midplane/engine";
+import { RUNTIME, RUNTIME_VERSION } from "../runtime.ts";
 import { loadTelemetryConfig, type TelemetryConfig } from "./config.ts";
 import { TelemetryCollector, TelemetryAuditWriter } from "./collector.ts";
 import { loadOrCreateInstallId } from "./install-id.ts";
@@ -170,7 +171,8 @@ function buildStartupEvent(args: {
     install_id: args.installId,
     ts: Math.floor(Date.now() / 1000),
     version: args.version,
-    bun_version: process.versions.bun ?? "unknown",
+    runtime: RUNTIME,
+    runtime_version: RUNTIME_VERSION,
     os: detectOs(),
     arch: detectArch(),
     transport: args.transport,
