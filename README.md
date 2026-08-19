@@ -54,15 +54,23 @@ A `delete all users` prompt to Claude Code, against a Midplane-fronted DB:
 
 ## Quick start
 
-Four ways in, cheapest first — same open-core codebase behind all of them.
-Step-by-step guides are at **[midplane.ai/docs](https://midplane.ai/docs)**.
+Three ways in — same open-core codebase behind all of them. Step-by-step guides
+are at **[midplane.ai/docs](https://midplane.ai/docs)**.
 
-### Guard one database, right now
+### Managed cloud
 
-Put Midplane in front of a Postgres database and point an agent at it. Nothing to
-install — `npx` fetches the [`midplane`](https://www.npmjs.com/package/midplane)
-package on first run. Add this to your MCP client's config (Claude Code, Claude
-Desktop, Cursor — they all take this shape):
+The fastest way to try Midplane: **[sign up at app.midplane.ai](https://app.midplane.ai)**
+and go from zero to your first guarded query in a couple of minutes. Dashboard,
+policy editor, hosted audit log, agent-token issuance. Nothing to install,
+multi-region, fully supported.
+
+### Guard one database yourself
+
+Put the MIT engine in front of a Postgres database and point an agent at it.
+Nothing to install — `npx` fetches the
+[`midplane`](https://www.npmjs.com/package/midplane) package on first run. Add
+this to your MCP client's config (Claude Code, Claude Desktop, Cursor — they all
+take this shape):
 
 ```json
 {
@@ -85,26 +93,10 @@ every query audited to `~/.midplane/audit.db`. Read the log back with
 `npx midplane init` — it introspects your schema over a read-only connection,
 suggests a tenant column, and writes a validated `midplane.policy.yaml`.
 
-### Standalone Docker
-
-The same MIT engine as a self-contained image — no Node, no `node_modules`. Good
-for a CI pipeline or a long-lived sidecar:
-
-```bash
-curl -O https://raw.githubusercontent.com/midplaneai/midplane/main/engine/.env.example
-mv .env.example .env    # set DATABASE_URL
-docker run --env-file .env -p 8080:8080 -v midplane-audit:/data \
-  midplane/midplane:0.19.0
-```
-
-The MCP endpoint comes up at `http://localhost:8080/mcp`. Never pass the DSN with
-an inline `-e` — it leaks the password to `ps aux` and your shell history.
-
-### Managed cloud
-
-**[Sign up at app.midplane.ai](https://app.midplane.ai)** for the dashboard,
-policy editor, hosted audit log, and agent-token issuance. Nothing to install,
-multi-region, fully supported.
+> For a CI pipeline or a long-lived sidecar, the same engine ships as a
+> self-contained image with no Node in it — `midplane/midplane:0.19.0`, serving
+> Streamable HTTP instead of stdio.
+> [Setup](https://midplane.ai/docs) · [`engine/README.md`](./engine/README.md).
 
 ### Self-host the whole app
 
