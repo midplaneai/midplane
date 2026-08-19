@@ -6,9 +6,10 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import yaml from "js-yaml";
-import { rankTenantCandidates, type ColumnRow } from "../src/init-wizard.ts";
+import { rankTenantCandidates, nextSteps, type ColumnRow } from "../src/init-wizard.ts";
 import { scaffold } from "../src/policy-cli.ts";
 import { PolicyFileSchema } from "../src/config.ts";
+import { installShape, selfCliArgv } from "../src/runtime.ts";
 
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
 
@@ -102,6 +103,107 @@ describe("scaffold with wizard extensions", () => {
     const text = scaffold({ tables: ["users"], tenantColumn: undefined, introspected: true });
     expect(text).toContain("public.users: read   # → read_write to allow writes");
     expect(text).toContain("# tenant_scope: (disabled)");
+  });
+});
+
+describe("nextSteps", () => {
+  const POLICY = "/home/dev/app/midplane.policy.yaml";
+  const npx = (over: Partial<Parameters<typeof nextSteps>[0]> = {}) =>
+    nextSteps({
+      shape: "package",
+      cliArgv: ["npx", "-y", "midplane"],
+      policyPath: POLICY,
+      dsnFromEnv: true,
+      ...over,
+    });
+
+  // The whole point: someone who arrived through `npx midplane init` must not
+  // be handed the install path they were avoiding.
+  test("the npm package gets stdio steps, never docker", () => {
+    const out = npx();
+    expect(out).not.toContain("docker run");
+    expect(out).not.toContain("-p 8080:8080");
+    expect(out).not.toContain("http://localhost:8080/mcp");
+    expect(out).toContain("npx -y midplane server --stdio");
+    expect(out).toContain("no server to start");
+  });
+
+  test("the client snippet is valid JSON and spawns this install", () => {
+    const out = npx();
+    const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as {
+      mcpServers: {
+        midplane: { command: string; args: string[]; env: Record<string, string> };
+      };
+    };
+    const entry = parsed.mcpServers.midplane;
+    expect(entry.command).toBe("npx");
+    expect(entry.args).toEqual(["-y", "midplane", "server", "--stdio"]);
+    // Absolute, because the client spawns from a working directory the user
+    // never chose — a relative path would resolve somewhere else.
+    expect(entry.env.MIDPLANE_POLICY_FILE).toBe(POLICY);
+    // The real DSN is never echoed, on any path.
+    expect(entry.env.DATABASE_URL).toBe("postgres://user:pass@host:5432/db");
+  });
+
+  test("bunx and a source checkout each get their own spawn", () => {
+    expect(npx({ cliArgv: ["bunx", "midplane"] })).toContain("bunx midplane server --stdio");
+    const source = npx({ shape: "source", cliArgv: ["bun", "/repo/src/cli.ts"] });
+    expect(source).toContain("bun /repo/src/cli.ts server --stdio");
+    expect(source).toContain('"args": ["/repo/src/cli.ts", "server", "--stdio"]');
+  });
+
+  // A path with a comma in it must survive into the config verbatim — the
+  // inline `args` array is assembled from JSON-encoded elements, not by
+  // reformatting a serialized one.
+  test("an awkward entry path round-trips through the snippet", () => {
+    const entry = "/repo/a, b/cli.ts";
+    const out = npx({ shape: "source", cliArgv: ["bun", entry] });
+    const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as { mcpServers: { midplane: { args: string[] } } };
+    expect(parsed.mcpServers.midplane.args).toEqual([entry, "server", "--stdio"]);
+  });
+
+  test('DSN in the env → "$DATABASE_URL"; typed at the prompt → export it', () => {
+    expect(npx({ dsnFromEnv: true })).toContain('-e DATABASE_URL="$DATABASE_URL"');
+    expect(npx({ dsnFromEnv: true })).not.toContain("export DATABASE_URL");
+    // An unset "$DATABASE_URL" would expand to empty and register a broken
+    // server, so the value has to be asked for instead.
+    const typed = npx({ dsnFromEnv: false });
+    expect(typed).not.toContain('"$DATABASE_URL"');
+    expect(typed).toContain("export DATABASE_URL");
+  });
+
+  test("verification commands are runnable as printed", () => {
+    const out = npx();
+    expect(out).toContain(`export MIDPLANE_POLICY_FILE=${POLICY}`);
+    expect(out).toContain("npx -y midplane doctor");
+    // Without --stdio, `query` would look for an HTTP server nothing started.
+    expect(out).toContain('npx -y midplane query --stdio --sql "SELECT 1"');
+  });
+
+  test("the image still gets docker steps, with an absolute mount source", () => {
+    const out = nextSteps({
+      shape: "docker",
+      cliArgv: ["midplane"],
+      policyPath: POLICY,
+      dsnFromEnv: true,
+    });
+    expect(out).toContain("docker run --env-file .env -p 8080:8080");
+    expect(out).toContain(`-v ${POLICY}:/policy.yaml`);
+    expect(out).toContain("claude mcp add --transport http midplane http://localhost:8080/mcp");
+    expect(out).toContain('midplane query --sql "SELECT 1"');
+  });
+
+  test("this build detects itself as a source checkout", () => {
+    // The suite runs `bun src/cli.ts` out of the repo — neither the compiled
+    // binary nor a node_modules install.
+    expect(installShape()).toBe("source");
+    const argv = selfCliArgv();
+    expect(argv[0]).toBe("bun");
+    expect(argv[1]).toMatch(/cli\.ts$/);
+    expect(nextSteps({ shape: installShape(), cliArgv: argv, policyPath: POLICY, dsnFromEnv: true }))
+      .not.toContain("docker run");
   });
 });
 

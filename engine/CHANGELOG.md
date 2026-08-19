@@ -2,6 +2,12 @@
 
 All notable changes to Midplane are documented here. Entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`midplane init` ends with the install you actually have.** The wizard closed with a `docker run`, a published port, and a `{"url": "http://localhost:8080/mcp"}` client snippet no matter how it was reached — so someone who arrived through `npx midplane init` was handed, as their next step, the install path they had just chosen not to take. It now branches on the shape it is running as (`installShape()` in `runtime.ts`, alongside the compiled-binary detection that already existed): the npm package and a source checkout speak stdio and are spawned **by** the agent, so they get a `claude mcp add … -- npx -y midplane server --stdio`, an `mcpServers` block carrying the same command, and stdio-shaped verification — no server to start, no port. The image still gets the `docker run` form. Three details the old block got wrong for everyone: the policy path is now absolute (an MCP client spawns from a working directory the user never chose, so the relative `midplane.policy.yaml` in a pasted config resolved elsewhere or nowhere), `query` is invoked with `--stdio` on the stdio paths (without it, it looks for an HTTP server nothing started), and the DSN is referenced as `"$DATABASE_URL"` only when the wizard actually read it from the environment — otherwise that expands to empty and registers a silently broken server, so the value is asked for instead. The DSN is still never echoed: the config snippet carries a placeholder.
+
 ## [0.19.0] — 2026-08-19
 
 ### Added

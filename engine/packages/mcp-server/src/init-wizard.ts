@@ -1,6 +1,7 @@
 // `midplane init` — interactive first-run setup: connect to the database,
 // detect the tenant column, choose grants, write a validated policy file,
-// and print the exact next commands (server, agent config, verification).
+// and print the exact next commands (agent config, verification) for the
+// install the user actually has — see nextSteps().
 //
 // This is the 60-second install made real. The flag-driven equivalent is
 // `midplane policy init` (same scaffold generator underneath — the wizard
@@ -29,12 +30,14 @@ import {
   log,
 } from "@clack/prompts";
 import { existsSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import yaml from "js-yaml";
 import { postgresDialect } from "@midplane/engine";
 import { parseArgs } from "./argv.ts";
 import { scaffold, collectLintFindings } from "./policy-cli.ts";
 import { PolicyFileSchema } from "./config.ts";
 import { displayHost, newCliPgClient, scrub } from "./dsn.ts";
+import { installShape, selfCliArgv, type InstallShape } from "./runtime.ts";
 
 const DEFAULT_OUT = "midplane.policy.yaml";
 
@@ -294,11 +297,55 @@ export async function runInit(argv: string[]): Promise<void> {
   }
 
   note(
-    [
+    nextSteps({
+      shape: installShape(),
+      cliArgv: selfCliArgv(),
+      policyPath: resolve(outFile),
+      // Whether the shell this ran in carries the DSN decides what the closing
+      // commands may reference: "$DATABASE_URL" works only if it's really
+      // there, and matching on the value covers `--url "$DATABASE_URL"` too.
+      dsnFromEnv: url === process.env.DATABASE_URL,
+    }),
+    "next steps",
+  );
+
+  outro(`Wrote ${outFile} — the DSN stays in your env, never in the file.`);
+}
+
+export interface NextStepsInput {
+  shape: InstallShape;
+  /** How to invoke this build's CLI, from selfCliArgv(). */
+  cliArgv: string[];
+  /**
+   * ABSOLUTE path to the policy file. An MCP client spawns the server from a
+   * working directory the user never sees, so a relative path in the config it
+   * pastes would resolve somewhere else — or nowhere.
+   */
+  policyPath: string;
+  /** The wizard took the DSN from DATABASE_URL, so this shell already has it. */
+  dsnFromEnv: boolean;
+}
+
+/**
+ * The closing "now run it" block, in the shape of the install the user
+ * actually has. Pure so it can be tested without a terminal.
+ *
+ * The npm package and a source checkout speak stdio and are spawned BY the
+ * agent: there is no server to start and no port to publish, and the policy
+ * path travels in the client's env block. Only the image serves HTTP. Printing
+ * a `docker run` to someone who arrived through `npx midplane init` hands them
+ * the install they were specifically avoiding.
+ */
+export function nextSteps(input: NextStepsInput): string {
+  const { policyPath, dsnFromEnv } = input;
+  const cli = input.cliArgv.join(" ");
+
+  if (input.shape === "docker") {
+    return [
       "Run the server (docker):",
       "  docker run --env-file .env -p 8080:8080 \\",
       "    -v midplane-audit:/data \\",
-      `    -v ./${outFile}:/policy.yaml -e MIDPLANE_POLICY_FILE=/policy.yaml \\`,
+      `    -v ${policyPath}:/policy.yaml -e MIDPLANE_POLICY_FILE=/policy.yaml \\`,
       "    midplane/midplane:latest",
       "",
       "Point your agent at it:",
@@ -306,13 +353,70 @@ export async function runInit(argv: string[]): Promise<void> {
       '  (Cursor: add {"url": "http://localhost:8080/mcp"} under mcpServers)',
       "",
       "Verify end to end:",
-      "  midplane doctor",
-      '  midplane query --sql "SELECT 1"',
-    ].join("\n"),
-    "next steps",
-  );
+      `  ${cli} doctor`,
+      `  ${cli} query --sql "SELECT 1"`,
+    ].join("\n");
+  }
 
-  outro(`Wrote ${outFile} — the DSN stays in your env, never in the file.`);
+  const [command, ...argv] = input.cliArgv as [string, ...string[]];
+  const serverArgs = [...argv, "server", "--stdio"];
+  // Built as an object and serialized, so the snippet is valid JSON by
+  // construction rather than by careful typing. `args` goes in as a
+  // placeholder string and is swapped for the inline array afterwards —
+  // pretty-printing puts one token per line, which turns four flags into four
+  // lines of noise in a block someone is meant to read at a glance.
+  const ARGS = "__MIDPLANE_SERVER_ARGS__";
+  const clientConfig = JSON.stringify(
+    {
+      mcpServers: {
+        midplane: {
+          command,
+          args: ARGS,
+          env: {
+            // Never the real DSN: the wizard's promise is that it stays in the
+            // environment and is never echoed or written down.
+            DATABASE_URL: "postgres://user:pass@host:5432/db",
+            MIDPLANE_POLICY_FILE: policyPath,
+          },
+        },
+      },
+    },
+    null,
+    2,
+  )
+    .replace(`"${ARGS}"`, `[${serverArgs.map((a) => JSON.stringify(a)).join(", ")}]`)
+    .split("\n")
+    .map((line) => `  ${line}`);
+
+  return [
+    "Your MCP client spawns midplane over stdio — no server to start, no port.",
+    "",
+    "Claude Code:",
+    "  claude mcp add midplane \\",
+    // With the DSN in the environment, "$DATABASE_URL" keeps the secret off the
+    // command line (and out of `ps aux` and shell history). Without it, that
+    // would expand to empty and register a broken server, so ask for the value.
+    dsnFromEnv
+      ? '    -e DATABASE_URL="$DATABASE_URL" \\'
+      : "    -e DATABASE_URL='postgres://user:pass@host:5432/db' \\",
+    `    -e MIDPLANE_POLICY_FILE=${policyPath} \\`,
+    `    -- ${[command, ...serverArgs].join(" ")}`,
+    "",
+    'Cursor, Claude Desktop, or any client taking an "mcpServers" block:',
+    ...clientConfig,
+    "",
+    "Verify end to end:",
+    ...(dsnFromEnv
+      ? []
+      : ["  export DATABASE_URL=…   # this shell doesn't have it — nothing stored it"]),
+    `  export MIDPLANE_POLICY_FILE=${policyPath}`,
+    "  export MIDPLANE_TRANSPORT=stdio",
+    `  ${cli} doctor`,
+    `  ${cli} query --stdio --sql "SELECT 1"`,
+    "",
+    "Prefer a long-running HTTP server? The same engine ships as a container:",
+    "  https://midplane.ai/docs",
+  ].join("\n");
 }
 
 // Clack returns a cancel symbol when the user hits ctrl-c/esc; every answer
@@ -363,7 +467,8 @@ export function printInitHelp(stream: NodeJS.WriteStream = process.stdout): void
 Connects with your DATABASE_URL (or a masked prompt), detects likely tenant
 columns (tenant_id, org_id, ... — shown with table coverage), lets you pick
 write grants and denies per table, writes a validated policy file, and
-prints the docker + agent-config commands to finish.
+prints the agent config + verification commands for the way you installed
+midplane (npm package and source checkout speak stdio; the image serves HTTP).
 
 Usage:
   midplane init [--url <dsn>] [--tenant-column <col>] [-o <file>]
