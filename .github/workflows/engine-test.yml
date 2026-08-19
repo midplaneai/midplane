@@ -158,7 +158,10 @@ jobs:
           node -e '
             const [p] = require("/tmp/pack.json");
             const files = p.files.map((f) => f.path);
-            const missing = ["dist/cli.js", "package.json", "README.md", "LICENSE"]
+            // dist/main.js is the bundle; dist/cli.js is the Node-version guard
+            // that dynamic-imports it. Shipping one without the other is a bin
+            // that either crashes on import or skips the guard entirely.
+            const missing = ["dist/cli.js", "dist/main.js", "package.json", "README.md", "LICENSE"]
               .filter((f) => !files.includes(f));
             if (missing.length) {
               console.error("tarball is missing:", missing.join(", "));

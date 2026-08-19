@@ -67,10 +67,11 @@ multi-region, fully supported.
 ### Guard one database yourself
 
 Put the MIT engine in front of a Postgres database and point an agent at it.
-Nothing to install — `npx` fetches the
-[`midplane`](https://www.npmjs.com/package/midplane) package on first run. Add
-this to your MCP client's config (Claude Code, Claude Desktop, Cursor — they all
-take this shape):
+Nothing to install — `npx` ships with Node and fetches the
+[`midplane`](https://www.npmjs.com/package/midplane) package on first run
+(needs Node 22.16+; on anything older it says so and exits). Add this to your
+MCP client's config (Claude Code, Claude Desktop, Cursor — they all take this
+shape):
 
 ```json
 {
@@ -84,8 +85,10 @@ take this shape):
 }
 ```
 
-The DSN belongs in that `env` block, not on a command line — a connection string
-passed as a CLI argument leaks the password to `ps aux` and your shell history.
+Keep the connection string in that `env` block rather than on a command line,
+where it would leak to `ps aux` and your shell history. The block still lands in
+a plaintext config file, so give Midplane its own least-privilege Postgres role:
+it governs which SQL runs, not what the role underneath it can reach.
 
 That config is already the safe default: reads allowed, writes and DDL denied,
 every query audited to `~/.midplane/audit.db`. Read the log back with

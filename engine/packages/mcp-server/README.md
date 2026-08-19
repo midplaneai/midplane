@@ -28,8 +28,10 @@ No install — `npx` fetches it on first run. Add this to your MCP client's conf
 }
 ```
 
-The DSN belongs in that `env` block, not on a command line — a connection string
-passed as a CLI argument leaks the password to `ps aux` and your shell history.
+Keep the connection string in that `env` block rather than on a command line,
+where it would leak to `ps aux` and your shell history. The block still lands in
+a plaintext config file, so give Midplane its own least-privilege Postgres role:
+it governs which SQL runs, not what the role underneath it can reach.
 
 Out of the box: reads are allowed, writes and DDL are denied, and every query is
 audited. Nothing to configure to be safe — configure only to open things up.
@@ -88,7 +90,10 @@ what got blocked, and why.
 ## Requirements
 
 Node 22.16+ or 24+ (the audit log uses the `node:sqlite` builtin), or Bun 1.3+.
-No native modules, no compiler needed at install.
+`npx` ships with Node, so there is nothing else to install — no native modules,
+no compiler. Below 22.16 the bin refuses to start and tells you why, rather than
+failing partway through with a stack trace from whichever dependency happened to
+reach a newer builtin first.
 
 ## Telemetry
 
