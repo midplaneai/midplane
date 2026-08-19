@@ -21,6 +21,8 @@ export type {
 export { EventType, Decision as AuditDecision, PolicyRule } from "./audit/types.ts";
 export { SqliteAuditWriter } from "./audit/sqlite.ts";
 export type { AuditEventRow } from "./audit/sqlite.ts";
+export { openSqlite, SQLITE_RUNTIME } from "./audit/sqlite-driver.ts";
+export type { SqliteDatabase, SqliteStatement } from "./audit/sqlite-driver.ts";
 export { PostgresAuditWriter } from "./audit/postgres.ts";
 
 export type { CredentialStore } from "./crypto/credential-store.ts";
