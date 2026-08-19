@@ -19,7 +19,7 @@
 import { readFileSync, rmSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import yaml from "js-yaml";
 import { postgresDialect } from "@midplane/engine";
 import { newCliPgClient } from "../../src/dsn.ts";
@@ -131,8 +131,13 @@ async function main(): Promise<void> {
   const writeIdx = writeTargets.map((t) => tables.indexOf(t));
   const denyIdx = denyTargets.map((t) => denyable.indexOf(t));
 
-  // 2. Drive the real wizard.
-  const s = spawnPty([process.execPath, CLI, "init", "--url", url!, "--tenant-column", tenantColumn, "-o", out]);
+  // 2. Drive the real wizard. Wide terminal on purpose: clack wraps the
+  // closing note to the terminal width, and a wrap that lands mid-path would
+  // break the transcript assertions below (the wizard's output is fine either
+  // way — this is about what the harness can match on).
+  const s = spawnPty([process.execPath, CLI, "init", "--url", url!, "--tenant-column", tenantColumn, "-o", out], {
+    cols: 200,
+  });
   try {
     if (missing.length > 0) {
       await s.waitFor("span tenants");
@@ -169,6 +174,37 @@ async function main(): Promise<void> {
     /* non-URL dsn form — skip */
   }
   checks.push(["DSN not written to file", !leaked && !text.includes("@")]);
+
+  // The closing note, as the user actually saw it. This is the only place the
+  // wiring gets checked end to end — installShape() → selfCliArgv() →
+  // nextSteps() → the printed box — because the pure parts can't see how the
+  // process was launched. Strip clack's box gutters so `includes` matches the
+  // text rather than the frame.
+  const transcript = s.output().replace(/[│├└┌─╮╯]/g, " ");
+  // Driven from a checkout, so the steps must be the stdio ones (the agent
+  // spawns midplane), not a docker run for an image the user hasn't got.
+  // The interpreter is named, not pathed (`bun /…/cli.ts`, not
+  // /Users/x/.bun/bin/bun), so anchor on the entry + subcommand.
+  checks.push([
+    "next steps are stdio, not docker",
+    transcript.includes(`${CLI} server --stdio`) && !transcript.includes("docker run"),
+  ]);
+  // A relative path here resolves against whatever cwd the MCP client spawns
+  // from, which is not the one the user ran the wizard in.
+  checks.push([
+    "policy path in the agent config is absolute",
+    transcript.includes(`"MIDPLANE_POLICY_FILE": "${resolve(out)}"`),
+  ]);
+  // The wizard's promise: the DSN stays in the environment. The printed config
+  // carries a placeholder, never the real credential.
+  let printedDsn = false;
+  try {
+    const pw = new URL(url!).password;
+    printedDsn = pw.length > 0 && transcript.includes(pw);
+  } catch {
+    /* non-URL dsn form — skip */
+  }
+  checks.push(["DSN not printed in the next steps", !printedDsn]);
 
   const parsed = PolicyFileSchema.safeParse(yaml.load(text));
   checks.push(["validates against PolicyFileSchema", parsed.success]);

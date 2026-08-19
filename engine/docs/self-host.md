@@ -98,7 +98,7 @@ Requires `npx` (Node.js) on `PATH`. Restart Claude Desktop after editing.
 
 `MIDPLANE_POLICY_FILE` is a YAML file, but you don't have to write it blind.
 
-The fastest path is the interactive wizard — it connects to your database (read-only), detects likely tenant columns (`tenant_id`, `org_id`, … shown with how many tables carry each), lets you pick per-table write grants and denies, and writes a validated, linted policy file plus the docker/agent commands to finish:
+The fastest path is the interactive wizard — it connects to your database (read-only), detects likely tenant columns (`tenant_id`, `org_id`, … shown with how many tables carry each), lets you pick per-table write grants and denies, and writes a validated, linted policy file plus the agent config and verification commands to finish — matched to how you're running midplane (the npm package and a source checkout are spawned by the agent over stdio; the image serves HTTP, so it gets the `docker run` form):
 
 ```bash
 midplane init
