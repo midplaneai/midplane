@@ -49,14 +49,20 @@ a validated `midplane.policy.yaml`. Point the server at it with
 
 ## What it blocks
 
-- **Destructive writes by default** — `DELETE FROM users` is denied even with a
-  `WHERE`, until you opt the table into `read_write`.
-- **Whole-table wipes and schema destruction** — no-`WHERE` `DELETE` / `UPDATE`
-  and all `DROP` / `TRUNCATE` / `ALTER`, regardless of table policy.
-- **Stacked-statement injection** — `SELECT 1; DROP TABLE users` denied at parse time.
-- **Writes hidden inside a read** — `WITH x AS (DELETE FROM users RETURNING *)
-  SELECT * FROM x` is denied at the inner `DELETE`. The same recursive walk
-  covers subqueries, UNION arms, and JOINs.
+- **Destructive writes by default** — a `DELETE` targeting a table is denied even
+  when it carries a `WHERE`, until you opt that table into `read_write`.
+- **Whole-table wipes and schema destruction** — unqualified `DELETE` / `UPDATE`
+  (no `WHERE`), and every `DROP` / `TRUNCATE` / `ALTER`, regardless of the
+  table's access level.
+- **Stacked-statement injection** — two statements separated by a semicolon in a
+  single call are refused at parse time. This is the canonical injection vector
+  and is denied unconditionally.
+- **Writes hidden inside a read** — a CTE that performs a write and then selects
+  from it is denied at the inner write, not the outer `SELECT`. The same
+  recursive walk covers subqueries, UNION arms, and JOINs.
+
+Worked examples of each, with the exact SQL and the denial message, are in the
+[policy reference](https://midplane.ai/docs) and the repository README.
 
 ## CLI
 
