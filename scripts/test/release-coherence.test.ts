@@ -32,7 +32,7 @@ const okServer = {
   version: PIN,
   packages: [
     { registryType: "npm", identifier: "midplane", version: PIN },
-    { registryType: "oci", identifier: "midplane/midplane", version: PIN },
+    { registryType: "oci", identifier: `docker.io/midplane/midplane:${PIN}` },
   ],
 };
 
@@ -61,7 +61,7 @@ describe("checkReleaseCoherence", () => {
       ...okServer,
       packages: [
         { registryType: "npm", identifier: "midplane", version: "0.17.0" },
-        { registryType: "oci", identifier: "midplane/midplane", version: "0.17.0" },
+        { registryType: "oci", identifier: "docker.io/midplane/midplane:0.17.0" },
       ],
     };
     const found = checkReleaseCoherence(okPkg, stale, PIN);
@@ -88,7 +88,7 @@ describe("checkReleaseCoherence", () => {
       ...okServer,
       packages: [
         { registryType: "npm", identifier: "midplane-mcp-server", version: PIN },
-        { registryType: "oci", identifier: "midplane/midplane", version: PIN },
+        { registryType: "oci", identifier: `docker.io/midplane/midplane:${PIN}` },
       ],
     };
     const found = checkReleaseCoherence(okPkg, wrong, PIN);
@@ -146,5 +146,45 @@ describe("checkReleaseCoherence — OCI annotation", () => {
     const found = checkReleaseCoherence(okPkg, okServer, PIN, "FROM alpine:3.20\n");
     expect(found).toHaveLength(1);
     expect(found[0]!.context).toContain("no io.modelcontextprotocol.server.name");
+  });
+});
+
+// The official registry rejects `registryBaseUrl` and `version` on an OCI block
+// and requires a canonical reference instead — `docker.io/owner/image:tag`. It
+// says so only at publish time, after the image and the npm package are already
+// out, so the shape is asserted here.
+describe("checkReleaseCoherence — OCI reference shape", () => {
+  const oci = (extra: Record<string, unknown>) => ({
+    ...okServer,
+    packages: [okServer.packages[0], { registryType: "oci", ...extra }],
+  });
+
+  it("accepts a canonical docker.io reference carrying the pinned tag", () => {
+    const ok = oci({ identifier: `docker.io/midplane/midplane:${PIN}` });
+    expect(checkReleaseCoherence(okPkg, ok, PIN)).toEqual([]);
+  });
+
+  it("catches a tag in the identifier left behind by a pin bump", () => {
+    const stale = oci({ identifier: "docker.io/midplane/midplane:0.17.0" });
+    const found = checkReleaseCoherence(okPkg, stale, PIN);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.found).toBe("0.17.0");
+  });
+
+  it("catches a bare repository reference with no host or tag", () => {
+    const bare = oci({ identifier: "midplane/midplane" });
+    expect(checkReleaseCoherence(okPkg, bare, PIN)).toHaveLength(1);
+  });
+
+  it("catches the two fields the registry forbids on an OCI block", () => {
+    const bad = oci({
+      identifier: `docker.io/midplane/midplane:${PIN}`,
+      registryBaseUrl: "https://docker.io",
+      version: PIN,
+    });
+    const found = checkReleaseCoherence(okPkg, bad, PIN);
+    expect(found).toHaveLength(2);
+    expect(found.map((m) => m.context).join(" ")).toMatch(/registryBaseUrl/);
+    expect(found.map((m) => m.context).join(" ")).toMatch(/version/);
   });
 });

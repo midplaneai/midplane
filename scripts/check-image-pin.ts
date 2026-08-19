@@ -127,7 +127,36 @@ export function checkReleaseCoherence(
   if (!ociPkg) {
     out.push({ path: SRV, found: "none", context: "no oci package block" });
   } else {
-    eq(SRV, "packages[oci].version", ociPkg.version, pinVersion);
+    // OCI blocks carry no `version` field — the official registry rejects one,
+    // and rejects `registryBaseUrl` too, requiring instead a canonical
+    // reference that embeds the registry host and the tag:
+    //   docker.io/midplane/midplane:X.Y.Z
+    // So the version to check lives inside the identifier.
+    if (ociPkg.registryBaseUrl !== undefined) {
+      out.push({
+        path: SRV,
+        found: String(ociPkg.registryBaseUrl),
+        context: "packages[oci].registryBaseUrl (the registry rejects this field; put the host in identifier)",
+      });
+    }
+    if (ociPkg.version !== undefined) {
+      out.push({
+        path: SRV,
+        found: String(ociPkg.version),
+        context: "packages[oci].version (the registry rejects this field; the tag belongs in identifier)",
+      });
+    }
+    const ref = String(ociPkg.identifier ?? "");
+    const tag = ref.match(/^docker\.io\/midplane\/midplane:(\d+\.\d+\.\d+)$/)?.[1];
+    if (!tag) {
+      out.push({
+        path: SRV,
+        found: ref || "none",
+        context: "packages[oci].identifier (want docker.io/midplane/midplane:X.Y.Z)",
+      });
+    } else {
+      eq(SRV, "packages[oci].identifier tag", tag, pinVersion);
+    }
   }
 
   // Registry ownership. The registry proves we own each artifact by matching

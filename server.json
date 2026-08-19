@@ -17,10 +17,19 @@
       "identifier": "midplane",
       "version": "0.19.0",
       "runtimeHint": "npx",
-      "transport": { "type": "stdio" },
+      "transport": {
+        "type": "stdio"
+      },
       "packageArguments": [
-        { "type": "positional", "valueHint": "subcommand", "value": "server" },
-        { "type": "named", "name": "--stdio" }
+        {
+          "type": "positional",
+          "valueHint": "subcommand",
+          "value": "server"
+        },
+        {
+          "type": "named",
+          "name": "--stdio"
+        }
       ],
       "environmentVariables": [
         {
@@ -47,15 +56,17 @@
           "description": "Set to 0 to disable anonymous usage telemetry (DO_NOT_TRACK=1 also works). Never includes SQL, table or column names, or identifiers.",
           "isRequired": false,
           "default": "1",
-          "choices": ["1", "0", "debug"]
+          "choices": [
+            "1",
+            "0",
+            "debug"
+          ]
         }
       ]
     },
     {
       "registryType": "oci",
-      "registryBaseUrl": "https://docker.io",
-      "identifier": "midplane/midplane",
-      "version": "0.19.0",
+      "identifier": "docker.io/midplane/midplane:0.19.0",
       "runtimeHint": "docker",
       "transport": {
         "type": "streamable-http",

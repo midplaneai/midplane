@@ -51,5 +51,14 @@ jobs:
         with:
           bun-version: 1.3
       - run: bun install --frozen-lockfile
+      # Schema validity is necessary but NOT sufficient. The official registry
+      # enforces rules the schema does not express and reports them only at
+      # publish time — the last step of a release, with the image and the npm
+      # package already out and immutable. Our first submission was rejected for
+      # putting `registryBaseUrl` and `version` on an OCI block (it wants a
+      # canonical `docker.io/owner/image:tag` reference), and BOTH this check and
+      # `mcp-publisher validate` passed that same file. The rules that actually
+      # catch it are the explicit ones in check-image-pin.ts, run by the
+      # pin-drift job above and covered by scripts/test/release-coherence.test.ts.
       - name: server.json validates against the MCP registry schema
         run: bun run check:server-json
