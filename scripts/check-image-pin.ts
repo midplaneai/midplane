@@ -12,6 +12,13 @@
 // (0.8.0 vs the current pin) and the current-pin references already import the
 // constant. The engine subtree (engine/**) ships its own image and is excluded.
 //
+// One engine release now goes out as THREE artifacts — the Docker image, the
+// `midplane` npm package, and the MCP registry entry — cut from the same
+// `engine-v*` tag. checkReleaseCoherence() below holds their versions and
+// identifiers together, because the failure mode is silent: `npx midplane`
+// reporting a version the image never shipped, or a registry entry pointing at
+// an npm version that does not exist.
+//
 //   bun scripts/check-image-pin.ts
 
 import { readFileSync } from "node:fs";
@@ -81,6 +88,74 @@ export function scanForDrift(
   return out;
 }
 
+// The npm package manifest and the MCP registry entry carry the release version
+// in structured fields rather than as free text, so they get an exact check
+// instead of the regex scan. Also asserts the two identity rules the official
+// registry enforces at publish time — server.json's `name` must equal the npm
+// package's `mcpName` (that pairing is how the registry proves we own the npm
+// package), and the npm package block must point at the package we publish.
+// Both are cheap to verify here and expensive to discover mid-release.
+export function checkReleaseCoherence(
+  pkg: Record<string, unknown>,
+  server: Record<string, unknown>,
+  pinVersion: string,
+  dockerfile?: string,
+): Mismatch[] {
+  const out: Mismatch[] = [];
+  const PKG = "engine/packages/mcp-server/package.json";
+  const SRV = "server.json";
+  const packages = (server.packages ?? []) as Array<Record<string, unknown>>;
+  const npmPkg = packages.find((p) => p.registryType === "npm");
+  const ociPkg = packages.find((p) => p.registryType === "oci");
+
+  const eq = (path: string, label: string, found: unknown, want: string) => {
+    if (found !== want) {
+      out.push({ path, found: String(found), context: `${label} (want ${want})` });
+    }
+  };
+
+  eq(PKG, "version", pkg.version, pinVersion);
+  eq(SRV, "version", server.version, pinVersion);
+
+  if (!npmPkg) {
+    out.push({ path: SRV, found: "none", context: "no npm package block" });
+  } else {
+    eq(SRV, "packages[npm].version", npmPkg.version, pinVersion);
+    eq(SRV, "packages[npm].identifier", npmPkg.identifier, String(pkg.name));
+  }
+
+  if (!ociPkg) {
+    out.push({ path: SRV, found: "none", context: "no oci package block" });
+  } else {
+    eq(SRV, "packages[oci].version", ociPkg.version, pinVersion);
+  }
+
+  // Registry ownership. The registry proves we own each artifact by matching
+  // the server name against something inside it: `mcpName` in the published
+  // npm package, and an OCI annotation on the image. Without both, `mcp-publisher
+  // publish` rejects the submission — after npm publish has already happened
+  // and is immutable.
+  eq(PKG, "mcpName", pkg.mcpName, String(server.name));
+
+  if (dockerfile !== undefined) {
+    const DF = "engine/docker/Dockerfile";
+    const label = dockerfile.match(
+      /LABEL\s+io\.modelcontextprotocol\.server\.name="([^"]*)"/,
+    );
+    if (!label) {
+      out.push({
+        path: DF,
+        found: "none",
+        context: "no io.modelcontextprotocol.server.name LABEL",
+      });
+    } else {
+      eq(DF, "io.modelcontextprotocol.server.name", label[1], String(server.name));
+    }
+  }
+
+  return out;
+}
+
 function main(): void {
   const root = join(import.meta.dir, "..");
   const mismatches: Mismatch[] = [];
@@ -94,6 +169,17 @@ function main(): void {
     }
     mismatches.push(...scanForDrift(site, text, PIN_VERSION));
   }
+
+  mismatches.push(
+    ...checkReleaseCoherence(
+      JSON.parse(
+        readFileSync(join(root, "engine/packages/mcp-server/package.json"), "utf8"),
+      ),
+      JSON.parse(readFileSync(join(root, "server.json"), "utf8")),
+      PIN_VERSION,
+      readFileSync(join(root, "engine/docker/Dockerfile"), "utf8"),
+    ),
+  );
 
   if (mismatches.length > 0) {
     console.error(

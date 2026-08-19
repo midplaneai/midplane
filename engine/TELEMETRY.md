@@ -69,8 +69,10 @@ Sent once, immediately after the MCP transport is listening. Fields:
 | `event`          | string   | `"startup"`                        | Discriminator                |
 | `install_id`     | ULID     | `"01H8K2J9XQVWZ7PCQ3F0R2N5T8"`     | Stable random ID per install |
 | `ts`             | int      | `1730000000`                       | Unix seconds, UTC            |
-| `version`        | string   | `"0.5.0"`                          | `@midplane/mcp-server` version |
-| `bun_version`    | string   | `"1.3.0"`                          | Runtime                      |
+| `version`        | string   | `"0.5.0"`                          | Midplane version             |
+| `runtime`        | enum     | `"node"`                           | `bun` / `node`               |
+| `runtime_version`| string   | `"24.4.0"`                         | Runtime version              |
+| `bun_version`    | string   | `"1.3.0"`                          | **Received only.** Sent by installs predating the npm/Node path, which had no runtime to name. Current engines send `runtime` + `runtime_version` instead; the receiver accepts either, and rejects an event carrying neither. |
 | `os`             | enum     | `"linux"`                          | `darwin` / `linux` / `win32` / `other` |
 | `arch`           | enum     | `"x64"`                            | `x64` / `arm64` / `other`    |
 | `transport`      | enum     | `"http"`                           | `stdio` / `http`             |
@@ -86,7 +88,8 @@ Sample:
   "install_id": "01H8K2J9XQVWZ7PCQ3F0R2N5T8",
   "ts": 1730000000,
   "version": "0.5.0",
-  "bun_version": "1.3.0",
+  "runtime": "node",
+  "runtime_version": "24.4.0",
   "os": "linux",
   "arch": "x64",
   "transport": "http",
@@ -256,7 +259,7 @@ Schema version bumps:
 
 ## Inspection
 
-Run `MIDPLANE_TELEMETRY=debug bun run packages/mcp-server/src/index.ts` and
+Run `MIDPLANE_TELEMETRY=debug bun run packages/mcp-server/src/cli.ts server` and
 exercise the server. Each event that *would* be sent is written to stderr as a
 single JSON line, prefixed with `[telemetry-debug]`. No network call is made.
 

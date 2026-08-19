@@ -25,6 +25,8 @@
     "lint": "bun --filter '@midplane-cloud/*' lint",
     "typecheck": "bun --filter '@midplane-cloud/*' typecheck",
     "check:pins": "bun scripts/check-image-pin.ts",
+    "check:server-json": "bun scripts/check-server-json.ts",
+    "build:npm": "bun engine/packages/mcp-server/scripts/build-npm.ts",
     "check:transforms": "bun scripts/check-mask-transforms.ts",
     "check:no-inline-secrets": "bun scripts/check-no-inline-secrets.ts",
     "db:generate": "bun --filter '@midplane-cloud/db' generate",
@@ -38,6 +40,8 @@
     "@playwright/test": "^1.49.1",
     "@types/bun": "^1.1.14",
     "@types/node": "^22.10.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

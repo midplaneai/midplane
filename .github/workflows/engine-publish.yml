@@ -1,12 +1,35 @@
 name: engine-publish
 
-# Publishes the OSS engine image midplane/midplane:<X.Y.Z> + :latest.
+# Publishes one engine release as three artifacts, in dependency order:
+#
+#   publish   → midplane/midplane:<X.Y.Z> + :latest (Docker Hub + GHCR)
+#   npm       → the `midplane` package on npmjs.com
+#   registry  → the ai.midplane/midplane entry in the official MCP registry
+#
+# The registry entry is metadata ABOUT the other two — it names an npm version
+# and an image tag, and the registry verifies both exist and carry proof of
+# ownership before accepting it. So it runs last, and each job `needs:` the one
+# before it: a failed image build must not leave a published npm package, and a
+# failed npm publish must not leave a registry entry pointing at nothing.
 #
 # Monorepo note: engine releases are namespaced `engine-v*` so they don't
 # collide with any control-plane release tag in the shared tag space. Push
 # `engine-v0.11.0` to cut midplane/midplane:0.11.0. This is SEPARATE from the
 # control-plane deploy (deploy-fly.yml, manual workflow_dispatch) — code-only
 # merge keeps the two pipelines distinct.
+#
+# One-time setup this workflow assumes:
+#   NPM_TOKEN                      npm automation token with publish rights on
+#                                  the `midplane` package
+#   MCP_REGISTRY_DNS_PRIVATE_KEY   Ed25519 private key (base64) whose public
+#                                  half is published as a TXT record at the
+#                                  midplane.ai APEX:
+#                                    midplane.ai. IN TXT "v=MCPv1; k=ed25519; p=<pubkey>"
+#                                  That record is what entitles us to the
+#                                  `ai.midplane/*` namespace. Generate with:
+#                                    openssl genpkey -algorithm Ed25519 -out key.pem
+#                                    openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64
+#                                    openssl pkey -in key.pem -outform DER | tail -c 32 | base64
 
 on:
   push:
@@ -22,6 +45,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.tag }}
     permissions:
       contents: read
       # Push the same image to GHCR (ghcr.io/midplaneai/midplane) alongside
@@ -85,3 +110,117 @@ jobs:
             midplane/midplane:latest
             ghcr.io/midplaneai/midplane:${{ steps.version.outputs.tag }}
             ghcr.io/midplaneai/midplane:latest
+
+  # The `midplane` npm package — the `npx midplane` path and the artifact the
+  # registry's npm block points at.
+  npm:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm provenance: the attestation is signed with this workflow's OIDC
+      # identity, so `npm view midplane` shows the commit and workflow the
+      # tarball was built from. For a security tool that is worth having.
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: probe
+          POSTGRES_DB: probe
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+
+      # A published npm version is immutable. Everything that can be checked
+      # before that point is checked before that point.
+      - name: Assert the tag matches the manifests
+        env:
+          TAG: ${{ needs.publish.outputs.version }}
+        run: |
+          manifest="$(node -p 'require("./engine/packages/mcp-server/package.json").version')"
+          if [ "$manifest" != "$TAG" ]; then
+            echo "::error::tag engine-v$TAG does not match package.json version $manifest"
+            exit 1
+          fi
+          # Holds package.json, server.json, the Dockerfile annotation, and
+          # OSS_ENGINE_IMAGE to one version and one server name.
+          bun scripts/check-image-pin.ts
+          bun scripts/check-server-json.ts
+
+      - name: Build the package
+        run: bun engine/packages/mcp-server/scripts/build-npm.ts
+
+      - name: Smoke the built package under Node
+        working-directory: engine/packages/mcp-server
+        env:
+          SMOKE_DATABASE_URL: postgres://postgres:probe@127.0.0.1:5432/probe
+        run: node scripts/smoke-npm-package.mjs
+
+      - name: Publish to npm
+        working-directory: engine/packages/mcp-server
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # --provenance is also set in package.json publishConfig; passing it
+        # here makes the requirement visible at the call site.
+        run: npm publish --provenance --access public
+
+  # The official MCP registry entry. Metadata only — it points at the npm
+  # package and the image published above, and the registry verifies both
+  # before accepting it (npm: the `mcpName` field; OCI: the
+  # io.modelcontextprotocol.server.name annotation).
+  registry:
+    needs: [publish, npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      # npm's CDN is not read-your-writes. Publishing the registry entry
+      # against a version the registry's validator cannot fetch yet fails the
+      # release for a reason that has nothing to do with the release.
+      - name: Wait for the npm version to be resolvable
+        env:
+          TAG: ${{ needs.publish.outputs.version }}
+        run: |
+          for i in $(seq 1 30); do
+            if npm view "midplane@$TAG" version >/dev/null 2>&1; then
+              echo "midplane@$TAG is live on npm"
+              exit 0
+            fi
+            echo "waiting for midplane@$TAG on npm ($i/30)"
+            sleep 10
+          done
+          echo "::error::midplane@$TAG did not appear on npm within 5 minutes"
+          exit 1
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/').tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher --help >/dev/null
+
+      # DNS auth over GitHub OIDC: the namespace is ai.midplane/*, which is
+      # ours by virtue of owning midplane.ai, not by virtue of the GitHub org.
+      # github-oidc would only grant io.github.midplaneai/*.
+      - name: Publish the registry entry
+        env:
+          MCP_DNS_KEY: ${{ secrets.MCP_REGISTRY_DNS_PRIVATE_KEY }}
+        run: |
+          ./mcp-publisher login dns --domain midplane.ai --private-key "$MCP_DNS_KEY"
+          ./mcp-publisher publish

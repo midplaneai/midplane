@@ -27,7 +27,7 @@
 //
 // Default posture is set by the wiring, not the rule: an undefined source is
 // inert (the engine-library default — an embedder that doesn't wire guardrails
-// gets none). The server (@midplane/mcp-server) defaults the YAML `guardrails`
+// gets none). The server (the `midplane` package) defaults the YAML `guardrails`
 // section to ON, so a self-host deployment is protected out of the box.
 
 import type { Rule, RuleEvalContext, RuleVerdict } from "./index.ts";

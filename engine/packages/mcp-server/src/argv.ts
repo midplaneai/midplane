@@ -17,7 +17,15 @@ export interface ParsedArgs {
 // Flags that never take a value, so they never swallow the next positional:
 // `policy test --json policy.yaml` must keep policy.yaml as the <file>.
 // (`--server` is deliberately NOT here — it takes an optional URL value.)
-const BOOLEAN_FLAGS = new Set(["json", "pretty", "help", "stdio", "canary", "allow-http"]);
+const BOOLEAN_FLAGS = new Set([
+  "json",
+  "pretty",
+  "help",
+  "stdio",
+  "http",
+  "canary",
+  "allow-http",
+]);
 
 export function parseArgs(args: string[]): ParsedArgs {
   const positionals: string[] = [];

@@ -24,6 +24,8 @@
 
 import { runAudit, printAuditHelp } from "./audit-cli.ts";
 import { runPolicy, printPolicyHelp } from "./policy-cli.ts";
+import { parseArgs } from "./argv.ts";
+import { transportFromFlags } from "./config.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
 // `midplane audit tail | head` must exit cleanly when the consumer closes
@@ -42,6 +44,7 @@ async function main(): Promise<void> {
   switch (cmd) {
     case undefined:
     case "server": {
+      applyTransportFlags(rest);
       const { runServer } = await import("./index.ts");
       await runServer();
       return;
@@ -110,11 +113,27 @@ async function main(): Promise<void> {
   }
 }
 
+// Written into process.env rather than threaded into runServer() because
+// loadConfig(process.env) is the one input the config layer has, so the flag
+// must land where a hand-set MIDPLANE_TRANSPORT would. The flag wins over the
+// env var — it is the more specific instruction. See transportFromFlags.
+function applyTransportFlags(argv: string[]): void {
+  let transport;
+  try {
+    transport = transportFromFlags(parseArgs(argv).flags);
+  } catch (err) {
+    process.stderr.write(`midplane server: ${(err as Error).message}\n`);
+    process.exit(2);
+  }
+  if (transport) process.env.MIDPLANE_TRANSPORT = transport;
+}
+
 function printHelp(stream: NodeJS.WriteStream = process.stdout): void {
   stream.write(`midplane — Postgres safety layer for AI agents
 
 Usage:
   midplane [server]    Run the MCP server (default subcommand)
+                       --stdio | --http  override MIDPLANE_TRANSPORT
   midplane init        Interactive setup: introspect the DB, write a policy
   midplane query ...   Send one query through the server as an agent would
   midplane doctor      Preflight + smoke checks (config, DB, audit, canary)

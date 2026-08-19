@@ -26,11 +26,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { join } from "node:path";
 import { parseArgs } from "./argv.ts";
 import { paletteFor, prettyMode, renderRowsTable } from "./render.ts";
 import { ensureHttpScheme } from "./dsn.ts";
 import { DEFAULT_PORT } from "./config.ts";
+import { selfServerSpawn } from "./runtime.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
 // The `query` tool requires intent (it lands on every audit row). A default
@@ -68,14 +68,15 @@ export async function mcpQuery(
   const client = new Client({ name: "midplane-cli", version: PACKAGE_VERSION });
   const transport = target.stdio
     ? new StdioClientTransport({
-        // Same entrypoint the container wrapper execs; process.execPath is
-        // the running bun. Full env passes through (the SDK's default env
-        // allowlist would drop DATABASE_URL) — EXCEPT LOG_LEVEL, which is
-        // forced silent unconditionally: pino writes to stdout, and stdout
-        // is the MCP channel here. An inherited LOG_LEVEL=info would
-        // corrupt the JSON-RPC stream.
-        command: process.execPath,
-        args: [join(import.meta.dir, "cli.ts"), "server"],
+        // Re-runs THIS build's `midplane server` — see selfServerSpawn(), which
+        // owns the compiled-binary / bun-source / node-dist differences. Full
+        // env passes through (the SDK's default env allowlist would drop
+        // DATABASE_URL) — EXCEPT LOG_LEVEL, forced silent so the child's ops
+        // logs don't interleave with this command's own output on the operator's
+        // terminal. (Protocol safety no longer depends on it: logger.ts writes
+        // to stderr, so an inherited LOG_LEVEL=info can't corrupt the JSON-RPC
+        // stream on stdout.)
+        ...selfServerSpawn(),
         env: {
           ...cleanEnv(),
           MIDPLANE_TRANSPORT: "stdio",

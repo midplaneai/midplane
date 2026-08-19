@@ -101,3 +101,72 @@ jobs:
       - name: Build image and run MCP trial battery against sidecar Postgres
         # test-image.sh cd's into engine/ itself and builds from the repo root.
         run: bash engine/scripts/test-image.sh
+
+  # The `midplane` npm package runs under Node, which the bun:test job above
+  # cannot speak to at all: it proves the SOURCE works under Bun, and every
+  # interesting difference (node:sqlite instead of bun:sqlite, libpg-query's
+  # WASM loading from node_modules, the bundled single-file entry) exists only
+  # in the built artifact on the other runtime. So build the real package and
+  # drive the real bin over stdio against a real Postgres.
+  #
+  # The matrix is the supported floor and the current LTS. 22.16 is the floor
+  # because node:sqlite is unavailable below it, which is a boot failure rather
+  # than a degraded mode — package.json's engines.node says the same thing.
+  node-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.16", "22", "24"]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: probe
+          POSTGRES_DB: probe
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: bun install --frozen-lockfile
+      # Bun builds the bundle; Node runs it. That split is the point.
+      - name: Build the npm package
+        run: bun engine/packages/mcp-server/scripts/build-npm.ts
+      - name: Smoke the built package under Node
+        working-directory: engine/packages/mcp-server
+        env:
+          SMOKE_DATABASE_URL: postgres://postgres:probe@127.0.0.1:5432/probe
+        run: node scripts/smoke-npm-package.mjs
+      # `npm pack` resolves the "files" list and bin the same way `npm publish`
+      # will, so a tarball missing dist/ or a bin pointing at nothing fails here
+      # rather than on a user's first `npx`.
+      - name: Verify the publishable tarball
+        working-directory: engine/packages/mcp-server
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const [p] = require("/tmp/pack.json");
+            const files = p.files.map((f) => f.path);
+            // dist/main.js is the bundle; dist/cli.js is the Node-version guard
+            // that dynamic-imports it. Shipping one without the other is a bin
+            // that either crashes on import or skips the guard entirely.
+            const missing = ["dist/cli.js", "dist/main.js", "package.json", "README.md", "LICENSE"]
+              .filter((f) => !files.includes(f));
+            if (missing.length) {
+              console.error("tarball is missing:", missing.join(", "));
+              console.error("contains:", files.join(", "));
+              process.exit(1);
+            }
+            console.log(`${p.name}@${p.version}: ${files.length} files, ${p.unpackedSize} bytes unpacked`);
+          '

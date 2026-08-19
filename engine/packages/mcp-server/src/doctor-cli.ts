@@ -26,6 +26,7 @@ import { collectLintFindings, stripPrefix } from "./policy-cli.ts";
 import { parseArgs } from "./argv.ts";
 import { paletteFor, type Palette } from "./render.ts";
 import { displayHost, ensureHttpScheme, newCliPgClient, scrub } from "./dsn.ts";
+import { runtimeLabel } from "./runtime.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
 type Status = "ok" | "warn" | "fail" | "info";
@@ -48,7 +49,7 @@ export async function runDoctor(argv: string[]): Promise<void> {
   const push = (name: string, status: Status, detail: string) =>
     checks.push({ name, status, detail });
 
-  push("version", "info", `midplane ${PACKAGE_VERSION} (bun ${Bun.version})`);
+  push("version", "info", `midplane ${PACKAGE_VERSION} (${runtimeLabel()})`);
 
   // ── 1. env config — the exact loader the server boots with ──────────────
   let cfg: Config | null = null;

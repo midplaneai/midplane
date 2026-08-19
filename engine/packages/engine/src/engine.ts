@@ -167,7 +167,7 @@ export interface EngineOptions {
   databaseName?: string;
   // Dialect that owns parsing for this engine. Defaults to `postgresDialect`
   // for back-compat with pre-0.6.0 callers (tests, embedders) that don't
-  // construct one. The factory in `@midplane/mcp-server` resolves the dialect
+  // construct one. The factory in the `midplane` package resolves the dialect
   // from per-DB YAML (`dialect: postgres|...`) and passes it explicitly.
   dialect?: Dialect;
   now?: () => number;

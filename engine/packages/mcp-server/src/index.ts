@@ -1,5 +1,4 @@
-#!/usr/bin/env bun
-// @midplane/mcp-server — bin entrypoint.
+// midplane — the server pipeline. Reached via `midplane server` (cli.ts).
 //
 // Pipeline: load config → init telemetry → warm parser → build engine →
 // build server → pick transport → serve. NEVER touches SQL itself; every
@@ -140,9 +139,12 @@ export async function runServer(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
-if (import.meta.main) {
-  runServer().catch((err) => {
-    logger.error({ err }, "fatal");
-    process.exit(1);
-  });
-}
+// No auto-run block here on purpose. This module used to start the server when
+// it was the entry (`if (import.meta.main)`), which made it a SECOND way into
+// the process alongside cli.ts. That is a trap once the code is bundled: the
+// npm build inlines this module into dist/cli.js, so any "am I the entry?"
+// test — import.meta.main, or comparing import.meta.url to process.argv[1] —
+// is true for the bundle, and `midplane server` would boot two servers on one
+// stdio pipe. Every query then ran twice, under two query ids.
+//
+// cli.ts is the only entry point. Run the server with `midplane server`.

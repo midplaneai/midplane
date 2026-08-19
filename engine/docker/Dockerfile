@@ -41,6 +41,12 @@ RUN bun build --compile ./engine/packages/mcp-server/src/cli.ts --outfile /app/m
 FROM alpine:3.20
 WORKDIR /app
 
+# How the official MCP registry proves we own this image: the annotation must
+# equal `name` in the repo-root server.json, which in turn must equal `mcpName`
+# in the npm package. `mcp-publisher publish` rejects the submission otherwise.
+# scripts/check-image-pin.ts holds all three together.
+LABEL io.modelcontextprotocol.server.name="ai.midplane/midplane"
+
 # curl: container HEALTHCHECK. sqlite: ad-hoc audit-log inspection from inside.
 # libstdc++/libgcc: the bun-compiled binary links against them on musl.
 RUN apk add --no-cache curl sqlite libstdc++ libgcc

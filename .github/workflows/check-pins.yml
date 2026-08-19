@@ -37,3 +37,19 @@ jobs:
       # an env file. Dependency-free, same cheap-on-every-PR posture.
       - name: no inline -e secrets in docs/commands
         run: bun run check:no-inline-secrets
+
+  # Separate job because this one needs `bun install` (ajv) and the network,
+  # which would cost the pin-drift job above its dependency-free speed.
+  # Catches a malformed server.json on the PR that writes it, rather than in
+  # the release job that submits it — by which point npm publish has already
+  # burned the version number.
+  server-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      - name: server.json validates against the MCP registry schema
+        run: bun run check:server-json

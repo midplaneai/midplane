@@ -1,6 +1,6 @@
 // `midplane audit` — read the local SQLite audit log without writing SQL.
 //
-// Five subcommands, all read-only against DB_PATH (default /data/audit.db):
+// Five subcommands, all read-only against DB_PATH (see defaultAuditDbPath):
 //   tail   — backfill recent rows + poll for new ones
 //   since  — one-shot dump of rows newer than a duration window
 //   denies — just the denials, each with the SQL that was blocked and why
@@ -10,13 +10,18 @@
 // Output is pretty (aligned, colored lines) on a TTY and JSON lines when
 // piped — render.ts owns the convention; `--json` / `--pretty` override.
 //
-// We open SQLite directly with `bun:sqlite` rather than going through the
-// HTTP /audit/since endpoint because (a) `docker exec` is already inside the
-// container, and (b) the HTTP path requires INDEXER_TOKEN, which a self-host
-// admin shouldn't need to provision just to read their own log.
+// We open SQLite directly rather than going through the HTTP /audit/since
+// endpoint because (a) `docker exec` is already inside the container, and
+// (b) the HTTP path requires INDEXER_TOKEN, which a self-host admin shouldn't
+// need to provision just to read their own log.
 
-import { Database } from "bun:sqlite";
-import { SqliteAuditWriter } from "@midplane/engine";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+  openSqlite,
+  SqliteAuditWriter,
+  type SqliteDatabase,
+} from "@midplane/engine";
+import { defaultAuditDbPath } from "./config.ts";
 import {
   fmtTs,
   oneLine,
@@ -28,7 +33,9 @@ import {
   type Palette,
 } from "./render.ts";
 
-const DEFAULT_DB_PATH = "/data/audit.db";
+// Same resolution the server uses, so the reader and the writer never point at
+// different files.
+const DEFAULT_DB_PATH = defaultAuditDbPath();
 // Override only used by the regression test for the rowid-cursor fix.
 const TAIL_POLL_MS = Number(process.env.MIDPLANE_AUDIT_TAIL_POLL_MS) || 1000;
 const TAIL_BACKFILL_DEFAULT = 10;
@@ -84,7 +91,7 @@ function dbPath(): string {
   return process.env.DB_PATH ?? DEFAULT_DB_PATH;
 }
 
-function openDb(): Database {
+function openDb(): SqliteDatabase {
   // Run schema migrations BEFORE the read-only handle opens. An operator
   // who upgraded the binary to 0.3.x but whose audit DB is still 0.2-shape
   // would otherwise hit `no such column: agent_name` on the very first
@@ -109,16 +116,16 @@ function openDb(): Database {
   // with `PRAGMA query_only` so any mutating SQL would error out.
   // create:false surfaces a friendly error instead of silently creating an
   // empty DB on a typo'd DB_PATH.
-  let db: Database;
+  let db: SqliteDatabase;
   try {
-    db = new Database(dbPath(), { readwrite: true, create: false });
+    db = openSqlite(dbPath(), { create: false });
   } catch (err) {
     process.stderr.write(
       `midplane audit: cannot open ${dbPath()}: ${(err as Error).message}\n`,
     );
     process.exit(1);
   }
-  db.run("PRAGMA query_only = 1");
+  db.exec("PRAGMA query_only = 1");
   return db;
 }
 
@@ -196,7 +203,7 @@ async function tail(args: string[]): Promise<void> {
   let cursor = 0;
   if (backfill > 0) {
     const recent = db
-      .query<RawRow, [number]>(
+      .prepare<RawRow, [number]>(
         `SELECT ${SELECT_COLS} FROM audit_events ORDER BY rowid DESC LIMIT ?`,
       )
       .all(backfill)
@@ -217,17 +224,17 @@ async function tail(args: string[]): Promise<void> {
   // table on the first poll.
   if (cursor === 0) {
     const maxRow = db
-      .query<{ rowid: number | null }, []>(
+      .prepare<{ rowid: number | null }, []>(
         `SELECT MAX(rowid) AS rowid FROM audit_events`,
       )
       .get();
     cursor = maxRow?.rowid ?? 0;
   }
 
-  const next = db.query<RawRow, [number]>(
+  const next = db.prepare<RawRow, [number]>(
     `SELECT ${SELECT_COLS} FROM audit_events WHERE rowid > ? ORDER BY rowid`,
   );
-  const maxRowid = db.query<{ m: number | null }, []>(
+  const maxRowid = db.prepare<{ m: number | null }, []>(
     `SELECT MAX(rowid) AS m FROM audit_events`,
   );
 
@@ -253,7 +260,7 @@ async function tail(args: string[]): Promise<void> {
       emit(r);
       cursor = r.rowid;
     }
-    await Bun.sleep(TAIL_POLL_MS);
+    await sleep(TAIL_POLL_MS);
   }
 }
 
@@ -277,7 +284,7 @@ async function since(args: string[]): Promise<void> {
   // iterate(), not all(): `since 7d` on a busy install can span millions of
   // rows whose payloads carry up-to-1MiB sql_raw — materializing the window
   // before emitting is an OOM, and the output is line-oriented anyway.
-  const stmt = db.query<RawRow, [number]>(
+  const stmt = db.prepare<RawRow, [number]>(
     `SELECT ${SELECT_COLS} FROM audit_events WHERE ts >= ? ORDER BY ts`,
   );
   for (const r of stmt.iterate(cutoff)) emit(r);
@@ -316,7 +323,7 @@ async function denies(args: string[]): Promise<void> {
   // The query keeps the LATEST `limit` denials; the reverse puts oldest
   // first so the newest denial lands at the bottom of the terminal.
   const rows = db
-    .query<RawRow, [number, number]>(
+    .prepare<RawRow, [number, number]>(
       `SELECT ${SELECT_COLS} FROM audit_events
        WHERE ts >= ?
          AND event_type = 'DECIDED'
@@ -332,7 +339,7 @@ async function denies(args: string[]): Promise<void> {
     const chunk = qids.slice(i, i + ATTEMPTED_FETCH_CHUNK);
     const placeholders = chunk.map(() => "?").join(",");
     const attempted = db
-      .query<{ query_id: string; payload: string }, string[]>(
+      .prepare<{ query_id: string; payload: string }, string[]>(
         `SELECT query_id, payload FROM audit_events
          WHERE event_type = 'ATTEMPTED' AND query_id IN (${placeholders})`,
       )
@@ -411,19 +418,19 @@ async function show(args: string[]): Promise<void> {
   const db = openDb();
 
   let rows = db
-    .query<RawRow, [string]>(
+    .prepare<RawRow, [string]>(
       `SELECT ${SELECT_COLS} FROM audit_events WHERE query_id = ? ORDER BY rowid`,
     )
     .all(target);
   if (rows.length === 0) {
     const byEventId = db
-      .query<{ query_id: string }, [string]>(
+      .prepare<{ query_id: string }, [string]>(
         `SELECT query_id FROM audit_events WHERE id = ?`,
       )
       .get(target);
     if (byEventId) {
       rows = db
-        .query<RawRow, [string]>(
+        .prepare<RawRow, [string]>(
           `SELECT ${SELECT_COLS} FROM audit_events WHERE query_id = ? ORDER BY rowid`,
         )
         .all(byEventId.query_id);
@@ -487,14 +494,14 @@ async function stats(args: string[]): Promise<void> {
   const db = openDb();
 
   const totals = db
-    .query<StatsRow, [number]>(
+    .prepare<StatsRow, [number]>(
       `SELECT event_type AS k, COUNT(*) AS n FROM audit_events
        WHERE ts >= ? GROUP BY event_type ORDER BY n DESC`,
     )
     .all(cutoff);
 
   const denyByRule = db
-    .query<StatsRow, [number]>(
+    .prepare<StatsRow, [number]>(
       `SELECT json_extract(payload, '$.policy_rule') AS k, COUNT(*) AS n
        FROM audit_events
        WHERE ts >= ?
@@ -505,7 +512,7 @@ async function stats(args: string[]): Promise<void> {
     .all(cutoff);
 
   const allowByStmt = db
-    .query<StatsRow, [number]>(
+    .prepare<StatsRow, [number]>(
       `SELECT json_extract(payload, '$.statement_type') AS k, COUNT(*) AS n
        FROM audit_events
        WHERE ts >= ?
@@ -519,7 +526,7 @@ async function stats(args: string[]): Promise<void> {
   // out the top-N. Operators digging into a specific agent can filter
   // further with `audit since` + jq.
   const byAgent = db
-    .query<StatsRow, [number]>(
+    .prepare<StatsRow, [number]>(
       `SELECT COALESCE(agent_name, '<anon>') AS k, COUNT(DISTINCT query_id) AS n
        FROM audit_events WHERE ts >= ? GROUP BY k ORDER BY n DESC LIMIT 10`,
     )

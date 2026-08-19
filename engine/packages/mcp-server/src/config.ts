@@ -15,7 +15,9 @@
 // legacy shape and see an identical MCP tool surface.
 
 import { z } from "zod";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import yaml from "js-yaml";
 import {
   PSEUDONYMIZE_KINDS,
@@ -26,10 +28,54 @@ import {
 export const TransportSchema = z.enum(["stdio", "http"]);
 export type Transport = z.infer<typeof TransportSchema>;
 
+/**
+ * `midplane server --stdio` / `--http` → a transport, or undefined when neither
+ * flag is present (leaving MIDPLANE_TRANSPORT, then the schema default, to
+ * decide). Throws when both are given.
+ *
+ * The transport used to be env-only, which is right for a container and wrong
+ * for the way an MCP client launches a server: a client config is a command
+ * line plus an env block, and every one of them writes the command first.
+ * `npx -y midplane server --stdio` is one copy-pasteable token; the env-var
+ * form needs a second field the user has to know exists.
+ */
+export function transportFromFlags(
+  flags: Record<string, string>,
+): Transport | undefined {
+  const stdio = flags.stdio === "true";
+  const http = flags.http === "true";
+  if (stdio && http) {
+    throw new Error("--stdio and --http are mutually exclusive");
+  }
+  if (stdio) return "stdio";
+  if (http) return "http";
+  return undefined;
+}
+
 // Canonical default port — exported so the CLI subcommands' "where is the
 // server" fallbacks (query/doctor/policy test --server) can never drift from
 // what the server actually binds.
 export const DEFAULT_PORT = 8080;
+
+// Where the audit log lands inside the container image.
+export const CONTAINER_AUDIT_DB_PATH = "/data/audit.db";
+
+/**
+ * Default DB_PATH. Exported so `midplane audit` reads the same file the server
+ * writes — two hard-coded defaults would silently diverge into "the log is
+ * empty" on the reader side.
+ *
+ * Every packaged deployment sets DB_PATH explicitly (the image's ENV, both Fly
+ * configs, and both spawners), so this is reached only by a bare local run:
+ * `npx midplane`, or `bun src/cli.ts` from a checkout. There /data is not
+ * writable — and on macOS not creatable — so fall back to the home directory.
+ * The container branch stays for a hand-rolled image that sets no DB_PATH.
+ */
+export function defaultAuditDbPath(): string {
+  return existsSync("/.dockerenv")
+    ? CONTAINER_AUDIT_DB_PATH
+    : join(homedir(), ".midplane", "audit.db");
+}
 
 // Env-var boolean. `"1"/"true"/"yes"/"on"` (case-insensitive) → true; everything
 // else (incl. `"0"`, `"false"`, unset) → false. z.coerce.boolean() is unsafe for
@@ -54,7 +100,7 @@ export const ConfigSchema = z.object({
   // (serves IPv6 + IPv4 on Linux where bindv6only=0). Kept as 0.0.0.0 globally
   // so a self-host on an IPv6-disabled host can't fail to boot.
   host: z.string().default("0.0.0.0"),
-  dbPath: z.string().default("/data/audit.db"),
+  dbPath: z.string().default(() => defaultAuditDbPath()),
   tenantId: z.string().default("__self_host__"),
   policyFile: z.string().optional(),
   transport: TransportSchema.default("http"),

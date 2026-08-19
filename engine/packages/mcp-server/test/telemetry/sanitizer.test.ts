@@ -98,3 +98,56 @@ describe("sanitizer", () => {
     expect(sanitize({ ...validStartup, version: "0.2.0+build.42" }).ok).toBe(true);
   });
 });
+
+// The runtime identifier is a two-shape field: engines predating the Node
+// consumer path send `bun_version`, current ones send `runtime` +
+// `runtime_version`. Both shapes reach the proxy — the old ones for as long as
+// those installs run — so both have to validate, and an event naming no runtime
+// at all must not.
+describe("startup runtime identification", () => {
+  const { bun_version: _dropped, ...withoutRuntime } = validStartup;
+
+  test("current shape (runtime + runtime_version) validates", () => {
+    expect(
+      sanitize({ ...withoutRuntime, runtime: "node", runtime_version: "24.4.0" })
+        .ok,
+    ).toBe(true);
+    expect(
+      sanitize({ ...withoutRuntime, runtime: "bun", runtime_version: "1.3.10" })
+        .ok,
+    ).toBe(true);
+  });
+
+  test("pre-Node-path shape (bun_version alone) still validates", () => {
+    expect(sanitize(validStartup).ok).toBe(true);
+  });
+
+  test("an event naming no runtime is rejected", () => {
+    const r = sanitize(withoutRuntime);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("schema_violation");
+  });
+
+  test("runtime_version without runtime is rejected", () => {
+    expect(sanitize({ ...withoutRuntime, runtime_version: "24.4.0" }).ok).toBe(
+      false,
+    );
+  });
+
+  test("an unknown runtime name is rejected", () => {
+    expect(
+      sanitize({ ...withoutRuntime, runtime: "deno", runtime_version: "2.0.0" })
+        .ok,
+    ).toBe(false);
+  });
+
+  test("forbidden substring in runtime_version is blocked", () => {
+    expect(
+      sanitize({
+        ...withoutRuntime,
+        runtime: "node",
+        runtime_version: "24.4.0+DROP",
+      }).ok,
+    ).toBe(false);
+  });
+});

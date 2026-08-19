@@ -54,20 +54,58 @@ A `delete all users` prompt to Claude Code, against a Midplane-fronted DB:
 
 ## Quick start
 
-Start hosted, or run it yourself — same open-core codebase. Step-by-step guides are
-at **[midplane.ai/docs](https://midplane.ai/docs)**.
+Three ways in — same open-core codebase behind all of them. Step-by-step guides
+are at **[midplane.ai/docs](https://midplane.ai/docs)**.
 
 ### Managed cloud
 
 The fastest way to try Midplane: **[sign up at app.midplane.ai](https://app.midplane.ai)**
-and go from zero to your first guarded query in a couple of minutes. Nothing to
-install, multi-region, fully supported.
+and go from zero to your first guarded query in a couple of minutes. Dashboard,
+policy editor, hosted audit log, agent-token issuance. Nothing to install,
+multi-region, fully supported.
 
-### Self-host
+### Guard one database yourself
 
-The complete single-tenant app — dashboard, policy editor, audit log, agent-token
-issuance — keyless and uncapped, on your own Postgres + a local engine. Docker is
-the only prerequisite:
+Put the MIT engine in front of a Postgres database and point an agent at it.
+Nothing to install — `npx` ships with Node and fetches the
+[`midplane`](https://www.npmjs.com/package/midplane) package on first run
+(needs Node 22.16+; on anything older it says so and exits). Add this to your
+MCP client's config (Claude Code, Claude Desktop, Cursor — they all take this
+shape):
+
+```json
+{
+  "mcpServers": {
+    "midplane": {
+      "command": "npx",
+      "args": ["-y", "midplane", "server", "--stdio"],
+      "env": { "DATABASE_URL": "postgres://user:pass@host:5432/db" }
+    }
+  }
+}
+```
+
+Keep the connection string in that `env` block rather than on a command line,
+where it would leak to `ps aux` and your shell history. The block still lands in
+a plaintext config file, so give Midplane its own least-privilege Postgres role:
+it governs which SQL runs, not what the role underneath it can reach.
+
+That config is already the safe default: reads allowed, writes and DDL denied,
+every query audited to `~/.midplane/audit.db`. Read the log back with
+`npx midplane audit denies`. To open specific tables up, generate a policy with
+`npx midplane init` — it introspects your schema over a read-only connection,
+suggests a tenant column, and writes a validated `midplane.policy.yaml`.
+
+> For a CI pipeline or a long-lived sidecar, the same engine ships as a
+> self-contained image with no Node in it — `midplane/midplane:0.19.0`, serving
+> Streamable HTTP instead of stdio.
+> [Setup](https://midplane.ai/docs) · [`engine/README.md`](./engine/README.md).
+
+### Self-host the whole app
+
+The complete single-tenant product — dashboard, policy editor, audit log,
+agent-token issuance — keyless and uncapped, on your own Postgres. Docker is the
+only prerequisite:
 
 ```bash
 git clone https://github.com/midplaneai/midplane && cd midplane
@@ -81,10 +119,6 @@ email+password signup becomes the owner.
 Running from source, the single-image deploy, the engine-spawn topology, and the
 full walkthrough: [midplane.ai/docs](https://midplane.ai/docs) (in-repo:
 [`SELF_HOST.md`](./SELF_HOST.md)).
-
-> The MIT query-path engine also ships as a standalone Docker image
-> (`midplane/midplane`) — for guarding a single database or a CI pipeline without
-> the dashboard. Setup at [midplane.ai/docs](https://midplane.ai/docs).
 
 ## Open core
 
