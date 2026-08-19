@@ -31,7 +31,6 @@
     "LICENSE"
   ],
   "publishConfig": {
-    "access": "public",
     "provenance": true
   },
   "scripts": {
