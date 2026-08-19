@@ -71,9 +71,11 @@ export async function mcpQuery(
         // Re-runs THIS build's `midplane server` — see selfServerSpawn(), which
         // owns the compiled-binary / bun-source / node-dist differences. Full
         // env passes through (the SDK's default env allowlist would drop
-        // DATABASE_URL) — EXCEPT LOG_LEVEL, which is forced silent
-        // unconditionally: pino writes to stdout, and stdout is the MCP channel
-        // here. An inherited LOG_LEVEL=info would corrupt the JSON-RPC stream.
+        // DATABASE_URL) — EXCEPT LOG_LEVEL, forced silent so the child's ops
+        // logs don't interleave with this command's own output on the operator's
+        // terminal. (Protocol safety no longer depends on it: logger.ts writes
+        // to stderr, so an inherited LOG_LEVEL=info can't corrupt the JSON-RPC
+        // stream on stdout.)
         ...selfServerSpawn(),
         env: {
           ...cleanEnv(),

@@ -69,10 +69,20 @@ const transport = new StdioClientTransport({
     // The point is to exercise the shipped default policy: reads allowed,
     // writes and DDL denied, with no policy file at all.
     MIDPLANE_TELEMETRY: "0",
-    LOG_LEVEL: "silent",
+    // Deliberately NOT setting LOG_LEVEL. This env block has to match the
+    // README's client config exactly, because a smoke test that quiets the
+    // server is testing a configuration no user runs. Setting LOG_LEVEL=silent
+    // here previously hid a real protocol bug: pino defaulted to info on
+    // stdout, which under stdio is the MCP channel itself.
   },
   stderr: "pipe",
 });
+
+// Any frame on stdout that isn't a JSON-RPC message lands here. The SDK
+// surfaces it and keeps going, so without this hook a polluted stream looks
+// like a clean run.
+const protocolErrors = [];
+transport.onerror = (err) => protocolErrors.push(String(err?.message ?? err));
 
 let serverStderr = "";
 await client.connect(transport);
@@ -137,8 +147,64 @@ try {
   const { rows } = await verify.query("SELECT count(*)::int AS n FROM smoke_widgets");
   await verify.end();
   check("denied DELETE did not execute", rows[0].n === 2, `${rows[0].n} rows`);
+  check(
+    "no protocol errors on the stdio stream",
+    protocolErrors.length === 0,
+    protocolErrors[0]?.slice(0, 120) ?? "",
+  );
 } finally {
   await client.close().catch(() => {});
+}
+
+// The direct check, independent of how forgiving the SDK happens to be: spawn
+// the bin exactly as the README's config does and read raw stdout. Under stdio
+// that pipe is the MCP channel, so EVERY line on it must be a JSON-RPC message
+// — an ops log, a stray console.log, or a dependency's deprecation notice all
+// break the protocol the same way.
+{
+  const raw = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [BIN, "server", "--stdio"], {
+      env: {
+        PATH: process.env.PATH,
+        DATABASE_URL: DSN,
+        DB_PATH: dbPath,
+        MIDPLANE_TELEMETRY: "0",
+      },
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.on("error", reject);
+    child.stdin.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "smoke", version: "0" },
+        },
+      }) + "\n",
+    );
+    setTimeout(() => {
+      child.kill();
+      resolve(out);
+    }, 5000);
+  });
+
+  const lines = raw.split("\n").filter(Boolean);
+  const notJsonRpc = lines.filter((l) => {
+    try {
+      return JSON.parse(l).jsonrpc !== "2.0";
+    } catch {
+      return true;
+    }
+  });
+  check(
+    "stdout carries only JSON-RPC under the stdio transport",
+    lines.length > 0 && notJsonRpc.length === 0,
+    notJsonRpc.length ? `${notJsonRpc.length} bad line(s): ${notJsonRpc[0].slice(0, 100)}` : `${lines.length} lines`,
+  );
 }
 
 // ── the audit log, read back through the shipped CLI ────────────────────────
