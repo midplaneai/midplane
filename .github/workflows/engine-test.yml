@@ -148,6 +148,22 @@ jobs:
         env:
           SMOKE_DATABASE_URL: postgres://postgres:probe@127.0.0.1:5432/probe
         run: node scripts/smoke-npm-package.mjs
+      # npm normalizes the manifest it uploads, and it does that SILENTLY except
+      # for a warning. A `./` prefix on bin made npm 11 report
+      # `"bin[midplane]" script name dist/cli.js was invalid and removed` — a
+      # warning, not an error, so the publish would have succeeded and shipped a
+      # package whose `npx midplane` did nothing. `npm pack` does not reproduce
+      # it (the tarball keeps the bin), so assert on the publish path.
+      - name: Manifest survives npm's publish-time normalization
+        working-directory: engine/packages/mcp-server
+        run: |
+          out="$(npm publish --dry-run 2>&1)"
+          echo "$out"
+          if grep -qi "auto-corrected" <<<"$out"; then
+            echo "::error::npm rewrote package.json on publish — see the warnings above. Run 'npm pkg fix'."
+            exit 1
+          fi
+
       # `npm pack` resolves the "files" list and bin the same way `npm publish`
       # will, so a tarball missing dist/ or a bin pointing at nothing fails here
       # rather than on a user's first `npx`.
