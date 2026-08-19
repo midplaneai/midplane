@@ -1,0 +1,87 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.midplane/midplane",
+  "title": "Midplane",
+  "description": "Safe-by-default SQL guardrails for AI agents: AST-checked queries, per-table policy, audit log.",
+  "version": "0.19.0",
+  "websiteUrl": "https://midplane.ai/docs",
+  "repository": {
+    "url": "https://github.com/midplaneai/midplane",
+    "source": "github",
+    "subfolder": "engine/packages/mcp-server"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "midplane",
+      "version": "0.19.0",
+      "runtimeHint": "npx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "valueHint": "subcommand", "value": "server" },
+        { "type": "named", "name": "--stdio" }
+      ],
+      "environmentVariables": [
+        {
+          "name": "DATABASE_URL",
+          "description": "Postgres connection string the agent's queries run against. Give it a least-privilege role: Midplane constrains what SQL is allowed, it does not widen or narrow what the role itself can reach.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "MIDPLANE_POLICY_FILE",
+          "description": "Path to a policy YAML granting per-table read/read_write access, tenant scoping, and column masking. Omit for the safe default: reads allowed, writes and DDL denied. Generate one with `npx midplane init`.",
+          "isRequired": false,
+          "format": "filepath"
+        },
+        {
+          "name": "DB_PATH",
+          "description": "Where the local SQLite audit log is written. Defaults to ~/.midplane/audit.db; read it back with `midplane audit denies`.",
+          "isRequired": false,
+          "format": "filepath"
+        },
+        {
+          "name": "MIDPLANE_TELEMETRY",
+          "description": "Set to 0 to disable anonymous usage telemetry (DO_NOT_TRACK=1 also works). Never includes SQL, table or column names, or identifiers.",
+          "isRequired": false,
+          "default": "1",
+          "choices": ["1", "0", "debug"]
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "registryBaseUrl": "https://docker.io",
+      "identifier": "midplane/midplane",
+      "version": "0.19.0",
+      "runtimeHint": "docker",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8080/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "DATABASE_URL",
+          "description": "Postgres connection string the agent's queries run against. Pass it with --env-file, never with an inline -e: a DSN on the docker command line leaks the password to `ps aux` and your shell history.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "MIDPLANE_POLICY_FILE",
+          "description": "Path (inside the container) to a policy YAML granting per-table read/read_write access, tenant scoping, and column masking. Omit for the safe default: reads allowed, writes and DDL denied.",
+          "isRequired": false,
+          "format": "filepath"
+        },
+        {
+          "name": "PORT",
+          "description": "Port the Streamable HTTP transport binds. Must match the url above if changed.",
+          "isRequired": false,
+          "default": "8080"
+        }
+      ]
+    }
+  ]
+}

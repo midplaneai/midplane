@@ -20,6 +20,9 @@ export default defineConfig({
       "packages/**/test/**/*.test.ts",
       "apps/**/test/**/*.test.ts",
       "infra/**/test/**/*.test.ts",
+      // Repo-level CI guards (scripts/check-*.ts). They gate releases, so the
+      // logic inside them is worth pinning like any other code.
+      "scripts/test/**/*.test.ts",
     ],
     // engine/** runs under `bun test` (bun:test API), NOT vitest. The include
     // globs above already scope to packages|apps|infra, but exclude engine/**
