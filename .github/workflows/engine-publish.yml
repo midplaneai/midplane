@@ -175,9 +175,21 @@ jobs:
         working-directory: engine/packages/mcp-server
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # No --access flag. `midplane` is unscoped, and unscoped packages are
+        # always public (private requires a scope and a paid plan), so
+        # `--access public` was a no-op that asserted the default.
+        #
+        # It stopped being free, though: as of early August 2026, npm tokens
+        # with bypass-2FA can no longer perform account- and package-level
+        # administrative operations, and "changing package access" is on that
+        # list (https://gh.io/npm-gat-bypass2fa-deprecation). Direct publishing
+        # is NOT restricted until around January 2027 — so asserting the access
+        # level was plausibly the only part of this command the token is no
+        # longer allowed to do.
+        #
         # --provenance is also set in package.json publishConfig; passing it
         # here makes the requirement visible at the call site.
-        run: npm publish --provenance --access public
+        run: npm publish --provenance
 
   # The official MCP registry entry. Metadata only — it points at the npm
   # package and the image published above, and the registry verifies both

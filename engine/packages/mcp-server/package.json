@@ -21,9 +21,9 @@
   "license": "MIT",
   "type": "module",
   "mcpName": "ai.midplane/midplane",
-  "main": "./dist/cli.js",
+  "main": "dist/cli.js",
   "bin": {
-    "midplane": "./dist/cli.js"
+    "midplane": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -31,7 +31,6 @@
     "LICENSE"
   ],
   "publishConfig": {
-    "access": "public",
     "provenance": true
   },
   "scripts": {
