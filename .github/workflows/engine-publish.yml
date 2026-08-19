@@ -19,17 +19,38 @@ name: engine-publish
 # merge keeps the two pipelines distinct.
 #
 # One-time setup this workflow assumes:
-#   NPM_TOKEN                      npm automation token with publish rights on
-#                                  the `midplane` package
-#   MCP_REGISTRY_DNS_PRIVATE_KEY   Ed25519 private key (base64) whose public
-#                                  half is published as a TXT record at the
-#                                  midplane.ai APEX:
+#   NPM_TOKEN                      npm token with publish rights on `midplane`.
+#                                  Removable once trusted publishing (OIDC) is
+#                                  configured — see the npm job below.
+#   MCP_REGISTRY_DNS_PRIVATE_KEY   Ed25519 private key, HEX (64 chars), whose
+#                                  public half is published as a TXT record at
+#                                  the midplane.ai APEX:
 #                                    midplane.ai. IN TXT "v=MCPv1; k=ed25519; p=<pubkey>"
 #                                  That record is what entitles us to the
-#                                  `ai.midplane/*` namespace. Generate with:
+#                                  `ai.midplane/*` namespace.
+#
+#                                  THE TWO HALVES USE DIFFERENT ENCODINGS. The
+#                                  public half is base64 because that is what
+#                                  the TXT record carries; the private half is
+#                                  hex because that is what `mcp-publisher login
+#                                  dns --private-key` parses. Passing base64
+#                                  there fails with
+#                                  "invalid hex private key format".
+#
 #                                    openssl genpkey -algorithm Ed25519 -out key.pem
+#                                    # public  -> DNS TXT (base64, 44 chars)
 #                                    openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64
-#                                    openssl pkey -in key.pem -outform DER | tail -c 32 | base64
+#                                    # private -> this secret (hex, 64 chars)
+#                                    openssl pkey -in key.pem -outform DER | tail -c 32 | xxd -p -c 64
+#
+#                                  Confirm the pair before a release — deriving
+#                                  the public half from the private one must
+#                                  reproduce what DNS serves:
+#                                    { printf '302e020100300506032b657004220420' | xxd -r -p; \
+#                                      echo -n "$PRIV_HEX" | xxd -r -p; } \
+#                                      | openssl pkey -inform DER -pubout -outform DER \
+#                                      | tail -c 32 | base64
+#                                    dig +short TXT midplane.ai | tr -d '"' | sed -E 's/.*p=//'
 
 on:
   push:
