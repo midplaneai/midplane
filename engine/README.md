@@ -17,6 +17,24 @@ enforcement is identical everywhere. It also ships on its own as the
 
 ## Run it standalone
 
+Two packagings of the same engine. **npm** (stdio — how an MCP client launches a
+local server) needs no install at all; add this to your client's config:
+
+```json
+{
+  "mcpServers": {
+    "midplane": {
+      "command": "npx",
+      "args": ["-y", "midplane", "server", "--stdio"],
+      "env": { "DATABASE_URL": "postgres://user:pass@host:5432/db" }
+    }
+  }
+}
+```
+
+**Docker** (Streamable HTTP) is the self-contained image — no Node, no
+`node_modules` — for a CI pipeline or a long-lived sidecar:
+
 ```bash
 curl -O https://raw.githubusercontent.com/midplaneai/midplane/main/engine/.env.example
 mv .env.example .env   # set DATABASE_URL
@@ -26,8 +44,9 @@ docker run --env-file .env -p 8080:8080 -v midplane-audit:/data midplane/midplan
 The MCP endpoint comes up at `http://localhost:8080/mcp`; point your agent at it.
 Setup details are at [midplane.ai/docs](https://midplane.ai/docs).
 
-> **Never put credentials on the docker command line** — an inline `-e` DSN leaks
-> the password to `ps aux` and your shell history. Use `--env-file`.
+> **Never put credentials on a command line** — an inline DSN leaks the password
+> to `ps aux` and your shell history. Use `--env-file` for Docker, and the `env`
+> block for an MCP client config.
 
 ## Develop
 

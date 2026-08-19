@@ -17,10 +17,10 @@ Please do not open public issues for vulnerabilities. We treat security reports 
 
 In scope:
 - The engine (`@midplane/engine`) — parse, policy, audit, execute pipeline
-- The MCP server (`@midplane/mcp-server`)
-- The published Docker image (`midplane/midplane` on Docker Hub)
+- The MCP server and CLI, published to npm as [`midplane`](https://www.npmjs.com/package/midplane)
+- The published Docker image (`midplane/midplane` on Docker Hub and GHCR)
 
 Out of scope:
-- Third-party dependencies (libpg_query, MCP SDK, bun:sqlite, etc.) — please report upstream
+- Third-party dependencies (libpg_query, MCP SDK, the runtime's SQLite builtin, etc.) — please report upstream
 - The hosted product (`midplane.ai`) — covered by a separate disclosure policy
 - The customer's own database, network, or agent configuration

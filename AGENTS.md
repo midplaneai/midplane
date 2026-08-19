@@ -17,9 +17,18 @@ subtree.
   the control-plane vitest files). Engine governance lives under `engine/`
   (LICENSE, THREAT_MODEL.md, TELEMETRY.md, CONTRIBUTING.md, SECURITY.md).
 
-One root `bun.lock` covers everything (`linker = "hoisted"`). The engine image is
-a self-contained `bun build --compile` binary (`engine/docker/Dockerfile`, repo-root
-context) — no `node_modules` in the runtime image. CI: `engine-test.yml` /
+One root `bun.lock` covers everything (`linker = "hoisted"`). The engine ships two
+ways from one source tree: the image is a self-contained `bun build --compile`
+binary (`engine/docker/Dockerfile`, repo-root context, no `node_modules` in the
+runtime image), and the `midplane` npm package is a `--target=node` bundle
+(`engine/packages/mcp-server/scripts/build-npm.ts`). **The engine therefore has to
+run on both Bun and Node**: `bun:sqlite` and `node:sqlite` are reached only
+through `engine/packages/engine/src/audit/sqlite-driver.ts`, whose specifier is
+computed so neither bundler sees the other runtime's builtin, and no other Bun
+global (`Bun.*`, `import.meta.dir`, `import.meta.main`) may reappear in
+`packages/*/src`. `bun test` cannot catch a violation — the `node-compat` CI job
+builds the package and drives the real bin under Node against a real Postgres
+(`scripts/smoke-npm-package.mjs`), which is what actually pins this. CI: `engine-test.yml` /
 `engine-publish.yml` (tags `engine-v*`) are separate from the control-plane
 `deploy-fly.yml`. The engine still ships as its own image, so the version pin
 persists — see "OSS image version pin sites" below.
@@ -92,6 +101,25 @@ check. Bumping the engine:
 1. Edit `OSS_ENGINE_IMAGE` in `packages/router/src/oss-image.ts`.
 2. Run `bun scripts/check-image-pin.ts` — it fails and lists every config/doc
    site that still disagrees. Update those, re-run until green.
+3. Add a `engine/CHANGELOG.md` entry, then push the `engine-v<X.Y.Z>` tag.
+4. After the image publishes, re-resolve the digest in `fly-eu.toml` /
+   `fly-us.toml` in a follow-up commit (the tag moves first, the digest can
+   only be read once the image exists — the drift check validates the tag part
+   only, for exactly this reason).
+
+One tag now cuts **three** artifacts, in this order (`engine-publish.yml`, each
+job gated on the one before): the Docker image, the `midplane` npm package, and
+the `ai.midplane/midplane` entry in the official MCP registry. The version is
+therefore the same in four places, and `check-image-pin.ts` enforces it:
+`OSS_ENGINE_IMAGE`, `engine/packages/mcp-server/package.json`, and both
+`version` and `packages[].version` in the repo-root `server.json`. Two of the
+three artifacts are immutable once published — do not publish an npm version
+whose contents differ from the image of the same number.
+
+The same check also holds the registry's two ownership proofs to `server.json`'s
+`name`: `mcpName` in the npm manifest, and the
+`io.modelcontextprotocol.server.name` LABEL in `engine/docker/Dockerfile`.
+Changing the server name means changing all three together.
 
 - TS (import the constant — do NOT hand-edit): `spawner-docker.ts`,
   `spawner-fly.ts`, and the current-pin references in
