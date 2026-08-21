@@ -72,6 +72,14 @@ services:
       # preview. Passed through here so setting it in the env file actually
       # reaches the container — required once any column mask is declared.
       MIDPLANE_MASK_SALT_MASTER: ${MIDPLANE_MASK_SALT_MASTER:-}
+      # Optional write approvals. Both or neither: the secret keys the per-project
+      # gate token, the origin is where the engine sends a held write (and where
+      # the approver's link points). Empty by default, which is byte-identical to
+      # not passing them — approvals stay off. Self-host process-spawns the engine
+      # inside this container, so localhost resolves correctly and no separate
+      # callback origin is needed.
+      MIDPLANE_APPROVAL_SECRET: ${MIDPLANE_APPROVAL_SECRET:-}
+      MIDPLANE_APP_ORIGIN: ${MIDPLANE_APP_ORIGIN:-}
     healthcheck:
       # bun is on PATH in the image; any HTTP response (even a redirect) means the
       # server is listening. Generous start_period covers migrations + Next boot.

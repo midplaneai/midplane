@@ -9,6 +9,11 @@ same codebase is the multi-tenant cloud, byte-for-byte unchanged.
 
 - **Uncapped core.** Unlimited connections, tokens, and seats; full audit
   history. Usage caps are a cloud-billing construct — your infra, your rules.
+- **The whole query path.** The same engine the cloud spawns: AST policy,
+  guardrails, column masking, write approvals, audit. Masking and approvals are
+  each opt-in on one secret — `MIDPLANE_MASK_SALT_MASTER` for masking,
+  `MIDPLANE_APPROVAL_SECRET` + `MIDPLANE_APP_ORIGIN` for approvals — both
+  documented in `.env.self-host.example` and unset by default.
 - **Single-owner auth.** The first email+password signup becomes the owner;
   later public signups are rejected. (Teammate invites are a planned follow-up.)
 - **One database, one region.** No region picker, no subdomains, no cross-region

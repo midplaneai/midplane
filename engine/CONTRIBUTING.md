@@ -49,4 +49,4 @@ The project is and stays MIT. By contributing you agree your contribution is lic
 
 ## Scope guidance
 
-Some things are deliberately out of scope for OSS — approval workflows (Slack-bot, web queue, escalation) ship in Midplane Cloud, not here. Other roadmap items (function-side-effects denylist, session-scope tracking, column-level reads) belong in OSS but are deferred — see the [Roadmap](./README.md#roadmap). PRs that add those should reference the roadmap entry so we can stage them; smaller fixes inside the current surface are easier to land.
+The engine owns the *decision* seam, not the human workflow on top of it. `approvals` here decides whether a write must be asked about and calls a gate over HTTP; the queue, the notifications, and the reviewer UI live in the control plane (`apps/web` — also MIT, also self-hostable), so send those PRs there. Other roadmap items (function-side-effects denylist, session-scope tracking, column-level read denial) belong in the engine but are deferred — open an issue referencing one so we can stage it. Smaller fixes inside the current surface are easier to land.

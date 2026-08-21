@@ -1,14 +1,16 @@
 # Policy rules
 
-OSS Midplane ships five policy rules. The `table_access` and `guardrails`
-rules are YAML-driven; the rest are hardcoded. Approvals (Slack-bot, web
-queue, escalation) are a Cloud feature, not OSS.
+Midplane ships five policy rules. The `table_access` and `guardrails` rules are
+YAML-driven; the rest are hardcoded. Two further YAML sections — `column_masks`
+and `approvals` — aren't rules: they shape or hold a statement the rules have
+already allowed. Both are documented at the end.
 
 Evaluation order (first DENY wins): `parse_error` → `multi_statement` →
 `table_access` → `tenant_scope` → `dangerous_statement`. The guardrails run
 **last**, so when a more-specific rule would also deny, that rule's reason
 surfaces; `dangerous_statement` only adds new denials for statements every
-other rule permitted.
+other rule permitted. Masking and approvals run after all of them, on the
+ALLOW path only.
 
 ## `table_access` (default: ON)
 
@@ -79,10 +81,10 @@ DELETE FROM anywhere                                         -- DENY  (no table 
 SELECT * FROM anywhere                                       -- ALLOW (default = read)
 ```
 
-> **Approvals don't ship in OSS.** OSS denial returns a structured MCP
-> error; the agent reads the reason and pivots. Slack-bot / web-queue
-> approval workflows are a Midplane Cloud feature on top of the same
-> engine — same policy YAML, plus humans in the loop.
+> **A denial is final.** It returns a structured MCP error; the agent reads
+> the reason and pivots. `approvals` (below) is not an escape hatch from
+> this — it holds writes the policy has already **allowed**, so nothing a
+> rule denied can be approved into running.
 
 ## `multi_statement` (default: ON)
 
@@ -219,10 +221,96 @@ omitting `guardrails` from a swap body leaves the current posture untouched.
 
 Denies any input that fails to parse. `libpg_query` is the parser. Anything that looks like a string but isn't valid Postgres SQL is denied.
 
-## What isn't a policy rule (OSS)
+## `column_masks` (default: OFF)
 
-- "Approval flow" — humans-in-the-loop approvals are a Midplane Cloud feature; OSS Midplane is policy-as-YAML only.
+Not a deny rule — a rewrite. Naming a column here never changes *whether* a
+query is allowed, only what comes back. A masked column must still be readable;
+`table_access` decides that independently, and masking presupposes the read.
+
+```yaml
+column_masks:
+  "public.users":
+    email:       full-redact
+    ssn:         { t: partial, keepEnd: 4 }
+    signup_at:   { t: generalize, granularity: month }
+    customer_id: consistent-hash
+mask_source_rewrite: true
+requires_features: [column_masks, mask_source_rewrite]
+```
+
+Transforms: `full-redact` (→ `***`), `null-out` (SQL `NULL` keeping the
+column's declared type, so non-text PII masks without changing the wire type),
+`consistent-hash` (deterministic and salted — masked join keys still join),
+`partial` (`keepStart` / `keepEnd` / `glyph`), `generalize` (`year` | `month` |
+`day`, or a numeric bucket), `pseudonymize` (`kind`, from the dictionaries the
+engine ships), and `noise` (`ratio` in `(0, 1]`).
+
+**Salt required.** Deterministic transforms are keyed by `MIDPLANE_MASK_SALT`.
+The engine refuses to boot with masks and no salt rather than fall back to an
+unsalted — and therefore correlatable — hash.
+
+**Where the masking happens.** With `mask_source_rewrite: true` the engine
+rewrites the query's source relation, so the mask is applied *inside* the
+statement: joins, filters, and aggregates see masked values instead of raw
+ones. With it off, the post-execution masker transforms the result set on the
+way out, and can only prove provenance for plain column references — so any
+computed output (an aggregate included, even over an unmasked table) is
+rejected for that whole database. Source rewriting is what lets
+`SELECT count(*) …` coexist with masking, and the control plane turns it on for
+every database that declares masks. `MIDPLANE_MASK_SOURCE_REWRITE` sets the
+engine-wide default; the per-DB YAML key overrides it.
+
+**Fails closed either way.** Provenance the engine can't prove maps back to a
+known base column — views, computed expressions, whole-row serialization, a
+stale catalog — denies the whole result set rather than risk emitting an
+unmasked value. Under source rewrite, the same posture covers functions: every
+function a masked statement invokes must be a vetted mask-safe builtin, so a
+call that reads a masked table through a string the parser can't see
+(`query_to_xml`, `dblink`, an FDW, a `SECURITY DEFINER` UDF) is denied instead
+of returning raw PII. `information_schema` / `pg_catalog` are exempt (no
+maskable customer row values), mirroring the `table_access` / `tenant_scope`
+carve-outs.
+
+## `approvals` (default: OFF)
+
+Not a deny rule either — a hold. The stage runs only **after** the rules above
+have returned ALLOW, so approvals sit under the policy, never over it: there is
+no path from denied to approved.
+
+```yaml
+approvals:
+  writes: true                # the umbrella — hold every write class
+  # or per class (then declare requires_features: [write_rules]):
+  # row_changes:        true  # INSERT / UPDATE / DELETE with a WHERE
+  # whole_table_writes: true  # unqualified DELETE / UPDATE
+  # schema_changes:     false # DDL
+```
+
+Any class key present overrides the umbrella for that class. The umbrella alone
+needs no feature token; a policy that holds only *some* classes must declare
+`requires_features: [write_rules]`, because an engine predating the split would
+strip the class keys and resolve to holding nothing.
+
+**A gate is required.** The engine decides *whether* to ask; the control plane
+decides the answer. Wire `MIDPLANE_APPROVAL_URL` + `MIDPLANE_APPROVAL_TOKEN`
+(the app serves the gate, cloud or self-hosted). With approvals on and no gate
+the server refuses to boot, rather than hold every write against something that
+will never answer.
+
+**What the agent sees.** A held write returns as pending, with an id and an
+expiry, and the agent is offered a `check_approval` tool to collect the ruling.
+The grant is bound to that exact statement and consumed when it runs, so
+re-running asks again instead of silently repeating the write. A denial carries
+the reviewer's note back to the agent — "use the refunds table instead" is worth
+far more than a bare refusal.
+
+Deliberately no row-count estimate. An earlier design routed on `EXPLAIN` row
+counts and needed a post-execution guard to contain an estimator that errs low
+by up to 400,000x; holding every write of a class has nothing to estimate.
+
+## What isn't a policy rule
+
 - "Limit row count" — `LIMIT` clause not enforced. Long-term roadmap.
 - "Match against a SQL pattern" — explicitly rejected. Regex-on-SQL is the anti-pattern Midplane fights.
-- "Approve based on time-of-day / business hours" — later roadmap.
-- "Prevent specific column reads" — later roadmap (fine-grained schema-aware policy).
+- "Approve based on time-of-day / business hours" — later roadmap. `approvals` holds by write class, not by clock.
+- "Prevent specific column reads" — later roadmap (fine-grained schema-aware policy). `column_masks` redacts a column's values; it doesn't deny the read.
