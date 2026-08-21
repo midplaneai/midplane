@@ -2,7 +2,7 @@
   "name": "@midplane/engine",
   "version": "0.9.0",
   "private": true,
-  "description": "Midplane engine: parse, policy, audit. Postgres.",
+  "description": "Midplane engine: parse, policy, mask, approve, audit. Postgres.",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",

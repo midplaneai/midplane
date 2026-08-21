@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "ai.midplane/midplane",
   "title": "Midplane",
-  "description": "Safe-by-default SQL guardrails for AI agents: AST-checked queries, per-table policy, audit log.",
+  "description": "Postgres MCP server for AI agents: PII masked at the source, AST policy, approvals, audit log.",
   "version": "0.19.0",
   "websiteUrl": "https://midplane.ai/docs",
   "repository": {

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Midplane — Safe Postgres for your team's AI agents.",
   description:
-    "Midplane is a thin access layer in front of your existing Postgres. Read-only by default. Writes opt-in per table. Every query logged.",
+    "Postgres MCP server for AI agents. Connect the tables you've been keeping off-limits: PII masked at the source, policy enforced on the SQL AST, writes held for human approval, everything audited.",
   metadataBase: new URL("https://midplane.ai"),
   icons: {
     icon: [
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Midplane — Safe Postgres for your team's AI agents.",
     description:
-      "A thin access layer that sits in front of your existing Postgres. Read-only by default. Writes opt-in per table. Every query logged.",
+      "Connect the tables you've been keeping off-limits. PII masked at the source, policy enforced on the SQL AST, writes held for human approval, everything audited.",
     url: "https://midplane.ai",
     siteName: "Midplane",
     images: [{ url: "/brand/og-card.svg", width: 1200, height: 630 }],
@@ -38,7 +38,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Midplane — Safe Postgres for your team's AI agents.",
     description:
-      "A thin access layer that sits in front of your existing Postgres. Read-only by default. Writes opt-in per table. Every query logged.",
+      "Connect the tables you've been keeping off-limits. PII masked at the source, policy enforced on the SQL AST, writes held for human approval, everything audited.",
     images: ["/brand/og-card.svg"],
   },
 };
