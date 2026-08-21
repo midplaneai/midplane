@@ -4,8 +4,12 @@ node_modules/
 .env.*.local
 .env.self-host
 !.env.self-host.example
+.envvars
 *.log
 .DS_Store
+
+# signing keys
+mcp-registry-key.pem
 
 # build outputs
 dist/
