@@ -1,6 +1,6 @@
 {
   "name": "midplane",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Safe-by-default SQL guardrails for AI agents. MCP server for Postgres over stdio + Streamable HTTP: parses every statement with a real SQL AST, enforces a per-table access policy, and audits before the query runs.",
   "keywords": [
     "mcp",
