@@ -95,10 +95,47 @@ describe("dangerous_function — filesystem / large object / admin", () => {
     ["current_setting can reach the mask salt", `SELECT current_setting('midplane.mask_salt')`],
     ["set_config", `SELECT set_config('search_path', 'evil', false)`],
     ["json_populate_record derefs a rowtype", `SELECT json_populate_record(null::secrets, '{}')`],
+    ["jsonb_populate_recordset derefs a rowtype", `SELECT jsonb_populate_recordset(null::secrets, '[]')`],
     ["pg_terminate_backend", `SELECT pg_terminate_backend(1234)`],
     ["pg_reload_conf", `SELECT pg_reload_conf()`],
   ])("denies %s", async (_label, sql) => {
     await expectDeny(sql);
+  });
+});
+
+describe("dangerous_function — sequence writes", () => {
+  // A write executed through a statement every other rule reads as a SELECT.
+  // Reachable in practice: an app role granted `ALL ON ALL SEQUENCES IN SCHEMA
+  // public` (a common setup-script grant) can call setval — verified against a
+  // live unprivileged role. Winding a sequence backwards makes every later
+  // INSERT collide on the primary key.
+  test("denies setval", async () => {
+    await expectDeny(`SELECT setval('users_id_seq', 1)`);
+  });
+
+  test("denies setval nested in an allowed-looking read", async () => {
+    await expectDeny(`SELECT id FROM orders WHERE id = setval('users_id_seq', 1)`);
+  });
+
+  test("the message explains the consequence, not just the name", async () => {
+    const r = await expectDeny(`SELECT setval('users_id_seq', 1)`);
+    expect(r.verdict.message).toContain("setval");
+    expect(r.verdict.message).toContain("primary-key collisions");
+  });
+
+  // nextval/currval/lastval are a DELIBERATE non-denial, pinned so the
+  // asymmetry is a considered line rather than something a later edit
+  // "completes" by accident. nextval is part of a normal write idiom
+  // (`INSERT INTO t (id) VALUES (nextval(...))`) already governed by
+  // table_access / block_dml; its standalone reach is burning sequence values,
+  // and sequence gaps are ordinary Postgres behavior.
+  test.each([
+    ["nextval", `SELECT nextval('users_id_seq')`],
+    ["nextval inside a legitimate INSERT", `INSERT INTO t (id, v) VALUES (nextval('t_id_seq'), 'x')`],
+    ["currval", `SELECT currval('users_id_seq')`],
+    ["lastval", `SELECT lastval()`],
+  ])("allows %s (deliberate)", async (_label, sql) => {
+    await expectAllow(sql);
   });
 });
 
@@ -210,6 +247,14 @@ describe("dangerous_function — does not over-refuse ordinary queries", () => {
     // Named similarly to denied entries but genuinely different functions.
     ["to_json is not denied here", `SELECT to_json(a) FROM t`],
     ["pg_typeof is introspection, not data reach", `SELECT pg_typeof(id) FROM users`],
+    // The *_to_record* family takes ONLY json — the output shape comes from the
+    // caller's explicit AS column-definition list, not from a table, so it
+    // dereferences nothing. Its rowtype-taking sibling json_populate_record IS
+    // denied above; these must not be swept in with it.
+    ["json_to_record", `SELECT * FROM json_to_record('{"a":1}') AS r(a int, b text)`],
+    ["jsonb_to_record", `SELECT * FROM jsonb_to_record('{"a":1}') AS r(a int)`],
+    ["json_to_recordset", `SELECT * FROM json_to_recordset('[{"a":1}]') AS r(a int)`],
+    ["jsonb_to_recordset", `SELECT * FROM jsonb_to_recordset('[{"a":1}]') AS r(a int)`],
   ])("allows %s", async (_label, sql) => {
     await expectAllow(sql);
   });

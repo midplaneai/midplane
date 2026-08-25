@@ -250,8 +250,24 @@ Denied families, and why each reaches outside its arguments:
 | Filesystem | `pg_read_file`, `pg_read_binary_file`, `pg_stat_file`, `pg_ls_dir`, `pg_ls_*` | Reads server-side files. |
 | Large object | `lo_import`, `lo_export`, `lo_get`, `lo_put`, `lo_unlink`, `lowrite` | Reaches the filesystem, or writes bulk bytes. `lo_export` writes to an arbitrary path. |
 | Session config | `current_setting`, `set_config` | Reads/writes GUCs, including the masking salt. |
-| Rowtype deref | `json_populate_record`, `jsonb_to_record`, … | The first argument is a rowtype deref, so Postgres reads that table's shape from the catalog rather than the passed value. |
+| Rowtype deref | `json_populate_record`, `jsonb_populate_recordset`, … | The first argument is a rowtype (`base anyelement`), so `json_populate_record(null::some_table, …)` makes Postgres read that table's shape from the catalog rather than the passed value. |
+| Sequence write | `setval` | Writes sequence state. Winding a sequence backwards makes every later `INSERT` collide on the primary key — a destructive write executed through a statement every other rule reads as a query. Reachable by an app role granted `ALL ON ALL SEQUENCES`. |
 | Admin | `pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `pg_promote` | Changes server state. |
+
+Two near-misses are **deliberately allowed**, because a denylist that over-reaches
+on an always-on rule costs more than it buys:
+
+- **`json_to_record` / `jsonb_to_record` and the `*_to_recordset` variants.**
+  Unlike their `*_populate_record*` siblings above, these take *only* JSON — the
+  output shape comes from the caller's explicit `AS r(a int, b text)` list, not
+  from a table. They dereference nothing, so denying them would block ordinary
+  JSON analytics for no security gain.
+- **`nextval` / `currval` / `lastval`.** `nextval` does mutate, but it is part of
+  a normal write idiom (`INSERT INTO t (id, v) VALUES (nextval('t_id_seq'), 'x')`)
+  that `table_access` / `block_dml` already governs, and its standalone reach is
+  burning sequence values — gaps are ordinary Postgres behavior, not a boundary
+  being crossed. The line is "arbitrary write with no read-path use" (`setval`),
+  not "touches state".
 
 Matching is on the **bare name, case-folded**, so neither qualification
 (`pg_catalog.pg_read_file`) nor case (`PG_READ_FILE`) evades it, and the walk

@@ -452,9 +452,12 @@ is unambiguously the denier.
 | `SELECT upper(pg_read_file('/etc/passwd'))`               | DENY    | Nesting does not evade — the inventory walk is fully recursive (the shape that bypassed pg_anon in GHSA-468r-mhwc-vxjc). |
 | `SELECT pg_catalog.pg_read_file('/etc/passwd')`           | DENY    | Qualification does not evade — matching is on the bare name. |
 | `SELECT PG_READ_FILE('/etc/passwd')`                      | DENY    | Case does not evade. |
+| `SELECT setval('users_id_seq', 1)`                        | DENY    | Writes sequence state through a statement every other rule reads as a query. Winding a sequence backwards collides every later `INSERT` on the primary key. Reachable by an app role granted `ALL ON ALL SEQUENCES` (verified live). |
 | `SELECT count(*), sum(total) FROM orders`                 | ALLOW   | Ordinary aggregates. The rule is a denylist, not an allowlist, so normal analytics is untouched. |
 | `SELECT my_business_helper(total) FROM orders`            | ALLOW   | A user-defined function is not denied by name. |
 | `SELECT generate_series(1, 10)`                           | ALLOW   | Set-returning builtins are fine — they reach no data outside their arguments. |
+| `SELECT * FROM json_to_record('{"a":1}') AS r(a int)`     | ALLOW   | Takes only JSON; the shape comes from the explicit `AS` list, not a table. Its rowtype-taking sibling `json_populate_record(null::t, …)` IS denied — the two must not be swept together. |
+| `SELECT nextval('users_id_seq')`                          | ALLOW   | Deliberate. Part of a normal write idiom already governed by `table_access` / `block_dml`; standalone reach is burning sequence values, and gaps are ordinary Postgres behavior. |
 
 Every case above was ALLOW in 0.19.0 and earlier, with the audit row recording
 `tables_touched: []`.

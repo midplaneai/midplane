@@ -213,10 +213,17 @@ export async function shadowScan(tx: TxClient, used: ShadowUsed): Promise<GateOu
 //         columns, not fn args). So the NAME-exclusion here is the sole defense against
 //         the whole-row form; do not add these without first adding an AST guard that
 //         rejects a composite/whole-row argument to a function while masking is active.
-//       - json_populate_record / jsonb_populate_record(set) / json_to_record /
-//         jsonb_to_record: the first argument is a rowtype/table-name DEREF
-//         (null::some_table) — Postgres reads that table's shape out of the catalog,
-//         bypassing the source wrap entirely. A REAL leak path. Exclude.
+//       - json_populate_record / jsonb_populate_record(set): the first argument is a
+//         rowtype/table-name DEREF (null::some_table) — Postgres reads that table's
+//         shape out of the catalog, bypassing the source wrap entirely. A REAL leak
+//         path. Exclude.
+//       - json_to_record / jsonb_to_record / the *_to_recordset variants: excluded
+//         too, but NOT for the deref reason above — their signature takes only json
+//         and the output shape comes from the caller's explicit AS column-definition
+//         list, so they deref nothing (checked against the catalog signatures). They
+//         stay out as SET-RETURNING (see that exclusion below), which is a deferral,
+//         not a leak. The always-on `dangerous_function` denylist deliberately does
+//         NOT list them for exactly this reason — do not "restore" them there.
 //       - hstore, xpath, table_to_xml/query_to_xml (already covered under dynamic SQL).
 //   SET-RETURNING: generate_series, unnest, regexp_matches / regexp_split_to_table,
 //     string_to_table, json*_array_elements* / json*_each* — safe-on-DATA (input is the

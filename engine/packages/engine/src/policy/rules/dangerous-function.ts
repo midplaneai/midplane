@@ -73,6 +73,7 @@ type DangerFamily =
   | "remote"
   | "session_config"
   | "rowtype_deref"
+  | "sequence_write"
   | "admin";
 
 // Executes a SQL string, or serializes a relation named by a string/regclass —
@@ -114,15 +115,40 @@ const REMOTE = [
 // and `set_config` can change execution context under the engine's feet.
 const SESSION_CONFIG = ["current_setting", "set_config"];
 
-// The first argument is a rowtype/table-name deref (`null::some_table`), so
-// Postgres reads that table's shape from the catalog rather than the passed
-// value. Called out as a REAL leak path in mask-safety.ts's exclusions.
+// The `*_populate_record*` family takes a rowtype as its FIRST argument
+// (`base anyelement`), so `json_populate_record(null::some_table, …)` makes
+// Postgres read that table's shape out of the catalog rather than from the
+// passed value. Verified against the catalog signatures.
+//
+// The `*_to_record*` family (`json_to_record`, `jsonb_to_record`, and the
+// `*_to_recordset` variants) is deliberately NOT here, despite mask-safety.ts's
+// exclusion note lumping the two together. Their signature takes ONLY json —
+// the output shape comes from the caller's explicit `AS r(a int, b text)`
+// column-definition list, not from a table. They dereference nothing and reach
+// no data outside their argument, so denying them would break ordinary JSON
+// analytics for no security gain. (They stay off the MASKING allowlist, which
+// is deny-by-default for the separate set-returning-function reason.)
 const ROWTYPE_DEREF = [
   "json_populate_record", "jsonb_populate_record",
   "json_populate_recordset", "jsonb_populate_recordset",
-  "json_to_record", "jsonb_to_record",
-  "json_to_recordset", "jsonb_to_recordset",
 ];
+
+// `setval` writes sequence state, and it is reachable: an app role granted
+// `ALL ON ALL SEQUENCES IN SCHEMA public` — a common setup-script grant — can
+// call it, verified against a live unprivileged role. Winding a sequence
+// backwards makes every subsequent INSERT collide on the primary key, so this
+// is a destructive write executed through a statement every other rule reads as
+// a SELECT. No legitimate agent-analytics use.
+//
+// `nextval` / `currval` / `lastval` are deliberately NOT here, even though
+// `nextval` also mutates. Two reasons. It is a normal part of a write idiom
+// (`INSERT INTO t (id, v) VALUES (nextval('t_id_seq'), 'x')`), so denying it
+// would break writes on a table the policy marked read_write while the INSERT
+// itself stays correctly governed by table_access / block_dml. And its
+// standalone reach is burning sequence values — sequence gaps are ordinary
+// Postgres behavior (any rollback makes one), not a boundary being crossed.
+// The line is "arbitrary write with no read-path use", not "touches state".
+const SEQUENCE_WRITE = ["setval"];
 
 // Changes server state. None of these answer a question about data.
 const ADMIN = [
@@ -143,6 +169,7 @@ function familyMap(): ReadonlyMap<string, DangerFamily> {
   add(REMOTE, "remote");
   add(SESSION_CONFIG, "session_config");
   add(ROWTYPE_DEREF, "rowtype_deref");
+  add(SEQUENCE_WRITE, "sequence_write");
   add(ADMIN, "admin");
   return m;
 }
@@ -172,6 +199,12 @@ function capabilityOf(family: DangerFamily): string {
       return (
         "reads a table's definition from the catalog through a rowtype " +
         "argument rather than from the value passed to it"
+      );
+    case "sequence_write":
+      return (
+        "writes sequence state, which can force primary-key collisions on " +
+        "later inserts, and Midplane refuses writes made through a statement " +
+        "that reads as a query"
       );
     case "admin":
       return "changes database server state";
