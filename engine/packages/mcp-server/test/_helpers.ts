@@ -17,6 +17,7 @@ import {
   multiStatement,
   tableAccess,
   tenantScope,
+  dangerousFunction,
 } from "@midplane/engine";
 import type { EngineHandle, EngineRegistry } from "../src/engine-factory.ts";
 
@@ -74,7 +75,13 @@ export function makeTestEngine(opts: {
   let counter = 0;
   const engine = new Engine({
     policy: {
-      rules: [parseError(), multiStatement(), tableAccess(), tenantScope()],
+      rules: [
+        parseError(),
+        multiStatement(),
+        tableAccess(),
+        tenantScope(),
+        dangerousFunction(),
+      ],
     },
     audit,
     credentials,

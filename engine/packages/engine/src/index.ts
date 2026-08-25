@@ -109,6 +109,8 @@ export {
   multiStatement,
   tenantScope,
   dangerousStatement,
+  dangerousFunction,
+  DANGEROUS_FUNCTIONS,
   parseError,
   resolveTableAccessForName,
   resolveTenantColumn,

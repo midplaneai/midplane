@@ -28,6 +28,7 @@ import {
   tableAccess,
   tenantScope,
   dangerousStatement,
+  dangerousFunction,
   postgresDialect,
   getDialect,
   type Rule,
@@ -576,6 +577,7 @@ async function test(args: string[]): Promise<void> {
     tableAccess(spec.tableAccess ?? undefined),
     tenantScope(spec.tenantScope),
     dangerousStatement(spec.guardrails),
+    dangerousFunction(),
   ];
 
   const ctx: EngineContext = {

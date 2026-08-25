@@ -36,6 +36,7 @@ export const PolicyRule = {
   MULTI_STATEMENT: "multi_statement",
   TENANT_SCOPE_MISSING: "tenant_scope_missing",
   DANGEROUS_STATEMENT: "dangerous_statement",
+  DANGEROUS_FUNCTION: "dangerous_function",
   PARSE_ERROR: "parse_error",
 } as const;
 export type PolicyRule = (typeof PolicyRule)[keyof typeof PolicyRule];

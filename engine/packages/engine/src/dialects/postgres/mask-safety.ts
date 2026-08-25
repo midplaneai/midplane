@@ -45,6 +45,7 @@
 import { parseSync } from "libpg-query";
 import type { TxClient } from "../../executor.ts";
 import type { GateOutcome, ShadowUsed, ShapeOutcome } from "../../masking/source-rewrite.ts";
+import { inventory } from "./function-inventory.ts";
 
 // Pure, non-reflective scalar + aggregate builtins safe to run over a masked
 // projection (see SAFETY CRITERION above). Bare names only — schema-qualified calls
@@ -104,64 +105,6 @@ export const MASK_SAFE_OPERATORS: ReadonlySet<string> = new Set([
 // identity (pg_operator), so a user-schema operator that redefines a builtin spelling
 // ahead of pg_catalog — whose body could call current_setting / query_to_xml — is
 // caught, not just off-allowlist spellings (Codex allowlist review, High).
-
-interface QualName {
-  schema: string | null;
-  name: string;
-}
-
-function svals(list: unknown): string[] {
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((n) => (n as { String?: { sval?: string } }).String?.sval)
-    .filter((s): s is string => typeof s === "string");
-}
-
-interface Invocations {
-  functions: QualName[];
-  operators: QualName[];
-}
-
-function inventory(ast: unknown): Invocations {
-  const functions: QualName[] = [];
-  const operators: QualName[] = [];
-  (function walk(node: unknown): void {
-    if (Array.isArray(node)) {
-      for (const x of node) walk(x);
-      return;
-    }
-    if (node && typeof node === "object") {
-      const o = node as Record<string, unknown>;
-      if (o.FuncCall) {
-        const parts = svals((o.FuncCall as { funcname?: unknown }).funcname);
-        if (parts.length > 0) {
-          functions.push(
-            parts.length >= 2
-              ? { schema: parts[parts.length - 2]!, name: parts[parts.length - 1]! }
-              : { schema: null, name: parts[0]! },
-          );
-        }
-      }
-      if (o.A_Expr) {
-        const a = o.A_Expr as { kind?: string; name?: unknown };
-        // Only AEXPR_OP carries an operator spelling we gate; LIKE/IN/BETWEEN/etc.
-        // are builtin comparison constructs (no user-resolvable operator name).
-        if (a.kind === "AEXPR_OP" || a.kind === undefined) {
-          const parts = svals(a.name);
-          if (parts.length > 0) {
-            operators.push(
-              parts.length >= 2
-                ? { schema: parts[parts.length - 2]!, name: parts[parts.length - 1]! }
-                : { schema: null, name: parts[0]! },
-            );
-          }
-        }
-      }
-      for (const k of Object.keys(o)) walk(o[k]);
-    }
-  })(ast);
-  return { functions, operators };
-}
 
 /** Stage 1 — sync, AST-only. Reject if any function/operator is off-allowlist or
  *  schema-qualified to a non-builtin. Returns the bare allowlisted function names
@@ -270,10 +213,17 @@ export async function shadowScan(tx: TxClient, used: ShadowUsed): Promise<GateOu
 //         columns, not fn args). So the NAME-exclusion here is the sole defense against
 //         the whole-row form; do not add these without first adding an AST guard that
 //         rejects a composite/whole-row argument to a function while masking is active.
-//       - json_populate_record / jsonb_populate_record(set) / json_to_record /
-//         jsonb_to_record: the first argument is a rowtype/table-name DEREF
-//         (null::some_table) — Postgres reads that table's shape out of the catalog,
-//         bypassing the source wrap entirely. A REAL leak path. Exclude.
+//       - json_populate_record / jsonb_populate_record(set): the first argument is a
+//         rowtype/table-name DEREF (null::some_table) — Postgres reads that table's
+//         shape out of the catalog, bypassing the source wrap entirely. A REAL leak
+//         path. Exclude.
+//       - json_to_record / jsonb_to_record / the *_to_recordset variants: excluded
+//         too, but NOT for the deref reason above — their signature takes only json
+//         and the output shape comes from the caller's explicit AS column-definition
+//         list, so they deref nothing (checked against the catalog signatures). They
+//         stay out as SET-RETURNING (see that exclusion below), which is a deferral,
+//         not a leak. The always-on `dangerous_function` denylist deliberately does
+//         NOT list them for exactly this reason — do not "restore" them there.
 //       - hstore, xpath, table_to_xml/query_to_xml (already covered under dynamic SQL).
 //   SET-RETURNING: generate_series, unnest, regexp_matches / regexp_split_to_table,
 //     string_to_table, json*_array_elements* / json*_each* — safe-on-DATA (input is the

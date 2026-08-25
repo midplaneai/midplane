@@ -84,7 +84,7 @@
     },
     "engine/packages/mcp-server": {
       "name": "midplane",
-      "version": "0.18.0",
+      "version": "0.20.0",
       "bin": {
         "midplane": "./dist/cli.js",
       },
