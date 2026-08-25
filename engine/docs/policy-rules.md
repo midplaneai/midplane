@@ -1,14 +1,14 @@
 # Policy rules
 
-OSS Midplane ships five policy rules. The `table_access` and `guardrails`
+OSS Midplane ships six policy rules. The `table_access` and `guardrails`
 rules are YAML-driven; the rest are hardcoded. Approvals (Slack-bot, web
 queue, escalation) are a Cloud feature, not OSS.
 
 Evaluation order (first DENY wins): `parse_error` → `multi_statement` →
-`table_access` → `tenant_scope` → `dangerous_statement`. The guardrails run
-**last**, so when a more-specific rule would also deny, that rule's reason
-surfaces; `dangerous_statement` only adds new denials for statements every
-other rule permitted.
+`table_access` → `tenant_scope` → `dangerous_statement` → `dangerous_function`.
+The guardrails run **last**, so when a more-specific rule would also deny, that
+rule's reason surfaces; the two guardrails only add new denials for statements
+every other rule permitted.
 
 ## `table_access` (default: ON)
 
@@ -214,6 +214,83 @@ Because the guardrails run last, a destructive statement on a table that
 deny-all-writes default) surfaces the `table_access` reason — it's blocked
 either way. Hot-swappable via `POST /admin/policy` like the other sections;
 omitting `guardrails` from a swap body leaves the current posture untouched.
+
+## `dangerous_function` (always ON, no configuration)
+
+Denies a statement that calls a Postgres function which reads or writes data
+**outside the relations the statement names**. Unlike `dangerous_statement`
+there is no flag to turn it off: every other rule keys on a table reference, so
+these calls are invisible to all of them, and there is no legitimate
+agent-analytics reason to make one.
+
+The concrete problem. `table_access` and `tenant_scope` decide from the tables a
+statement names. A statement can carry its whole payload inside a function
+*argument* instead, where no table is named at all:
+
+```sql
+-- with `default: deny` and every guardrail on:
+SELECT ssn FROM secrets                                     -- DENY  (table_access)
+SELECT query_to_xml('SELECT ssn FROM secrets', f, t, '')    -- DENY  (dangerous_function)
+SELECT table_to_xml('secrets'::regclass, f, t, '')          -- DENY  (dangerous_function)
+SELECT database_to_xml(f, t, '')                            -- DENY  (dangerous_function)
+SELECT pg_read_file('/etc/passwd')                          -- DENY  (dangerous_function)
+SELECT lo_export(lo_import('/etc/passwd'), '/tmp/x')        -- DENY  (dangerous_function)
+SELECT upper(pg_read_file('/etc/passwd'))                   -- DENY  (nested calls count)
+```
+
+Before this rule (0.19.0 and earlier) every line except the first was ALLOW, and
+the audit row recorded `tables_touched: []` — so the read left no record of what
+it touched.
+
+Denied families, and why each reaches outside its arguments:
+
+| Family | Examples | Why |
+|---|---|---|
+| Dynamic SQL / relation dump | `query_to_xml`, `table_to_xml`, `schema_to_xml`, `database_to_xml`, `cursor_to_xml*`, `dblink*` | Runs a SQL string, or serializes a relation named by a string/regclass. **Core PostgreSQL with `EXECUTE` granted to `PUBLIC`** — needs no privileged role, so this is a `table_access` and `tenant_scope` bypass on an ordinary connection. |
+| Filesystem | `pg_read_file`, `pg_read_binary_file`, `pg_stat_file`, `pg_ls_dir`, `pg_ls_*` | Reads server-side files. |
+| Large object | `lo_import`, `lo_export`, `lo_get`, `lo_put`, `lo_unlink`, `lowrite` | Reaches the filesystem, or writes bulk bytes. `lo_export` writes to an arbitrary path. |
+| Session config | `current_setting`, `set_config` | Reads/writes GUCs, including the masking salt. |
+| Rowtype deref | `json_populate_record`, `jsonb_to_record`, … | The first argument is a rowtype deref, so Postgres reads that table's shape from the catalog rather than the passed value. |
+| Admin | `pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `pg_promote` | Changes server state. |
+
+Matching is on the **bare name, case-folded**, so neither qualification
+(`pg_catalog.pg_read_file`) nor case (`PG_READ_FILE`) evades it, and the walk
+recurses into nested calls (the shape that bypassed pg_anon in
+[GHSA-468r-mhwc-vxjc](https://github.com/google/security-research/security/advisories/GHSA-468r-mhwc-vxjc)).
+
+**What it cannot do.** A name denylist cannot see through a wrapper: a
+`SECURITY DEFINER` UDF whose body calls `pg_read_file` presents only its own
+name to the parser. That is not solvable from the AST — this rule is the
+parser-side layer of a pair, not the whole defense.
+
+The other half is Postgres itself. `EXECUTE` on the XML-export family is granted
+to `PUBLIC`, so revoke it on the database you point Midplane at. Run this once as
+a superuser or the database owner; it resolves signatures from the catalog, so it
+works across PostgreSQL versions:
+
+```sql
+DO $$
+DECLARE f record;
+BEGIN
+  FOR f IN
+    SELECT p.oid::regprocedure AS sig
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'pg_catalog'
+       AND (p.proname ~ '_to_xml' OR p.proname ~ '^query_to_' OR p.proname ~ '^cursor_to_')
+  LOOP
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', f.sig);
+  END LOOP;
+END $$;
+```
+
+After this, `SELECT database_to_xml(false, true, '')` returns
+`ERROR: permission denied for function database_to_xml` for any non-superuser
+role, however it is spelled and whoever calls it. Ordinary queries are
+unaffected. The filesystem and large-object families are already superuser-only
+(or gated behind `pg_read_server_files` / `pg_write_server_files`) — the general
+guidance there is unchanged: give Midplane its own least-privilege role, as
+[`THREAT_MODEL.md`](../THREAT_MODEL.md) describes. `scripts/sample-db/provision.sql`
+in the control-plane repo shows the same treatment applied to the `lo_*` family.
 
 ## `parse_error` (default: ON, implicit)
 

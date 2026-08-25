@@ -126,6 +126,26 @@ export type DangerousStatement =
   | { kind: "unqualified_dml"; operation: "DELETE" | "UPDATE"; table: string }
   | { kind: "ddl"; operation: string };
 
+// A function invoked anywhere in the statement, as WRITTEN (no overload
+// resolution — see the `dangerous_function` rule for why name-matching is the
+// right granularity for a denylist and what it cannot cover).
+//
+// Exists because the rest of this IR is RELATION-shaped: every check keys on a
+// table reference or a statement kind. A statement whose payload lives inside a
+// function ARGUMENT — `query_to_xml('SELECT * FROM secrets')`,
+// `table_to_xml('secrets'::regclass)`, `pg_read_file('/etc/passwd')` — surfaces
+// no table reference at all, so table_access has nothing to check, tenant_scope
+// sees an empty scope, and the audit accumulator records tables_touched=[].
+// Without this field those statements are invisible to every control.
+//
+// `schema` is the explicit qualifier as written, or null for a bare call.
+// Consumers key on `name`, so qualifying a call cannot be used to evade a
+// denylist.
+export interface FunctionRef {
+  schema: string | null;
+  name: string;
+}
+
 // A statement a dialect parser could not faithfully model. `touchedTables`
 // carries the tables it could identify so tenant_scope fails closed when one is
 // scoped (tenantScope.evaluateIR iterates `unsupported`); table_access denies it
@@ -152,5 +172,6 @@ export interface NormalizedProgram {
   accessChecks: AccessCheck[]; // for table_access
   scopeUnits: ScopeUnit[]; // for tenant_scope
   dangerousStatements: DangerousStatement[]; // for dangerous_statement guardrails
+  functionsInvoked: FunctionRef[]; // for dangerous_function (every call, nested included)
   unsupported: UnsupportedStatement[]; // fail-closed (empty for the Postgres adapter)
 }

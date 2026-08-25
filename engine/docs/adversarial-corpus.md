@@ -393,6 +393,10 @@ all deny under both legacy and any YAML config.
 | `SET timezone = 'UTC'`                               | DENY (`table_access`) |
 | `RESET search_path`                                  | DENY (`table_access`) |
 
+`table_access` reaches all of the above because each is its own statement kind.
+A function call is not: a `SELECT` that wraps one parses as an ordinary read and
+names no table, which is what `dangerous_function` covers (section 7).
+
 ---
 
 ## 6. dangerous_statement (destructive-op guardrails)
@@ -424,6 +428,39 @@ fall through to `table_access` / `tenant_scope`.
 
 ---
 
+## 7. dangerous_function (data reach outside the named relations)
+
+Every rule above decides from the tables a statement **names**. A statement can
+put its whole payload inside a function *argument* instead, naming nothing.
+`dangerous_function` is the denylist for that shape. It is always on and takes
+no configuration — there is no legitimate agent-analytics reason to call one of
+these. These cases use a permissive policy (`default: read_write`) so the rule
+is unambiguously the denier.
+
+| SQL                                                       | Verdict | Why this matters |
+|-----------------------------------------------------------|---------|------------------|
+| `SELECT query_to_xml('SELECT ssn FROM secrets', f, t, '')` | DENY   | Runs a SQL string. **Core PG, `EXECUTE` to `PUBLIC`** — no privileged role needed, so it reads any table the connected role can see without naming it. A `table_access` and `tenant_scope` bypass. |
+| `SELECT table_to_xml('secrets'::regclass, f, t, '')`      | DENY    | Same reach via a `regclass` argument instead of a query string. |
+| `SELECT database_to_xml(f, t, '')`                        | DENY    | Every readable table in the database, in one statement. |
+| `SELECT schema_to_xml('public', f, t, '')`                | DENY    | Whole-schema variant. |
+| `SELECT * FROM dblink('host=x', 'SELECT 1') AS t(a int)`  | DENY    | Reads another server; also an SSRF primitive. |
+| `SELECT pg_read_file('/etc/passwd')`                      | DENY    | Server-side file read. Postgres also denies this to an unprivileged role; refused here so a privileged connection is not a cliff edge. |
+| `SELECT lo_export(lo_import('/etc/passwd'), '/tmp/x')`    | DENY    | File read **and** write to an arbitrary path. |
+| `SELECT lo_unlink(1)`                                     | DENY    | A write disguised as a SELECT. |
+| `SELECT current_setting('midplane.mask_salt')`            | DENY    | GUC read; can target the masking salt. |
+| `SELECT pg_terminate_backend(123)`                        | DENY    | Changes server state. |
+| `SELECT upper(pg_read_file('/etc/passwd'))`               | DENY    | Nesting does not evade — the inventory walk is fully recursive (the shape that bypassed pg_anon in GHSA-468r-mhwc-vxjc). |
+| `SELECT pg_catalog.pg_read_file('/etc/passwd')`           | DENY    | Qualification does not evade — matching is on the bare name. |
+| `SELECT PG_READ_FILE('/etc/passwd')`                      | DENY    | Case does not evade. |
+| `SELECT count(*), sum(total) FROM orders`                 | ALLOW   | Ordinary aggregates. The rule is a denylist, not an allowlist, so normal analytics is untouched. |
+| `SELECT my_business_helper(total) FROM orders`            | ALLOW   | A user-defined function is not denied by name. |
+| `SELECT generate_series(1, 10)`                           | ALLOW   | Set-returning builtins are fine — they reach no data outside their arguments. |
+
+Every case above was ALLOW in 0.19.0 and earlier, with the audit row recording
+`tables_touched: []`.
+
+---
+
 ## Known limitations
 
 The following shapes currently **allow** when an audit mindset would
@@ -433,9 +470,7 @@ any of these adds policy state we'd rather defer to a follow-up release.
 
 | SQL                                            | Verdict | Why it's a gap |
 |------------------------------------------------|---------|----------------|
-| `SELECT pg_terminate_backend(123)`             | ALLOW   | SELECT-wrapped admin function. AST-level write detection cannot tell side-effecting `pg_*` functions from pure ones without a denylist. **Planned: function-side-effects denylist.** |
-| `SELECT pg_cancel_backend(123)`                | ALLOW   | Same shape. |
-| `SELECT lo_unlink(1)`                          | ALLOW   | Large-object unlink — a write disguised as a SELECT. |
+| `SELECT my_udf()` wrapping a denied builtin    | ALLOW   | `dangerous_function` matches on the function NAME, so it cannot see into a `SECURITY DEFINER` UDF whose body calls `pg_read_file`. Not solvable from the AST — `REVOKE EXECUTE ... FROM PUBLIC` on the underlying builtin is the defense that holds. |
 | `BEGIN`                                        | ALLOW   | Transaction control statement. Midplane commits per query, so BEGIN is a no-op for the pipeline. |
 | `VACUUM users`                                 | ALLOW   | Performance side effects (locks, IO) but no data mutation. |
 | `PREPARE my_p AS SELECT 1`                     | ALLOW   | Session-state mutation. Tightening requires session-scope tracking; deferred. |

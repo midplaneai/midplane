@@ -388,6 +388,11 @@ function label(
         matched_rule: "dangerous_statement",
         reason: shorten(preview.message),
       };
+    case "dangerous_function":
+      return {
+        matched_rule: "dangerous_function",
+        reason: shorten(preview.message),
+      };
     case "parse_error":
       return { matched_rule: "parse_error", reason: shorten(preview.message) };
     default:

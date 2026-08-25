@@ -29,6 +29,7 @@ export const PolicyRuleName = z.enum([
   "multi_statement",
   "tenant_scope_missing",
   "dangerous_statement",
+  "dangerous_function",
   "parse_error",
   "internal_error",
 ]);
