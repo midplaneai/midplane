@@ -16,10 +16,12 @@
 
 import type { PgParseTree } from "./parse.ts";
 import { walk as visitorWalk } from "./visitor.ts";
+import { inventory } from "./function-inventory.ts";
 import type {
   AccessCheck,
   DangerousStatement,
   EqualityPredicate,
+  FunctionRef,
   InsertShape,
   NormalizedProgram,
   ScopeUnit,
@@ -37,6 +39,9 @@ export function normalize(ast: unknown): NormalizedProgram {
     accessChecks: collectAccessChecks(stmts),
     scopeUnits: collectScopeUnits(stmts),
     dangerousStatements: collectDangerousStatements(stmts),
+    // Walks the WHOLE tree (nested calls included) — see function-inventory.ts.
+    // QualName is structurally FunctionRef, so this needs no mapping.
+    functionsInvoked: collectFunctionsInvoked(tree),
     unsupported: [], // libpg_query faithfully parses everything it accepts
   };
 }
@@ -755,6 +760,18 @@ function collectDangerousStatements(
 
   for (const s of stmts) walk(s.stmt);
   return out;
+}
+
+// ── functionsInvoked → FunctionRef[] (shared with the masking shape gate) ──
+
+// Every function call anywhere in the tree, in walk order. Delegates to the
+// inventory walker mask-safety.ts uses, so the always-on denylist and the
+// masking-only allowlist can never disagree about what a statement invokes.
+// Operators are inventoried too but not surfaced here: the dangerous_function
+// denylist is keyed on function names, and the masking gate reads its own
+// operator list directly.
+function collectFunctionsInvoked(tree: PgParseTree): FunctionRef[] {
+  return inventory(tree).functions;
 }
 
 // ── 3. accumulator → allRelnames + auditStatementType (the shared visitor walk) ──

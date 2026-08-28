@@ -139,7 +139,7 @@ the app's gate (`MIDPLANE_APPROVAL_URL` + `MIDPLANE_APPROVAL_TOKEN`), self-hoste
 or cloud, both below.
 
 > For a CI pipeline or a long-lived sidecar, the same engine ships as a
-> self-contained image with no Node in it — `midplane/midplane:0.19.0`, serving
+> self-contained image with no Node in it — `midplane/midplane:0.20.0`, serving
 > Streamable HTTP instead of stdio.
 > [Setup](https://midplane.ai/docs) · [`engine/README.md`](./engine/README.md).
 

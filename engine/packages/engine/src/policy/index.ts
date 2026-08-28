@@ -22,6 +22,7 @@ export type {
   DangerousStatementConfig,
   DangerousStatementSource,
 } from "./rules/dangerous-statement.ts";
+export { dangerousFunction, DANGEROUS_FUNCTIONS } from "./rules/dangerous-function.ts";
 export { parseError } from "./rules/parse-error.ts";
 
 export interface EvaluateInput {
@@ -74,9 +75,11 @@ export interface EvaluateResult {
 //
 // Rule evaluation order on DENY: the rule list is checked in array order;
 // the first DENY verdict wins. Order parse_error → multi_statement →
-// table_access → tenant_scope → dangerous_statement so the most-specific
-// failure surfaces (the destructive-op guardrail runs last and only adds
-// denials for statements every other rule permitted).
+// table_access → tenant_scope → dangerous_statement → dangerous_function so the
+// most-specific failure surfaces (the two guardrails run last and only add
+// denials for statements every other rule permitted). dangerous_function is
+// last because a statement that both reads a denied table and calls a denied
+// function should report the table — that's the cause the agent can act on.
 export function evaluate(input: EvaluateInput): EvaluateResult {
   const rctx: RuleEvalContext = { parse: input.parse, ctx: input.ctx };
 
@@ -141,5 +144,6 @@ const EMPTY_PROGRAM: NormalizedProgram = {
   accessChecks: [],
   scopeUnits: [],
   dangerousStatements: [],
+  functionsInvoked: [],
   unsupported: [],
 };

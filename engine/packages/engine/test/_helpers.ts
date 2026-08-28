@@ -11,6 +11,7 @@ import { tableAccess, type TableAccessConfig } from "../src/policy/rules/table-a
 import { multiStatement } from "../src/policy/rules/multi-statement.ts";
 import { tenantScope } from "../src/policy/rules/tenant-scope.ts";
 import { dangerousStatement } from "../src/policy/rules/dangerous-statement.ts";
+import { dangerousFunction } from "../src/policy/rules/dangerous-function.ts";
 import { parseError } from "../src/policy/rules/parse-error.ts";
 import { recordDecided } from "./_verdict-recorder.ts";
 
@@ -93,6 +94,10 @@ export function makeEngine(opts: {
       // existing corpus's verdicts are unchanged; the dangerous-statement
       // corpus passes its own rule list with guardrails active.
       dangerousStatement(),
+      // Mirrors production too, but this one is NOT inert — it has no config
+      // source by design (always on). Included so the corpus exercises the same
+      // chain production runs.
+      dangerousFunction(),
     ];
 
   let counter = 0;

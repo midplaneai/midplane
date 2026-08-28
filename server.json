@@ -3,7 +3,7 @@
   "name": "ai.midplane/midplane",
   "title": "Midplane",
   "description": "Postgres MCP server for AI agents: PII masked at the source, AST policy, approvals, audit log.",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "websiteUrl": "https://midplane.ai/docs",
   "repository": {
     "url": "https://github.com/midplaneai/midplane",
@@ -15,7 +15,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "midplane",
-      "version": "0.19.0",
+      "version": "0.20.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -66,7 +66,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "docker.io/midplane/midplane:0.19.0",
+      "identifier": "docker.io/midplane/midplane:0.20.0",
       "runtimeHint": "docker",
       "transport": {
         "type": "streamable-http",

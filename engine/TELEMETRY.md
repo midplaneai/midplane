@@ -127,7 +127,18 @@ tool calls, the heartbeat is suppressed (idle installs don't beacon daily).
 
 Tool names are the fixed set: `query`, `list_tables`, `describe_table`, `list_databases` (`list_databases` is only registered on multi-DB installs but the enum carries it for forward-compat in either case).
 Policy rule names are the fixed set: `table_access`, `multi_statement`,
-`tenant_scope_missing`, `parse_error`, `internal_error`.
+`tenant_scope_missing`, `dangerous_statement`, `dangerous_function`,
+`parse_error`, `internal_error`.
+
+> **Adding a rule name is a receiver-first change.** `denials_by_rule` is a
+> record keyed by this enum, so a receiver that does not yet know a name
+> rejects the WHOLE heartbeat (`safeParse` fails on the unknown key, and
+> `infra/telemetry-proxy` answers 204), not just that one counter — the
+> window's tool counts and latency go with it. Deploy the proxy before
+> engines that can emit the new name. This stays on `schema_version: 2`: the
+> event shape and privacy story are unchanged, and bumping would make the
+> interim worse, since an un-updated receiver pins `z.literal(2)` and would
+> then reject every event rather than only the ones carrying the new name.
 Statement type buckets are the fixed set: `SELECT`, `INSERT`, `UPDATE`,
 `DELETE`, `DDL`, `OTHER`. **Anything outside these allow-lists is dropped
 before send** — a new rule or tool requires a schema bump and a doc update

@@ -25,6 +25,7 @@ import {
   tableAccess,
   tenantScope,
   dangerousStatement,
+  dangerousFunction,
   getDialect,
   CachingCatalogResolver,
   postgresSourceRewriter,
@@ -468,6 +469,12 @@ function makeEngineEntry(
         // reason surfaces when one applies. Reads the holder via getter for
         // hot-swap, same as the rules above.
         dangerousStatement((): DangerousStatementConfig => holder.guardrails),
+        // Ungated and last. Refuses functions that read/write data outside the
+        // relations the statement names (query_to_xml, pg_read_file, dblink, …)
+        // — invisible to every rule above because they surface no table
+        // reference. No config source: there is no legitimate agent-analytics
+        // reason to call one, so there is no key to turn it off.
+        dangerousFunction(),
       ],
     },
     audit,

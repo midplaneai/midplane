@@ -7,11 +7,12 @@
 // extractable per-table target that the YAML can grant `read_write` to,
 // so all of them deny under both legacy (no YAML) and any YAML config.
 //
-// Known limitation (documented, not patched): SELECT-wrapped
-// admin-function calls like `SELECT pg_terminate_backend(123)` parse as
-// a SelectStmt with a FuncCall and are NOT denied. AST-level write
-// detection cannot tell side-effecting functions from pure ones without
-// a denylist. The function-side-effects denylist is a Cloud feature.
+// The former known limitation — SELECT-wrapped admin-function calls like
+// `SELECT pg_terminate_backend(123)` parsing as an ordinary read — is CLOSED.
+// The `dangerous_function` rule is the function-side-effects denylist that
+// section was waiting on, it ships in the MIT engine rather than Cloud, and it
+// is always on. See src/policy/rules/dangerous-function.ts for what a name
+// denylist can and cannot cover.
 
 import { describe, test } from "bun:test";
 import { makeEngine, baseCtx } from "../_helpers.ts";
@@ -132,21 +133,61 @@ describe("adversarial/exec-side-effects: transaction control", () => {
 });
 
 describe("adversarial/exec-side-effects: SELECT-wrapped admin functions", () => {
-  // These are documented V1 gaps. The corpus surfaces them so a buyer
-  // reading the public artifact sees exactly what V1 does and does not
-  // catch. V1.5 introduces a side-effecting-function denylist.
-  test("SELECT pg_terminate_backend(123) → currently allow (V1 gap)", async () => {
+  // These WERE the documented V1 gap: a side-effecting function wrapped in a
+  // SELECT parses as an ordinary read, and AST-level write detection cannot
+  // tell it from a pure one without a denylist. That denylist now exists as the
+  // `dangerous_function` rule, so all three deny — and they deny under the
+  // DEFAULT harness config, because the rule is always on and takes no config.
+  const DANGEROUS_FUNCTION = PolicyRule.DANGEROUS_FUNCTION;
+
+  test("SELECT pg_terminate_backend(123) → deny (changes server state)", async () => {
     const { engine } = makeEngine();
-    await expectAllow(engine, baseCtx, "SELECT pg_terminate_backend(123)");
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT pg_terminate_backend(123)",
+      DANGEROUS_FUNCTION,
+    );
   });
 
-  test("SELECT pg_cancel_backend(123) → currently allow (V1 gap)", async () => {
+  test("SELECT pg_cancel_backend(123) → deny (changes server state)", async () => {
     const { engine } = makeEngine();
-    await expectAllow(engine, baseCtx, "SELECT pg_cancel_backend(123)");
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT pg_cancel_backend(123)",
+      DANGEROUS_FUNCTION,
+    );
   });
 
-  test("SELECT lo_unlink(1) → currently allow (V1 gap)", async () => {
+  test("SELECT lo_unlink(1) → deny (a write disguised as a SELECT)", async () => {
     const { engine } = makeEngine();
-    await expectAllow(engine, baseCtx, "SELECT lo_unlink(1)");
+    await expectDeny(engine, baseCtx, "SELECT lo_unlink(1)", DANGEROUS_FUNCTION);
+  });
+
+  test("SELECT pg_read_file('/etc/passwd') → deny (server-side file read)", async () => {
+    // The vector reported privately against 0.19.0. COPY … FROM '/etc/passwd'
+    // was already denied above; this is the same file access spelled as a
+    // function, and it must reach the same verdict.
+    const { engine } = makeEngine();
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT pg_read_file('/etc/passwd')",
+      DANGEROUS_FUNCTION,
+    );
+  });
+
+  test("SELECT query_to_xml('SELECT * FROM users', …) → deny (reads a table via a string)", async () => {
+    // The more severe sibling: core PostgreSQL, EXECUTE granted to PUBLIC, so
+    // it needs no privileged role. Reads any table the connected role can see
+    // without naming it, which is a table_access and tenant_scope bypass.
+    const { engine } = makeEngine();
+    await expectDeny(
+      engine,
+      baseCtx,
+      "SELECT query_to_xml('SELECT * FROM users', false, true, '')",
+      DANGEROUS_FUNCTION,
+    );
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "midplane",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Postgres MCP server for AI agents, over stdio + Streamable HTTP. Connect the tables you've been keeping off-limits: PII masked at the source, policy enforced on the SQL AST, writes held for human approval, everything audited.",
   "keywords": [
     "mcp",
