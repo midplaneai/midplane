@@ -2,7 +2,7 @@
   "name": "midplane-monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Safety layer between AI coding agents and Postgres. Engine subtree of midplane-cloud; members are declared by the root workspaces globs (engine/packages/*, engine/examples/*), not here.",
+  "description": "Query-path engine behind Midplane's Postgres MCP server for AI agents: mask, policy, approvals, audit. Engine subtree of midplane-cloud; members are declared by the root workspaces globs (engine/packages/*, engine/examples/*), not here.",
   "license": "MIT",
   "type": "module",
   "scripts": {

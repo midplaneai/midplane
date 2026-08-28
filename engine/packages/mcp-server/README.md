@@ -1,10 +1,14 @@
 # midplane
 
-**Safe-by-default SQL guardrails for AI agents.** An MCP server that sits between
-an AI agent (Claude, Cursor, any MCP client) and your Postgres database. It parses
-every statement with a real SQL AST — not a regex blocklist — enforces a
-declarative per-table access policy, blocks destructive DML/DDL, and writes an
-audit row **before** the query executes.
+**Postgres MCP server for AI agents.** Connect the tables you've been keeping
+off-limits. PII masked at the source, policy enforced on the SQL AST, writes held
+for human approval, everything audited. MIT, self-hostable.
+
+It sits between an AI agent (Claude, Cursor, any MCP client) and your Postgres
+database: every statement is parsed with a real SQL AST — not matched against a
+regex blocklist — checked against a declarative per-table access policy, rewritten
+so masked columns never leave the database in the clear, and recorded in an audit
+row **before** the query executes.
 
 [![npm](https://img.shields.io/npm/v/midplane.svg)](https://www.npmjs.com/package/midplane)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -64,6 +68,25 @@ a validated `midplane.policy.yaml`. Point the server at it with
 Worked examples of each, with the exact SQL and the denial message, are in the
 [policy reference](https://midplane.ai/docs) and the repository README.
 
+## Mask columns, hold writes
+
+Two more sections of the same policy file, for the tables you'd otherwise keep
+off-limits:
+
+- **`column_masks`** — name a column and the transform to apply, and the engine
+  rewrites the query's source relation so the raw value never leaves Postgres.
+  `full-redact`, `null-out`, `consistent-hash` (deterministic and salted, so
+  masked join keys still join), `partial`, `generalize`, `pseudonymize`, `noise`.
+  Set `MIDPLANE_MASK_SALT` — the engine refuses to boot with masks and no salt
+  rather than fall back to a correlatable hash — and `mask_source_rewrite: true`
+  for the source-rewrite path. Result provenance the engine can't prove maps to a
+  known base column denies the whole result set rather than risk leaking a value.
+- **`approvals`** — hold a write the policy already permits until a human rules on
+  it. The engine asks a gate over HTTP (`MIDPLANE_APPROVAL_URL` +
+  `MIDPLANE_APPROVAL_TOKEN`; the app below serves one) and offers the agent a
+  `check_approval` tool to collect the answer. Approvals sit under the policy,
+  never over it: nothing denied can be approved into running.
+
 ## CLI
 
 ```
@@ -89,7 +112,7 @@ what got blocked, and why.
 - **Docker** — `midplane/midplane`, a self-contained image with no Node or
   `node_modules` in it.
 - **Managed cloud** — [app.midplane.ai](https://app.midplane.ai), with a
-  dashboard, policy editor, and hosted audit log.
+  dashboard, policy and masking editors, an approval queue, and a hosted audit log.
 - **Self-host the full app** — `./bin/self-host up` from the
   [repo](https://github.com/midplaneai/midplane).
 

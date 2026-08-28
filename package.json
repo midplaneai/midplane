@@ -2,7 +2,7 @@
   "name": "midplane-cloud",
   "version": "0.0.0",
   "private": true,
-  "description": "Hosted Midplane. Sign up, paste a Postgres URL, get an MCP endpoint that runs the OSS engine with your credentials.",
+  "description": "Hosted Midplane. Sign up, paste a Postgres URL, get a Postgres MCP endpoint that runs the OSS engine with your credentials — masking, policy, approvals, audit.",
   "license": "MIT",
   "type": "module",
   "workspaces": [

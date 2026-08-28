@@ -1,9 +1,10 @@
 # Contributing to Midplane
 
 Thanks for your interest. This repository is the Midplane monorepo: the
-**control plane** (dashboard, connection/policy management, audit views, the
-hosted MCP proxy) at the root, and the query-path **engine** (SQL parsing,
-policy enforcement, guardrails) under [`engine/`](./engine) — an MIT subtree
+**control plane** (dashboard, policy and masking management, approval queue,
+audit views, the hosted MCP proxy) at the root, and the query-path **engine**
+(SQL parsing, policy enforcement, guardrails, column masking, the approval
+seam) under [`engine/`](./engine) — an MIT subtree
 with its own [`engine/CONTRIBUTING.md`](./engine/CONTRIBUTING.md) (the highest-
 value contributions there are SQL-bypass attempts and the policy fixes that
 defeat them) and [`engine/THREAT_MODEL.md`](./engine/THREAT_MODEL.md). One
@@ -15,8 +16,8 @@ the control plane as one web app.
 The control plane is **open core**:
 
 - Everything outside `apps/web/src/ee/` is MIT (the Community Edition) — the full
-  single-tenant product: dashboard, policy editor, audit log, dry-run, local
-  auth, every guardrail.
+  single-tenant product: dashboard, policy and masking editors, approval queue,
+  audit log, dry-run, local auth, every guardrail.
 - `apps/web/src/ee/` is the commercial **Enterprise Edition** (see
   `apps/web/src/ee/LICENSE`): the governance band — SSO/SAML today, more later.
 

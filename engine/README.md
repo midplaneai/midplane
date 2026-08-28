@@ -6,10 +6,11 @@
 
 The MIT query-path engine at the heart of [Midplane](../README.md): it parses every
 SQL statement with a real Postgres AST, enforces the table-access policy and
-guardrails, and writes the audit row **before** the query runs. The control plane
+guardrails, rewrites masked columns at their source relation, holds writes that
+need a human, and writes the audit row **before** the query runs. The control plane
 spawns this same engine for every project — cloud and self-host alike — so
-enforcement is identical everywhere. It also ships on its own as the
-`midplane/midplane` Docker image.
+enforcement is identical everywhere. It also ships on its own as the `midplane` npm
+package and the `midplane/midplane` Docker image.
 
 > 📖 **Documentation lives at [midplane.ai/docs](https://midplane.ai/docs)** — agent
 > setup (Cursor / Claude Code / Claude Desktop), the CLI, the policy YAML reference,
