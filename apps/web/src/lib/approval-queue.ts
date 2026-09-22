@@ -6,7 +6,7 @@
 // (customer_id, region) FK onto customers), so one indexed read on
 // (customer_id, region, status, created_at) covers the whole queue.
 
-import { and, desc, eq, gt, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import {
@@ -88,13 +88,14 @@ async function sweepBeforeRead(region: Region, customerId: string): Promise<void
 /** The row-scoped form of the sweep, for reads of ONE request: the detail
  *  page and the decide fallback. Scoped to the caller's workspace, so a
  *  single-approval read never writes outside it, and conditional on
- *  status='pending', so it never passes through 'approved'. decided_at is the
- *  deadline itself, the same stamp the queue sweep writes. */
+ *  status='pending', so it never passes through 'approved'. Judged on the DB
+ *  clock like the sweeps: a web node running ahead of Postgres must not
+ *  expire a still-live request just because someone opened its page.
+ *  decided_at is the deadline itself, the same stamp the queue sweep writes. */
 async function relabelIfExpired(
   region: Region,
   customerId: string,
   id: string,
-  at: Date,
 ): Promise<void> {
   const db = getDb(region);
   await db
@@ -106,7 +107,7 @@ async function relabelIfExpired(
         eq(writeApprovals.customerId, customerId),
         eq(writeApprovals.region, region),
         eq(writeApprovals.status, "pending"),
-        lte(writeApprovals.expiresAt, at),
+        sql`${writeApprovals.expiresAt} < NOW()`,
       ),
     );
 }
@@ -179,7 +180,7 @@ export async function getApproval(
   // Best-effort, like the queue sweep: on a failure the read still renders,
   // and the decide path re-checks the deadline atomically.
   try {
-    await relabelIfExpired(region, customerId, id, new Date());
+    await relabelIfExpired(region, customerId, id);
   } catch (err) {
     console.error("[approvals] expiry relabel before read failed", err);
   }
@@ -283,11 +284,12 @@ export async function decideApproval(args: {
     if (existing.status !== "pending") return { ok: false, error: "already_decided" };
 
     // Still pending, so the deadline is what refused us (the inline relabel
-    // is best-effort and may have failed). Relabel it now, so the queue stops
-    // offering an action that cannot succeed. Conditional and idempotent —
-    // and it never passes through 'approved', which is precisely what made
-    // the old ordering racy.
-    await relabelIfExpired(args.region, args.customerId, args.id, at);
+    // is best-effort and may have failed, or the DB clock has not reached
+    // the deadline this node's clock has). Relabel it now if the DB agrees,
+    // so the queue stops offering an action that cannot succeed. Conditional
+    // and idempotent — and it never passes through 'approved', which is
+    // precisely what made the old ordering racy.
+    await relabelIfExpired(args.region, args.customerId, args.id);
     return { ok: false, error: "expired" };
   }
 

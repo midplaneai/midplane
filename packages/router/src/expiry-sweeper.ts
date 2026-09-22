@@ -47,6 +47,10 @@ import { sql as drizzleSql } from "drizzle-orm";
 
 import type { Db } from "./resolve.ts";
 
+/** Anything that can run one raw statement: the pooled Db, or a transaction
+ *  handle when a caller needs the sweep inside its own txn (revokeToken). */
+type Executor = Pick<Db, "execute">;
+
 /** Backstop cadence. Must stay well above Neon's 5-minute scale-to-zero
  *  window — see the header comment. */
 export const DEFAULT_TICK_MS = 6 * 60 * 60_000;
@@ -77,7 +81,7 @@ export interface ExpirySweeperOptions {
  *  revoked_reason='expired' distinguishes this transition from user-action
  *  revokes in the audit log. */
 export async function sweepExpiredTokens(
-  db: Db,
+  db: Executor,
   scope?: { projectId: string },
 ): Promise<number> {
   const scopeClause = scope
@@ -110,7 +114,7 @@ export async function sweepExpiredTokens(
  *  the write to one workspace (write_approvals_queue_idx leads with
  *  customer_id, region, status); the backstop passes none. */
 export async function sweepExpiredApprovals(
-  db: Db,
+  db: Executor,
   scope?: { customerId: string; region: string },
 ): Promise<number> {
   const scopeClause = scope

@@ -630,6 +630,12 @@ export async function revokeToken(
       .limit(1);
     if (parent.length === 0) return null;
 
+    // Expiry is swept on reads now, so a token past its deadline may still
+    // say 'active' here. Relabel the project's expired rows first, inside
+    // this txn, so the no-op below sees 'expired' and the deadline stays the
+    // forensic record instead of being rewritten as a user revoke.
+    await sweepExpiredTokens(tx, { projectId });
+
     // Read current status first — revoking an already-revoked or expired
     // token is a no-op that returns the existing row without rewriting
     // revoked_at / revoked_reason. Keeps the original timestamps as the

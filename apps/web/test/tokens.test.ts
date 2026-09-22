@@ -538,6 +538,24 @@ describe("revokeToken", () => {
     expect(auditRow.mcpTokenId).toBe("tok-1");
   });
 
+  it("sweeps the project's expiries before reading status, so an unswept expired token stays expired", async () => {
+    // Expiry is swept on reads now; a DELETE that arrives before any list read
+    // must still be the documented no-op, not a rewrite to revoked.
+    handle.queueSelect([{ id: "conn-1" }]); // parent
+    handle.queueSelect([{ id: "tok-1", status: "expired" }]); // post-sweep read
+    const { revokeToken } = await import("../src/lib/tokens.ts");
+    const result = await revokeToken(customer, "conn-1", "tok-1", {
+      reason: "user_action",
+      actorUserId: "u",
+    });
+    expect(result).toEqual({ id: "tok-1" });
+    const ops = handle.calls.map((c) => c.op);
+    expect(ops.slice(0, 3)).toEqual(["select", "execute", "select"]);
+    expect(String(handle.calls[1]!.set)).toContain("UPDATE mcp_tokens");
+    expect(ops).not.toContain("update");
+    expect(ops).not.toContain("insert"); // no TOKEN_REVOKED audit row
+  });
+
   it("idempotent on already-revoked: returns the row, no UPDATE, no audit", async () => {
     handle.queueSelect([{ id: "conn-1" }]);
     handle.queueSelect([{ id: "tok-1", status: "revoked" }]);
