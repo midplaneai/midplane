@@ -191,9 +191,14 @@ describe("ExpirySweeper", () => {
     await sweepExpiredApprovals(db);
 
     expect(calls[0]).toContain("AND project_id = proj_1");
+    expect(calls[0]).not.toContain("AND id =");
     expect(calls[1]).toContain("AND customer_id = cust_1 AND region = eu");
     expect(calls[2]).not.toContain("project_id");
     expect(calls[3]).not.toContain("customer_id");
+
+    // A single-row scope (revokeToken) narrows further, never wider.
+    await sweepExpiredTokens(db, { projectId: "proj_1", tokenId: "tok_1" });
+    expect(calls[4]).toContain("AND project_id = proj_1 AND id = tok_1");
     // Scoping never loosens the deadline predicate.
     for (const sql of calls) expect(sql).toContain("expires_at < NOW()");
   });

@@ -631,10 +631,11 @@ export async function revokeToken(
     if (parent.length === 0) return null;
 
     // Expiry is swept on reads now, so a token past its deadline may still
-    // say 'active' here. Relabel the project's expired rows first, inside
-    // this txn, so the no-op below sees 'expired' and the deadline stays the
-    // forensic record instead of being rewritten as a user revoke.
-    await sweepExpiredTokens(tx, { projectId });
+    // say 'active' here. Relabel THIS row first, inside this txn, so the
+    // no-op below sees 'expired' and the deadline stays the forensic record
+    // instead of being rewritten as a user revoke. Just this row: a revoke
+    // must not wait on locks held against unrelated expired tokens.
+    await sweepExpiredTokens(tx, { projectId, tokenId });
 
     // Read current status first — revoking an already-revoked or expired
     // token is a no-op that returns the existing row without rewriting

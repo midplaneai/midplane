@@ -71,8 +71,10 @@ export interface ExpirySweeperOptions {
 /** Flip active tokens whose expires_at has passed. Returns the row count.
  *  Throws on DB error — callers decide whether that is fatal (the backstop
  *  tick logs and moves on; a read path logs and renders anyway). `scope`
- *  narrows the write to one project (mcp_tokens_project_status_idx); the
- *  backstop passes none and walks mcp_tokens_expires_at_idx instead.
+ *  narrows the write to one project (mcp_tokens_project_status_idx), or to
+ *  one token within it when a caller is about to act on that row alone
+ *  (revokeToken, inside its own txn); the backstop passes none and walks
+ *  mcp_tokens_expires_at_idx instead.
  *
  *  NOW() is the DB clock — keeps the predicate consistent with
  *  resolveByToken's filter (also NOW()) so a token never lands in a state
@@ -82,10 +84,12 @@ export interface ExpirySweeperOptions {
  *  revokes in the audit log. */
 export async function sweepExpiredTokens(
   db: Executor,
-  scope?: { projectId: string },
+  scope?: { projectId: string; tokenId?: string },
 ): Promise<number> {
   const scopeClause = scope
-    ? drizzleSql`AND project_id = ${scope.projectId}`
+    ? scope.tokenId
+      ? drizzleSql`AND project_id = ${scope.projectId} AND id = ${scope.tokenId}`
+      : drizzleSql`AND project_id = ${scope.projectId}`
     : drizzleSql``;
   const result = await db.execute(drizzleSql`
     UPDATE mcp_tokens
