@@ -6,7 +6,7 @@
 // (customer_id, region) FK onto customers), so one indexed read on
 // (customer_id, region, status, created_at) covers the whole queue.
 
-import { and, desc, eq, gt, lte, ne } from "drizzle-orm";
+import { and, desc, eq, gt, lte, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import {
@@ -20,6 +20,8 @@ import {
   type WriteApprovalStatus,
 } from "@midplane-cloud/db";
 import { user } from "@midplane-cloud/db/auth-schema";
+
+import { expireStaleApprovals } from "@/lib/approvals";
 
 // Two different people can appear on one approval — the person the agent acts
 // for, and the person who decided it — so the user table joins twice under
@@ -66,21 +68,70 @@ export interface QueueRow {
   createdAt: Date;
 }
 
+/** Relabel this workspace's timed-out requests right before its queue is
+ *  read, so "what is waiting on me" never shows a request nobody can answer
+ *  any more. Inline on the read, NOT on a timer: the old 5-minute sweeper kept
+ *  the Neon compute from ever scaling to zero (see
+ *  packages/router/src/expiry-sweeper.ts). Scoped to the caller's workspace,
+ *  so a member's page load never writes another tenant's rows. Best-effort —
+ *  on a failure the queue still renders, and the decide path re-checks the
+ *  deadline atomically, so a stale label can never turn into a granted
+ *  write. */
+async function sweepBeforeRead(region: Region, customerId: string): Promise<void> {
+  try {
+    await expireStaleApprovals(region, { customerId });
+  } catch (err) {
+    console.error("[approvals] expiry sweep before read failed", err);
+  }
+}
+
+/** The row-scoped form of the sweep, for reads of ONE request: the detail
+ *  page and the decide fallback. Scoped to the caller's workspace, so a
+ *  single-approval read never writes outside it, and conditional on
+ *  status='pending', so it never passes through 'approved'. decided_at is the
+ *  deadline itself, the same stamp the queue sweep writes. */
+async function relabelIfExpired(
+  region: Region,
+  customerId: string,
+  id: string,
+  at: Date,
+): Promise<void> {
+  const db = getDb(region);
+  await db
+    .update(writeApprovals)
+    .set({ status: "expired", decidedAt: sql`${writeApprovals.expiresAt}` })
+    .where(
+      and(
+        eq(writeApprovals.id, id),
+        eq(writeApprovals.customerId, customerId),
+        eq(writeApprovals.region, region),
+        eq(writeApprovals.status, "pending"),
+        lte(writeApprovals.expiresAt, at),
+      ),
+    );
+}
+
 /** Everything still waiting in this workspace, newest first. */
 export async function listPendingApprovals(
   region: Region,
   customerId: string,
   limit = 100,
 ): Promise<QueueRow[]> {
+  await sweepBeforeRead(region, customerId);
   return selectRows(region, customerId, "pending", limit);
 }
 
-/** Recently settled requests — the "Decided" tab. */
+/** Recently settled requests — the "Decided" tab. Sweeps first as well: the
+ *  page reads both tabs concurrently, and a request timing out at render
+ *  time must land in THIS list rather than depend on the sibling read having
+ *  swept. (A request whose deadline falls in the milliseconds between the two
+ *  sweeps can miss both lists for that one render; it appears on the next.) */
 export async function listDecidedApprovals(
   region: Region,
   customerId: string,
   limit = 50,
 ): Promise<QueueRow[]> {
+  await sweepBeforeRead(region, customerId);
   const db = getDb(region);
   const rows = await db
     .select(SELECTION)
@@ -125,6 +176,13 @@ export async function getApproval(
   customerId: string,
   id: string,
 ): Promise<QueueRow | null> {
+  // Best-effort, like the queue sweep: on a failure the read still renders,
+  // and the decide path re-checks the deadline atomically.
+  try {
+    await relabelIfExpired(region, customerId, id, new Date());
+  } catch (err) {
+    console.error("[approvals] expiry relabel before read failed", err);
+  }
   const db = getDb(region);
   const rows = await db
     .select(SELECTION)
@@ -218,22 +276,18 @@ export async function decideApproval(args: {
     // generic refusal.
     const existing = await getApproval(args.region, args.customerId, args.id);
     if (!existing) return { ok: false, error: "not_found" };
+    // getApproval relabels a timed-out row inline, so it normally comes back
+    // already 'expired'. That is expiry, not someone else's decision — nobody
+    // decided it, the clock did — and the approver's message must say so.
+    if (existing.status === "expired") return { ok: false, error: "expired" };
     if (existing.status !== "pending") return { ok: false, error: "already_decided" };
 
-    // Still pending, so the deadline is what refused us. Relabel it now rather
-    // than waiting for the sweeper, so the queue stops offering an action that
-    // cannot succeed. Conditional and idempotent — and note it never passes
-    // through 'approved', which is precisely what made the old ordering racy.
-    await db
-      .update(writeApprovals)
-      .set({ status: "expired", decidedAt: at })
-      .where(
-        and(
-          eq(writeApprovals.id, args.id),
-          eq(writeApprovals.status, "pending"),
-          lte(writeApprovals.expiresAt, at),
-        ),
-      );
+    // Still pending, so the deadline is what refused us (the inline relabel
+    // is best-effort and may have failed). Relabel it now, so the queue stops
+    // offering an action that cannot succeed. Conditional and idempotent —
+    // and it never passes through 'approved', which is precisely what made
+    // the old ordering racy.
+    await relabelIfExpired(args.region, args.customerId, args.id, at);
     return { ok: false, error: "expired" };
   }
 
