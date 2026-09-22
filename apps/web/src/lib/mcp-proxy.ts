@@ -21,7 +21,10 @@
 // PR2 of mcp_url_auth_security: ContainerRegistry keys on project_id,
 // not the plaintext mcp_token. The pushPolicy helper takes a projectId.
 // The ExpirySweeper runs alongside the Indexer in the regional process
-// and flips expired-but-still-active rows on mcp_tokens.
+// as a slow (6h) backstop that flips expired-but-still-active rows on
+// mcp_tokens / write_approvals; the dashboard read paths sweep inline.
+// Its cadence must stay above Neon's 5-minute scale-to-zero window — a
+// 5-minute tick kept both regional computes awake around the clock.
 
 import { randomUUID } from "node:crypto";
 
@@ -211,16 +214,19 @@ export function getMcpProxyContext(): McpProxyContext {
     indexer.start();
   }
 
-  // Expiry sweeper runs alongside the indexer in the regional process.
-  // Independent of indexerToken — even in laptop dev without the indexer
-  // we want expired tokens to flip status so the dashboard renders
-  // truthfully. Durable enforcement of expiry happens in resolveByToken
-  // (NOW() in the WHERE filter); the sweeper is for dashboard /
-  // audit ordering.
+  // Expiry sweeper runs alongside the indexer in the regional process as
+  // a slow backstop (default 6h). Independent of indexerToken — even in
+  // laptop dev without the indexer we want audit timestamps on expired
+  // rows to land eventually. Durable enforcement of expiry happens in
+  // resolveByToken (NOW() in the WHERE filter), and the token list /
+  // approvals queue sweep inline before rendering, so this timer carries
+  // no truthfulness on its own. Keep the cadence well above Neon's
+  // 5-minute scale-to-zero window: this timer is what used to keep the
+  // control-plane Postgres awake 24/7 with no users.
   const expirySweeper = new ExpirySweeper({
     db,
     onSweep: ({ affected }) => {
-      console.log(`[expiry-sweeper] flipped ${affected} token(s) to expired`);
+      console.log(`[expiry-sweeper] flipped ${affected} row(s) to expired`);
     },
     onError: (err) => {
       console.error("[expiry-sweeper]", err);

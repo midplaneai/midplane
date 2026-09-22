@@ -52,7 +52,11 @@ export type {
 } from "./spawner-process.ts";
 export { Indexer } from "./indexer.ts";
 export type { ContainerAuditRow, IndexerOptions } from "./indexer.ts";
-export { ExpirySweeper } from "./expiry-sweeper.ts";
+export {
+  ExpirySweeper,
+  sweepExpiredApprovals,
+  sweepExpiredTokens,
+} from "./expiry-sweeper.ts";
 export type { ExpirySweeperOptions } from "./expiry-sweeper.ts";
 export { pushPolicy, PushPolicyError } from "./admin.ts";
 export type { PushPolicyDeps, PushPolicyResult } from "./admin.ts";

@@ -32,6 +32,8 @@ interface FakeDbHandle {
   queueSelect(rows: unknown[]): void;
   /** Make the next insert reject with the given error. */
   failNextInsert(err: unknown): void;
+  /** Make the next execute() (raw SQL, e.g. the inline expiry sweep) reject. */
+  failNextExecute(err: unknown): void;
 }
 
 let handle: FakeDbHandle;
@@ -40,6 +42,7 @@ function makeFakeDb(): FakeDbHandle {
   const calls: DbCall[] = [];
   const selectQueue: Array<unknown[]> = [];
   const insertErrorQueue: unknown[] = [];
+  const executeErrorQueue: unknown[] = [];
 
   const startSelect = () => {
     let table: unknown;
@@ -129,6 +132,7 @@ function makeFakeDb(): FakeDbHandle {
             : String((chunks[0] as { value?: unknown }).value ?? "")
           : "";
       calls.push({ op: "execute", set: raw });
+      if (executeErrorQueue.length > 0) throw executeErrorQueue.shift();
       return { rows: [] };
     },
   });
@@ -149,6 +153,9 @@ function makeFakeDb(): FakeDbHandle {
     },
     failNextInsert(err) {
       insertErrorQueue.push(err);
+    },
+    failNextExecute(err) {
+      executeErrorQueue.push(err);
     },
   };
 }
@@ -426,13 +433,76 @@ describe("listTokens", () => {
     expect(rows).toHaveLength(1);
     expect(rows![0]!.id).toBe("tok-1");
     expect(rows![0]!.status).toBe("active");
+
+    // The expiry sweep runs INLINE on the list read (after the ownership
+    // check, before the rows are selected) rather than on a timer — the
+    // timer is what kept the Neon compute awake around the clock.
+    const sweepIdx = handle.calls.findIndex(
+      (c) => c.op === "execute" && String(c.set).includes("UPDATE mcp_tokens"),
+    );
+    expect(sweepIdx).toBeGreaterThan(0);
+    const lastSelectIdx = handle.calls.map((c) => c.op).lastIndexOf("select");
+    expect(sweepIdx).toBeLessThan(lastSelectIdx);
   });
 
-  it("returns null on foreign project", async () => {
+  it("returns null on foreign project, without sweeping", async () => {
     handle.queueSelect([]); // parent not owned
     const { listTokens } = await import("../src/lib/tokens.ts");
     const rows = await listTokens(customer, "foreign");
     expect(rows).toBeNull();
+    expect(handle.calls.some((c) => c.op === "execute")).toBe(false);
+  });
+
+  it("still lists tokens when the inline sweep fails", async () => {
+    // The sweep is best-effort: the count and runtime paths filter on NOW()
+    // themselves, so a sweep outage may only lag a status label, never blank
+    // the list.
+    handle.queueSelect([{ id: "conn-1" }]);
+    handle.queueSelect([
+      {
+        id: "tok-1",
+        name: "laptop",
+        prefix: "mp_test",
+        last4: "ab12",
+        createdByUserId: "u",
+        createdAt: new Date(),
+        expiresAt: null,
+        lastUsedAt: null,
+        lastUsedIp: null,
+        lastUsedUa: null,
+        status: "active",
+        revokedAt: null,
+        revokedReason: null,
+      },
+    ]);
+    handle.failNextExecute(new Error("postgres outage"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { listTokens } = await import("../src/lib/tokens.ts");
+    const rows = await listTokens(customer, "conn-1");
+    expect(rows).toHaveLength(1);
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining("expiry sweep before list failed"),
+      expect.any(Error),
+    );
+  });
+});
+
+describe("listProjectAgents", () => {
+  it("sweeps inline after the ownership check and before the agent select", async () => {
+    handle.queueSelect([{ id: "conn-1" }]); // parent ownership
+    handle.queueSelect([]); // no agents → early return before the grants select
+    const { listProjectAgents } = await import("../src/lib/tokens.ts");
+    expect(await listProjectAgents(customer, "conn-1")).toEqual([]);
+    const ops = handle.calls.map((c) => c.op);
+    expect(ops).toEqual(["select", "execute", "select"]);
+    expect(String(handle.calls[1]!.set)).toContain("UPDATE mcp_tokens");
+  });
+
+  it("returns null on a foreign project without sweeping", async () => {
+    handle.queueSelect([]); // parent not owned
+    const { listProjectAgents } = await import("../src/lib/tokens.ts");
+    expect(await listProjectAgents(customer, "foreign")).toBeNull();
+    expect(handle.calls.some((c) => c.op === "execute")).toBe(false);
   });
 });
 
@@ -466,6 +536,24 @@ describe("revokeToken", () => {
     const auditRow = audit!.set as Record<string, unknown>;
     expect(auditRow.eventType).toBe("TOKEN_REVOKED");
     expect(auditRow.mcpTokenId).toBe("tok-1");
+  });
+
+  it("sweeps the project's expiries before reading status, so an unswept expired token stays expired", async () => {
+    // Expiry is swept on reads now; a DELETE that arrives before any list read
+    // must still be the documented no-op, not a rewrite to revoked.
+    handle.queueSelect([{ id: "conn-1" }]); // parent
+    handle.queueSelect([{ id: "tok-1", status: "expired" }]); // post-sweep read
+    const { revokeToken } = await import("../src/lib/tokens.ts");
+    const result = await revokeToken(customer, "conn-1", "tok-1", {
+      reason: "user_action",
+      actorUserId: "u",
+    });
+    expect(result).toEqual({ id: "tok-1" });
+    const ops = handle.calls.map((c) => c.op);
+    expect(ops.slice(0, 3)).toEqual(["select", "execute", "select"]);
+    expect(String(handle.calls[1]!.set)).toContain("UPDATE mcp_tokens");
+    expect(ops).not.toContain("update");
+    expect(ops).not.toContain("insert"); // no TOKEN_REVOKED audit row
   });
 
   it("idempotent on already-revoked: returns the row, no UPDATE, no audit", async () => {

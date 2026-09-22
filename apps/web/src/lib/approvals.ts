@@ -12,8 +12,10 @@
 // the HTTP surface (route handler).
 
 import { createHash } from "node:crypto";
-import { and, desc, eq, gt, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { ulid } from "ulid";
+
+import { sweepExpiredApprovals } from "@midplane-cloud/router";
 
 import {
   auditEventsIndex,
@@ -243,9 +245,16 @@ async function claimSettled(
     (row.status === "pending" && row.expiresAt.getTime() <= now());
   if (!stale) return null;
 
+  // decided_at is the deadline itself, matching the sweep, so the Decided tab
+  // shows when this request actually timed out rather than when an agent
+  // happened to retry.
   const consumed = await db
     .update(writeApprovals)
-    .set({ status: "expired", claimedAt: at })
+    .set({
+      status: "expired",
+      decidedAt: sql`${writeApprovals.expiresAt}`,
+      claimedAt: at,
+    })
     .where(and(eq(writeApprovals.id, row.id), isNull(writeApprovals.claimedAt)))
     .returning({ id: writeApprovals.id });
 
@@ -347,28 +356,22 @@ export class ApprovalRaceError extends Error {
   }
 }
 
-/** Relabel pending requests whose window has closed.
+/** Relabel pending requests whose window has closed. Returns the row count.
  *
  *  Expiry denies, always — a request that times out into a `yes` would be a
  *  denial-of-attention attack on the control plane. Idempotent, so it is safe to
- *  run from a sweeper on any cadence. */
+ *  run on any cadence: the queue reads call it inline scoped to their own
+ *  workspace, and the router's ExpirySweeper runs the same statement
+ *  region-wide as a slow backstop. One UPDATE shape, one clock (the DB's),
+ *  defined in packages/router/src/expiry-sweeper.ts. */
 export async function expireStaleApprovals(
   region: Region,
-  opts: { now?: () => number } = {},
+  scope?: { customerId: string },
 ): Promise<number> {
-  const now = opts.now ?? Date.now;
-  const db = getDb(region);
-  const expired = await db
-    .update(writeApprovals)
-    .set({ status: "expired", decidedAt: new Date(now()) })
-    .where(
-      and(
-        eq(writeApprovals.status, "pending"),
-        lt(writeApprovals.expiresAt, new Date(now())),
-      ),
-    )
-    .returning({ id: writeApprovals.id });
-  return expired.length;
+  return sweepExpiredApprovals(
+    getDb(region),
+    scope ? { customerId: scope.customerId, region } : undefined,
+  );
 }
 
 /** Read-only status of one approval, for the agent's `check_approval` tool.

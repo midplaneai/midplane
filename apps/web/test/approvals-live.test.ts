@@ -222,6 +222,14 @@ d("approval resolution — live", () => {
 
     const first = await resolveApproval({ ...BASE, queryId: "q2" }, NO_WAIT);
     expect(first.status).toBe("expired");
+    // The claim path stamps the deadline, like the sweeps: identical expiry
+    // events must not produce different histories depending on who noticed.
+    const consumed = await sql`SELECT decided_at, expires_at FROM write_approvals
+                               WHERE grant_key = ${grantKeyFor(BASE)} AND status = 'expired'`;
+    expect(consumed).toHaveLength(1);
+    expect(new Date(consumed[0]!.decided_at as string).getTime()).toBe(
+      new Date(consumed[0]!.expires_at as string).getTime(),
+    );
 
     const second = await resolveApproval({ ...BASE, queryId: "q3" }, NO_WAIT);
     expect(second.status).toBe("pending");
@@ -286,6 +294,88 @@ d("approval resolution — live", () => {
     expect(await expireStaleApprovals("eu")).toBe(0);
     const rows = await sql`SELECT status FROM write_approvals WHERE grant_key = ${grantKeyFor(BASE)}`;
     expect(rows[0]!.status).toBe("pending");
+  });
+
+  it("the queue relabels a stale row inline on read — no timer involved", async () => {
+    // The periodic sweeper is a slow backstop now (it used to keep the Neon
+    // compute awake 24/7). The queue read itself must hide a timed-out request
+    // and leave the row relabelled, so "what is waiting on me" stays honest.
+    await resolveApproval(BASE, NO_WAIT);
+    await sql`UPDATE write_approvals SET expires_at = now() - interval '1 minute'
+              WHERE grant_key = ${grantKeyFor(BASE)}`;
+
+    expect(await listPendingApprovals("eu", "c_live")).toHaveLength(0);
+    const rows = await sql`SELECT status, decided_at, expires_at FROM write_approvals WHERE grant_key = ${grantKeyFor(BASE)}`;
+    expect(rows[0]!.status).toBe("expired");
+    // The stamp is the deadline itself, not the moment the queue was opened:
+    // with traffic-driven sweeps that gap is unbounded, and the Decided tab
+    // renders this value.
+    expect(new Date(rows[0]!.decided_at as string).getTime()).toBe(
+      new Date(rows[0]!.expires_at as string).getTime(),
+    );
+  });
+
+  it("the Decided tab sweeps on its own read, so a timed-out request lands there", async () => {
+    // The page reads both tabs concurrently; the decided list must not depend
+    // on the sibling pending read having swept first.
+    await resolveApproval(BASE, NO_WAIT);
+    await sql`UPDATE write_approvals SET expires_at = now() - interval '1 minute'
+              WHERE grant_key = ${grantKeyFor(BASE)}`;
+
+    const decided = await listDecidedApprovals("eu", "c_live");
+    expect(decided.map((r) => r.status)).toContain("expired");
+  });
+
+  it("the detail read relabels a stale row inline too", async () => {
+    const a = await resolveApproval(BASE, NO_WAIT);
+    if (a.status !== "pending") throw new Error("expected pending");
+    await sql`UPDATE write_approvals SET expires_at = now() - interval '1 minute'
+              WHERE id = ${a.approvalId}`;
+
+    const row = await getApproval("eu", "c_live", a.approvalId);
+    expect(row?.status).toBe("expired");
+    expect(row?.decidedAt?.getTime()).toBe(row?.expiresAt.getTime());
+  });
+
+  it("the detail read leaves live, settled, and foreign rows alone", async () => {
+    // relabelIfExpired is conditional on status='pending', the deadline, AND
+    // the caller's workspace. Each guard, negatively.
+    const live = await resolveApproval(BASE, NO_WAIT);
+    if (live.status !== "pending") throw new Error("expected pending");
+    expect((await getApproval("eu", "c_live", live.approvalId))?.status).toBe("pending");
+
+    await sql`UPDATE write_approvals
+                 SET status = 'denied', decided_by_user_id = 'u_named', decided_at = now(),
+                     expires_at = now() - interval '1 minute'
+               WHERE id = ${live.approvalId}`;
+    expect((await getApproval("eu", "c_live", live.approvalId))?.status).toBe("denied");
+
+    // A different statement, so it gets its own grant key rather than
+    // consuming the settled row above.
+    const other = await resolveApproval(
+      { ...BASE, queryId: "q2", sql: "UPDATE orders SET status='refunded' WHERE id=2" },
+      NO_WAIT,
+    );
+    if (other.status !== "pending") throw new Error("expected pending");
+    await sql`UPDATE write_approvals SET expires_at = now() - interval '1 minute'
+              WHERE id = ${other.approvalId}`;
+    expect(await getApproval("eu", "someone_else", other.approvalId)).toBeNull();
+    const rows = await sql`SELECT status FROM write_approvals WHERE id = ${other.approvalId}`;
+    expect(rows[0]!.status).toBe("pending"); // a foreign read wrote nothing
+  });
+
+  it("both tabs read concurrently agree on a request that just timed out", async () => {
+    // What the /approvals page actually does: Promise.all over both lists.
+    await resolveApproval(BASE, NO_WAIT);
+    await sql`UPDATE write_approvals SET expires_at = now() - interval '1 minute'
+              WHERE grant_key = ${grantKeyFor(BASE)}`;
+
+    const [pending, decided] = await Promise.all([
+      listPendingApprovals("eu", "c_live"),
+      listDecidedApprovals("eu", "c_live"),
+    ]);
+    expect(pending).toHaveLength(0);
+    expect(decided.map((r) => r.status)).toContain("expired");
   });
 
   describe("review fixes", () => {

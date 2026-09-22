@@ -19,6 +19,8 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { ulid } from "ulid";
 
+import { sweepExpiredTokens } from "@midplane-cloud/router";
+
 import {
   auditEventsIndex,
   projects,
@@ -375,6 +377,25 @@ export async function createToken(
   return { id, plaintext: generated.plaintext };
 }
 
+/** Flip this project's expired-but-still-'active' rows right before a list
+ *  read, so the dashboard labels them truthfully. Inline on the read, NOT on a
+ *  timer: the old 5-minute sweeper kept the Neon compute from ever scaling to
+ *  zero (see packages/router/src/expiry-sweeper.ts). Scoped to the project the
+ *  caller already proved they own, so a GET never writes another tenant's
+ *  rows. Best-effort — on a sweep failure the list still renders; the count
+ *  and runtime paths filter on NOW() themselves, so only the status label
+ *  could lag. */
+async function sweepBeforeList(
+  db: Parameters<typeof sweepExpiredTokens>[0],
+  projectId: string,
+): Promise<void> {
+  try {
+    await sweepExpiredTokens(db, { projectId });
+  } catch (err) {
+    console.error("[tokens] expiry sweep before list failed", err);
+  }
+}
+
 /** List every token on a project — dashboard-safe shape (no hash, no
  *  plaintext, no pepper). Ordered newest-first so the show-once mint UX
  *  surfaces the just-created token at the top. Returns null when the
@@ -397,6 +418,7 @@ export async function listTokens(
     )
     .limit(1);
   if (parent.length === 0) return null;
+  await sweepBeforeList(db, projectId);
 
   const rows = await db
     .select({
@@ -477,6 +499,7 @@ export async function listProjectAgents(
     )
     .limit(1);
   if (parent.length === 0) return null;
+  await sweepBeforeList(db, projectId);
 
   // Both credential kinds in one list. kind='oauth' rows are the per-(project,
   // client) attribution rows the OAuth path mints; kind='url' are PAT tokens.
@@ -606,6 +629,13 @@ export async function revokeToken(
       .for("update")
       .limit(1);
     if (parent.length === 0) return null;
+
+    // Expiry is swept on reads now, so a token past its deadline may still
+    // say 'active' here. Relabel THIS row first, inside this txn, so the
+    // no-op below sees 'expired' and the deadline stays the forensic record
+    // instead of being rewritten as a user revoke. Just this row: a revoke
+    // must not wait on locks held against unrelated expired tokens.
+    await sweepExpiredTokens(tx, { projectId, tokenId });
 
     // Read current status first — revoking an already-revoked or expired
     // token is a no-op that returns the existing row without rewriting
