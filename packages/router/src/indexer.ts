@@ -49,6 +49,9 @@ import type { Region } from "@midplane-cloud/kms";
 import type { Db } from "./resolve.ts";
 import type { ActiveContainer, ContainerRegistry } from "./spawner.ts";
 
+/** 5s — design doc cadence. Cheap to keep this fast: a tick against an
+ *  engine with nothing new is one HTTP call and no database statement
+ *  (see cursorCache), so the cadence sets audit latency, not DB load. */
 const DEFAULT_TICK_MS = 5_000;
 /** recordError write throttle — minute-level is plenty for the
  *  freshness dot; without it a persistently-down engine churns an
@@ -212,6 +215,29 @@ export class Indexer {
    *  indexer_cursors every tick (see recordError). */
   private readonly lastErrorStampMs = new Map<string, number>();
 
+  /** Per-project in-memory cursor: the last audit id this process wrote
+   *  for the container, plus the customer it belongs to. Populated from
+   *  the cursor row on first sighting (one DB read), advanced in memory
+   *  after every successful batch, and dropped when the container leaves
+   *  the registry (see tick()).
+   *
+   *  This is what makes an idle engine free for the control plane's
+   *  Postgres: a tick that finds no new audit rows is one HTTP call to the
+   *  engine and ZERO database statements, so Neon can scale to zero while
+   *  an agent session is merely open. Before this cache, every 5-second
+   *  tick re-read the cursor row, which on its own kept the compute awake
+   *  for the whole 30-minute idle window after each MCP request.
+   *
+   *  Correctness does not depend on the cache. This process is the only
+   *  writer of its containers' cursors; if another process ever advances
+   *  the row first (a bluegreen overlap, a second web machine adopting the
+   *  same engine), a stale cursor only re-fetches rows that the INSERT's
+   *  ON CONFLICT DO NOTHING drops. */
+  private readonly cursorCache = new Map<
+    string,
+    { lastId: string; customerId: string }
+  >();
+
   constructor(opts: IndexerOptions) {
     if (!opts.indexerToken) {
       throw new Error(
@@ -263,6 +289,15 @@ export class Indexer {
       }
     }
 
+    // A container that left the registry (idle stop, invalidate) takes its
+    // cursor cache entry with it, so a later re-spawn re-reads the row once
+    // and picks up anything another process may have written meanwhile.
+    // Also bounds the cache to the registry's size.
+    const live = new Set(containers.map((c) => c.projectId));
+    for (const projectId of this.cursorCache.keys()) {
+      if (!live.has(projectId)) this.cursorCache.delete(projectId);
+    }
+
     if (this.nowFn() - this.lastRetentionAt >= this.retentionSweepMs) {
       this.lastRetentionAt = this.nowFn();
       for (const container of containers) {
@@ -291,27 +326,35 @@ export class Indexer {
   }
 
   private async indexOne(container: ActiveContainer): Promise<void> {
-    // Prefer the cursor row's customer_id (stamped on first index). It
-    // survives project deletion via FK ON DELETE SET NULL: the row's
-    // project_id flips to NULL but customer_id stays, so backlog
-    // drainage works even when the user deletes a project 5 seconds
-    // after first use. Fall back to the projects table on first
-    // sighting only.
-    const cursorRow = await this.loadCursorRow(container.projectId);
-    let customerId = cursorRow?.customerId;
-    if (!customerId) {
-      const meta = await this.resolveCustomer(container.projectId);
-      if (!meta) {
-        // Truly orphaned: no cursor row AND no project row. Skip.
-        return;
+    let cached = this.cursorCache.get(container.projectId);
+    if (!cached) {
+      // First sighting of this container in this process: one DB read.
+      // Prefer the cursor row's customer_id (stamped on first index). It
+      // survives project deletion via FK ON DELETE SET NULL: the row's
+      // project_id flips to NULL but customer_id stays, so backlog
+      // drainage works even when the user deletes a project 5 seconds
+      // after first use. Fall back to the projects table only when there
+      // is no cursor row yet.
+      const cursorRow = await this.loadCursorRow(container.projectId);
+      let customerId = cursorRow?.customerId;
+      if (!customerId) {
+        const meta = await this.resolveCustomer(container.projectId);
+        if (!meta) {
+          // Truly orphaned: no cursor row AND no project row. Skip.
+          return;
+        }
+        customerId = meta.customerId;
       }
-      customerId = meta.customerId;
+      cached = { lastId: cursorRow?.lastId ?? "", customerId };
+      this.cursorCache.set(container.projectId, cached);
     }
 
-    let cursor = cursorRow?.lastId ?? "";
+    const customerId = cached.customerId;
+    let cursor = cached.lastId;
     // Drain in-tick: keep polling until next_cursor is null. Bounded by
     // the registry being a fixed-size set per process; no risk of starving
-    // other containers because the OSS limit caps response size.
+    // other containers because the OSS limit caps response size. An empty
+    // page returns before touching the database at all.
     for (let i = 0; i < 50; i++) {
       const resp = await this.fetchSince(container, cursor);
       if (resp.rows.length === 0) return;
@@ -328,9 +371,12 @@ export class Indexer {
           phase: "write",
         });
         await this.recordError(container, err);
+        // The row was not advanced, so neither is the cache: the next
+        // tick re-fetches from the same cursor.
         return;
       }
       cursor = resp.rows[resp.rows.length - 1]!.id;
+      cached.lastId = cursor;
       if (resp.next_cursor === null) return;
     }
   }
@@ -686,10 +732,15 @@ export class Indexer {
   }
 
   private async sweepRetention(container: ActiveContainer): Promise<void> {
-    // Retention reads customer_id off the cursor row — no fallback to
-    // projects needed because the cursor row is always populated by
-    // the time any rows are ack'd into Postgres (writeBatch upserts it).
-    const cursorRow = await this.loadCursorRow(container.projectId);
+    // Retention reads customer_id off the cursor — the in-memory copy
+    // indexOne keeps for this container (no DB round trip), falling back
+    // to the row on the rare tick where the cache is cold. No fallback to
+    // projects needed because the cursor is always populated by the time
+    // any rows are ack'd into Postgres (writeBatch upserts it). Nothing
+    // ack'd yet means nothing to retire, and no statement is issued.
+    const cursorRow =
+      this.cursorCache.get(container.projectId) ??
+      (await this.loadCursorRow(container.projectId));
     if (!cursorRow || !cursorRow.lastId) return;
     const customerId = cursorRow.customerId;
     const ackId = cursorRow.lastId;

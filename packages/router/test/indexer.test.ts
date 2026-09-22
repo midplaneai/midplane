@@ -84,6 +84,9 @@ interface FakeDbState {
   /** Captures every SET LOCAL app.customer_id = '...' bind issued
    *  inside indexer transactions. */
   boundCustomerIds: string[];
+  /** Every SELECT that resolved, keyed by table. The cursor-cache tests
+   *  assert that an idle engine costs zero of these after first sighting. */
+  selectsByTable: Map<unknown, number>;
 }
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -99,6 +102,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
     failNextTxn: false,
     retentionMaxId: null,
     boundCustomerIds: [],
+    selectsByTable: new Map(),
   };
 
   // Find a cursor by its current project_id (NULL is never returned —
@@ -136,6 +140,7 @@ function makeFakeDb(): { db: Db; state: FakeDbState } {
     };
 
     function resolveSelect(): unknown[] {
+      state.selectsByTable.set(table, (state.selectsByTable.get(table) ?? 0) + 1);
       if (table === projects) {
         // resolveCustomer: WHERE id = $1 (project id, single param).
         const meta = whereCond.firstUlid
@@ -518,6 +523,24 @@ async function buildHarness(
   return { db, state, registry, spawner };
 }
 
+/** Every statement the fake db saw: selects, inserts, updates, and the
+ *  SET LOCAL binds that open each transaction. */
+function dbStatementCount(state: FakeDbState): number {
+  let selects = 0;
+  for (const n of state.selectsByTable.values()) selects += n;
+  return (
+    selects +
+    state.inserts.length +
+    state.updates.length +
+    state.boundCustomerIds.length
+  );
+}
+
+function sinceUrl(fetchFn: unknown, callIndex: number): string {
+  const calls = (fetchFn as ReturnType<typeof vi.fn>).mock.calls;
+  return String(calls[callIndex]![0]);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -789,6 +812,126 @@ describe("Indexer", () => {
     expect(updateWhere.firstUlid).toBe(cursorBeforeDelete!.id);
     expect(updateWhere.colsSeen.has("id")).toBe(true);
     expect(updateWhere.colsSeen.has("project_id")).toBe(false);
+  });
+
+  describe("cursor cache — an idle engine costs the database nothing", () => {
+    it("reads the cursor once on first sighting, then polls with zero DB statements", async () => {
+      // The 5s tick used to re-read indexer_cursors every time, which alone
+      // kept the Neon compute awake for the whole 30-minute idle window
+      // after an MCP request. Now the cursor lives in memory.
+      const { db, state, registry } = await buildHarness();
+      const fetchFn = vi.fn(async () =>
+        jsonResponse({ rows: [], next_cursor: null }),
+      ) as unknown as typeof fetch;
+      const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+
+      await ix.tick();
+      // First sighting: cursor row lookup (miss) + projects fallback.
+      expect(state.selectsByTable.get(indexerCursors)).toBe(1);
+      expect(state.selectsByTable.get(projects)).toBe(1);
+      const afterFirst = dbStatementCount(state);
+
+      await ix.tick();
+      await ix.tick();
+      await ix.tick();
+      expect(fetchFn).toHaveBeenCalledTimes(4); // the engine is still polled
+      expect(dbStatementCount(state)).toBe(afterFirst); // Postgres is not
+    });
+
+    it("advances the cursor in memory after a batch and fetches from it next tick", async () => {
+      const { db, state, registry } = await buildHarness();
+      const responses = [
+        jsonResponse({ rows: [row("01HX0000000000000000000001")], next_cursor: null }),
+        jsonResponse({ rows: [], next_cursor: null }),
+        jsonResponse({ rows: [], next_cursor: null }),
+      ];
+      const fetchFn = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+      const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+
+      await ix.tick();
+      expect(sinceUrl(fetchFn, 0)).toContain("/audit/since/0?");
+      const afterWrite = dbStatementCount(state);
+
+      await ix.tick();
+      await ix.tick();
+      // Both follow-up polls resume from the row we wrote, without asking
+      // the database where we were.
+      expect(sinceUrl(fetchFn, 1)).toContain("/audit/since/01HX0000000000000000000001?");
+      expect(sinceUrl(fetchFn, 2)).toContain("/audit/since/01HX0000000000000000000001?");
+      expect(dbStatementCount(state)).toBe(afterWrite);
+    });
+
+    it("keeps the cursor where it was when the write fails", async () => {
+      const { db, state, registry } = await buildHarness({ failNextTxn: true });
+      const responses = [
+        jsonResponse({ rows: [row("01HX0000000000000000000001")], next_cursor: null }),
+        jsonResponse({ rows: [row("01HX0000000000000000000001")], next_cursor: null }),
+      ];
+      const fetchFn = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+      const errors: unknown[] = [];
+      const ix = new Indexer({
+        db,
+        registry,
+        indexerToken: "t",
+        fetch: fetchFn,
+        onError: (e) => errors.push(e),
+      });
+
+      await ix.tick(); // the transaction throws; nothing landed
+      expect(errors.length).toBeGreaterThan(0);
+      expect(state.auditRows).toHaveLength(0);
+
+      await ix.tick(); // retried from the same cursor, and this time it lands
+      expect(sinceUrl(fetchFn, 1)).toContain("/audit/since/0?");
+      expect(state.auditRows.map((r) => r.id)).toEqual(["01HX0000000000000000000001"]);
+    });
+
+    it("forgets a container's cursor when it leaves the registry and re-reads it on return", async () => {
+      const { db, state, registry } = await buildHarness();
+      const fetchFn = vi.fn(async () =>
+        jsonResponse({ rows: [], next_cursor: null }),
+      ) as unknown as typeof fetch;
+      const ix = new Indexer({ db, registry, indexerToken: "t", fetch: fetchFn });
+
+      await ix.tick();
+      expect(state.selectsByTable.get(indexerCursors)).toBe(1);
+
+      // Idle stop / invalidate: the container is gone, and so is its entry.
+      await registry.invalidate(TEST_CONN_A);
+      await ix.tick(); // nothing registered; prunes the cache
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+
+      // Re-spawn: one fresh read, so a cursor another process advanced
+      // meanwhile is picked up rather than trusted from memory. Simulate
+      // that other process by planting an advanced row.
+      state.cursorsById.set("01HXCURSOR00000000000000AA", {
+        id: "01HXCURSOR00000000000000AA",
+        projectId: TEST_CONN_A,
+        lastId: "01HX0000000000000000000009",
+        customerId: TEST_CUST_A,
+        region: "eu",
+      });
+      await registry.acquire({
+        projectId: TEST_CONN_A,
+        region: "eu",
+        databases: [
+          {
+            name: "main",
+            projectDatabaseId: "01HXYZMAIN0000000000000000",
+            dsn: "postgres://x",
+            tableAccess: { default: "deny", tables: {} },
+            tenantScope: { column: null, overrides: {}, exempt: [] },
+            guardrails: { block_unqualified_dml: true, block_ddl: true, block_dml: false },
+          },
+        ],
+      });
+      await ix.tick();
+      expect(state.selectsByTable.get(indexerCursors)).toBe(2);
+      // The re-read cursor is the one actually used, not the stale memory.
+      expect(sinceUrl(fetchFn, 1)).toContain("/audit/since/01HX0000000000000000000009?");
+      await ix.tick();
+      expect(state.selectsByTable.get(indexerCursors)).toBe(2);
+    });
   });
 
   it("drains multi-page within a single tick", async () => {
