@@ -18,12 +18,30 @@ import {
 import type { Region } from "@midplane-cloud/kms";
 import { OSS_ENGINE_IMAGE } from "./oss-image.ts";
 import type { RegionConfig } from "./region.ts";
-import { toDatabaseEntry } from "./spawner.ts";
+import {
+  BOOT_FINGERPRINT_VERSION,
+  bootFingerprint,
+  toDatabaseEntry,
+} from "./spawner.ts";
 import type { SpawnedContainer, Spawner, SpawnOptions } from "./spawner.ts";
 
 // Path inside the OSS container where the policy YAML is materialized.
 // The MIDPLANE_POLICY_FILE env var points the engine at this path.
 const POLICY_FILE_GUEST_PATH = "/etc/midplane/policy.yaml";
+
+/** Machine metadata key holding the bootFingerprint the engine was created with.
+ *  The registry that remembers what each engine booted with is in-memory and
+ *  every web deploy wipes it, but the machine outlives the deploy. Stamping the
+ *  fingerprint on the machine lets a later adoption check the one thing a policy
+ *  push can't fix: whether masks, DSNs and the approval gate are what this
+ *  request needs. Only the sha256 digest is stored. One key per pre-image version
+ *  (see BOOT_FINGERPRINT_VERSION): an instance reads only its own version's key,
+ *  so it never adopts a machine it can't verify, including one stamped by a newer
+ *  release after a rollback. Exported for tests. */
+export const BOOT_FINGERPRINT_METADATA_KEY = `midplane_boot_fp_v${BOOT_FINGERPRINT_VERSION}`;
+
+// Fly machine states an adoption must not wait on (see adoptable).
+const UNADOPTABLE_STATES = new Set(["destroying", "destroyed", "failed"]);
 
 export interface FlyMachineSpawnerOptions {
   apiToken: string;
@@ -66,10 +84,15 @@ interface MachineGetResponse {
   state: string;
   private_ip: string;
   /** Image the machine is actually running (from config.image on the
-   *  list response). Undefined when Fly omits config — the adoption
-   *  image check is skipped then (fail-open keeps the session alive;
-   *  the realistic skew path always carries config). */
+   *  list response). Undefined when Fly omits config — the image check
+   *  alone would skip then, but the fingerprint check below can't pass
+   *  without config either, so such a machine is recreated. */
   image?: string;
+  /** The bootFingerprint recorded under BOOT_FINGERPRINT_METADATA_KEY at
+   *  create. Undefined when the machine predates fingerprinting, was stamped
+   *  under another version's key, or Fly omitted config: its boot config is
+   *  unknown, so it is never adopted. */
+  bootFingerprint?: string;
 }
 
 export class FlyMachineSpawner implements Spawner {
@@ -122,7 +145,8 @@ export class FlyMachineSpawner implements Spawner {
     // redeploy (bluegreen wipes the process) or a second web instance loses
     // that entry, so we'd blind-create and Fly would 409 "already_exists".
     // Adopting the live machine makes spawn idempotent against both.
-    let machine = await this.createMachine(app, regionCfg.flyRegion, opts);
+    const fingerprint = bootFingerprint(opts);
+    let machine = await this.createMachine(app, regionCfg.flyRegion, opts, fingerprint);
     let created = machine !== null;
     if (!machine) {
       const adopted = await this.getMachineByName(app, name);
@@ -131,27 +155,21 @@ export class FlyMachineSpawner implements Spawner {
           `fly machine ${name} reported existing on create but absent on lookup`,
         );
       }
-      if (adopted.image !== undefined && imageIsStale(adopted.image, this.image)) {
-        // Stale-image guard: a machine created under an older engine pin
-        // survives web redeploys (it's adopted by name, never recreated).
-        // That's not just version drift — pre-0.9.0 engine schemas are
-        // non-strict and silently STRIP policy sections they don't know,
-        // so a stale engine acks the new YAML while enforcing none of it
-        // (the UI would claim guardrails are on; the engine wouldn't
-        // know they exist). Recreate on mismatch so the pinned image is
-        // what actually enforces. imageIsStale is ONE-DIRECTIONAL: an
-        // instance never destroys a machine running a NEWER tag than its
-        // own pin — during a bluegreen web deploy, mixed instances would
-        // otherwise ping-pong the same engine machine, killing live
-        // sessions on every flip.
+      if (!this.adoptable(adopted, fingerprint)) {
+        // The machine can't serve this request as it is; recreate it (see
+        // adoptable for the two reasons). Either way a push can't fix it:
+        // the image is the image, and masks / DSNs / the gate are read once at
+        // boot. This is the only point where a mask, approval-gate or password
+        // change saved while the registry was cold can reach the engine — the
+        // save's registry.invalidate had nothing to stop.
         await this.destroy(app, adopted.id);
         // Fly's DELETE is async — the dying machine can hold the name for
         // a few seconds, so the create may keep 409ing. Retry briefly;
         // a concurrent spawn may also recreate it first, in which case we
-        // adopt that one (if it's not stale too).
+        // adopt that one (if it's adoptable too).
         const recreateDeadline = Date.now() + 10_000;
         for (;;) {
-          machine = await this.createMachine(app, regionCfg.flyRegion, opts);
+          machine = await this.createMachine(app, regionCfg.flyRegion, opts, fingerprint);
           if (machine) {
             created = true;
             break;
@@ -159,13 +177,10 @@ export class FlyMachineSpawner implements Spawner {
           const recreated = await this.getMachineByName(app, name);
           if (
             recreated &&
-            !(
-              recreated.image !== undefined &&
-              imageIsStale(recreated.image, this.image)
-            ) &&
-            recreated.id !== adopted.id
+            recreated.id !== adopted.id &&
+            this.adoptable(recreated, fingerprint)
           ) {
-            // Someone else recreated it on an acceptable image.
+            // Someone else recreated it with an acceptable image and config.
             machine = recreated;
             created = false;
             if (machine.state !== "started") {
@@ -175,7 +190,7 @@ export class FlyMachineSpawner implements Spawner {
           }
           if (Date.now() >= recreateDeadline) {
             throw new Error(
-              `fly machine ${name} could not be recreated after destroying its stale image (want ${this.image})`,
+              `fly machine ${name} could not be recreated after destroying its stale engine (want ${this.image})`,
             );
           }
           await sleep(500);
@@ -220,8 +235,9 @@ export class FlyMachineSpawner implements Spawner {
       // delivered:false ("next spawn reads from PG") — but this adoption
       // IS that next spawn, and without a push the persistent engine
       // keeps enforcing the old policy while PG and the UI say otherwise.
-      // Push the spawn-time policy (read fresh from PG by the caller) so
-      // adoption and creation leave the engine in the same state.
+      // Push the FULL spawn-time policy (read fresh from PG by the caller) so
+      // adoption and creation leave the engine in the same state. The
+      // boot-time part already matches (adoptable checked the fingerprint).
       try {
         await this.pushPolicyToMachine(machine.private_ip, opts);
       } catch (err) {
@@ -263,6 +279,31 @@ export class FlyMachineSpawner implements Spawner {
     return `mcp-${projectId.slice(0, 16).toLowerCase()}`;
   }
 
+  // An existing machine can be adopted only if BOTH hold:
+  //   - Its image isn't older than the pin. A machine created under an older
+  //     pin survives web redeploys, and pre-0.9.0 engine schemas are non-strict:
+  //     they silently STRIP policy sections they don't know, so a stale engine
+  //     acks the new YAML while enforcing none of it (the UI would claim
+  //     guardrails are on; the engine wouldn't know they exist).
+  //     The image check is ONE-DIRECTIONAL: an instance never destroys a
+  //     machine running a NEWER tag than its own pin. During a bluegreen web
+  //     deploy, mixed instances would otherwise ping-pong the same engine
+  //     machine, killing live sessions on every flip.
+  //   - It booted with exactly the config this request needs (bootFingerprint).
+  //     Masks, DSNs and the approval gate can't be pushed, so a machine booted
+  //     before a mask was added or a password rotated would keep serving
+  //     plaintext or the old credential while the dashboard says the change is
+  //     applied. No fingerprint under this version's key means unknown, and
+  //     unknown is recreated.
+  // A machine that is going away or broken is never adopted either: waiting on
+  // it would time out into a 502, and a `failed` one would be re-adopted by
+  // every later request. The recreate path replaces it instead.
+  private adoptable(m: MachineGetResponse, fingerprint: string): boolean {
+    if (UNADOPTABLE_STATES.has(m.state)) return false;
+    if (m.image !== undefined && imageIsStale(m.image, this.image)) return false;
+    return m.bootFingerprint === fingerprint;
+  }
+
   private async getMachineByName(
     app: string,
     name: string,
@@ -277,7 +318,7 @@ export class FlyMachineSpawner implements Spawner {
     }
     const machines = (await res.json()) as Array<MachineGetResponse & {
       name?: string;
-      config?: { image?: string };
+      config?: { image?: string; metadata?: Record<string, string> };
     }>;
     const m = machines.find((x) => x.name === name);
     return m
@@ -286,6 +327,7 @@ export class FlyMachineSpawner implements Spawner {
           state: m.state,
           private_ip: m.private_ip,
           image: m.config?.image,
+          bootFingerprint: m.config?.metadata?.[BOOT_FINGERPRINT_METADATA_KEY],
         }
       : null;
   }
@@ -306,6 +348,7 @@ export class FlyMachineSpawner implements Spawner {
     app: string,
     flyRegion: string,
     opts: SpawnOptions,
+    fingerprint: string,
   ): Promise<MachineCreateResponse | null> {
     // Per-DB DSN env vars. Names match OSS env-interpolation regex; the
     // YAML's `databases[].url` references each via ${...}. DSNs surface
@@ -347,6 +390,9 @@ export class FlyMachineSpawner implements Spawner {
             cpus: 1,
             memory_mb: 256,
           },
+          // What this engine booted with, for the adoption check after the
+          // in-memory registry is gone (see BOOT_FINGERPRINT_METADATA_KEY).
+          metadata: { [BOOT_FINGERPRINT_METADATA_KEY]: fingerprint },
           env: {
             ...dsnEnv,
             PORT: "8080",
@@ -501,20 +547,21 @@ export class FlyMachineSpawner implements Spawner {
   // POST /admin/policy (same body shape pushPolicy in admin.ts sends).
   // Skipped without an indexerToken — the engine's admin surface is 404
   // in that mode (laptop dev); hosted always has the token.
+  //
+  // The body is the same toDatabaseEntry mapping the boot file is rendered
+  // from. A hand-picked subset is not safe here: the engine KEEPS its previous
+  // approvals when the block is omitted, so approvals turned on while the
+  // registry was cold stayed off on the engine. Masks ride along unchanged;
+  // the engine doesn't hot-swap them, and adoptable already proved they match.
+  // One gap remains, shared with the save-time push: the serializer omits an
+  // INACTIVE approvals block, so approvals turned OFF while the registry was
+  // cold stay on here. That fails closed (writes keep waiting for approval).
   private async pushPolicyToMachine(
     privateIp: string,
     opts: SpawnOptions,
   ): Promise<void> {
     if (!this.indexerToken) return;
-    const body = serializeMultiDbPolicyToYaml(
-      opts.databases.map((db) => ({
-        name: db.name,
-        projectDatabaseId: db.projectDatabaseId,
-        tableAccess: db.tableAccess,
-        tenantScope: db.tenantScope,
-        guardrails: db.guardrails,
-      })),
-    );
+    const body = serializeMultiDbPolicyToYaml(opts.databases.map(toDatabaseEntry));
     let res: Response;
     try {
       res = await this.fetchFn(`http://[${privateIp}]:8080/admin/policy`, {

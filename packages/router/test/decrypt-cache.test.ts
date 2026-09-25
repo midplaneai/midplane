@@ -16,9 +16,9 @@ describe("DecryptCache", () => {
   it("returns 'fresh' inside TTL", () => {
     const clock = fakeNow();
     const c = new DecryptCache({ now: clock.now });
-    c.set("conn1", "eu", "postgres://x");
+    c.set("conn1", "eu", "rev-1", "postgres://x");
     clock.advance(60_000);
-    const r = c.get("conn1", "eu");
+    const r = c.get("conn1", "eu", "rev-1");
     expect(r.kind).toBe("fresh");
     if (r.kind === "fresh") expect(r.plaintext).toBe("postgres://x");
   });
@@ -26,47 +26,57 @@ describe("DecryptCache", () => {
   it("returns 'grace' past TTL but inside grace window", () => {
     const clock = fakeNow();
     const c = new DecryptCache({ now: clock.now });
-    c.set("conn1", "eu", "postgres://x");
+    c.set("conn1", "eu", "rev-1", "postgres://x");
     clock.advance(11 * 60_000); // 1 min past TTL
-    const r = c.get("conn1", "eu");
+    const r = c.get("conn1", "eu", "rev-1");
     expect(r.kind).toBe("grace");
   });
 
   it("returns 'expired' past TTL + grace (70 minutes)", () => {
     const clock = fakeNow();
     const c = new DecryptCache({ now: clock.now });
-    c.set("conn1", "eu", "postgres://x");
+    c.set("conn1", "eu", "rev-1", "postgres://x");
     clock.advance(71 * 60_000);
-    const r = c.get("conn1", "eu");
+    const r = c.get("conn1", "eu", "rev-1");
     expect(r.kind).toBe("expired");
   });
 
   it("returns 'miss' for unknown keys", () => {
     const c = new DecryptCache();
-    expect(c.get("nope", "eu").kind).toBe("miss");
+    expect(c.get("nope", "eu", "rev-1").kind).toBe("miss");
   });
 
   it("region scoping isolates eu and us entries", () => {
     const c = new DecryptCache();
-    c.set("conn1", "eu", "eu-dsn");
-    expect(c.get("conn1", "us").kind).toBe("miss");
+    c.set("conn1", "eu", "rev-1", "eu-dsn");
+    expect(c.get("conn1", "us", "rev-1").kind).toBe("miss");
   });
 
   it("evicts the oldest entry past capacity", () => {
     const c = new DecryptCache({ capacity: 2 });
-    c.set("a", "eu", "1");
-    c.set("b", "eu", "2");
-    c.set("c", "eu", "3");
-    expect(c.get("a", "eu").kind).toBe("miss");
-    expect(c.get("b", "eu").kind).toBe("fresh");
-    expect(c.get("c", "eu").kind).toBe("fresh");
+    c.set("a", "eu", "rev-1", "1");
+    c.set("b", "eu", "rev-1", "2");
+    c.set("c", "eu", "rev-1", "3");
+    expect(c.get("a", "eu", "rev-1").kind).toBe("miss");
+    expect(c.get("b", "eu", "rev-1").kind).toBe("fresh");
+    expect(c.get("c", "eu", "rev-1").kind).toBe("fresh");
+  });
+
+  it("a different revision is a miss and evicts the old plaintext", () => {
+    // Another web instance rotated the credential: this instance never ran
+    // invalidate(), but the row it just read carries the new ciphertext.
+    const c = new DecryptCache();
+    c.set("a", "eu", "rev-1", "old-plaintext");
+    expect(c.get("a", "eu", "rev-2").kind).toBe("miss");
+    expect(c.size()).toBe(0);
+    expect(c.get("a", "eu", "rev-1").kind).toBe("miss");
   });
 
   it("invalidate drops the entry", () => {
     const c = new DecryptCache();
-    c.set("a", "eu", "x");
+    c.set("a", "eu", "rev-1", "x");
     c.invalidate("a", "eu");
-    expect(c.get("a", "eu").kind).toBe("miss");
+    expect(c.get("a", "eu", "rev-1").kind).toBe("miss");
   });
 
   it("rotation fence: drops a set whose decryption started before invalidate", () => {
@@ -80,9 +90,9 @@ describe("DecryptCache", () => {
     clock.advance(100);
     c.invalidate("a", "eu");
     clock.advance(100);
-    const ok = c.set("a", "eu", "old-plaintext", decryptStartedAt);
+    const ok = c.set("a", "eu", "rev-1", "old-plaintext", decryptStartedAt);
     expect(ok).toBe(false);
-    expect(c.get("a", "eu").kind).toBe("miss");
+    expect(c.get("a", "eu", "rev-1").kind).toBe("miss");
   });
 
   it("rotation fence: accepts a set whose decryption started AFTER invalidate", () => {
@@ -95,9 +105,9 @@ describe("DecryptCache", () => {
     clock.advance(50);
     const decryptStartedAt = clock.now();
     clock.advance(50);
-    const ok = c.set("a", "eu", "new-plaintext", decryptStartedAt);
+    const ok = c.set("a", "eu", "rev-1", "new-plaintext", decryptStartedAt);
     expect(ok).toBe(true);
-    const r = c.get("a", "eu");
+    const r = c.get("a", "eu", "rev-1");
     expect(r.kind).toBe("fresh");
     if (r.kind === "fresh") expect(r.plaintext).toBe("new-plaintext");
   });
@@ -113,12 +123,12 @@ describe("DecryptCache", () => {
     c.invalidate("a", "eu");
     clock.advance(100);
     const freshStartedAt = clock.now();
-    c.set("a", "eu", "new-plaintext", freshStartedAt);
+    c.set("a", "eu", "rev-1", "new-plaintext", freshStartedAt);
     clock.advance(100);
     // Straggler arrives now with the OLD timestamp.
-    const ok = c.set("a", "eu", "old-plaintext", stragglerStartedAt);
+    const ok = c.set("a", "eu", "rev-1", "old-plaintext", stragglerStartedAt);
     expect(ok).toBe(false);
-    const r = c.get("a", "eu");
+    const r = c.get("a", "eu", "rev-1");
     expect(r.kind).toBe("fresh");
     if (r.kind === "fresh") expect(r.plaintext).toBe("new-plaintext");
   });

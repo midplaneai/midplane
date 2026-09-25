@@ -22,6 +22,8 @@
 // to the Spawner backend via env injection (Docker -e, Fly machine config)
 // and held in process memory only as long as the container is alive.
 
+import { createHash } from "node:crypto";
+
 import type {
   ApprovalsConfig,
   ColumnMasksConfig,
@@ -68,8 +70,9 @@ export interface SpawnDatabase {
 
 /** Map a SpawnDatabase to the policy DatabaseEntry the engine's boot YAML is
  *  rendered from — the single source of truth for the SPAWN mapping (previously
- *  duplicated verbatim in every spawner). The hot-reload path (/admin/policy) does
- *  NOT use this: it deliberately omits masking, which is boot-time-only.
+ *  duplicated verbatim in every spawner). The Fly adopt-time push re-sends this
+ *  same mapping. The save-time hot-reload (admin.ts pushPolicy) builds its own
+ *  entries without masking, which is boot-time-only.
  *
  *  ISSUE-007 launch: `maskSourceRewrite` is turned ON for every DB that declares
  *  masks, so the cloud emits `mask_source_rewrite: true` + the
@@ -77,8 +80,10 @@ export interface SpawnDatabase {
  *  SOURCE relation (aggregates over unmasked tables stop being blanket-denied)
  *  instead of the post-exec output filter. Inert on an unmasked DB — the serializer
  *  only emits the flag/token alongside a non-empty column_masks block — so setting it
- *  unconditionally is safe. Rollback: set this back to `false` and redeploy; engines
- *  pick up the post-exec path on their next spawn. */
+ *  unconditionally is safe. Rollback: set this back to `false` and redeploy. The
+ *  flag feeds bootFingerprint for masked DBs, so their engines are recreated on
+ *  the next request and pick up the post-exec path; unmasked engines are left
+ *  alone. */
 export function toDatabaseEntry(db: SpawnDatabase): DatabaseEntry {
   return {
     name: db.name,
@@ -128,6 +133,10 @@ export interface SpawnOptions {
 }
 
 export interface Spawner {
+  /** Must resolve to an engine that BOOTED with `opts`' boot-time config (see
+   *  {@link bootFingerprint}): the registry records that fingerprint without
+   *  checking. A backend that reuses an engine it didn't just start (Fly adopts
+   *  by name) has to verify the engine's boot config first. */
   spawn(opts: SpawnOptions): Promise<SpawnedContainer>;
 }
 
@@ -137,45 +146,90 @@ interface RegistryEntry {
   idleTimer: ReturnType<typeof setTimeout>;
   lastTouchedAt: number;
   /** Fingerprint of the BOOT-TIME-ONLY config this container was spawned with
-   *  (see {@link bootFingerprint}). A warm container can't hot-reload masking,
-   *  so a later request with a different fingerprint must respawn, not reuse. */
+   *  (see {@link bootFingerprint}). A warm container can't hot-reload it, so a
+   *  later request with a different fingerprint must respawn, not reuse. */
   bootFingerprint: string;
 }
 
-// Fingerprint of the engine config a warm container CANNOT hot-reload:
-// column_masks (per DB) and the mask salt. The engine reads these once at
-// construction, so reusing a container booted with a different fingerprint would
-// serve a wrong — possibly UNMASKED — result set (a masking bypass). table_access
-// / tenant_scope / guardrails are deliberately EXCLUDED: those are pushed to a
-// live container via /admin/policy, so an edit keeps a warm container current
-// without a respawn, and folding them in here would respawn on every policy
-// tweak. Canonical (sorted) so identical config always yields the same string.
+/** Version of the {@link bootFingerprint} recipe. The Fly spawner stamps the
+ *  fingerprint under a per-version metadata key and only trusts its own
+ *  version's key, so a machine it can't verify is always recreated, never
+ *  adopted.
+ *
+ *  Bump it when the recipe changes: an input added to or removed from the
+ *  pre-image, or a new encoding. A new boot-only env var or YAML field counts,
+ *  and must also be added to the pre-image, or machines booted without it would
+ *  still be adopted. Every machine is then recreated once, and old instances in
+ *  a bluegreen deploy recreate the new ones unless that release also stamps the
+ *  previous version's key.
+ *
+ *  Do NOT bump for a changed value of an existing input (e.g. flipping
+ *  toDatabaseEntry's maskSourceRewrite): the digest already changes for exactly
+ *  the affected machines, and a bump would recreate every other one too. */
+export const BOOT_FINGERPRINT_VERSION = 1;
+
+// Fingerprint of the engine config a running engine CANNOT hot-reload. The
+// engine reads all of it once at boot, so reusing an engine booted with a
+// different fingerprint serves a wrong result:
+//   - column_masks + mask_source_rewrite (per DB) and the mask salt: a possibly
+//     UNMASKED result set (a masking bypass).
+//   - each DB's DSN: injected as env at create. /admin/policy only names the env
+//     var, so a rotated password can't be pushed and the engine keeps using the
+//     old one. The DB id + name set rides along: adding a DB needs a new env var,
+//     and the engine rejects a rename by hot-reload.
+//   - the approval gate URL + token (env): a warm engine pointed at an old gate
+//     401s every held write.
+// table_access / tenant_scope / guardrails / approvals are deliberately
+// EXCLUDED: those are pushed to a live engine via /admin/policy, and folding
+// them in would respawn on every policy tweak.
+//
+// Returned as a sha256 hex digest. The pre-image holds DSNs, the salt and the
+// gate token, and the Fly spawner stores the result in machine metadata, so only
+// the digest may leave this function. Canonical (sorted keys and DBs): every web
+// instance must compute the same value for the same config, or they would take
+// turns recreating the same machine.
 export function bootFingerprint(opts: SpawnOptions): string {
-  const dbs = [...opts.databases]
+  const byId = (a: SpawnDatabase, b: SpawnDatabase) =>
+    a.projectDatabaseId < b.projectDatabaseId ? -1 : a.projectDatabaseId > b.projectDatabaseId ? 1 : 0;
+  const databases = [...opts.databases]
+    .sort(byId)
     .map((d) => {
-      const cols = d.columnMasks ?? {};
-      const body = Object.keys(cols)
-        .sort()
-        .map((t) => {
-          const inner = cols[t]!;
-          const rules = Object.keys(inner)
-            .sort()
-            .map((c) => `${c}=${JSON.stringify(inner[c])}`)
-            .join(",");
-          return `${t}{${rules}}`;
-        })
-        .join(",");
-      return `${d.name}[${body}]`;
-    })
-    .sort()
-    .join("|");
-  // The gate URL+token are boot-time env: a warm container cannot pick up a new
-  // pair by hot-reload. Including them means provisioning approvals on a
-  // deployment (or rotating the secret) respawns rather than leaving warm
-  // engines pointed at a gate that will 401 every held write. Absent on both
-  // sides ⇒ the fingerprint is byte-identical to before this feature.
-  const gate = opts.approvalGate ? `${opts.approvalGate.url}:${opts.approvalGate.token}` : "";
-  return `salt:${opts.maskSalt ?? ""}#masks:${dbs}#gate:${gate}`;
+      const entry = toDatabaseEntry(d);
+      const masks = entry.columnMasks ?? {};
+      const masked = Object.values(masks).some((cols) => Object.keys(cols).length > 0);
+      return {
+        id: d.projectDatabaseId,
+        name: d.name,
+        dsn: d.dsn,
+        columnMasks: masks,
+        // Only where it does anything: the serializer emits the flag only next
+        // to a non-empty column_masks block, so flipping it must not recreate
+        // unmasked projects' engines.
+        maskSourceRewrite: masked ? (entry.maskSourceRewrite ?? false) : null,
+      };
+    });
+  const preimage = canonicalJson({
+    salt: opts.maskSalt ?? "",
+    gate: opts.approvalGate ?? null,
+    databases,
+  });
+  return createHash("sha256").update(preimage).digest("hex");
+}
+
+// JSON with object keys sorted at every level, so two semantically equal
+// configs serialize identically however their keys were ordered (mask rules are
+// objects read back from jsonb).
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const fields = Object.keys(obj)
+      .filter((k) => obj[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`);
+    return `{${fields.join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export interface ActiveContainer {
@@ -219,11 +273,13 @@ export class ContainerRegistry {
         this.touch(key, existing);
         return existing.container;
       }
-      // Boot-time-only config (column_masks / mask salt) differs from how this
-      // warm container booted — it can't hot-reload masking, so reusing it would
-      // serve a wrong (possibly UNMASKED) result set. Evict + spawn fresh. This
-      // is the safety net behind the save-time forceRespawn: it also catches a
-      // failed invalidate, or a spawn path that booted a mask-less container.
+      // Boot-time-only config (masks, salt, DSNs, gate) differs from how this
+      // warm container booted — it can't hot-reload any of it, so reusing it
+      // would serve a wrong (possibly UNMASKED) result set or a rotated-away
+      // password. Evict + spawn fresh. This is the safety net behind the
+      // save-time forceRespawn: it also catches a failed invalidate, a save or
+      // rotation handled by another web instance, or a spawn path that booted a
+      // mask-less container.
       await this.invalidate(key);
     }
     const pending = this.inflight.get(key);
@@ -241,6 +297,9 @@ export class ContainerRegistry {
 
     const promise = (async () => {
       try {
+        // Recording `fingerprint` for this container is only truthful because
+        // spawn() guarantees the engine booted with it — including an engine
+        // the backend adopted rather than started (see Spawner.spawn).
         const container = await this.spawner.spawn(opts);
         const entry: RegistryEntry = {
           container,

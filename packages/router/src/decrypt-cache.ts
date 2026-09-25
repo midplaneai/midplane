@@ -22,11 +22,22 @@
 // — the per-credential row in project_databases. Keying per-DB rather
 // than per-project means rotating one DB's DSN does not invalidate
 // cached plaintext for siblings; each DB has its own grace window.
+//
+// Revision check: each entry records the revision (a digest of the
+// stored ciphertext, see dsnRevision) it was decrypted from, and get()
+// serves it only to a caller holding that same revision. The fence above
+// protects only the web instance that ran the rotation. Every other
+// instance still holds the old plaintext, and without this check would
+// serve it for up to TTL + grace, including into a freshly booted engine.
+// Callers read the row on every request, so a rotated ciphertext is a
+// miss on every instance at once, and the old plaintext is evicted.
 
 import type { Region } from "@midplane-cloud/kms";
 
 export interface CacheEntry {
   plaintext: string;
+  /** Revision of the ciphertext this plaintext was decrypted from. */
+  revision: string;
   /** Unix ms when the cached plaintext expires (10 min after KMS success). */
   expiresAt: number;
   /** Unix ms of last successful KMS decrypt for this credential. */
@@ -73,6 +84,9 @@ export class DecryptCache {
   /**
    * Cache a freshly-decrypted plaintext.
    *
+   * `revision` identifies the ciphertext it was decrypted from; get() only
+   * serves the entry to a caller presenting the same revision.
+   *
    * `decryptStartedAt` is the time the caller began the KMS round-trip
    * that produced this plaintext. If a rotation invalidated the entry
    * after that point, the write is dropped (returns false) and the cache
@@ -83,6 +97,7 @@ export class DecryptCache {
   set(
     projectDatabaseId: string,
     region: Region,
+    revision: string,
     plaintext: string,
     decryptStartedAt?: number,
   ): boolean {
@@ -99,6 +114,7 @@ export class DecryptCache {
     this.map.delete(key);
     this.map.set(key, {
       plaintext,
+      revision,
       expiresAt: now + this.ttlMs,
       lastKmsSuccessAt: now,
     });
@@ -116,12 +132,17 @@ export class DecryptCache {
    *  - "grace" : past TTL but inside (TTL + grace) — serve, but caller
    *              should attempt KMS refresh out-of-band.
    *  - "expired": past TTL + grace — must refuse new sessions.
-   *  - "miss"  : never cached.
+   *  - "miss"  : never cached, or cached from a different revision (the
+   *              credential was rotated; the stale plaintext is evicted).
    */
-  get(projectDatabaseId: string, region: Region): DecryptResult {
+  get(projectDatabaseId: string, region: Region, revision: string): DecryptResult {
     const key = `${region}:${projectDatabaseId}`;
     const entry = this.map.get(key);
     if (!entry) return { kind: "miss" };
+    if (entry.revision !== revision) {
+      this.evict(key);
+      return { kind: "miss" };
+    }
     const now = this.now();
     if (now <= entry.expiresAt) {
       // Refresh LRU position.

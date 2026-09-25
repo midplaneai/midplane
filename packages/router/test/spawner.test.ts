@@ -176,6 +176,127 @@ describe("ContainerRegistry", () => {
     expect(bootFingerprint(a)).not.toBe(bootFingerprint(c));
   });
 
+  it("bootFingerprint is canonical for object-form mask rules: key order and unset params don't matter", () => {
+    // Every web instance must compute the same fingerprint for the same config,
+    // or they take turns recreating the same Fly machine. A parsed rule may carry
+    // its keys in any order, or an optional param set to undefined, where the
+    // jsonb row simply omits it.
+    const withPhoneRule = (rule: ColumnMasksConfig[string][string]) =>
+      opts("01HXYZCONN000000000000000A", {
+        columnMasks: { "public.users": { phone: rule } },
+        maskSalt: "s",
+      });
+    const a = withPhoneRule({ t: "partial", keepStart: 2, keepEnd: 4 });
+    const reordered = withPhoneRule({ keepEnd: 4, keepStart: 2, t: "partial" });
+    const unsetParam = withPhoneRule({ t: "partial", keepStart: 2, keepEnd: 4, glyph: undefined });
+    expect(bootFingerprint(reordered)).toBe(bootFingerprint(a));
+    expect(bootFingerprint(unsetParam)).toBe(bootFingerprint(a));
+    // ...but a changed param is a different boot config.
+    const changed = withPhoneRule({ t: "partial", keepStart: 2, keepEnd: 3 });
+    expect(bootFingerprint(changed)).not.toBe(bootFingerprint(a));
+  });
+
+  it("bootFingerprint changes when the DSN rotates (env can't be hot-reloaded)", () => {
+    const a = opts();
+    const b = { ...a, databases: [{ ...a.databases[0]!, dsn: "postgres://rotated" }] };
+    expect(bootFingerprint(a)).not.toBe(bootFingerprint(b));
+  });
+
+  it("bootFingerprint changes when a database is added or renamed", () => {
+    const a = opts();
+    const renamed = { ...a, databases: [{ ...a.databases[0]!, name: "primary" }] };
+    const added = {
+      ...a,
+      databases: [
+        ...a.databases,
+        { ...a.databases[0]!, name: "analytics", projectDatabaseId: "01HXYZANLY0000000000000000" },
+      ],
+    };
+    expect(bootFingerprint(renamed)).not.toBe(bootFingerprint(a));
+    expect(bootFingerprint(added)).not.toBe(bootFingerprint(a));
+    // Database order doesn't matter.
+    const reordered = { ...added, databases: [...added.databases].reverse() };
+    expect(bootFingerprint(reordered)).toBe(bootFingerprint(added));
+  });
+
+  it("bootFingerprint ignores hot-reloadable policy (table_access, approvals)", () => {
+    const a = opts();
+    const b = {
+      ...a,
+      databases: [
+        {
+          ...a.databases[0]!,
+          tableAccess: { default: "read" as const, tables: { orders: "read_write" as const } },
+          approvals: {
+            row_changes: true,
+            whole_table_writes: true,
+            schema_changes: true,
+            expires_after_seconds: 1800,
+            writes: true,
+          },
+        },
+      ],
+    };
+    expect(bootFingerprint(b)).toBe(bootFingerprint(a));
+  });
+
+  it("bootFingerprint is a sha256 digest: no DSN, salt or gate token in cleartext", () => {
+    const fp = bootFingerprint({
+      ...opts("01HXYZCONN000000000000000A", {
+        columnMasks: { "public.users": { email: "full-redact" } },
+        maskSalt: "salt-secret",
+      }),
+      approvalGate: { url: "https://app/api/engine/approvals/x", token: "gate-secret" },
+    });
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
+    expect(fp).not.toContain("postgres");
+    expect(fp).not.toContain("secret");
+  });
+
+  it("bootFingerprint recipe is pinned: a change here needs a BOOT_FINGERPRINT_VERSION decision", () => {
+    // Fly machines outlive deploys and carry this digest, so a change here
+    // recreates engines. If the RECIPE changed (an input added or removed, a new
+    // encoding), bump BOOT_FINGERPRINT_VERSION. If only a VALUE of an existing
+    // input changed (e.g. toDatabaseEntry's maskSourceRewrite, which moves the
+    // masked case below), update the digest without a bump. See the version doc.
+    expect(bootFingerprint(opts())).toBe(
+      "2d7cd5dfef9b9b735886ce4716c17a573ec18faa2322413f78913bc223037590",
+    );
+    expect(
+      bootFingerprint({
+        ...opts("01HXYZCONN000000000000000A", {
+          columnMasks: { "public.users": { email: "full-redact" } },
+          maskSalt: "s",
+        }),
+        approvalGate: { url: "https://app/api/engine/approvals/x", token: "t" },
+      }),
+    ).toBe("b4d9bc7b37feae99a9047a12e89d9ba89fc5c2e41351eed880de7cb0e304fe64");
+  });
+
+  it("an explicit empty mask map fingerprints like an absent one", () => {
+    // The proxy parses masks into `{}` while other spawn paths may omit the
+    // field; both boot the same engine, so they must not recreate each other's.
+    const absent = opts();
+    const empty = {
+      ...absent,
+      databases: absent.databases.map((d) => ({ ...d, columnMasks: {} })),
+    };
+    expect(bootFingerprint(empty)).toBe(bootFingerprint(absent));
+  });
+
+  it("respawns a warm container when the DSN was rotated on another instance", async () => {
+    // Rotation ran on a different web instance, so this registry never got an
+    // invalidate(). The next request carries the new password (the decrypt
+    // cache is revision-keyed), so the fingerprint differs and it respawns.
+    const stub = new StubSpawner();
+    const reg = new ContainerRegistry(stub);
+    const a = opts();
+    const first = await reg.acquire(a);
+    await reg.acquire({ ...a, databases: [{ ...a.databases[0]!, dsn: "postgres://rotated" }] });
+    expect(stub.calls).toBe(2);
+    expect(first.stop).toHaveBeenCalled();
+  });
+
   it("dedupes concurrent first-spawns via inflight mutex", async () => {
     const stub = new StubSpawner();
     stub.delayMs = 30;
