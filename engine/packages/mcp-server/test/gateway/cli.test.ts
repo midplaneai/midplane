@@ -103,7 +103,7 @@ describe("midplane gateway (process)", () => {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/health`);
+        const res = await fetch(`http://127.0.0.1:${port}/ready`);
         health = { status: res.status, body: (await res.json()) as Record<string, unknown> };
         if (res.status === 200) break;
       } catch {

@@ -20,6 +20,7 @@
 // off, the apply is all-or-nothing, and a database whose masks changed gets a
 // freshly built Engine on its existing pool (masks are constructor config).
 
+import { isDeepStrictEqual } from "node:util";
 import { ulid } from "ulid";
 import {
   Engine,
@@ -1140,7 +1141,7 @@ async function writeRemovalRows(
 // mode) mean the running Engine can stay.
 function sameMasks(entry: EngineEntry, spec: DatabaseSpec): boolean {
   return (
-    stableJson(nonEmptyMasks(entry.columnMasks)) === stableJson(nonEmptyMasks(spec.columnMasks)) &&
+    isDeepStrictEqual(nonEmptyMasks(entry.columnMasks), nonEmptyMasks(spec.columnMasks)) &&
     (entry.maskSourceRewrite ?? null) === (spec.maskSourceRewrite ?? null)
   );
 }
@@ -1149,16 +1150,6 @@ function nonEmptyMasks(m: ColumnMasksSpec | null): ColumnMasksSpec | null {
   if (!m) return null;
   const kept = Object.entries(m).filter(([, cols]) => Object.keys(cols).length > 0);
   return kept.length > 0 ? Object.fromEntries(kept) : null;
-}
-
-function stableJson(v: unknown): string {
-  if (v === null || typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
-  const o = v as Record<string, unknown>;
-  return `{${Object.keys(o)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`)
-    .join(",")}}`;
 }
 
 // The policy-relevant state of an entry, frozen — the "before" side of a diff
@@ -1224,11 +1215,7 @@ function snapshotPolicy(entries: Map<string, EngineEntry>, cfg: Config): PolicyS
           block_ddl: e.holder.guardrails.blockDdl,
           block_dml: e.holder.guardrails.blockDml,
         },
-        approvals: {
-          row_changes: approvals.rowChanges ?? false,
-          whole_table_writes: approvals.wholeTableWrites ?? false,
-          schema_changes: approvals.schemaChanges ?? false,
-        },
+        approvals: approvalsWire(approvals),
         tenant_scope: tenantScopeIsActive(ts)
           ? { column: ts.defaultColumn, overrides: { ...ts.overrides }, exempt: [...ts.exempt] }
           : null,
@@ -1424,11 +1411,7 @@ async function finalizeReload(
         ...(meta ? { bundle_version: meta.bundleVersion } : {}),
         ...(s.approvals !== undefined
           ? {
-              approvals: {
-                row_changes: s.approvals.rowChanges ?? false,
-                whole_table_writes: s.approvals.wholeTableWrites ?? false,
-                schema_changes: s.approvals.schemaChanges ?? false,
-              },
+              approvals: approvalsWire(s.approvals),
               column_masks: s.columnMasks ?? null,
             }
           : {}),
@@ -1589,14 +1572,24 @@ function diffGuardrails(
   return diff;
 }
 
+// The snake_case shape approvals take in audit rows and the heartbeat. `?? false`
+// because a holder built from a document with no approvals block may carry an
+// empty object.
+function approvalsWire(a: ApprovalsSpec): { row_changes: boolean; whole_table_writes: boolean; schema_changes: boolean } {
+  return {
+    row_changes: a.rowChanges ?? false,
+    whole_table_writes: a.wholeTableWrites ?? false,
+    schema_changes: a.schemaChanges ?? false,
+  };
+}
+
 function diffApprovals(prev: ApprovalsSpec, next: ApprovalsSpec): ApprovalsDiff {
   const diff: ApprovalsDiff = {};
-  const pairs: Array<[keyof ApprovalsDiff, boolean, boolean]> = [
-    ["row_changes", prev.rowChanges ?? false, next.rowChanges ?? false],
-    ["whole_table_writes", prev.wholeTableWrites ?? false, next.wholeTableWrites ?? false],
-    ["schema_changes", prev.schemaChanges ?? false, next.schemaChanges ?? false],
-  ];
-  for (const [k, from, to] of pairs) if (from !== to) diff[k] = { from, to };
+  const from = approvalsWire(prev);
+  const to = approvalsWire(next);
+  for (const k of Object.keys(from) as Array<keyof ApprovalsDiff>) {
+    if (from[k] !== to[k]) diff[k] = { from: from[k], to: to[k] };
+  }
   return diff;
 }
 
@@ -1619,7 +1612,7 @@ function diffColumnMasks(
   for (const [k, rule] of b) {
     const was = a.get(k);
     if (was === undefined) added[k] = rule;
-    else if (stableJson(was) !== stableJson(rule)) changed[k] = { from: was, to: rule };
+    else if (!isDeepStrictEqual(was, rule)) changed[k] = { from: was, to: rule };
   }
   for (const k of a.keys()) if (!b.has(k)) removed.push(k);
   const diff: ColumnMasksDiff = {};

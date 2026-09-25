@@ -9,6 +9,9 @@
 //   • request tokens say how long a replay cache must remember them
 //   • `midplane gateway` with any argument never starts (or enrolls)
 //   • the capabilities a gateway reports cover every closed vocabulary
+//   • approval outcomes are signed and bound to the statement they answer
+//   • an approval never outlives the policy that permitted the write
+//   • waits for a pooled connection are bounded
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -16,21 +19,29 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ApprovalUnavailableError, PSEUDONYMIZE_KINDS, type ApprovalRequest } from "@midplane/engine";
+import { ApprovalUnavailableError, PSEUDONYMIZE_KINDS, type ApprovalGate, type ApprovalRequest } from "@midplane/engine";
 import { HttpApprovalGate } from "../../src/approval-gate.ts";
 import { buildEngine, type BuiltEngineHandle, type ReplaceDatabase } from "../../src/engine-factory.ts";
 import { checkBundlePolicy } from "../../src/gateway/policy-check.ts";
 import { LinkClient } from "../../src/gateway/link-client.ts";
+import { DEFAULT_CONNECTION_TIMEOUT_MS, PgPoolExecutor } from "../../src/executor/pg-pool.ts";
 import {
   MAX_BUNDLE_BYTES,
   MAX_CLOCK_SKEW_S,
+  b64urlEncode,
+  encodeApprovalOutcome,
   generateEd25519KeyPair,
+  keyId,
   mintRequestToken,
   privateKeyFromPem,
   publicKeyFromRaw,
+  sqlSha256,
   verifyRequestToken,
+  type ApprovalOutcomeClaims,
 } from "../../src/gateway/protocol.ts";
-import { gatewayCapabilities } from "../../src/gateway/runtime.ts";
+import { createGatewayApprovalGate, gatewayCapabilities } from "../../src/gateway/runtime.ts";
+import type { StoredIdentity } from "../../src/gateway/state.ts";
+import { MockExecutor } from "../_helpers.ts";
 
 const ENV_A = "MIDPLANE_DSN_01AAAAAAAAAAAAAAAAAAAAAAAA";
 const ENV_B = "MIDPLANE_DSN_01BBBBBBBBBBBBBBBBBBBBBBBB";
@@ -189,7 +200,13 @@ describe("approval gate", () => {
   test("never follows a redirect: the held statement is not re-sent, and a 3xx is 'unavailable'", async () => {
     const seen: RequestInit[] = [];
     const gate = new HttpApprovalGate(
-      { url: "https://cloud.test/api/gateway/v1/approvals", authorize: () => "Bearer t" },
+      {
+        url: "https://cloud.test/api/gateway/v1/approvals",
+        authorize: () => "Bearer t",
+        verifyOutcome: () => {
+          throw new Error("a redirect has no outcome to verify");
+        },
+      },
       (async (_url: string, init: RequestInit) => {
         seen.push(init);
         return new Response(null, { status: 307, headers: { location: "https://elsewhere.test/approve" } });
@@ -254,5 +271,175 @@ describe("midplane gateway arguments", () => {
     const r = spawnSync(process.execPath, [CLI, "help", "gateway"], { env, encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("MIDPLANE_GATEWAY_STATE_DIR");
+  });
+});
+
+describe("signed approval outcomes (gateway mode)", () => {
+  const bundleKey = (() => {
+    const pair = generateEd25519KeyPair();
+    return { kid: keyId(pair.publicKeyRaw), raw: pair.publicKeyRaw, privateKey: privateKeyFromPem(pair.privateKeyPem) };
+  })();
+  const gatewayPair = generateEd25519KeyPair();
+  const identity: StoredIdentity = {
+    v: 1,
+    gateway_id: "01GATEWAYAAAAAAAAAAAAAAAAA",
+    project_id: "01PROJECTAAAAAAAAAAAAAAAAA",
+    cloud_url: "https://cloud.test",
+    issuer: "https://cloud.test",
+    gateway_key: b64urlEncode(gatewayPair.publicKeyRaw),
+    signing_key: { kid: bundleKey.kid, x: b64urlEncode(bundleKey.raw) },
+    min_version: 1,
+    poll_seconds: 15,
+    enrolled_at: 1,
+  };
+  const REQ = {
+    queryId: "01QUERYAAAAAAAAAAAAAAAAAAA",
+    database: "main",
+    sql: "DELETE FROM orders WHERE id = 1",
+    intent: "i",
+    statementType: "DELETE",
+    tablesTouched: ["orders"],
+    tenantId: "t",
+    agentName: null,
+    agentVersion: null,
+    mcpTokenId: null,
+  } as unknown as ApprovalRequest;
+
+  function signed(over: Partial<ApprovalOutcomeClaims> = {}, key = bundleKey): string {
+    const iat = Math.floor(Date.now() / 1000);
+    return encodeApprovalOutcome(
+      {
+        iss: identity.issuer,
+        project_id: identity.project_id,
+        gateway_id: identity.gateway_id,
+        query_id: REQ.queryId,
+        sql_sha256: sqlSha256(REQ.sql),
+        iat,
+        exp: iat + 60,
+        outcome: { status: "approved", by: "ada@example.com", note: null },
+        ...over,
+      },
+      { kid: key.kid, privateKey: key.privateKey },
+    );
+  }
+
+  function gateAnswering(body: string) {
+    return createGatewayApprovalGate({
+      cloudUrl: "https://cloud.test",
+      client: new LinkClient("https://cloud.test", "t"),
+      identity,
+      privateKey: privateKeyFromPem(gatewayPair.privateKeyPem),
+      fetchImpl: (async () => new Response(body, { status: 200 })) as unknown as typeof fetch,
+    });
+  }
+
+  test("a signed outcome bound to this statement is honoured", async () => {
+    expect(await gateAnswering(signed()).request(REQ)).toMatchObject({ status: "approved", by: "ada@example.com" });
+  });
+
+  test.each([
+    ["an unsigned 'approved' (what a TLS-intercepting proxy could say)", () => JSON.stringify({ status: "approved", by: "mitm" })],
+    ["an outcome signed by another key", () => {
+      const other = generateEd25519KeyPair();
+      return signed({}, { kid: bundleKey.kid, raw: other.publicKeyRaw, privateKey: privateKeyFromPem(other.privateKeyPem) });
+    }],
+    ["an outcome for another attempt (replayed approval)", () => signed({ query_id: "01OTHERQUERYAAAAAAAAAAAAAA" })],
+    ["an outcome for different SQL bytes", () => signed({ sql_sha256: sqlSha256("DELETE FROM orders WHERE id = 2") })],
+    ["an outcome for another gateway", () => signed({ gateway_id: "01OTHERGATEWAYAAAAAAAAAAAA" })],
+    ["an expired outcome", () => {
+      const iat = Math.floor(Date.now() / 1000) - 1000;
+      return signed({ iat, exp: iat + 60 });
+    }],
+  ])("%s is 'unavailable', never permission", async (_label, body) => {
+    await expect(gateAnswering(body()).request(REQ)).rejects.toBeInstanceOf(ApprovalUnavailableError);
+  });
+});
+
+describe("policy re-check after an approval", () => {
+  let dir: string;
+  let handle: BuiltEngineHandle;
+  let executor: MockExecutor;
+  afterEach(async () => {
+    await handle.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function yaml(tableDefault: "read" | "read_write"): string {
+    return [
+      "databases:",
+      "  - name: main",
+      `    url: \${${ENV_A}}`,
+      "    table_access:",
+      `      default: ${tableDefault}`,
+      "      tables: {}",
+      "    guardrails:",
+      "      block_unqualified_dml: true",
+      "      block_ddl: true",
+      "    requires_features:",
+      "      - write_approvals",
+      "    approvals:",
+      "      writes: true",
+      "",
+    ].join("\n");
+  }
+
+  async function apply(tableDefault: "read" | "read_write", version: number) {
+    const checked = checkBundlePolicy(yaml(tableDefault));
+    if (!checked.ok) throw new Error(checked.reason);
+    await handle.replacePolicy(
+      checked.databases.map((d) => ({ spec: { ...d.spec, url: "postgres://stub" }, dsnEnv: d.dsnEnv, configured: true })),
+      { bundleVersion: version },
+    );
+  }
+
+  function build(onRequest: () => Promise<void>) {
+    dir = mkdtempSync(join(tmpdir(), "midplane-recheck-"));
+    executor = new MockExecutor();
+    const gate: ApprovalGate = {
+      async request() {
+        await onRequest();
+        return { status: "approved", by: "ada@example.com", note: null };
+      },
+    };
+    handle = buildEngine(
+      { port: 0, host: "127.0.0.1", dbPath: join(dir, "a.db"), tenantId: "t", transport: "http", maskSourceRewrite: false },
+      { startEmpty: true, executor, approvalGate: gate },
+    );
+  }
+
+  const WRITE = "UPDATE orders SET status = 'x' WHERE id = 1";
+  const run = () => {
+    const e = handle.registry.get("main");
+    return e.engine.handle({ sql: WRITE, ctx: { ...e.ctxBase, agent_name: "t", agent_version: "1" } });
+  };
+
+  test("a tightening that lands while the write waits for a human wins: the approved write is denied, not run", async () => {
+    // The lockdown (orders read-only) arrives during the approval hold.
+    build(() => apply("read", 2));
+    await apply("read_write", 1);
+    const decision = await run();
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe("table_access");
+    expect(executor.calls).toHaveLength(0);
+    const decided = handle.registry.audit.readSince("0", 100).filter((r) => r.event_type === "DECIDED");
+    expect(JSON.stringify(decided.at(-1)!.payload)).toContain("table_access");
+  });
+
+  test("without a change in policy, the approved write runs", async () => {
+    build(async () => {});
+    await apply("read_write", 1);
+    expect((await run()).allowed).toBe(true);
+    expect(executor.calls).toHaveLength(1);
+  });
+});
+
+describe("pool connection timeout", () => {
+  test("pooled connection waits are bounded (30 s by default)", async () => {
+    const ex = new PgPoolExecutor({ databaseUrl: "postgres://stub@127.0.0.1:1/x" });
+    expect((ex as unknown as { pool: { options: { connectionTimeoutMillis: number } } }).pool.options.connectionTimeoutMillis).toBe(
+      DEFAULT_CONNECTION_TIMEOUT_MS,
+    );
+    expect(DEFAULT_CONNECTION_TIMEOUT_MS).toBe(30_000);
+    await ex.close();
   });
 });

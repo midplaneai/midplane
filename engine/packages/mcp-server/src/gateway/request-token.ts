@@ -144,7 +144,7 @@ export function verifyRequestToken(
   if (!verifyJws(parsed, publicKey)) {
     throw new RequestTokenError("signature", "request token signature does not verify");
   }
-  const claims = parseJsonObject(parsed.payload, "request token");
+  const claims = parseJsonObject(parsed.payload, "request token payload");
   const kid = parsed.header.kid as string;
   if (claims.iss !== kid || claims.sub !== kid) {
     throw new RequestTokenError("claims", "request token iss/sub must equal its kid");
@@ -189,7 +189,7 @@ export function verifyEnrollmentProof(
   if (!verifyJws(parsed, publicKey)) {
     throw new RequestTokenError("signature", "enrollment proof signature does not verify");
   }
-  const claims = parseJsonObject(parsed.payload, "enrollment proof");
+  const claims = parseJsonObject(parsed.payload, "enrollment proof payload");
   const { jti, exp } = checkBindingClaims(claims, expect);
   return { publicKeyRaw, jti, exp, rememberUntil: exp + MAX_CLOCK_SKEW_S };
 }

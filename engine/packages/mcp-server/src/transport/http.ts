@@ -39,8 +39,9 @@ export interface HttpHandle {
   close(): Promise<void>;
 }
 
-/** GET /health. Default: 200 {ok:true}. Gateway mode reports its state, and is
- *  unhealthy (503) until it holds an enforceable policy. */
+/** GET /health and /ready. Default for both: 200 {ok:true}. Gateway mode
+ *  reports its state on both, and /ready is 503 until it holds an enforceable
+ *  policy. */
 export type HealthCheck = () => { status: number; body: unknown };
 
 // Per-session context the transport captures from the initialize request
@@ -98,6 +99,10 @@ export async function startHttp(
     indexer?: IndexerRoutes;
     admin?: AdminRoutes;
     health?: HealthCheck;
+    /** GET /ready. Default: same as the default /health. Gateway mode answers
+     *  503 until it holds an enforceable policy (readiness), while /health
+     *  stays 200 (liveness). */
+    ready?: HealthCheck;
     /** Read X-Midplane-Token-Id / X-Midplane-Scope at initialize (default
      *  true). Gateway mode turns this off: on an unauthenticated transport a
      *  token id is forgeable attribution and a scope header is only ever a
@@ -114,6 +119,7 @@ export async function startHttp(
   const sessions = new Map<string, SessionEntry>();
   const routeOpts: RouteOptions = {
     health: opts.health,
+    ready: opts.ready,
     identityHeaders: opts.identityHeaders ?? true,
     loopbackRequestsOnly: opts.loopbackRequestsOnly ?? false,
   };
@@ -168,6 +174,7 @@ export async function startHttp(
 
 interface RouteOptions {
   health: HealthCheck | undefined;
+  ready: HealthCheck | undefined;
   identityHeaders: boolean;
   loopbackRequestsOnly: boolean;
 }
@@ -188,8 +195,9 @@ async function handle(
     return;
   }
 
-  if (req.method === "GET" && url === "/health") {
-    const h = routeOpts.health ? routeOpts.health() : { status: 200, body: { ok: true } };
+  if (req.method === "GET" && (url === "/health" || url === "/ready")) {
+    const check = url === "/health" ? routeOpts.health : routeOpts.ready;
+    const h = check ? check() : { status: 200, body: { ok: true } };
     writeJson(res, h.status, h.body);
     return;
   }

@@ -184,7 +184,7 @@ export function verifyBundle(jws: string, expect: BundleExpectations): BundleVer
   //    are checked before `v` is even looked at.
   let payload: Record<string, unknown>;
   try {
-    payload = parseJsonObject(parsed.payload, "bundle");
+    payload = parseJsonObject(parsed.payload, "bundle payload");
   } catch (err) {
     return reject("malformed", (err as Error).message);
   }

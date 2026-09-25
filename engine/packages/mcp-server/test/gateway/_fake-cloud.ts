@@ -8,12 +8,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import {
   RequestTokenError,
   b64urlEncode,
+  encodeApprovalOutcome,
   encodeBundle,
   encodeEnrollmentResponse,
   hashEnrollmentToken,
   mintEnrollmentToken,
   publicKeyFromRaw,
   readRequestTokenKid,
+  sqlSha256,
   verifyEnrollmentProof,
   verifyRequestToken,
 } from "../../src/gateway/protocol.ts";
@@ -174,8 +176,26 @@ export class FakeCloud {
       return;
     }
     if (method === "POST" && path === "/api/gateway/v1/approvals") {
-      this.approvalRequests.push(JSON.parse(body) as Record<string, unknown>);
-      return json(res, 200, { status: "approved", by: "ada@example.com", note: null });
+      const held = JSON.parse(body) as { query_id: string; sql: string };
+      this.approvalRequests.push(held as unknown as Record<string, unknown>);
+      // Signed and bound to the statement, as a gateway requires.
+      const iat = Math.floor(Date.now() / 1000);
+      return jose(
+        res,
+        encodeApprovalOutcome(
+          {
+            iss: this.origin,
+            project_id: this.projectId,
+            gateway_id: gw.id,
+            query_id: held.query_id,
+            sql_sha256: sqlSha256(held.sql),
+            iat,
+            exp: iat + 60,
+            outcome: { status: "approved", by: "ada@example.com", note: null },
+          },
+          { kid: this.bundleKey.kid, privateKey: this.bundleKey.privateKey },
+        ),
+      );
     }
     if (method === "POST" && path === "/api/gateway/v1/approvals/status") {
       return json(res, 200, { status: "expired" });

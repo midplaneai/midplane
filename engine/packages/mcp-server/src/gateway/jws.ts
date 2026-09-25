@@ -1,8 +1,8 @@
 // Compact JWS (RFC 7515) with exactly one algorithm: EdDSA over Ed25519 (RFC 8037).
 //
-// Hand-rolled on purpose. The link signs three kinds of object — policy
-// bundles, the enrollment response, request tokens — and each has one fixed
-// header shape. A general JOSE library brings algorithm negotiation, embedded
+// Hand-rolled on purpose. The link signs four kinds of object — policy
+// bundles, the enrollment response, approval outcomes, request tokens — and
+// each has one fixed header shape. A general JOSE library brings algorithm negotiation, embedded
 // keys (`jwk`, `jku`, `x5u`) and `crit` header processing, which is exactly the
 // surface the well-known JWT bugs live in. Here the verifier knows the one
 // algorithm and the exact header keys up front, and anything else is refused.
@@ -82,18 +82,8 @@ export function parseJws(token: string, maxBytes: number): ParsedJws {
     throw new JwsError("malformed", `JWS part is not base64url: ${(err as Error).message}`);
   }
 
-  let header: unknown;
-  try {
-    header = JSON.parse(headerBytes.toString("utf8"));
-  } catch {
-    throw new JwsError("malformed", "JWS header is not JSON");
-  }
-  if (typeof header !== "object" || header === null || Array.isArray(header)) {
-    throw new JwsError("malformed", "JWS header is not a JSON object");
-  }
-
   return {
-    header: header as Record<string, unknown>,
+    header: parseJsonObject(headerBytes, "JWS header"),
     payload,
     signingInput: Buffer.from(`${h}.${p}`, "ascii"),
     signature,
@@ -138,16 +128,17 @@ export function verifyJws(parsed: ParsedJws, publicKey: KeyObject): boolean {
   }
 }
 
-/** Parse a JSON payload that must be an object. */
+/** Parse bytes that must hold a JSON object — a JWS header or payload.
+ *  `what` names it in the error, e.g. "JWS header", "bundle payload". */
 export function parseJsonObject(bytes: Buffer, what: string): Record<string, unknown> {
   let v: unknown;
   try {
     v = JSON.parse(bytes.toString("utf8"));
   } catch {
-    throw new JwsError("malformed", `${what} payload is not JSON`);
+    throw new JwsError("malformed", `${what} is not JSON`);
   }
   if (typeof v !== "object" || v === null || Array.isArray(v)) {
-    throw new JwsError("malformed", `${what} payload is not a JSON object`);
+    throw new JwsError("malformed", `${what} is not a JSON object`);
   }
   return v as Record<string, unknown>;
 }

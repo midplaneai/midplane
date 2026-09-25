@@ -14,12 +14,11 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-import { HttpApprovalGate } from "../../src/approval-gate.ts";
 import { buildEngine, type BuiltEngineHandle } from "../../src/engine-factory.ts";
 import { ensureIdentity } from "../../src/gateway/enroll.ts";
-import { APPROVALS_PATH, LinkClient } from "../../src/gateway/link-client.ts";
+import { LinkClient } from "../../src/gateway/link-client.ts";
 import { EnrollmentError } from "../../src/gateway/protocol.ts";
-import { GatewayRuntime } from "../../src/gateway/runtime.ts";
+import { GatewayRuntime, createGatewayApprovalGate } from "../../src/gateway/runtime.ts";
 import { GatewayStateDir } from "../../src/gateway/state.ts";
 import { buildServer } from "../../src/server.ts";
 import { startHttp, type HttpHandle } from "../../src/transport/http.ts";
@@ -102,10 +101,11 @@ describe("gateway runtime", () => {
       { cloudUrl, enrollToken: opts.enrollToken === undefined ? token : opts.enrollToken, name: "test", engineVersion: "0.0.0-test", capabilities: {} },
       quiet,
     );
-    let runtime: GatewayRuntime | undefined;
-    const approvalGate = new HttpApprovalGate({
-      url: `${cloudUrl}${APPROVALS_PATH}`,
-      authorize: (m, p, b) => client.authorization(runtime!.requestSigner, m, p, b),
+    const approvalGate = createGatewayApprovalGate({
+      cloudUrl,
+      client,
+      identity: enrolled.identity,
+      privateKey: enrolled.privateKey,
     });
     const executor = new MockExecutor();
     const handle = buildEngine(
@@ -120,7 +120,7 @@ describe("gateway runtime", () => {
       },
       { startEmpty: true, executor, approvalGate },
     );
-    runtime = new GatewayRuntime({
+    const runtime = new GatewayRuntime({
       identity: enrolled.identity,
       privateKey: enrolled.privateKey,
       state,
@@ -207,7 +207,7 @@ describe("gateway runtime", () => {
 
   // ── never received / serving / restart ─────────────────────────────────
 
-  test("never received a bundle: every tool is refused, /health is 503, no database pool exists", async () => {
+  test("never received a bundle: every tool is refused, /ready is 503, no database pool exists", async () => {
     cloud.publish(policy());
     const gw = await boot();
     const origin = await closedOrigin();
@@ -215,16 +215,19 @@ describe("gateway runtime", () => {
 
     expect(await gw.runtime.pollOnce()).toBe("error");
     expect(gw.runtime.state).toBe("awaiting_bundle");
-    expect(gw.runtime.health().status).toBe(503);
+    expect(gw.runtime.ready().status).toBe(503);
+    // Liveness stays up: a restart can't change "no policy yet".
+    expect(gw.runtime.health()).toMatchObject({ status: 200, body: { state: "awaiting_bundle" } });
     expect(gw.handle.registry.count()).toBe(0);
 
     // Through a real MCP session over the gateway's transport.
     const http = await startHttp(
       (ctx) => buildServer({ handle: gw.handle, sessionContext: ctx, serving: gw.runtime.servingGuard() }),
-      { port: 0, host: "127.0.0.1", health: () => gw.runtime.health(), identityHeaders: false },
+      { port: 0, host: "127.0.0.1", health: () => gw.runtime.health(), ready: () => gw.runtime.ready(), identityHeaders: false },
     );
     servers.push(http);
-    expect((await fetch(`http://127.0.0.1:${http.port}/health`)).status).toBe(503);
+    expect((await fetch(`http://127.0.0.1:${http.port}/ready`)).status).toBe(503);
+    expect((await fetch(`http://127.0.0.1:${http.port}/health`)).status).toBe(200);
     const client = new Client({ name: "t", version: "0" });
     await client.connect(new StreamableHTTPClientTransport(new URL(http.url)));
     const res = (await client.callTool({ name: "query", arguments: { sql: "SELECT 1", intent: "probe" } })) as {
@@ -247,7 +250,7 @@ describe("gateway runtime", () => {
     const gw = await boot();
     expect(await gw.runtime.pollOnce()).toBe("bundle");
     expect(gw.runtime.state).toBe("serving");
-    expect(gw.runtime.health()).toMatchObject({ status: 200, body: { bundle_version: 1 } });
+    expect(gw.runtime.ready()).toMatchObject({ status: 200, body: { state: "serving", bundle_version: 1 } });
     expect(readFileSync(join(stateDir, "bundle.jws"), "utf8")).toBe(cloud.published[0]!);
     expect(await gw.runtime.pollOnce()).toBe("not_modified");
   });
@@ -351,7 +354,8 @@ describe("gateway runtime", () => {
     cloud.publish(policy({ requires: ["row_estimate_limits"] }));
     await gw.runtime.pollOnce();
     expect(gw.runtime.state).toBe("halted");
-    expect(gw.runtime.health()).toMatchObject({ status: 503, body: { state: "halted" } });
+    expect(gw.runtime.ready()).toMatchObject({ status: 503, body: { state: "halted" } });
+    expect(gw.runtime.health().status).toBe(200);
     expect(String(gw.runtime.heartbeat().halt_reason)).toContain("row_estimate_limits");
     expect(gw.handle.registry.count()).toBe(0); // pools drained
     const refused = await queryTool(gw)("SELECT 1");

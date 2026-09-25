@@ -30,11 +30,14 @@ import { MAX_POLL_SECONDS, MIN_POLL_SECONDS } from "./config.ts";
 import type { BuiltEngineHandle, ReplaceDatabase } from "../engine-factory.ts";
 import type { Availability, ServingGuard, ToolRefusal } from "../server.ts";
 import { checkBundlePolicy } from "./policy-check.ts";
+import { HttpApprovalGate } from "../approval-gate.ts";
 import {
+  APPROVALS_PATH,
   BUNDLE_FIELDS_V1,
   b64urlDecode,
   keyId,
   publicKeyFromRaw,
+  verifyApprovalOutcome,
   verifyBundle,
   type BundleRejectReason,
 } from "./protocol.ts";
@@ -93,6 +96,52 @@ interface Rejection {
   at: string;
 }
 
+/** The key every link request is signed with, bound to the enrolled issuer. */
+export function gatewaySigner(identity: StoredIdentity, privateKey: KeyObject): GatewaySigner {
+  return { gatewayId: identity.gateway_id, audience: identity.issuer, privateKey };
+}
+
+/** The control plane's bundle key this gateway pinned at enrollment — what
+ *  bundles and approval outcomes must be signed with. */
+export function pinnedBundleKey(identity: StoredIdentity): KeyObject {
+  const raw = b64urlDecode(identity.signing_key.x);
+  if (keyId(raw) !== identity.signing_key.kid) {
+    throw new Error("identity.json signing key does not match its kid; delete the state directory and enroll again");
+  }
+  return publicKeyFromRaw(raw);
+}
+
+/** The approval gate a gateway uses: every request signed with the gateway
+ *  key, every outcome verified against the pinned bundle key and bound to the
+ *  statement it answers. Wired whether or not a bundle holds writes yet, so
+ *  turning approvals on is a pure bundle change. */
+export function createGatewayApprovalGate(opts: {
+  cloudUrl: string;
+  client: LinkClient;
+  identity: StoredIdentity;
+  privateKey: KeyObject;
+  fetchImpl?: typeof fetch;
+}): HttpApprovalGate {
+  const signer = gatewaySigner(opts.identity, opts.privateKey);
+  const bundleKey = pinnedBundleKey(opts.identity);
+  return new HttpApprovalGate(
+    {
+      url: `${opts.cloudUrl}${APPROVALS_PATH}`,
+      authorize: (method, path, body) => opts.client.authorization(signer, method, path, body),
+      verifyOutcome: (body, req) =>
+        verifyApprovalOutcome(body, {
+          signer: { kid: opts.identity.signing_key.kid, publicKey: bundleKey },
+          issuer: opts.identity.issuer,
+          projectId: opts.identity.project_id,
+          gatewayId: opts.identity.gateway_id,
+          queryId: req.queryId,
+          sql: req.sql,
+        }),
+    },
+    opts.fetchImpl,
+  );
+}
+
 export class GatewayRuntime {
   private stateValue: GatewayState = "awaiting_bundle";
   private haltReason: string | null = null;
@@ -121,21 +170,12 @@ export class GatewayRuntime {
     // Bounded both ways, whatever the env or the enrollment response said: a
     // huge interval would overflow setTimeout (which then fires at once).
     this.pollSeconds = Math.min(Math.max(deps.pollSeconds, MIN_POLL_SECONDS), MAX_POLL_SECONDS);
-    const raw = b64urlDecode(identity.signing_key.x);
-    if (keyId(raw) !== identity.signing_key.kid) {
-      throw new Error("identity.json signing key does not match its kid; delete the state directory and enroll again");
-    }
-    this.bundleKey = publicKeyFromRaw(raw);
-    this.signer = { gatewayId: identity.gateway_id, audience: identity.issuer, privateKey: deps.privateKey };
+    this.bundleKey = pinnedBundleKey(identity);
+    this.signer = gatewaySigner(identity, deps.privateKey);
   }
 
   get state(): GatewayState {
     return this.stateValue;
-  }
-
-  /** The signer the approval gate and every link request use. */
-  get requestSigner(): GatewaySigner {
-    return this.signer;
   }
 
   // ── boot + loop ─────────────────────────────────────────────────────────
@@ -210,13 +250,27 @@ export class GatewayRuntime {
     }
   }
 
+  /** GET /health — liveness. Always 200 while the process runs: a gateway that
+   *  is awaiting its first bundle, halted or paused is doing its job, and a
+   *  restart can't change any of those states. Liveness probes that restarted
+   *  on "not serving" would loop a paused gateway forever. */
   health(): { status: number; body: unknown } {
-    if (this.stateValue === "serving") {
-      return { status: 200, body: { ok: true, state: "serving", bundle_version: this.applied?.version ?? null } };
-    }
+    return { status: 200, body: { ok: true, ...this.stateBody() } };
+  }
+
+  /** GET /ready — readiness. 200 only while enforcing a policy; 503 while
+   *  awaiting, halted or paused. What a load balancer or readiness probe keys
+   *  on. */
+  ready(): { status: number; body: unknown } {
+    const serving = this.stateValue === "serving";
+    return { status: serving ? 200 : 503, body: { ok: serving, ...this.stateBody() } };
+  }
+
+  private stateBody(): Record<string, unknown> {
     return {
-      status: 503,
-      body: { ok: false, state: this.stateValue, ...(this.haltReason ? { reason: this.haltReason } : {}) },
+      state: this.stateValue,
+      bundle_version: this.applied?.version ?? null,
+      ...(this.haltReason ? { reason: this.haltReason } : {}),
     };
   }
 

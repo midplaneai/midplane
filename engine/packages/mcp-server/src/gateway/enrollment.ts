@@ -136,7 +136,7 @@ export function verifyEnrollmentResponse(
   // it — every field is re-validated below.
   let payload: Record<string, unknown>;
   try {
-    payload = parseJsonObject(parsed.payload, "enrollment response");
+    payload = parseJsonObject(parsed.payload, "enrollment response payload");
   } catch (err) {
     throw new EnrollmentError((err as Error).message);
   }

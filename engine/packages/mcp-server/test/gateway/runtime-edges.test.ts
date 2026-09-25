@@ -9,12 +9,11 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { HttpApprovalGate } from "../../src/approval-gate.ts";
 import { buildEngine, type BuiltEngineHandle } from "../../src/engine-factory.ts";
 import { ensureIdentity, type LoadedIdentity } from "../../src/gateway/enroll.ts";
-import { APPROVALS_PATH, LinkClient } from "../../src/gateway/link-client.ts";
+import { LinkClient } from "../../src/gateway/link-client.ts";
 import { EnrollmentError, generateEd25519KeyPair, mintEnrollmentToken } from "../../src/gateway/protocol.ts";
-import { GatewayRuntime, type RuntimeLogger } from "../../src/gateway/runtime.ts";
+import { GatewayRuntime, createGatewayApprovalGate, type RuntimeLogger } from "../../src/gateway/runtime.ts";
 import { GatewayStateDir } from "../../src/gateway/state.ts";
 import { buildServer } from "../../src/server.ts";
 import { MockExecutor } from "../_helpers.ts";
@@ -95,11 +94,13 @@ describe("gateway runtime — edge paths", () => {
     );
   }
 
-  function engine(opts: { maskSalt?: string; executor?: MockExecutor; withGate?: () => GatewayRuntime } = {}) {
-    const approvalGate = opts.withGate
-      ? new HttpApprovalGate({
-          url: `${cloud.origin}${APPROVALS_PATH}`,
-          authorize: (m, p, b) => new LinkClient(cloud.origin, "t").authorization(opts.withGate!().requestSigner, m, p, b),
+  function engine(opts: { maskSalt?: string; executor?: MockExecutor; gateFor?: LoadedIdentity } = {}) {
+    const approvalGate = opts.gateFor
+      ? createGatewayApprovalGate({
+          cloudUrl: cloud.origin,
+          client: new LinkClient(cloud.origin, "t"),
+          identity: opts.gateFor.identity,
+          privateKey: opts.gateFor.privateKey,
         })
       : undefined;
     return buildEngine(
@@ -193,7 +194,7 @@ describe("gateway runtime — edge paths", () => {
     cloud.publish(policy({ masks: true }));
     expect(await rt.pollOnce()).toBe("bundle");
     expect(rt.state).toBe("halted");
-    expect(rt.health()).toMatchObject({ status: 503, body: { state: "halted" } });
+    expect(rt.ready()).toMatchObject({ status: 503, body: { state: "halted" } });
     expect(String(rt.heartbeat().halt_reason)).toMatch(/v2 could not be applied: .*MIDPLANE_MASK_SALT/);
     expect(rt.heartbeat().bundle).toBeNull();
     expect(handle.registry.count()).toBe(0);
@@ -302,9 +303,8 @@ describe("gateway runtime — edge paths", () => {
   test("the guard refuses every tool, check_approval included, even when its audit write fails", async () => {
     cloud.publish(policy({ approvals: true, analytics: true }));
     const enrolled = await enroll();
-    let rt!: GatewayRuntime;
-    const handle = engine({ withGate: () => rt });
-    rt = runtime(enrolled, handle, { env: { [MAIN_ENV]: MAIN_DSN, [ANALYTICS_ENV]: MAIN_DSN } });
+    const handle = engine({ gateFor: enrolled });
+    const rt = runtime(enrolled, handle, { env: { [MAIN_ENV]: MAIN_DSN, [ANALYTICS_ENV]: MAIN_DSN } });
     await rt.bootFromCache();
     await rt.pollOnce();
 
@@ -358,9 +358,8 @@ describe("gateway runtime — edge paths", () => {
   test("check_approval's status call is signed for its own path and body, and the cloud accepts it", async () => {
     cloud.publish(policy({ approvals: true }));
     const enrolled = await enroll();
-    let rt!: GatewayRuntime;
-    const handle = engine({ withGate: () => rt });
-    rt = runtime(enrolled, handle);
+    const handle = engine({ gateFor: enrolled });
+    const rt = runtime(enrolled, handle);
     await rt.bootFromCache();
     await rt.pollOnce();
 

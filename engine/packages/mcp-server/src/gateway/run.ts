@@ -12,7 +12,6 @@
 
 import { warmup, type AuditWriter } from "@midplane/engine";
 import { version as PACKAGE_VERSION } from "../../package.json" with { type: "json" };
-import { HttpApprovalGate } from "../approval-gate.ts";
 import { DenyWebhookAuditWriter, loadDenyWebhookConfig } from "../deny-webhook.ts";
 import { buildEngine } from "../engine-factory.ts";
 import { logger } from "../logger.ts";
@@ -22,8 +21,8 @@ import { initTelemetry } from "../telemetry/index.ts";
 import { startHttp } from "../transport/http.ts";
 import { isLoopbackAddress, loadGatewayConfig } from "./config.ts";
 import { ensureIdentity } from "./enroll.ts";
-import { APPROVALS_PATH, LinkClient } from "./link-client.ts";
-import { GatewayRuntime, gatewayCapabilities } from "./runtime.ts";
+import { LinkClient } from "./link-client.ts";
+import { GatewayRuntime, createGatewayApprovalGate, gatewayCapabilities } from "./runtime.ts";
 import { GatewayStateDir } from "./state.ts";
 
 export async function runGateway(): Promise<void> {
@@ -81,19 +80,15 @@ export async function runGateway(): Promise<void> {
     return result;
   };
 
-  // The runtime is built after the gate but the gate signs with the runtime's
-  // signer; a late-bound reference keeps construction order simple.
-  let runtime: GatewayRuntime | undefined;
-  // Always wired, whether or not a bundle holds writes yet: turning approvals
-  // on is then a pure bundle change. Each call carries a request token signed
-  // for exactly that path and body — there is no static gate secret.
-  const approvalGate = new HttpApprovalGate({
-    url: `${cfg.cloudUrl}${APPROVALS_PATH}`,
-    authorize: (method, path, body) => client.authorization(runtime!.requestSigner, method, path, body),
+  const approvalGate = createGatewayApprovalGate({
+    cloudUrl: cfg.cloudUrl,
+    client,
+    identity,
+    privateKey: enrolled.privateKey,
   });
 
   const handle = buildEngine(cfg.engine, { startEmpty: true, approvalGate, wrapAudit });
-  runtime = new GatewayRuntime({
+  const runtime = new GatewayRuntime({
     identity,
     privateKey: enrolled.privateKey,
     state,
@@ -115,7 +110,8 @@ export async function runGateway(): Promise<void> {
     {
       port: cfg.engine.port,
       host: cfg.engine.host,
-      health: () => runtime!.health(),
+      health: () => runtime.health(),
+      ready: () => runtime.ready(),
       // No indexer or admin routes: a gateway's policy comes only from bundles,
       // and its audit leaves only by the (future) authenticated push.
       identityHeaders: false,
@@ -147,7 +143,7 @@ export async function runGateway(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, "shutting down");
     try {
-      runtime!.stop();
+      runtime.stop();
       await http.close();
       await telemetry.shutdown();
       await handle.close();

@@ -32,6 +32,16 @@ export {
 } from "./keys.ts";
 export { JwsError } from "./jws.ts";
 export {
+  APPROVAL_TYP,
+  ApprovalOutcomeError,
+  MAX_APPROVAL_OUTCOME_LIFETIME_S,
+  encodeApprovalOutcome,
+  sqlSha256,
+  verifyApprovalOutcome,
+  type ApprovalOutcomeClaims,
+  type ApprovalOutcomeExpectations,
+} from "./approval.ts";
+export {
   BUNDLE_FIELDS_V1,
   BUNDLE_FORMAT_VERSION,
   BUNDLE_TYP,

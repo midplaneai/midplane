@@ -45,13 +45,19 @@ export interface ApprovalGateConfig {
   token: string;
 }
 
-/** Gateway mode: no static token. Every call is authorized by a fresh request
+/** Gateway mode. No static token: every call is authorized by a fresh request
  *  token the gateway signs for that exact method, path and body, so a captured
- *  header is worthless for any other request. Returns the full Authorization
- *  header value. */
+ *  header is worthless for any other request. And no bare answers: the
+ *  control plane's outcome must be signed with the pinned key and bound to
+ *  this statement (gateway/approval.ts) — "approved" runs a held write, so it
+ *  must not be something a TLS-intercepting proxy can say. */
 export interface SignedApprovalGateConfig {
   url: string;
+  /** Returns the full Authorization header value. */
   authorize: (method: string, path: string, body: string) => string;
+  /** Verifies the signed response body for `req` and returns the outcome
+   *  object; throws on anything else. */
+  verifyOutcome: (body: string, req: ApprovalRequest) => unknown;
 }
 
 /** Read + validate the gate config.
@@ -137,10 +143,23 @@ export class HttpApprovalGate implements ApprovalGate {
     }
 
     let body: unknown;
-    try {
-      body = await res.json();
-    } catch (err) {
-      throw new ApprovalUnavailableError("approval gate returned a non-JSON body", err);
+    if ("verifyOutcome" in this.config) {
+      try {
+        body = this.config.verifyOutcome(await res.text(), req);
+      } catch (err) {
+        // Unsigned, mis-signed, or for another statement: an unknown answer,
+        // and an unknown answer is not permission.
+        throw new ApprovalUnavailableError(
+          `approval gate returned an outcome that does not verify: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        );
+      }
+    } else {
+      try {
+        body = await res.json();
+      } catch (err) {
+        throw new ApprovalUnavailableError("approval gate returned a non-JSON body", err);
+      }
     }
 
     const outcome = parseOutcome(body);

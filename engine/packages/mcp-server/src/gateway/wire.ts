@@ -11,8 +11,9 @@
 //                          state, not a failure (the gateway neither backs off
 //                          nor warns). Enrollment normally guarantees a bundle.
 //   POST heartbeat         2xx
-//   POST approvals         2xx JSON outcome (the approval gate's wire shape)
-//   POST approvals/status  2xx JSON status
+//   POST approvals         2xx application/jose — the outcome, SIGNED with the
+//                          bundle key and bound to the statement (approval.ts)
+//   POST approvals/status  2xx JSON status (read-only; never executes anything)
 //
 // Errors are JSON `{error: <code>}`; `clock_skew` also carries `server_time`
 // (seconds since the epoch). Anything not 2xx/304 is a failure the gateway
