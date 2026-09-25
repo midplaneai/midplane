@@ -54,6 +54,7 @@ import {
 } from "./tools/describe-table.ts";
 import { handleListDatabases } from "./tools/list-databases.ts";
 import { ceilingFor, scopedRegistry, type SessionScope } from "./scope.ts";
+import { logger } from "./logger.ts";
 
 export interface BuildServerOptions {
   handle: EngineHandle;
@@ -556,8 +557,10 @@ function guardToolCalls(
           agentVersion: agent.version,
           reason: availability.reason,
         });
-      } catch {
-        // The refusal stands whether or not its record could be written.
+      } catch (err) {
+        // The refusal stands whether or not its record could be written — but a
+        // missing record is an operator problem, so say so.
+        logger.error({ err, tool: name }, "refusal applied but its audit write failed");
       }
       return gatewayStateResult(availability.reason);
     });
@@ -584,7 +587,7 @@ function registerAwaitingPolicySurface(server: McpServer): void {
       "This gateway received its policy after this session started. Reconnect the MCP client to see the databases.",
     );
   const description =
-    "This gateway had no policy from Midplane Cloud when this session started; every call is refused until it has one.";
+    "This gateway was not serving when this session started (no policy from Midplane Cloud yet, or halted). Every call is refused; reconnect once the gateway is serving.";
   server.registerTool("query", { title: "Run a SQL query", description, inputSchema: QueryInputSchema }, async () => reconnect());
   server.registerTool("list_tables", { title: "List tables", description, inputSchema: ListTablesInputSchema }, async () => reconnect());
   server.registerTool(

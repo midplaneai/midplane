@@ -4,7 +4,9 @@
 // A request token is a JWT (RFC 7519) signed EdDSA by the gateway's own key —
 // an RFC 7523 client assertion — bound to ONE request the way DPoP (RFC 9449)
 // binds proofs: method (`htm`), path (`htu`) and, when there is a body, its
-// sha256 (`bh`). Lifetime is 60 s as minted and at most 120 s as accepted.
+// sha256 (`bh`). Lifetime is 60 s as minted and at most 120 s as issued; with
+// the ±60 s clock-skew allowance a token is accepted until exp + 60 s, which is
+// the window a replay cache must cover (VerifiedRequestToken.rememberUntil).
 //
 // Why not mTLS: the control plane's TLS is terminated by its hosting edge,
 // which neither verifies nor forwards client certificates, and customer egress
@@ -23,6 +25,12 @@
 //   enrollment proof  header { alg, typ: "midplane-gw-enroll+jwt", jwk }
 //                     carries the NEW public key being registered, and proves
 //                     the caller holds its private half
+//
+// Audience: an enrollment proof's `aud` is the origin the gateway addressed
+// (MIDPLANE_CLOUD_URL) — it can't know the issuer yet — so the control plane
+// checks it against its own public origin. Every later request token's `aud` is
+// the `iss` from the signed enrollment response, and a gateway refuses to boot
+// when MIDPLANE_CLOUD_URL no longer matches the origin it enrolled against.
 
 import { createHash, randomBytes, type KeyObject } from "node:crypto";
 import { b64urlDecode, b64urlEncode } from "./b64.ts";
@@ -117,9 +125,12 @@ export function readRequestTokenKid(token: string): string {
 export interface VerifiedRequestToken {
   gatewayId: string;
   jti: string;
-  /** Expiry, seconds since the epoch — how long the caller's jti cache must
-   *  remember this token. */
+  /** The token's own expiry, seconds since the epoch. */
   exp: number;
+  /** exp + the skew allowance: the last second this token is still accepted,
+   *  and so how long a jti replay cache must remember it. Evicting at `exp`
+   *  would reopen a replay window of MAX_CLOCK_SKEW_S. */
+  rememberUntil: number;
 }
 
 /** Second half: verify the token against the gateway's registered public key
@@ -139,7 +150,7 @@ export function verifyRequestToken(
     throw new RequestTokenError("claims", "request token iss/sub must equal its kid");
   }
   const { jti, exp } = checkBindingClaims(claims, expect);
-  return { gatewayId: kid, jti, exp };
+  return { gatewayId: kid, jti, exp, rememberUntil: exp + MAX_CLOCK_SKEW_S };
 }
 
 export interface VerifiedEnrollmentProof {
@@ -147,6 +158,8 @@ export interface VerifiedEnrollmentProof {
   publicKeyRaw: Buffer;
   jti: string;
   exp: number;
+  /** See VerifiedRequestToken.rememberUntil. */
+  rememberUntil: number;
 }
 
 export function verifyEnrollmentProof(
@@ -178,7 +191,7 @@ export function verifyEnrollmentProof(
   }
   const claims = parseJsonObject(parsed.payload, "enrollment proof");
   const { jti, exp } = checkBindingClaims(claims, expect);
-  return { publicKeyRaw, jti, exp };
+  return { publicKeyRaw, jti, exp, rememberUntil: exp + MAX_CLOCK_SKEW_S };
 }
 
 /** sha256 of the request body, as it appears in `bh`. */

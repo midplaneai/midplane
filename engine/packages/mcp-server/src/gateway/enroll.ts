@@ -16,6 +16,7 @@ import type { LinkClient } from "./link-client.ts";
 import type { GatewayStateDir, StoredIdentity } from "./state.ts";
 import {
   EnrollmentError,
+  b64urlEncode,
   parseEnrollmentToken,
   verifyEnrollmentResponse,
 } from "./protocol.ts";
@@ -46,13 +47,25 @@ export async function ensureIdentity(
     if (input.enrollToken) {
       log.info({ gateway_id: existing.gateway_id }, "already enrolled; MIDPLANE_ENROLL_TOKEN is ignored");
     }
+    // Every token this gateway mints is bound to the issuer it enrolled with, so
+    // a different URL can't work — and would send held statements and
+    // heartbeats to a control plane (possibly another region) that isn't ours.
     if (existing.cloud_url !== input.cloudUrl) {
-      log.warn(
-        { enrolled_against: existing.cloud_url, cloud_url: input.cloudUrl },
-        "MIDPLANE_CLOUD_URL differs from the origin this gateway enrolled against",
+      throw new EnrollmentError(
+        `MIDPLANE_CLOUD_URL is ${input.cloudUrl}, but this gateway enrolled against ${existing.cloud_url}. ` +
+          "Set it back, or delete the state directory and enroll with a token from the new control plane.",
       );
     }
     const key = state.loadKey();
+    // The key on disk must be the one the control plane registered. A different
+    // one (a restored or shared state volume) would have every request refused
+    // while the gateway sat on its cached policy with no local explanation.
+    if (b64urlEncode(key.publicKeyRaw) !== existing.gateway_key) {
+      throw new EnrollmentError(
+        `${state.keyPath} is not the key this gateway enrolled with. Each gateway instance needs its own state ` +
+          "directory; delete this one and enroll again.",
+      );
+    }
     return { identity: existing, ...key, enrolledNow: false };
   }
 
@@ -86,6 +99,7 @@ export async function ensureIdentity(
     project_id: verified.projectId,
     cloud_url: input.cloudUrl,
     issuer: verified.issuer,
+    gateway_key: b64urlEncode(key.publicKeyRaw),
     signing_key: verified.signingKey,
     min_version: verified.minVersion,
     poll_seconds: verified.pollSeconds,

@@ -4,17 +4,24 @@
 // Each request carries a fresh request token signed by the gateway key and bound
 // to that request's method, path and body (request-token.ts). Redirects are
 // never followed — a token is bound to one path, and a redirect is either a
-// misconfiguration or someone steering the gateway — and every call has a
-// deadline. Results are values, not throws, so the pull loop can tell "nothing
-// new", "here is a bundle" and each kind of failure apart.
+// misconfiguration or someone steering the gateway — every call has a deadline,
+// and every response body is read with a size cap. Results are values, not
+// throws, so the pull loop can tell "nothing new", "here is a bundle" and each
+// kind of failure apart. Routes and status conventions live in wire.ts.
 
 import type { KeyObject } from "node:crypto";
-import { mintEnrollmentProof, mintRequestToken } from "./protocol.ts";
+import { MAX_BUNDLE_BYTES } from "./bundle.ts";
+import { mintEnrollmentProof, mintRequestToken } from "./request-token.ts";
+import {
+  BUNDLE_PATH,
+  ENROLL_PATH,
+  HEARTBEAT_PATH,
+  LINK_ERROR,
+  MAX_LINK_RESPONSE_BYTES,
+  bundleEtag,
+} from "./wire.ts";
 
-export const ENROLL_PATH = "/api/gateway/v1/enroll";
-export const BUNDLE_PATH = "/api/gateway/v1/bundle";
-export const HEARTBEAT_PATH = "/api/gateway/v1/heartbeat";
-export const APPROVALS_PATH = "/api/gateway/v1/approvals";
+export { APPROVALS_PATH, BUNDLE_PATH, ENROLL_PATH, HEARTBEAT_PATH } from "./wire.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -22,15 +29,18 @@ export interface LinkFailure {
   kind: "error";
   /** HTTP status, or null when no response arrived (network, timeout). */
   status: number | null;
-  /** The control plane's `error` code when it sent one (e.g. gateway_revoked,
-   *  clock_skew, enrollment_token_used). */
+  /** The control plane's `error` code when it sent one (see LINK_ERROR). */
   code: string | null;
   message: string;
   /** The control plane's clock, when it reported one (clock_skew). */
   serverTime: number | null;
 }
 
-export type BundleFetch = { kind: "not_modified" } | { kind: "bundle"; jws: string } | LinkFailure;
+export type BundleFetch =
+  | { kind: "not_modified" }
+  | { kind: "no_bundle" }
+  | { kind: "bundle"; jws: string }
+  | LinkFailure;
 
 export interface GatewaySigner {
   gatewayId: string;
@@ -63,26 +73,37 @@ export class LinkClient {
     });
     const res = await this.send("POST", ENROLL_PATH, proof, text);
     if (res.kind === "error") return res;
-    if (res.response.status !== 200) return failure(res.response);
-    return { kind: "enrolled", jws: (await res.response.text()).trim() };
+    if (!res.response.ok) return failure(res.response);
+    const jws = await readCapped(res.response, MAX_LINK_RESPONSE_BYTES);
+    if (jws === null) return oversize(ENROLL_PATH);
+    return { kind: "enrolled", jws: jws.trim() };
   }
 
   async fetchBundle(signer: GatewaySigner, currentVersion: number | null): Promise<BundleFetch> {
     const token = this.token(signer, "GET", BUNDLE_PATH);
     const headers: Record<string, string> = {};
-    if (currentVersion !== null) headers["if-none-match"] = `"${currentVersion}"`;
+    if (currentVersion !== null) headers["if-none-match"] = bundleEtag(currentVersion);
     const res = await this.send("GET", BUNDLE_PATH, token, undefined, headers);
     if (res.kind === "error") return res;
     if (res.response.status === 304) return { kind: "not_modified" };
-    if (res.response.status !== 200) return failure(res.response);
-    return { kind: "bundle", jws: (await res.response.text()).trim() };
+    if (!res.response.ok) {
+      const f = await failure(res.response);
+      // Nothing published yet is a state, not a failure: no backoff, no warning.
+      return f.status === 404 && f.code === LINK_ERROR.noBundle ? { kind: "no_bundle" } : f;
+    }
+    const jws = await readCapped(res.response, MAX_BUNDLE_BYTES);
+    if (jws === null) return oversize(BUNDLE_PATH);
+    return { kind: "bundle", jws: jws.trim() };
   }
 
   async heartbeat(signer: GatewaySigner, body: unknown): Promise<{ kind: "ok" } | LinkFailure> {
     const text = JSON.stringify(body);
     const res = await this.send("POST", HEARTBEAT_PATH, this.token(signer, "POST", HEARTBEAT_PATH, text), text);
     if (res.kind === "error") return res;
-    if (res.response.status >= 200 && res.response.status < 300) return { kind: "ok" };
+    if (res.response.ok) {
+      await res.response.body?.cancel().catch(() => undefined);
+      return { kind: "ok" };
+    }
     return failure(res.response);
   }
 
@@ -124,6 +145,7 @@ export class LinkClient {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (response.status >= 300 && response.status < 400 && response.status !== 304) {
+        await response.body?.cancel().catch(() => undefined);
         return {
           kind: "error",
           status: response.status,
@@ -145,11 +167,47 @@ export class LinkClient {
   }
 }
 
+/** Read a response body as UTF-8, or null once it exceeds `max` bytes — the
+ *  size check happens while reading, not after the whole body is in memory. */
+async function readCapped(res: Response, max: number): Promise<string | null> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function oversize(path: string): LinkFailure {
+  return {
+    kind: "error",
+    status: null,
+    code: "oversize",
+    message: `control plane response to ${path} exceeded the size limit`,
+    serverTime: null,
+  };
+}
+
 async function failure(res: Response): Promise<LinkFailure> {
   let code: string | null = null;
   let serverTime: number | null = null;
+  const text = await readCapped(res, MAX_LINK_RESPONSE_BYTES).catch(() => null);
   try {
-    const body = (await res.json()) as Record<string, unknown>;
+    const body = JSON.parse(text ?? "") as Record<string, unknown>;
     if (typeof body.error === "string") code = body.error;
     if (typeof body.server_time === "number") serverTime = body.server_time;
   } catch {

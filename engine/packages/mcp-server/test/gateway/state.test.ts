@@ -12,6 +12,7 @@ const IDENTITY: StoredIdentity = {
   project_id: "01PROJECT",
   cloud_url: "https://eu.app.midplane.test",
   issuer: "https://eu.app.midplane.test",
+  gateway_key: "gwkey",
   signing_key: { kid: "abc", x: "def" },
   min_version: 3,
   poll_seconds: 15,
@@ -49,6 +50,10 @@ describe("GatewayStateDir", () => {
   test("a malformed identity is an error that says how to recover", () => {
     const state = GatewayStateDir.open(join(root, "gw"));
     writeFileSync(state.identityPath, JSON.stringify({ v: 1, gateway_id: "x" }));
+    expect(() => state.readIdentity()).toThrow(/enroll again/);
+    // Not JSON at all (a truncated write from another tool, a stray edit): same hint,
+    // not a bare SyntaxError.
+    writeFileSync(state.identityPath, "{ truncated");
     expect(() => state.readIdentity()).toThrow(/enroll again/);
   });
 });

@@ -106,9 +106,18 @@ describe("verifyEnrollmentResponse", () => {
   });
 
   test("malformed fields are refused even when signed", () => {
-    for (const over of [{ min_version: 0 }, { iss: "eu.app.midplane.test" }, { gateway_id: "" }, { poll_seconds: 0 }]) {
+    for (const over of [{ iss: "eu.app.midplane.test" }, { gateway_id: "" }, { poll_seconds: 0 }]) {
       expect(() => verify(respond(over as Partial<EnrollmentResponseClaims>))).toThrow(/malformed/);
     }
+    // min_version 0 can't even be encoded: versions start at 1 …
+    expect(() => respond({ min_version: 0 })).toThrow(/min_version/);
+    // … and a hand-signed one is still refused by the gateway.
+    const zero = craftJws(
+      { alg: "EdDSA", typ: ENROLL_RESPONSE_TYP, kid: bundleKey.kid },
+      { v: 1, ...claims(), min_version: 0 },
+      (i) => sign(null, i, bundleKey.privateKey),
+    );
+    expect(() => verify(zero)).toThrow(/malformed/);
   });
 
   test("the wrong typ, or a future format, is refused", () => {

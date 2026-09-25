@@ -112,6 +112,10 @@ export class HttpApprovalGate implements ApprovalGate {
           "user-agent": USER_AGENT,
         },
         body,
+        // Never follow: a redirect would re-send the held statement to another
+        // origin and honour whatever outcome it returns. A 3xx is !ok below,
+        // so it surfaces as ApprovalUnavailableError.
+        redirect: "manual",
         signal: controller.signal,
       });
     } catch (err) {
@@ -176,6 +180,10 @@ export class HttpApprovalGate implements ApprovalGate {
           "user-agent": USER_AGENT,
         },
         body,
+        // Never follow: a redirect would re-send the held statement to another
+        // origin and honour whatever outcome it returns. A 3xx is !ok below,
+        // so it surfaces as ApprovalUnavailableError.
+        redirect: "manual",
         signal: controller.signal,
       });
     } catch (err) {

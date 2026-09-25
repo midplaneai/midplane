@@ -9,6 +9,17 @@
 
 export { b64urlDecode, b64urlEncode } from "./b64.ts";
 export {
+  APPROVALS_PATH,
+  APPROVALS_STATUS_PATH,
+  BUNDLE_PATH,
+  ENROLL_PATH,
+  HEARTBEAT_PATH,
+  LINK_ERROR,
+  MAX_LINK_RESPONSE_BYTES,
+  bundleEtag,
+  type LinkErrorCode,
+} from "./wire.ts";
+export {
   ED25519_PUBLIC_KEY_BYTES,
   generateEd25519KeyPair,
   keyId,

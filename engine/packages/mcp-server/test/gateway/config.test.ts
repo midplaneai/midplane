@@ -1,6 +1,9 @@
 // `midplane gateway` configuration: what it refuses to boot with.
 
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { homedir, hostname } from "node:os";
+import { join } from "node:path";
 import {
   GatewayConfigError,
   isLoopbackAddress,
@@ -67,8 +70,24 @@ describe("loadGatewayConfig", () => {
   });
 
   test("poll interval has a floor", () => {
-    expect(problems({ ...BASE, MIDPLANE_GATEWAY_POLL_SECONDS: "1" }).join("\n")).toContain("≥ 5");
+    expect(problems({ ...BASE, MIDPLANE_GATEWAY_POLL_SECONDS: "1" }).join("\n")).toContain("between 5 and 3600");
+    // …and a ceiling: an interval past setTimeout's range would fire at once, in a loop.
+    expect(problems({ ...BASE, MIDPLANE_GATEWAY_POLL_SECONDS: "4000000" }).join("\n")).toContain("between 5 and 3600");
     expect(loadGatewayConfig({ ...BASE, MIDPLANE_GATEWAY_POLL_SECONDS: "30" }).pollSeconds).toBe(30);
+  });
+
+  test("defaults and the remaining refusals: state dir, name, a fractional poll, an invalid port", () => {
+    const cfg = loadGatewayConfig({ ...BASE, MIDPLANE_GATEWAY_STATE_DIR: undefined });
+    expect(cfg.stateDir).toBe(existsSync("/.dockerenv") ? "/data/gateway" : join(homedir(), ".midplane", "gateway"));
+    expect(cfg.name).toBe(hostname());
+    expect(cfg.enrollToken).toBeNull();
+    expect(loadGatewayConfig({ ...BASE, MIDPLANE_GATEWAY_NAME: "edge-1" }).name).toBe("edge-1");
+    for (const bad of ["7.5", "abc"]) {
+      expect(problems({ ...BASE, MIDPLANE_GATEWAY_POLL_SECONDS: bad }).join("\n")).toContain("must be an integer");
+    }
+    expect(problems({ ...BASE, PORT: "not-a-port" }).join("\n")).toMatch(/^port:/m);
+    // An explicit http transport is fine; only a non-HTTP one is refused.
+    expect(loadGatewayConfig({ ...BASE, MIDPLANE_TRANSPORT: "http" }).engine.transport).toBe("http");
   });
 
   test("every problem is reported at once", () => {

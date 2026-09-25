@@ -50,6 +50,15 @@ async function main(): Promise<void> {
       return;
     }
     case "gateway": {
+      // Any argument is either a request for help or a mistake. Neither may
+      // start the gateway: with MIDPLANE_ENROLL_TOKEN set, starting it spends
+      // the one-time token.
+      if (rest.length > 0) {
+        const wantsHelp = rest.length === 1 && (rest[0] === "--help" || rest[0] === "-h");
+        printGatewayHelp(wantsHelp ? process.stdout : process.stderr);
+        if (!wantsHelp) process.exit(2);
+        return;
+      }
       // Lazy: the link client and enrollment code stay off every other path.
       const { runGateway } = await import("./gateway/run.ts");
       await runGateway();
@@ -110,6 +119,10 @@ async function main(): Promise<void> {
         printInitHelp();
         return;
       }
+      if (rest[0] === "gateway") {
+        printGatewayHelp();
+        return;
+      }
       printHelp();
       return;
     default:
@@ -152,7 +165,31 @@ Usage:
   midplane policy ...  Author/validate/lint/dry-run a policy file
                        (init | validate | lint | test [--server])
   midplane version     Print version
-  midplane help [cmd]  Detailed usage for init|query|doctor|audit|policy
+  midplane help [cmd]  Detailed usage for init|query|doctor|audit|policy|gateway
+`);
+}
+
+function printGatewayHelp(stream: NodeJS.WriteStream = process.stdout): void {
+  stream.write(`midplane gateway — run as a customer-hosted gateway for Midplane Cloud
+
+Usage:
+  midplane gateway     (takes no arguments; configured by environment)
+
+Enrolls once with a one-time token, then enforces the signed policy bundles
+Midplane Cloud publishes. Serves /mcp on loopback only.
+
+Required:
+  MIDPLANE_CLOUD_URL          Your region's Midplane Cloud origin
+  MIDPLANE_MASK_SALT          ≥ 32 chars, from your secret manager; never sent to the cloud
+  MIDPLANE_ENROLL_TOKEN       First boot only (mpe1_…); ignored once enrolled
+  MIDPLANE_DSN_<id>           One per database, as shown in Midplane Cloud
+
+Optional:
+  MIDPLANE_GATEWAY_STATE_DIR  Key, identity and last policy (image: /data/gateway; persist it)
+  MIDPLANE_GATEWAY_NAME       Defaults to the hostname
+  MIDPLANE_GATEWAY_POLL_SECONDS  5–3600, default set by Midplane Cloud
+  MIDPLANE_HOST / PORT        Loopback address only (default 127.0.0.1) / 8080
+  HTTPS_PROXY                 Egress proxy (on Node, also NODE_USE_ENV_PROXY=1)
 `);
 }
 

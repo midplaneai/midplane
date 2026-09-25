@@ -24,8 +24,9 @@
 
 import { createHash, type KeyObject } from "node:crypto";
 import { ulid } from "ulid";
-import { TRANSFORM_NAMES, type AuditEvent } from "@midplane/engine";
+import { PSEUDONYMIZE_KINDS, TRANSFORM_NAMES, type AuditEvent } from "@midplane/engine";
 import { ENGINE_FEATURES } from "../config.ts";
+import { MAX_POLL_SECONDS, MIN_POLL_SECONDS } from "./config.ts";
 import type { BuiltEngineHandle, ReplaceDatabase } from "../engine-factory.ts";
 import type { Availability, ServingGuard, ToolRefusal } from "../server.ts";
 import { checkBundlePolicy } from "./policy-check.ts";
@@ -43,6 +44,21 @@ import type { GatewayStateDir, StoredIdentity } from "./state.ts";
 export type GatewayState = "awaiting_bundle" | "serving" | "halted";
 
 export const LINK_CAPABILITIES = ["bundle.v1", "heartbeat.v1", "approval_gate.v1"] as const;
+
+/** What this gateway can enforce, reported at enrollment and in every
+ *  heartbeat. The control plane compares a candidate bundle against it before
+ *  publishing, so it lists every closed vocabulary the policy schema enforces:
+ *  a bundle naming a transform or pseudonymize kind this build doesn't know
+ *  would halt the gateway. */
+export function gatewayCapabilities(): Record<string, string[]> {
+  return {
+    link: [...LINK_CAPABILITIES],
+    bundle_fields: [...BUNDLE_FIELDS_V1],
+    policy_features: [...ENGINE_FEATURES].sort(),
+    mask_transforms: [...TRANSFORM_NAMES],
+    pseudonymize_kinds: [...PSEUDONYMIZE_KINDS],
+  };
+}
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_BACKOFF_S = 300;
 const REVOKED_POLL_S = 300;
@@ -98,8 +114,13 @@ export class GatewayRuntime {
   /** Serializes bundle processing: a poll and a boot load never interleave. */
   private chain: Promise<unknown> = Promise.resolve();
 
+  private readonly pollSeconds: number;
+
   constructor(private readonly deps: GatewayRuntimeDeps) {
     const { identity } = deps;
+    // Bounded both ways, whatever the env or the enrollment response said: a
+    // huge interval would overflow setTimeout (which then fires at once).
+    this.pollSeconds = Math.min(Math.max(deps.pollSeconds, MIN_POLL_SECONDS), MAX_POLL_SECONDS);
     const raw = b64urlDecode(identity.signing_key.x);
     if (keyId(raw) !== identity.signing_key.kid) {
       throw new Error("identity.json signing key does not match its kid; delete the state directory and enroll again");
@@ -141,7 +162,8 @@ export class GatewayRuntime {
     }
     this.failures = 0;
     this.revoked = false;
-    if (res.kind === "not_modified") return "not_modified";
+    // Nothing published yet is a state, not a failure: keep the normal cadence.
+    if (res.kind === "not_modified" || res.kind === "no_bundle") return "not_modified";
     await this.process(res.jws, "cloud");
     return "bundle";
   }
@@ -215,12 +237,7 @@ export class GatewayRuntime {
       started_at: this.startedAt,
       state: this.stateValue,
       halt_reason: this.haltReason,
-      capabilities: {
-        link: [...LINK_CAPABILITIES],
-        bundle_fields: [...BUNDLE_FIELDS_V1],
-        policy_features: [...ENGINE_FEATURES].sort(),
-        mask_transforms: [...TRANSFORM_NAMES],
-      },
+      capabilities: gatewayCapabilities(),
       bundle: this.applied
         ? { version: this.applied.version, policy_sha256: this.applied.policySha256, applied_at: this.applied.appliedAt }
         : null,
@@ -258,7 +275,9 @@ export class GatewayRuntime {
         detail: verdict.detail,
         at: new Date().toISOString(),
       };
-      log[source === "cache" ? "error" : "warn"](
+      // A cached bundle that fails, or two different statements under one
+      // version, is never routine: a cloud bug or a key compromise.
+      log[source === "cache" || verdict.reason === "version_conflict" ? "error" : "warn"](
         { source, reason: verdict.reason, version: verdict.version, detail: verdict.detail },
         source === "cache"
           ? "cached policy bundle failed verification; ignoring it"
@@ -317,7 +336,7 @@ export class GatewayRuntime {
     // Nothing reaches the engine while halted (the guard refuses first); drain
     // the pools anyway so a halted gateway holds no database connections.
     try {
-      await this.deps.handle.replacePolicy([], { bundleVersion: version });
+      await this.deps.handle.drain({ bundleVersion: version, reason });
     } catch (err) {
       this.deps.log.warn({ err }, "draining databases on halt failed");
     }
@@ -376,10 +395,12 @@ export class GatewayRuntime {
   }
 
   private nextDelayMs(): number {
-    const base = this.revoked ? REVOKED_POLL_S : this.deps.pollSeconds;
-    const backedOff = this.failures > 0 ? Math.min(base * 2 ** this.failures, MAX_BACKOFF_S) : base;
+    const base = this.revoked ? REVOKED_POLL_S : this.pollSeconds;
+    const backedOff = this.failures > 0 ? base * 2 ** Math.min(this.failures, 16) : base;
     const jitter = 0.8 + Math.random() * 0.4;
-    return Math.round(backedOff * jitter * 1000);
+    // The cap applies to the jittered value, so no wait ever exceeds it.
+    const cap = Math.max(MAX_BACKOFF_S, base);
+    return Math.round(Math.min(backedOff * jitter, cap) * 1000);
   }
 
   private queueHeartbeat(): void {
@@ -391,6 +412,9 @@ export class GatewayRuntime {
     }, 0).unref?.();
   }
 
+  // Written through the WRAPPED audit writer, so a refusal reaches the deny
+  // webhook and telemetry like any policy denial — a halted or paused gateway
+  // refusing every call is exactly when an operator wants to hear about it.
   private async auditRefusal(r: ToolRefusal): Promise<void> {
     const event = {
       id: ulid(),
@@ -406,6 +430,6 @@ export class GatewayRuntime {
       event_type: "DECIDED",
       payload: { decision: "DENY", policy_rule: "gateway_state", reason: r.reason, tool: r.tool },
     } as unknown as AuditEvent;
-    await this.deps.handle.registry.audit.write(event);
+    await this.deps.handle.auditWriter.write(event);
   }
 }

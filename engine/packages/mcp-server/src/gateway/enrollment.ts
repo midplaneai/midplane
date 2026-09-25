@@ -17,9 +17,11 @@
 //             min_version, poll_seconds, iat }
 //
 // `gateway_key` echoes the public key the gateway registered, binding the
-// response to this enrollment. `min_version` is the project's latest bundle
-// version at enrollment and becomes the gateway's floor — without it, the same
-// proxy could hand a freshly enrolled gateway an old, authentic, looser bundle.
+// response to this enrollment. `min_version` is max(1, the project's latest
+// bundle version at enrollment) and becomes the gateway's floor — without it,
+// the same proxy could hand a freshly enrolled gateway an old, authentic,
+// looser bundle. It is never 0: versions start at 1, and a project always has a
+// bundle by the time it can mint enrollment tokens.
 
 import { createHash, randomBytes, type KeyObject } from "node:crypto";
 import { b64urlDecode, b64urlEncode } from "./b64.ts";
@@ -92,6 +94,9 @@ export function encodeEnrollmentResponse(
   claims: EnrollmentResponseClaims,
   signer: { kid: string; privateKey: KeyObject },
 ): string {
+  if (!Number.isSafeInteger(claims.min_version) || claims.min_version < 1) {
+    throw new Error("enrollment response min_version must be an integer ≥ 1 (max(1, latest bundle version))");
+  }
   const payload = { v: ENROLL_RESPONSE_FORMAT_VERSION, ...claims };
   return signJws(
     { alg: "EdDSA", typ: ENROLL_RESPONSE_TYP, kid: signer.kid },

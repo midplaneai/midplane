@@ -5,7 +5,10 @@
 //     bundle the customer already replaced).
 //   • by the control plane, on every bundle BEFORE signing it. The same code
 //     answering the same question means a control-plane serializer bug fails
-//     one save instead of halting every customer's gateway.
+//     one save instead of halting every customer's gateway. That protects
+//     gateways at the control plane's own engine version; OLDER gateways are
+//     protected by comparing the bundle against the capabilities each one
+//     reports (runtime.ts gatewayCapabilities), not by this check.
 //
 // On top of the engine's own policy parser (schema, requires_features), a
 // gateway bundle must:

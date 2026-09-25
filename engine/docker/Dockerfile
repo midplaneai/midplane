@@ -72,6 +72,11 @@ USER midplane
 
 ENV PORT=8080
 ENV DB_PATH=/data/audit.db
+# `midplane gateway` keeps its key, identity and last policy bundle here. Set
+# explicitly (like DB_PATH) because the code's container detection looks for
+# /.dockerenv, which k8s/containerd runtimes don't create; without this a gateway
+# there would write to $HOME and lose its identity on every restart.
+ENV MIDPLANE_GATEWAY_STATE_DIR=/data/gateway
 ENV NODE_ENV=production
 
 EXPOSE 8080

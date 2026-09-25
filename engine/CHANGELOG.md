@@ -13,6 +13,8 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
   - **Fail closed.** A gateway that has never received a bundle serves nothing. So does a gateway holding a bundle it can't enforce: an unknown format, critical field or policy feature halts it rather than falling back to an older policy.
   - **Loopback only.** `/mcp` has no authentication yet, so the gateway binds to loopback and refuses to start on any other address.
   - **Signed requests.** Held writes go to the approval gate, heartbeats report the enforced policy, and every request to Midplane Cloud carries a short-lived token signed by the gateway's own key. There is no shared secret.
+  - **State directory.** The gateway's key, identity and cached bundle live in `MIDPLANE_GATEWAY_STATE_DIR`, which the image sets to `/data/gateway`. Mount a volume at `/data`: a gateway whose state doesn't survive a restart can't come back without a new enrollment token.
+  - **Egress proxies.** The image (Bun) honors `HTTPS_PROXY` / `HTTP_PROXY`. The npm package on Node also needs `NODE_USE_ENV_PROXY=1`, and warns at boot when a proxy is set without it.
   - **Threat model.** See the "Gateway mode" section of [`THREAT_MODEL.md`](./THREAT_MODEL.md). It explains why the gateway's own Postgres role is the real floor.
   - **Not live yet.** Midplane Cloud's side of the link is not live yet.
 

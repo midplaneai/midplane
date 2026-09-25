@@ -16,16 +16,14 @@ import { HttpApprovalGate } from "../approval-gate.ts";
 import { DenyWebhookAuditWriter, loadDenyWebhookConfig } from "../deny-webhook.ts";
 import { buildEngine } from "../engine-factory.ts";
 import { logger } from "../logger.ts";
-import { installShape, runtimeLabel } from "../runtime.ts";
+import { RUNTIME, installShape, runtimeLabel } from "../runtime.ts";
 import { buildServer } from "../server.ts";
 import { initTelemetry } from "../telemetry/index.ts";
 import { startHttp } from "../transport/http.ts";
-import { ENGINE_FEATURES } from "../config.ts";
-import { DEFAULT_POLL_SECONDS, isLoopbackAddress, loadGatewayConfig, MIN_POLL_SECONDS } from "./config.ts";
+import { isLoopbackAddress, loadGatewayConfig } from "./config.ts";
 import { ensureIdentity } from "./enroll.ts";
 import { APPROVALS_PATH, LinkClient } from "./link-client.ts";
-import { BUNDLE_FIELDS_V1 } from "./protocol.ts";
-import { GatewayRuntime, LINK_CAPABILITIES } from "./runtime.ts";
+import { GatewayRuntime, gatewayCapabilities } from "./runtime.ts";
 import { GatewayStateDir } from "./state.ts";
 
 export async function runGateway(): Promise<void> {
@@ -41,6 +39,18 @@ export async function runGateway(): Promise<void> {
 
   await warmup();
 
+  // Bun's fetch (the image) honors HTTP(S)_PROXY on its own. Node's ignores them
+  // unless the process started with NODE_USE_ENV_PROXY=1 — read once at startup,
+  // so the gateway can't turn it on itself — and a gateway behind an egress
+  // proxy would silently try to connect directly and never reach the cloud.
+  const proxyEnv = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].find((k) => process.env[k]);
+  if (RUNTIME === "node" && proxyEnv && process.env.NODE_USE_ENV_PROXY !== "1") {
+    logger.warn(
+      { proxy_env: proxyEnv },
+      "an egress proxy is configured but Node ignores it without NODE_USE_ENV_PROXY=1; set it, or the gateway can't reach Midplane Cloud",
+    );
+  }
+
   const state = GatewayStateDir.open(cfg.stateDir);
   const client = new LinkClient(cfg.cloudUrl, `midplane-gateway/${PACKAGE_VERSION}`);
 
@@ -54,11 +64,7 @@ export async function runGateway(): Promise<void> {
         enrollToken: cfg.enrollToken,
         name: cfg.name,
         engineVersion: PACKAGE_VERSION,
-        capabilities: {
-          link: [...LINK_CAPABILITIES],
-          bundle_fields: [...BUNDLE_FIELDS_V1],
-          policy_features: [...ENGINE_FEATURES].sort(),
-        },
+        capabilities: gatewayCapabilities(),
       },
       logger,
     );
@@ -94,7 +100,7 @@ export async function runGateway(): Promise<void> {
     client,
     handle,
     env: process.env,
-    pollSeconds: Math.max(cfg.pollSeconds ?? identity.poll_seconds ?? DEFAULT_POLL_SECONDS, MIN_POLL_SECONDS),
+    pollSeconds: cfg.pollSeconds ?? identity.poll_seconds,
     engineVersion: PACKAGE_VERSION,
     runtimeLabel: runtimeLabel(),
     installShape: installShape(),
@@ -113,6 +119,9 @@ export async function runGateway(): Promise<void> {
       // No indexer or admin routes: a gateway's policy comes only from bundles,
       // and its audit leaves only by the (future) authenticated push.
       identityHeaders: false,
+      // Binding to loopback keeps other hosts out; this keeps out a browser on
+      // THIS host that a DNS-rebinding page points at the port.
+      loopbackRequestsOnly: true,
     },
   );
   // Config already refused a non-loopback MIDPLANE_HOST; check what the socket

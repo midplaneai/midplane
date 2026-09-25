@@ -103,12 +103,19 @@ export async function startHttp(
      *  token id is forgeable attribution and a scope header is only ever a
      *  narrowing the caller chose, so neither is identity. */
     identityHeaders?: boolean;
+    /** Refuse (403) any request whose Host, or Origin when present, isn't a
+     *  loopback name (default false). Binding to loopback keeps other hosts
+     *  out; this keeps out a web page on THIS host whose DNS was rebound to
+     *  127.0.0.1 — the browser then sends the page's own name as Host. The MCP
+     *  transport spec requires Origin validation for exactly this reason. */
+    loopbackRequestsOnly?: boolean;
   },
 ): Promise<HttpHandle> {
   const sessions = new Map<string, SessionEntry>();
   const routeOpts: RouteOptions = {
     health: opts.health,
     identityHeaders: opts.identityHeaders ?? true,
+    loopbackRequestsOnly: opts.loopbackRequestsOnly ?? false,
   };
 
   const httpServer = createServer((req, res) =>
@@ -162,6 +169,7 @@ export async function startHttp(
 interface RouteOptions {
   health: HealthCheck | undefined;
   identityHeaders: boolean;
+  loopbackRequestsOnly: boolean;
 }
 
 async function handle(
@@ -174,6 +182,11 @@ async function handle(
   routeOpts: RouteOptions,
 ): Promise<void> {
   const url = req.url ?? "/";
+
+  if (routeOpts.loopbackRequestsOnly && !isLoopbackRequest(req)) {
+    writeJson(res, 403, { error: "forbidden", reason: "only loopback Host and Origin headers are accepted" });
+    return;
+  }
 
   if (req.method === "GET" && url === "/health") {
     const h = routeOpts.health ? routeOpts.health() : { status: 200, body: { ok: true } };
@@ -466,6 +479,32 @@ async function readText(req: IncomingMessage): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+// Host (and Origin, when a browser sent one) must name this machine. "localhost"
+// is fine HERE, unlike for the bind address: a rebinding attack arrives with the
+// attacker's own name in Host, never with localhost.
+function isLoopbackRequest(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (typeof host !== "string" || !isLoopbackHostname(hostnameOf(`http://${host}`))) return false;
+  const origin = req.headers.origin;
+  return origin === undefined || isLoopbackHostname(hostnameOf(origin));
+}
+
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(hostname: string | null): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    (hostname !== null && /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname))
+  );
 }
 
 // Bracket an IPv6 literal for use in a URL authority: `::` → `[::]`, so the

@@ -221,6 +221,13 @@ export interface BuiltEngineHandle extends EngineHandle {
     meta: { bundleVersion: number },
   ): Promise<{ applied_at: string }>;
   policySnapshot(): PolicySnapshotEntry[];
+  /** Gateway halt: drop every database and its pool, recording the removal.
+   *  Nothing is "applied" — the gateway serves nothing until a newer bundle
+   *  applies through replacePolicy. */
+  drain(meta: { bundleVersion: number; reason: string }): Promise<void>;
+  /** The audit writer with wrapAudit applied (telemetry, deny webhook): what a
+   *  gateway writes its own refusals through, so they alert like any denial. */
+  auditWriter: AuditWriter;
 }
 
 export interface BuildEngineOptions {
@@ -498,6 +505,8 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): BuiltEn
     replacePolicy: (databases, meta) =>
       replaceAllDatabases(databases, meta, cfg, audit, credentials, opts, entries, baseAudit),
     policySnapshot: () => snapshotPolicy(entries, cfg),
+    drain: (meta) => drainAllDatabases(meta, cfg, opts, entries, baseAudit),
+    auditWriter: audit,
     async close() {
       await registry.close();
     },
@@ -1005,7 +1014,7 @@ async function replaceAllDatabases(
         const next = makeEngineEntry(d.spec, cfg, audit, credentials, opts, gw);
         opened.push(next);
         plans.push({ kind: "added", next });
-      } else if (prev.url !== d.spec.url || prev.configured !== d.configured) {
+      } else if (prev.url !== d.spec.url || prev.configured !== d.configured || prev.dsnEnv !== d.dsnEnv) {
         const next = makeEngineEntry(d.spec, cfg, audit, credentials, opts, gw);
         opened.push(next);
         plans.push({ kind: "rebuilt", prev, next, closePrev: true });
@@ -1047,18 +1056,84 @@ async function replaceAllDatabases(
       summaries.push(replaceSummary(before, plan.prev, "swapped"));
     }
   }
+  const removed: string[] = [];
   for (const [name, e] of [...entries]) {
     if (!incoming.has(name)) {
       entries.delete(name);
       toClose.push({ executor: e.executor, db: name });
+      removed.push(name);
       logger.info({ db: name }, "bundle removed database");
     }
   }
 
+  // Drain replaced pools OFF the apply path. pg's end() resolves only once every
+  // checked-out client is released, so awaiting it here would hold the gateway's
+  // next bundle — a pause included — behind whatever long query is running.
   for (const c of toClose) {
-    if (c.executor !== opts.executor) await closeExecutor(c.executor, c.db, "replaced by bundle");
+    if (c.executor !== opts.executor) void closeExecutor(c.executor, c.db, "replaced by bundle");
   }
+  await writeRemovalRows(cfg, baseAudit, removed, { source: "bundle", bundleVersion: meta.bundleVersion });
   return finalizeReload(cfg, baseAudit, "bundle", summaries, { bundleVersion: meta.bundleVersion });
+}
+
+async function drainAllDatabases(
+  meta: { bundleVersion: number; reason: string },
+  cfg: Config,
+  opts: BuildEngineOptions,
+  entries: Map<string, EngineEntry>,
+  baseAudit: SqliteAuditWriter,
+): Promise<void> {
+  const removed = [...entries.keys()].sort();
+  for (const [name, e] of [...entries]) {
+    entries.delete(name);
+    if (e.executor !== opts.executor) void closeExecutor(e.executor, name, "gateway halted");
+  }
+  logger.info({ databases: removed, bundleVersion: meta.bundleVersion }, "gateway halted: databases drained");
+  await writeRemovalRows(cfg, baseAudit, removed, {
+    source: "halt",
+    bundleVersion: meta.bundleVersion,
+    reason: meta.reason,
+  });
+}
+
+// One POLICY_RELOADED row per database a gateway stopped serving — dropped by a
+// bundle, or drained by a halt — so the audit log alone shows when enforcement
+// on a database ended and why. Best-effort, like every reload row.
+async function writeRemovalRows(
+  cfg: Config,
+  audit: SqliteAuditWriter,
+  removed: readonly string[],
+  meta: { source: "bundle" | "halt"; bundleVersion: number; reason?: string },
+): Promise<void> {
+  for (const name of removed) {
+    const event = {
+      id: ulid(),
+      query_id: ulid(),
+      tenant_id: cfg.tenantId,
+      database: name,
+      agent_name: null,
+      agent_version: null,
+      agent_intent: null,
+      mcp_token_id: null,
+      ts: Date.now(),
+      schema_version: 3,
+      event_type: "POLICY_RELOADED",
+      payload: {
+        source: meta.source,
+        removed: true,
+        bundle_version: meta.bundleVersion,
+        ...(meta.reason ? { reason: meta.reason } : {}),
+        sections_changed: [],
+        databases_changed: [...removed],
+        table_access: null,
+      },
+    } as unknown as AuditEvent;
+    try {
+      await audit.write(event);
+    } catch (err) {
+      logger.error({ err, db: name }, "database removal applied but audit write failed");
+    }
+  }
 }
 
 // Masks are Engine constructor config: equal masks (and the same enforcement
@@ -1344,7 +1419,8 @@ async function finalizeReload(
             : {}),
         },
         // Gateway bundles: which signed version this row applied, plus the two
-        // sections the patch path never reported (spike §1.5 #9).
+        // sections the patch path never reported, so a bundle row states the
+        // whole enforced policy.
         ...(meta ? { bundle_version: meta.bundleVersion } : {}),
         ...(s.approvals !== undefined
           ? {

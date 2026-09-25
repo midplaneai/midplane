@@ -26,8 +26,8 @@ import { join } from "node:path";
 import { ConfigSchema, type Config } from "../config.ts";
 
 export const DEFAULT_GATEWAY_HOST = "127.0.0.1";
-export const DEFAULT_POLL_SECONDS = 15;
 export const MIN_POLL_SECONDS = 5;
+export const MAX_POLL_SECONDS = 3600;
 export const MIN_MASK_SALT_LENGTH = 32;
 
 const REFUSED_ENV = [
@@ -101,8 +101,8 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv): GatewayConfig {
   let pollSeconds: number | null = null;
   if (set("MIDPLANE_GATEWAY_POLL_SECONDS")) {
     const n = Number(env.MIDPLANE_GATEWAY_POLL_SECONDS);
-    if (!Number.isInteger(n) || n < MIN_POLL_SECONDS) {
-      problems.push(`MIDPLANE_GATEWAY_POLL_SECONDS must be an integer ≥ ${MIN_POLL_SECONDS}.`);
+    if (!Number.isInteger(n) || n < MIN_POLL_SECONDS || n > MAX_POLL_SECONDS) {
+      problems.push(`MIDPLANE_GATEWAY_POLL_SECONDS must be an integer between ${MIN_POLL_SECONDS} and ${MAX_POLL_SECONDS}.`);
     } else {
       pollSeconds = n;
     }
