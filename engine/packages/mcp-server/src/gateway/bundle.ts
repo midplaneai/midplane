@@ -38,8 +38,9 @@ export const BUNDLE_TYP = "midplane-bundle+jws";
 export const BUNDLE_FORMAT_VERSION = 1;
 export const MAX_BUNDLE_BYTES = 1024 * 1024;
 
-/** Payload fields a v1 gateway understands. Reported in the heartbeat so the
- *  control plane knows which `crit` names a gateway can honour. */
+/** Payload fields a v1 gateway understands. Reported at enrollment and in the
+ *  heartbeat so the control plane knows which `crit` names a gateway can
+ *  honour. */
 export const BUNDLE_FIELDS_V1 = [
   "v",
   "crit",

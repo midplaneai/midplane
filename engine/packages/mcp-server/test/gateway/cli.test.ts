@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,6 +113,21 @@ describe("midplane gateway (process)", () => {
       await new Promise((r) => setTimeout(r, 100));
     }
     expect(health).toMatchObject({ status: 200, body: { state: "serving", bundle_version: 1 } });
+
+    // run.ts wires the loopback-only request check: a page that rebinds its
+    // own hostname to 127.0.0.1 still sends that hostname, and is refused.
+    const rebound = await new Promise<number>((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", port, path: "/ready", headers: { host: `attacker.example:${port}` } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(rebound).toBe(403);
 
     const hbDeadline = Date.now() + 5_000;
     while (!cloud.heartbeats.some((h) => h.state === "serving") && Date.now() < hbDeadline) {

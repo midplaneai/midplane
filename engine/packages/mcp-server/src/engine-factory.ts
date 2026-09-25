@@ -569,14 +569,7 @@ function buildEntryWith(
   executor: Executor,
   gw: GatewayEntryOptions | undefined,
 ): EngineEntry {
-  const holder: PolicyHolder = {
-    tableAccess: spec.tableAccess
-      ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
-      : undefined,
-    tenantScope: cloneTenantScope(spec.tenantScope),
-    guardrails: { ...spec.guardrails },
-    approvals: { ...spec.approvals },
-  };
+  const holder = holderFor(spec);
 
   // Resolve the dialect for this DB. Postgres is a stateless singleton; one
   // instance is shared by the engine (parse/normalize) AND the metadata SQL
@@ -1044,16 +1037,17 @@ async function replaceAllDatabases(
       entries.set(plan.next.name, plan.next);
       summaries.push(replaceSummary(null, plan.next, "added"));
     } else if (plan.kind === "rebuilt") {
+      const before = snapshotEntry(plan.prev);
       entries.set(plan.next.name, plan.next);
+      // The replaced Engine can still hold a statement — a write waiting at the
+      // approval gate — and once approved that write re-checks policy through
+      // THIS holder, on a pool the mask rebuild kept. Point it at the new policy.
+      applyToHolder(plan.prev.holder, plan.next.holder);
       if (plan.closePrev) toClose.push({ executor: plan.prev.executor, db: plan.prev.name });
-      summaries.push(replaceSummary(plan.prev, plan.next, "rebuilt"));
+      summaries.push(replaceSummary(before, plan.next, "rebuilt"));
     } else {
       const before = snapshotEntry(plan.prev);
-      const h = plan.prev.holder;
-      h.tableAccess = { default: plan.spec.tableAccess!.default, tables: plan.spec.tableAccess!.tables };
-      h.tenantScope = cloneTenantScope(plan.spec.tenantScope);
-      h.guardrails = { ...plan.spec.guardrails };
-      h.approvals = { ...plan.spec.approvals };
+      applyToHolder(plan.prev.holder, holderFor(plan.spec));
       summaries.push(replaceSummary(before, plan.prev, "swapped"));
     }
   }
@@ -1061,6 +1055,7 @@ async function replaceAllDatabases(
   for (const [name, e] of [...entries]) {
     if (!incoming.has(name)) {
       entries.delete(name);
+      retireHolder(e.holder);
       toClose.push({ executor: e.executor, db: name });
       removed.push(name);
       logger.info({ db: name }, "bundle removed database");
@@ -1087,6 +1082,7 @@ async function drainAllDatabases(
   const removed = [...entries.keys()].sort();
   for (const [name, e] of [...entries]) {
     entries.delete(name);
+    retireHolder(e.holder);
     if (e.executor !== opts.executor) void closeExecutor(e.executor, name, "gateway halted");
   }
   logger.info({ databases: removed, bundleVersion: meta.bundleVersion }, "gateway halted: databases drained");
@@ -1095,6 +1091,31 @@ async function drainAllDatabases(
     bundleVersion: meta.bundleVersion,
     reason: meta.reason,
   });
+}
+
+function holderFor(spec: DatabaseSpec): PolicyHolder {
+  return {
+    tableAccess: spec.tableAccess
+      ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
+      : undefined,
+    tenantScope: cloneTenantScope(spec.tenantScope),
+    guardrails: { ...spec.guardrails },
+    approvals: { ...spec.approvals },
+  };
+}
+
+function applyToHolder(h: PolicyHolder, from: PolicyHolder): void {
+  h.tableAccess = from.tableAccess;
+  h.tenantScope = from.tenantScope;
+  h.guardrails = from.guardrails;
+  h.approvals = from.approvals;
+}
+
+// A database the gateway no longer serves denies everything from here on, so a
+// write still waiting at the approval gate on its Engine is refused by the
+// re-check rather than run on whatever the closing pool still allows.
+function retireHolder(h: PolicyHolder): void {
+  h.tableAccess = { default: "deny", tables: {} };
 }
 
 // One POLICY_RELOADED row per database a gateway stopped serving — dropped by a

@@ -275,12 +275,11 @@ export class Engine {
     //    a read the boolean short-circuits before the array scan.
     const resolution = await this.resolveApproval(evalResult, input, intent, queryId);
 
-    // A human ruling takes as long as the gate holds (tens of seconds), and the
-    // approval it grants is collected on a later re-run. If the policy was
-    // tightened in that window — a hot reload, a gateway bundle — the policy in
-    // force NOW decides: re-evaluate, and a denial replaces the ALLOW the human
-    // was asked about. An approval covers a statement the policy permits; it
-    // never outlives that permission.
+    // The gate can hold this attempt for tens of seconds while a human rules.
+    // If the policy was tightened while it waited — a hot reload, a gateway
+    // bundle — the policy in force NOW decides: re-evaluate, and a denial
+    // replaces the ALLOW the human was asked about. An approval covers a
+    // statement the policy permits; it never outlives that permission.
     if (resolution === APPROVED) {
       const current = this.evaluateGuarded(parseResult, input.ctx);
       if (current.verdict.decision === "DENY") evalResult = current;

@@ -27,6 +27,7 @@ import type {
 } from "@midplane/engine";
 import { ApprovalUnavailableError } from "@midplane/engine";
 import { logger } from "./logger.ts";
+import { readCapped } from "./read-capped.ts";
 
 // How long the engine waits for the control plane before calling it unavailable.
 //
@@ -39,6 +40,9 @@ import { logger } from "./logger.ts";
 const REQUEST_TIMEOUT_MS = 25_000;
 
 const USER_AGENT = "midplane-approval-gate/1";
+
+// An outcome or a status is a few hundred bytes of JSON (or a JWS of it).
+const MAX_RESPONSE_BYTES = 64 * 1024;
 
 export interface ApprovalGateConfig {
   url: string;
@@ -91,61 +95,22 @@ export class HttpApprovalGate implements ApprovalGate {
   constructor(
     private readonly config: ApprovalGateConfig | SignedApprovalGateConfig,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
-
-  private authorization(url: string, body: string): string {
-    if ("authorize" in this.config) {
-      return this.config.authorize("POST", new URL(url).pathname, body);
+  ) {
+    // Signed requests with unsigned answers would be the worst of both: a
+    // proxy could still say "approved". Refuse the combination outright.
+    if ("authorize" in config && typeof config.verifyOutcome !== "function") {
+      throw new Error("a signed approval gate needs verifyOutcome: it must not accept unsigned outcomes");
     }
-    return `Bearer ${this.config.token}`;
   }
 
   async request(req: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalOutcome> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    const onAbort = () => controller.abort();
-    signal?.addEventListener("abort", onAbort);
-
-    let res: Response;
-    try {
-      // Serialized once: a signed authorization covers these exact bytes.
-      const body = JSON.stringify(toWire(req));
-      res = await this.fetchImpl(this.config.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: this.authorization(this.config.url, body),
-          "user-agent": USER_AGENT,
-        },
-        body,
-        // Never follow: a redirect would re-send the held statement to another
-        // origin and honour whatever outcome it returns. A 3xx is !ok below,
-        // so it surfaces as ApprovalUnavailableError.
-        redirect: "manual",
-        signal: controller.signal,
-      });
-    } catch (err) {
-      // Includes the timeout. Safe to retry: the grant is statement-keyed, so a
-      // request the control plane already created is found by the next attempt.
-      throw new ApprovalUnavailableError(
-        `approval gate unreachable: ${err instanceof Error ? err.message : String(err)}`,
-        err,
-      );
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    }
-
-    if (!res.ok) {
-      throw new ApprovalUnavailableError(
-        `approval gate returned HTTP ${res.status}`,
-      );
-    }
+    // Serialized once: a signed authorization covers these exact bytes.
+    const text = await this.post(this.config.url, JSON.stringify(toWire(req)), REQUEST_TIMEOUT_MS, signal, "approval gate");
 
     let body: unknown;
     if ("verifyOutcome" in this.config) {
       try {
-        body = this.config.verifyOutcome(await res.text(), req);
+        body = this.config.verifyOutcome(text, req);
       } catch (err) {
         // Unsigned, mis-signed, or for another statement: an unknown answer,
         // and an unknown answer is not permission.
@@ -156,7 +121,7 @@ export class HttpApprovalGate implements ApprovalGate {
       }
     } else {
       try {
-        body = await res.json();
+        body = JSON.parse(text);
       } catch (err) {
         throw new ApprovalUnavailableError("approval gate returned a non-JSON body", err);
       }
@@ -182,46 +147,17 @@ export class HttpApprovalGate implements ApprovalGate {
     mcpTokenId: string | null,
     signal?: AbortSignal,
   ): Promise<ApprovalStatus> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
-    const onAbort = () => controller.abort();
-    signal?.addEventListener("abort", onAbort);
-
-    let res: Response;
-    try {
-      const url = `${this.config.url}/status`;
-      const body = JSON.stringify({ approval_id: approvalId, mcp_token_id: mcpTokenId });
-      res = await this.fetchImpl(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: this.authorization(url, body),
-          "user-agent": USER_AGENT,
-        },
-        body,
-        // Never follow: a redirect would re-send the held statement to another
-        // origin and honour whatever outcome it returns. A 3xx is !ok below,
-        // so it surfaces as ApprovalUnavailableError.
-        redirect: "manual",
-        signal: controller.signal,
-      });
-    } catch (err) {
-      throw new ApprovalUnavailableError(
-        `approval status unreachable: ${err instanceof Error ? err.message : String(err)}`,
-        err,
-      );
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    }
-
-    if (!res.ok) {
-      throw new ApprovalUnavailableError(`approval status returned HTTP ${res.status}`);
-    }
+    const text = await this.post(
+      `${this.config.url}/status`,
+      JSON.stringify({ approval_id: approvalId, mcp_token_id: mcpTokenId }),
+      STATUS_TIMEOUT_MS,
+      signal,
+      "approval status",
+    );
 
     let body: unknown;
     try {
-      body = await res.json();
+      body = JSON.parse(text);
     } catch (err) {
       throw new ApprovalUnavailableError("approval status returned a non-JSON body", err);
     }
@@ -231,6 +167,80 @@ export class HttpApprovalGate implements ApprovalGate {
       throw new ApprovalUnavailableError("approval status returned an unrecognized response");
     }
     return parsed;
+  }
+
+  /** POST `body` and read the 2xx answer as text, all inside one deadline — the
+   *  body read included, so a peer that sends headers and then stalls can't
+   *  hold the call open. Every way of not getting an answer (network, timeout,
+   *  non-2xx, an unfollowed 3xx, a body over the cap) is
+   *  ApprovalUnavailableError, never a decision. `what` names the call in
+   *  messages. */
+  private async post(
+    url: string,
+    body: string,
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+    what: string,
+  ): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort);
+    try {
+      let res: Response;
+      try {
+        res = await this.fetchImpl(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: this.authorization(url, body),
+            "user-agent": USER_AGENT,
+          },
+          body,
+          // Never follow: a redirect would re-send this request — a held
+          // statement, or an approval id — to another origin and honour
+          // whatever it answers. A 3xx is !ok below: unavailable.
+          redirect: "manual",
+          signal: controller.signal,
+        });
+      } catch (err) {
+        // Includes the timeout. Safe to retry: the grant is statement-keyed, so a
+        // request the control plane already created is found by the next attempt.
+        throw new ApprovalUnavailableError(
+          `${what} unreachable: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        );
+      }
+
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => undefined);
+        throw new ApprovalUnavailableError(`${what} returned HTTP ${res.status}`);
+      }
+
+      let text: string | null;
+      try {
+        text = await readCapped(res, MAX_RESPONSE_BYTES);
+      } catch (err) {
+        throw new ApprovalUnavailableError(
+          `${what} response could not be read: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        );
+      }
+      if (text === null) {
+        throw new ApprovalUnavailableError(`${what} response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+      }
+      return text;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  private authorization(url: string, body: string): string {
+    if ("authorize" in this.config) {
+      return this.config.authorize("POST", new URL(url).pathname, body);
+    }
+    return `Bearer ${this.config.token}`;
   }
 }
 

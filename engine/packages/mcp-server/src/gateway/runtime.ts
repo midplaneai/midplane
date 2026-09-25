@@ -34,6 +34,7 @@ import { HttpApprovalGate } from "../approval-gate.ts";
 import {
   APPROVALS_PATH,
   BUNDLE_FIELDS_V1,
+  LINK_ERROR,
   b64urlDecode,
   keyId,
   publicKeyFromRaw,
@@ -417,7 +418,7 @@ export class GatewayRuntime {
 
   private noteLinkFailure(status: number | null, code: string | null, message: string, serverTime: number | null): void {
     const { log } = this.deps;
-    if (code === "gateway_revoked") {
+    if (code === LINK_ERROR.gatewayRevoked) {
       if (!this.revoked) {
         log.error(
           {},
@@ -427,7 +428,7 @@ export class GatewayRuntime {
       this.revoked = true;
       return;
     }
-    if (code === "clock_skew") {
+    if (code === LINK_ERROR.clockSkew) {
       const skew = serverTime !== null ? Math.round(Date.now() / 1000 - serverTime) : null;
       log.error({ skew_seconds: skew }, "Midplane Cloud rejected this gateway's clock; fix the host's time sync");
       return;

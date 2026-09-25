@@ -16,14 +16,17 @@
 //   POST approvals/status  2xx JSON status (read-only; never executes anything)
 //
 // Errors are JSON `{error: <code>}`; `clock_skew` also carries `server_time`
-// (seconds since the epoch). Anything not 2xx/304 is a failure the gateway
-// retries with backoff, keeping its current policy.
+// (seconds since the epoch). Any other status is a failure: the gateway keeps
+// enforcing its current policy and retries, with backoff — or, once revoked,
+// on a slow fixed poll so a re-enabled gateway picks up again.
 
 export const ENROLL_PATH = "/api/gateway/v1/enroll";
 export const BUNDLE_PATH = "/api/gateway/v1/bundle";
 export const HEARTBEAT_PATH = "/api/gateway/v1/heartbeat";
 export const APPROVALS_PATH = "/api/gateway/v1/approvals";
-export const APPROVALS_STATUS_PATH = "/api/gateway/v1/approvals/status";
+/** Derived, not spelled out: the approval gate reaches status as
+ *  `${approvals url}/status` (the same rule as the hosted gate's URL). */
+export const APPROVALS_STATUS_PATH = `${APPROVALS_PATH}/status`;
 
 export const LINK_ERROR = {
   unauthorized: "unauthorized",
@@ -33,6 +36,8 @@ export const LINK_ERROR = {
   enrollmentTokenInvalid: "enrollment_token_invalid",
   enrollmentTokenExpired: "enrollment_token_expired",
   enrollmentTokenUsed: "enrollment_token_used",
+  /** 409: a gateway route on a hosted project (or the reverse). */
+  wrongDataPlane: "wrong_data_plane",
 } as const;
 export type LinkErrorCode = (typeof LINK_ERROR)[keyof typeof LINK_ERROR];
 

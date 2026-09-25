@@ -35,6 +35,17 @@ describe("GatewayStateDir", () => {
     expect(statSync(state.keyPath).mode & 0o777).toBe(0o600);
   });
 
+  test("two processes creating the key at once end up with the same key", () => {
+    const state = GatewayStateDir.open(join(root, "gw"));
+    const winner = state.loadOrCreateKey();
+    // The loser checked before the winner wrote: it generates its own key, and
+    // the exclusive link must hand it the winner's instead.
+    const late = GatewayStateDir.open(join(root, "gw"));
+    late.hasKey = () => false;
+    expect(late.loadOrCreateKey().publicKeyRaw.equals(winner.publicKeyRaw)).toBe(true);
+    expect(readdirSync(state.dir)).toEqual(["gateway.key"]);
+  });
+
   test("identity and bundle round-trip; writes leave no temp files behind", () => {
     const state = GatewayStateDir.open(join(root, "gw"));
     expect(state.readIdentity()).toBeNull();

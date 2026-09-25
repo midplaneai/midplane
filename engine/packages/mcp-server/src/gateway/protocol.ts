@@ -1,8 +1,8 @@
 // The gateway link protocol, as one import.
 //
 // Both ends of the link use these modules: the gateway to mint request tokens
-// and verify bundles, the control plane to sign bundles and verify request
-// tokens. Keeping one implementation of the wire format — rather than a copy on
+// and verify bundles and approval outcomes, the control plane to sign bundles
+// and approval outcomes and verify request tokens. Keeping one implementation of the wire format — rather than a copy on
 // each side held together by a parity test — is the point. Everything here is
 // pure (node:crypto only, no I/O, no engine internals), so a consumer outside
 // the engine can depend on it.
@@ -40,6 +40,7 @@ export {
   verifyApprovalOutcome,
   type ApprovalOutcomeClaims,
   type ApprovalOutcomeExpectations,
+  type ApprovalOutcomeWire,
 } from "./approval.ts";
 export {
   BUNDLE_FIELDS_V1,

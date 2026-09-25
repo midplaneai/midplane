@@ -5,7 +5,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { BUNDLE_PATH, LinkClient, type GatewaySigner } from "../../src/gateway/link-client.ts";
+import { LinkClient, type GatewaySigner } from "../../src/gateway/link-client.ts";
+import { BUNDLE_PATH } from "../../src/gateway/protocol.ts";
 import { testKey } from "./_fixtures.ts";
 
 const key = testKey();

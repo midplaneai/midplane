@@ -10,6 +10,7 @@
 // kind of failure apart. Routes and status conventions live in wire.ts.
 
 import type { KeyObject } from "node:crypto";
+import { readCapped } from "../read-capped.ts";
 import { MAX_BUNDLE_BYTES } from "./bundle.ts";
 import { mintEnrollmentProof, mintRequestToken } from "./request-token.ts";
 import {
@@ -21,15 +22,14 @@ import {
   bundleEtag,
 } from "./wire.ts";
 
-export { APPROVALS_PATH, BUNDLE_PATH, ENROLL_PATH, HEARTBEAT_PATH } from "./wire.ts";
-
 const REQUEST_TIMEOUT_MS = 10_000;
 
 export interface LinkFailure {
   kind: "error";
   /** HTTP status, or null when no response arrived (network, timeout). */
   status: number | null;
-  /** The control plane's `error` code when it sent one (see LINK_ERROR). */
+  /** The control plane's `error` code when it sent one (see LINK_ERROR), or
+   *  the client's own: `redirect` (a 3xx, never followed) and `oversize`. */
   code: string | null;
   message: string;
   /** The control plane's clock, when it reported one (clock_skew). */
@@ -74,8 +74,8 @@ export class LinkClient {
     const res = await this.send("POST", ENROLL_PATH, proof, text);
     if (res.kind === "error") return res;
     if (!res.response.ok) return failure(res.response);
-    const jws = await readCapped(res.response, MAX_LINK_RESPONSE_BYTES);
-    if (jws === null) return oversize(ENROLL_PATH);
+    const jws = await readBody(res.response, MAX_LINK_RESPONSE_BYTES, ENROLL_PATH);
+    if (typeof jws !== "string") return jws;
     return { kind: "enrolled", jws: jws.trim() };
   }
 
@@ -91,8 +91,8 @@ export class LinkClient {
       // Nothing published yet is a state, not a failure: no backoff, no warning.
       return f.status === 404 && f.code === LINK_ERROR.noBundle ? { kind: "no_bundle" } : f;
     }
-    const jws = await readCapped(res.response, MAX_BUNDLE_BYTES);
-    if (jws === null) return oversize(BUNDLE_PATH);
+    const jws = await readBody(res.response, MAX_BUNDLE_BYTES, BUNDLE_PATH);
+    if (typeof jws !== "string") return jws;
     return { kind: "bundle", jws: jws.trim() };
   }
 
@@ -167,32 +167,23 @@ export class LinkClient {
   }
 }
 
-/** Read a response body as UTF-8, or null once it exceeds `max` bytes — the
- *  size check happens while reading, not after the whole body is in memory. */
-async function readCapped(res: Response, max: number): Promise<string | null> {
-  const declared = Number(res.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > max) {
-    await res.body?.cancel().catch(() => undefined);
-    return null;
+/** A 2xx body, or the failure reading it: over the cap, or a stream that broke
+ *  mid-body (a reset, the request deadline). Either way the poll loop sees a
+ *  LinkFailure and backs off, the same as a failed request. */
+async function readBody(res: Response, max: number, path: string): Promise<string | LinkFailure> {
+  let text: string | null;
+  try {
+    text = await readCapped(res, max);
+  } catch (err) {
+    return {
+      kind: "error",
+      status: null,
+      code: null,
+      message: `control plane response to ${path} could not be read: ${err instanceof Error ? err.message : String(err)}`,
+      serverTime: null,
+    };
   }
-  if (!res.body) return "";
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-function oversize(path: string): LinkFailure {
+  if (text !== null) return text;
   return {
     kind: "error",
     status: null,

@@ -14,6 +14,8 @@
 //                      (tail | since | denies | show | stats).
 //   policy             Author/validate/lint/dry-run a MIDPLANE_POLICY_FILE
 //                      (init | validate | lint | test [--server]).
+//   gateway            Run as a gateway: enroll with Midplane Cloud, pull
+//                      signed policy bundles, enforce them (gateway/run.ts).
 //   version            Print the package version.
 //   help               Show usage.
 //

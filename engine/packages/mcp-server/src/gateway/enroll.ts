@@ -16,6 +16,7 @@ import type { LinkClient } from "./link-client.ts";
 import type { GatewayStateDir, StoredIdentity } from "./state.ts";
 import {
   EnrollmentError,
+  LINK_ERROR,
   b64urlEncode,
   parseEnrollmentToken,
   verifyEnrollmentResponse,
@@ -115,11 +116,11 @@ export async function ensureIdentity(
 
 function enrollHint(code: string | null): string {
   switch (code) {
-    case "enrollment_token_expired":
+    case LINK_ERROR.enrollmentTokenExpired:
       return " — the token has expired; create a new one in Midplane Cloud.";
-    case "enrollment_token_used":
+    case LINK_ERROR.enrollmentTokenUsed:
       return " — the token was already used by another gateway; create a new one.";
-    case "enrollment_token_invalid":
+    case LINK_ERROR.enrollmentTokenInvalid:
       return " — the token is not valid for this control plane (check MIDPLANE_CLOUD_URL's region).";
     default:
       return "";

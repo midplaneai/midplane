@@ -10,8 +10,11 @@
 //   • `midplane gateway` with any argument never starts (or enrolls)
 //   • the capabilities a gateway reports cover every closed vocabulary
 //   • approval outcomes are signed and bound to the statement they answer
-//   • an approval never outlives the policy that permitted the write
+//   • an approval never outlives the policy that permitted the write, even
+//     when the Engine it was held on has since been replaced or dropped
 //   • waits for a pooled connection are bounded
+//   • approval answers are read with a cap, inside the deadline
+//   • a body that breaks mid-read is a link failure, not a crashed poll
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -20,10 +23,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ApprovalUnavailableError, PSEUDONYMIZE_KINDS, type ApprovalGate, type ApprovalRequest } from "@midplane/engine";
-import { HttpApprovalGate } from "../../src/approval-gate.ts";
+import { HttpApprovalGate, type SignedApprovalGateConfig } from "../../src/approval-gate.ts";
 import { buildEngine, type BuiltEngineHandle, type ReplaceDatabase } from "../../src/engine-factory.ts";
 import { checkBundlePolicy } from "../../src/gateway/policy-check.ts";
 import { LinkClient } from "../../src/gateway/link-client.ts";
+import { signJws } from "../../src/gateway/jws.ts";
 import { DEFAULT_CONNECTION_TIMEOUT_MS, PgPoolExecutor } from "../../src/executor/pg-pool.ts";
 import {
   MAX_BUNDLE_BYTES,
@@ -123,6 +127,20 @@ describe("replacePolicy / drain", () => {
     await expect(handle.registry.get("main").engine.handle({ sql: "SELECT 1", ctx })).rejects.toThrow(ENV_B);
   });
 
+  test("a halt closes every pool, off the apply path", async () => {
+    await apply(policy([{ name: "main", env: ENV_A }, { name: "analytics", env: ENV_B }]), 1, {
+      [ENV_A]: "postgres://gw@db/a",
+      [ENV_B]: "postgres://gw@db/b",
+    });
+    const closes = ["main", "analytics"].map((db) =>
+      spyOn(handle.registry.get(db).executor as unknown as { close(): Promise<void> }, "close").mockImplementation(
+        () => new Promise(() => {}),
+      ),
+    );
+    await handle.drain({ bundleVersion: 2, reason: "paused" });
+    for (const c of closes) expect(c).toHaveBeenCalledTimes(1);
+  });
+
   test("a dropped database and a halt each leave a POLICY_RELOADED record", async () => {
     await apply(policy([{ name: "main", env: ENV_A }, { name: "analytics", env: ENV_B }]), 1, {});
     await apply(policy([{ name: "main", env: ENV_A }]), 2, {});
@@ -154,8 +172,10 @@ describe("link client", () => {
   });
 
   test("a bundle body larger than a bundle can be is refused while reading", async () => {
-    const huge = "a".repeat(MAX_BUNDLE_BYTES + 10);
-    const declared = await client(() => new Response(huge, { status: 200 })).fetchBundle(signer, null);
+    // Declared too large: refused on the header, before reading a byte.
+    const declared = await client(
+      () => new Response("tiny", { status: 200, headers: { "content-length": String(MAX_BUNDLE_BYTES + 1) } }),
+    ).fetchBundle(signer, null);
     expect(declared).toMatchObject({ kind: "error", code: "oversize" });
     // No content-length: the cap still applies while streaming.
     const streamed = await client(
@@ -171,6 +191,22 @@ describe("link client", () => {
         ),
     ).fetchBundle(signer, null);
     expect(streamed).toMatchObject({ kind: "error", code: "oversize" });
+  });
+
+  test("a body that breaks mid-read is a link failure (backoff), not a throw", async () => {
+    const r = await client(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(new TextEncoder().encode("eyJ"));
+              c.error(new Error("connection reset"));
+            },
+          }),
+          { status: 200 },
+        ),
+    ).fetchBundle(signer, null);
+    expect(r).toMatchObject({ kind: "error", status: null, message: expect.stringContaining("connection reset") });
   });
 
   test("any 2xx carries the enrollment response", async () => {
@@ -215,6 +251,40 @@ describe("approval gate", () => {
     await expect(gate.request(REQ)).rejects.toBeInstanceOf(ApprovalUnavailableError);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.redirect).toBe("manual");
+  });
+
+  const answering = (respond: () => Response) =>
+    new HttpApprovalGate({ url: "https://cloud.test/approvals", token: "t" }, (async () => respond()) as unknown as typeof fetch);
+
+  test("an answer larger than any outcome is 'unavailable', read with a cap", async () => {
+    const body = JSON.stringify({ status: "approved", by: "x", note: "n".repeat(128 * 1024) });
+    await expect(answering(() => new Response(body)).request(REQ)).rejects.toThrow(/exceeded/);
+    await expect(answering(() => new Response(body)).check("a", null)).rejects.toThrow(/exceeded/);
+  });
+
+  test("the deadline covers the body: headers then a stall is 'unavailable', not a hang", async () => {
+    // Like a real fetch, the body stream errors when the request's signal
+    // aborts — so the gate must keep that signal armed until the body is read.
+    const stalledFetch = (async (_url: string, init: RequestInit) =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            init.signal!.addEventListener("abort", () => c.error(new Error("aborted")));
+          },
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const gate = new HttpApprovalGate({ url: "https://cloud.test/approvals", token: "t" }, stalledFetch);
+    const ctl = new AbortController();
+    const pending = gate.request(REQ, ctl.signal);
+    setTimeout(() => ctl.abort(), 20);
+    await expect(pending).rejects.toBeInstanceOf(ApprovalUnavailableError);
+  });
+
+  test("signed requests without signed answers is refused at construction", () => {
+    expect(
+      () => new HttpApprovalGate({ url: "https://cloud.test/a", authorize: () => "Bearer t" } as unknown as SignedApprovalGateConfig),
+    ).toThrow(/verifyOutcome/);
   });
 });
 
@@ -353,6 +423,65 @@ describe("signed approval outcomes (gateway mode)", () => {
   ])("%s is 'unavailable', never permission", async (_label, body) => {
     await expect(gateAnswering(body()).request(REQ)).rejects.toBeInstanceOf(ApprovalUnavailableError);
   });
+
+  // Hand-signed with the REAL key, so each case isolates one claim check.
+  function handSigned(over: Record<string, unknown>, typ = "midplane-approval+jws"): string {
+    const iat = Math.floor(Date.now() / 1000);
+    return signJws(
+      { alg: "EdDSA", typ, kid: bundleKey.kid },
+      JSON.stringify({
+        v: 1,
+        iss: identity.issuer,
+        project_id: identity.project_id,
+        gateway_id: identity.gateway_id,
+        query_id: REQ.queryId,
+        sql_sha256: sqlSha256(REQ.sql),
+        iat,
+        exp: iat + 60,
+        outcome: { status: "approved", by: "ada@example.com", note: null },
+        ...over,
+      }),
+      bundleKey.privateKey,
+    );
+  }
+
+  test("the hand-signed control verifies", async () => {
+    expect(await gateAnswering(handSigned({})).request(REQ)).toMatchObject({ status: "approved" });
+  });
+
+  test.each([
+    ["another control plane", { iss: "https://other.test" }],
+    ["another project", { project_id: "01OTHERPROJECTAAAAAAAAAAAA" }],
+    ["issued in the future", { iat: Math.floor(Date.now() / 1000) + 3600, exp: Math.floor(Date.now() / 1000) + 3660 }],
+    ["valid for longer than 300 s", { exp: Math.floor(Date.now() / 1000) + 301 }],
+    ["a format this gateway doesn't know", { v: 2 }],
+    ["no outcome object", { outcome: "approved" }],
+  ])("an outcome for %s is refused", async (_label, over) => {
+    await expect(gateAnswering(handSigned(over)).request(REQ)).rejects.toBeInstanceOf(ApprovalUnavailableError);
+  });
+
+  test("a bundle signed where an approval belongs (wrong typ) is refused", async () => {
+    await expect(gateAnswering(handSigned({}, "midplane-bundle+jws")).request(REQ)).rejects.toBeInstanceOf(
+      ApprovalUnavailableError,
+    );
+  });
+
+  test("signed pending and denied outcomes come through as themselves", async () => {
+    const expiresAt = Date.now() + 600_000;
+    expect(
+      await gateAnswering(
+        signed({ outcome: { status: "pending", approval_id: "01APPROVALAAAAAAAAAAAAAAAA", expires_at: expiresAt } }),
+      ).request(REQ),
+    ).toEqual({ status: "pending", approvalId: "01APPROVALAAAAAAAAAAAAAAAA", expiresAt });
+    expect(
+      await gateAnswering(signed({ outcome: { status: "denied", by: "ada@example.com", note: "use refunds" } })).request(REQ),
+    ).toEqual({ status: "denied", by: "ada@example.com", note: "use refunds" });
+  });
+
+  test("the control plane can't sign what a gateway would refuse to read", () => {
+    expect(() => signed({ outcome: { status: "pending" } as unknown as ApprovalOutcomeClaims["outcome"] })).toThrow(/approval_id/);
+    expect(() => signed({ outcome: { status: "denied", by: null, note: "n".repeat(64 * 1024) } })).toThrow(/exceeds/);
+  });
 });
 
 describe("policy re-check after an approval", () => {
@@ -364,7 +493,7 @@ describe("policy re-check after an approval", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function yaml(tableDefault: "read" | "read_write"): string {
+  function yaml(tableDefault: "read" | "read_write", masks = false): string {
     return [
       "databases:",
       "  - name: main",
@@ -377,14 +506,16 @@ describe("policy re-check after an approval", () => {
       "      block_ddl: true",
       "    requires_features:",
       "      - write_approvals",
+      ...(masks ? ["      - column_masks"] : []),
       "    approvals:",
       "      writes: true",
+      ...(masks ? ["    column_masks:", "      public.users:", "        email: full-redact"] : []),
       "",
     ].join("\n");
   }
 
-  async function apply(tableDefault: "read" | "read_write", version: number) {
-    const checked = checkBundlePolicy(yaml(tableDefault));
+  async function apply(tableDefault: "read" | "read_write", version: number, masks = false) {
+    const checked = checkBundlePolicy(yaml(tableDefault, masks));
     if (!checked.ok) throw new Error(checked.reason);
     await handle.replacePolicy(
       checked.databases.map((d) => ({ spec: { ...d.spec, url: "postgres://stub" }, dsnEnv: d.dsnEnv, configured: true })),
@@ -394,7 +525,8 @@ describe("policy re-check after an approval", () => {
 
   function build(onRequest: () => Promise<void>) {
     dir = mkdtempSync(join(tmpdir(), "midplane-recheck-"));
-    executor = new MockExecutor();
+    // query(): masked databases need a catalog resolver; nothing here reads it.
+    executor = Object.assign(new MockExecutor(), { query: async () => [] });
     const gate: ApprovalGate = {
       async request() {
         await onRequest();
@@ -402,7 +534,7 @@ describe("policy re-check after an approval", () => {
       },
     };
     handle = buildEngine(
-      { port: 0, host: "127.0.0.1", dbPath: join(dir, "a.db"), tenantId: "t", transport: "http", maskSourceRewrite: false },
+      { port: 0, host: "127.0.0.1", dbPath: join(dir, "a.db"), tenantId: "t", transport: "http", maskSourceRewrite: false, maskSalt: "s".repeat(32) },
       { startEmpty: true, executor, approvalGate: gate },
     );
   }
@@ -423,6 +555,35 @@ describe("policy re-check after an approval", () => {
     expect(executor.calls).toHaveLength(0);
     const decided = handle.registry.audit.readSince("0", 100).filter((r) => r.event_type === "DECIDED");
     expect(JSON.stringify(decided.at(-1)!.payload)).toContain("table_access");
+  });
+
+  test("a tightening that also changes masks (a rebuilt Engine) still reaches the waiting write", async () => {
+    // The write is held on the v1 Engine; the mask change builds a new one. The
+    // held write re-checks through the OLD Engine, so its holder must move too.
+    build(() => apply("read", 2, true));
+    await apply("read_write", 1);
+    const before = handle.registry.get("main").engine;
+    const decision = await run();
+    expect(handle.registry.get("main").engine).not.toBe(before);
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe("table_access");
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  test("a bundle that drops the database while the write waits: denied, not run", async () => {
+    build(async () => {
+      await handle.replacePolicy([], { bundleVersion: 2 });
+    });
+    await apply("read_write", 1);
+    expect((await run()).allowed).toBe(false);
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  test("a halt while the write waits: denied, not run", async () => {
+    build(() => handle.drain({ bundleVersion: 2, reason: "paused" }));
+    await apply("read_write", 1);
+    expect((await run()).allowed).toBe(false);
+    expect(executor.calls).toHaveLength(0);
   });
 
   test("without a change in policy, the approved write runs", async () => {

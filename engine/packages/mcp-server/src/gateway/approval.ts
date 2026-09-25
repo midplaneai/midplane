@@ -40,6 +40,13 @@ export function sqlSha256(sql: string): string {
   return createHash("sha256").update(sql, "utf8").digest("hex");
 }
 
+/** The approval gate's wire outcome, snake_case as it travels (approval-gate.ts
+ *  parseOutcome reads it). `expires_at` is milliseconds since the epoch. */
+export type ApprovalOutcomeWire =
+  | { status: "approved" | "denied"; by: string | null; note: string | null }
+  | { status: "expired" }
+  | { status: "pending"; approval_id: string; expires_at: number; review_url?: string };
+
 export interface ApprovalOutcomeClaims {
   iss: string;
   project_id: string;
@@ -48,11 +55,12 @@ export interface ApprovalOutcomeClaims {
   sql_sha256: string;
   iat: number;
   exp: number;
-  /** The approval gate's wire outcome (see approval-gate.ts parseOutcome). */
-  outcome: Record<string, unknown>;
+  outcome: ApprovalOutcomeWire;
 }
 
-/** Control-plane side. */
+/** Control-plane side. Refuses to sign what the gateway would refuse to read,
+ *  so a malformed outcome fails where it is made, not as "approval unavailable"
+ *  on a customer's gateway. */
 export function encodeApprovalOutcome(
   claims: ApprovalOutcomeClaims,
   signer: { kid: string; privateKey: KeyObject },
@@ -60,11 +68,19 @@ export function encodeApprovalOutcome(
   if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_APPROVAL_OUTCOME_LIFETIME_S) {
     throw new Error(`approval outcome lifetime must be 1–${MAX_APPROVAL_OUTCOME_LIFETIME_S} s`);
   }
-  return signJws(
+  const o = claims.outcome as Record<string, unknown>;
+  if (o.status === "pending" && (typeof o.approval_id !== "string" || !Number.isSafeInteger(o.expires_at))) {
+    throw new Error("a pending approval outcome needs approval_id and expires_at (ms since the epoch)");
+  }
+  const jws = signJws(
     { alg: "EdDSA", typ: APPROVAL_TYP, kid: signer.kid },
     JSON.stringify({ v: APPROVAL_FORMAT_VERSION, ...claims }),
     signer.privateKey,
   );
+  if (jws.length > MAX_APPROVAL_BYTES) {
+    throw new Error(`approval outcome exceeds ${MAX_APPROVAL_BYTES} bytes; shorten the note`);
+  }
+  return jws;
 }
 
 export interface ApprovalOutcomeExpectations {

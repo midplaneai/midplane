@@ -7,8 +7,9 @@
 //     never leaves its state dir. It signs every request the gateway makes
 //     (request-token.ts); the control plane stores only the public half.
 //   • the BUNDLE key — the control plane's regional signing key. It signs
-//     policy bundles and the enrollment response; the gateway pins its public
-//     half at enrollment (enrollment.ts) and verifies every bundle against it.
+//     policy bundles, the enrollment response and approval outcomes; the
+//     gateway pins its public half at enrollment (enrollment.ts) and verifies
+//     all three against it.
 //
 // Public keys travel as the raw 32-byte Ed25519 point, base64url-encoded — the
 // `x` member of an OKP JWK (RFC 8037). node:crypto only: this module runs on

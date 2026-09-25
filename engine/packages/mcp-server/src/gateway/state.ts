@@ -44,8 +44,9 @@ export interface StoredIdentity {
   v: 1;
   gateway_id: string;
   project_id: string;
-  /** The origin this gateway enrolled against. Informational: requests go to
-   *  MIDPLANE_CLOUD_URL; tokens and bundles are bound to `issuer`. */
+  /** The MIDPLANE_CLOUD_URL this gateway enrolled against. A later boot with a
+   *  different one is refused (enroll.ts): the identity belongs to this control
+   *  plane. Tokens and bundles are bound to `issuer`. */
   cloud_url: string;
   issuer: string;
   /** base64url public half of gateway.key, as the control plane registered it. */

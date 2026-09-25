@@ -6,7 +6,7 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ### Security
 
-- **An approval never outlives the policy that permitted the write.** A held write waits for a human for up to the gate's hold, and its approval is collected on a later re-run. The policy is now evaluated again after the approval, so a tightening that lands in between — a hot reload making the table read-only, say — denies the write instead of running it on the decision made before. Applies to every mode.
+- **An approval never outlives the policy that permitted the write.** The approval gate can hold a write for tens of seconds while a human decides. The policy is now evaluated again once the approval arrives, so a tightening that lands during that wait (a hot reload making the table read-only, a new gateway bundle, a gateway halt) denies the write instead of running it on the earlier decision. A re-run after a "pending" answer was already evaluated from scratch. Applies to every mode.
 
 ### Changed
 
@@ -21,7 +21,7 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
   - **Fail closed.** A gateway that has never received a bundle serves nothing. So does a gateway holding a bundle it can't enforce: an unknown format, critical field or policy feature halts it rather than falling back to an older policy.
   - **Loopback only.** `/mcp` has no authentication yet, so the gateway binds to loopback and refuses to start on any other address.
   - **Signed requests and answers.** Held writes go to the approval gate, heartbeats report the enforced policy, and every request to Midplane Cloud carries a short-lived token signed by the gateway's own key. There is no shared secret. The cloud's answer to a held write must itself be signed with the pinned key and bound to that exact statement; an unsigned "approved" never runs a write.
-  - **Liveness and readiness.** `GET /health` stays 200 while the process runs and reports the gateway's state; `GET /ready` is 503 until the gateway enforces a policy, and while it is halted or paused. Point readiness probes and load balancers at `/ready`, liveness probes at `/health`.
+  - **Liveness and readiness.** `GET /health` stays 200 while the process runs (its `ok` means alive, not enforcing) and reports the gateway's state; `GET /ready` is 503 until the gateway enforces a policy, and while it is halted or paused. Both answer on loopback only, like `/mcp`, so probe from inside the container: an exec readiness probe running `curl -sf http://127.0.0.1:8080/ready`, and the same against `/health` for liveness. The image's built-in `HEALTHCHECK` already does the latter.
   - **State directory.** The gateway's key, identity and cached bundle live in `MIDPLANE_GATEWAY_STATE_DIR`, which the image sets to `/data/gateway`. Mount a volume at `/data`: a gateway whose state doesn't survive a restart can't come back without a new enrollment token.
   - **Egress proxies.** The image (Bun) honors `HTTPS_PROXY` / `HTTP_PROXY`. The npm package on Node also needs `NODE_USE_ENV_PROXY=1`, and warns at boot when a proxy is set without it.
   - **Threat model.** See the "Gateway mode" section of [`THREAT_MODEL.md`](./THREAT_MODEL.md). It explains why the gateway's own Postgres role is the real floor.

@@ -261,9 +261,13 @@ describe("gateway runtime", () => {
     await gw.runtime.pollOnce();
     const query = queryTool(gw);
 
-    await query(WRITE);
+    const ranAtStart = gw.executor.calls.length;
+    const held = await query(WRITE);
     // The held write went to the control plane over a request token the fake
-    // cloud verified against this gateway's key, path and body.
+    // cloud verified against this gateway's key, path and body, and its signed
+    // "approved" verified against the pinned key: the write ran.
+    expect(held.isError).toBeFalsy();
+    expect(gw.executor.calls.length).toBe(ranAtStart + 1);
     expect(cloud.approvalRequests).toHaveLength(1);
     expect(cloud.approvalRequests[0]).toMatchObject({ sql: WRITE, database: "main" });
 
