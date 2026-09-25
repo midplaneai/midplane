@@ -20,6 +20,8 @@
 // on the parent row but threaded through here so the cache fence and KMS
 // region routing match the OSS-side per-region key.
 
+import { createHash } from "node:crypto";
+
 import { eq } from "drizzle-orm";
 
 import {
@@ -71,6 +73,13 @@ interface ResolverState {
   inflight: Map<string, Promise<void>>;
 }
 
+/** Revision of a stored credential: a digest of its ciphertext. It changes on
+ *  every write of encrypted_dsn, which is what the cache needs (rotated_at is
+ *  only set by rotateProject). Exported for tests. */
+export function dsnRevision(encryptedDsn: Uint8Array): string {
+  return createHash("sha256").update(encryptedDsn).digest("hex");
+}
+
 export interface ResolveInput {
   projectDatabase: ProjectDatabase;
   /** Region of the parent project — KMS keys are per-region, so the
@@ -88,14 +97,17 @@ export class DsnResolver {
   async resolve(input: ResolveInput): Promise<ResolveDsnResult> {
     const cache = this.deps.cache;
     const { projectDatabase: cdb, region, customerId } = input;
-    const cached = cache.get(cdb.id, region);
+    // Read from the row the caller just loaded, so a rotation on another web
+    // instance is a miss here instead of a hit on the old password.
+    const revision = dsnRevision(cdb.encryptedDsn);
+    const cached = cache.get(cdb.id, region, revision);
 
     if (cached.kind === "fresh") {
       return { ok: true, plaintext: cached.plaintext, source: "fresh" };
     }
 
     if (cached.kind === "grace") {
-      this.scheduleRefresh(input);
+      this.scheduleRefresh(input, revision);
       return { ok: true, plaintext: cached.plaintext, source: "grace" };
     }
 
@@ -120,7 +132,7 @@ export class DsnResolver {
     const decryptStartedAt = this.deps.now ? this.deps.now() : Date.now();
     try {
       const plaintext = await this.callKms(cdb, region, customerId);
-      cache.set(cdb.id, region, plaintext, decryptStartedAt);
+      cache.set(cdb.id, region, revision, plaintext, decryptStartedAt);
       await this.persistSuccess(cdb.id);
       return { ok: true, plaintext, source: "miss" };
     } catch (err) {
@@ -137,14 +149,14 @@ export class DsnResolver {
     }
   }
 
-  private scheduleRefresh(input: ResolveInput): void {
+  private scheduleRefresh(input: ResolveInput, revision: string): void {
     const { projectDatabase: cdb, region, customerId } = input;
     if (this.state.inflight.has(cdb.id)) return;
     const decryptStartedAt = this.deps.now ? this.deps.now() : Date.now();
     const promise = (async () => {
       try {
         const plaintext = await this.callKms(cdb, region, customerId);
-        this.deps.cache.set(cdb.id, region, plaintext, decryptStartedAt);
+        this.deps.cache.set(cdb.id, region, revision, plaintext, decryptStartedAt);
         await this.persistSuccess(cdb.id);
       } catch (err) {
         this.deps.onRefreshError?.(err, {
