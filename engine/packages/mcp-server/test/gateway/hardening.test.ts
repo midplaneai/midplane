@@ -10,8 +10,8 @@
 //   • `midplane gateway` with any argument never starts (or enrolls)
 //   • the capabilities a gateway reports cover every closed vocabulary
 //   • approval outcomes are signed and bound to the statement they answer
-//   • an approval never outlives the policy that permitted the write, even
-//     when the Engine it was held on has since been replaced or dropped
+//   • an approval never outlives the policy that permitted the write, and a
+//     write held on an Engine that was since replaced or dropped never runs
 //   • waits for a pooled connection are bounded
 //   • approval answers are read with a cap, inside the deadline
 //   • a body that breaks mid-read is a link failure, not a crashed poll
@@ -238,6 +238,7 @@ describe("approval gate", () => {
     const gate = new HttpApprovalGate(
       {
         url: "https://cloud.test/api/gateway/v1/approvals",
+        statusUrl: "https://cloud.test/api/gateway/v1/approvals/status",
         authorize: () => "Bearer t",
         verifyOutcome: () => {
           throw new Error("a redirect has no outcome to verify");
@@ -262,23 +263,53 @@ describe("approval gate", () => {
     await expect(answering(() => new Response(body)).check("a", null)).rejects.toThrow(/exceeded/);
   });
 
-  test("the deadline covers the body: headers then a stall is 'unavailable', not a hang", async () => {
-    // Like a real fetch, the body stream errors when the request's signal
-    // aborts — so the gate must keep that signal armed until the body is read.
-    const stalledFetch = (async (_url: string, init: RequestInit) =>
-      new Response(
-        new ReadableStream({
-          start(c) {
-            init.signal!.addEventListener("abort", () => c.error(new Error("aborted")));
-          },
-        }),
-        { status: 200 },
-      )) as unknown as typeof fetch;
+  // Like a real fetch, the body stream errors when the request's signal aborts,
+  // so a stalled body ends only if the gate keeps its deadline armed until the
+  // body is read.
+  const stalledFetch = (async (_url: string, init: RequestInit) =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          init.signal!.addEventListener("abort", () => c.error(new Error("aborted")));
+        },
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+
+  test("the gate's own deadline covers the body: headers then a stall is 'unavailable', not a hang", async () => {
+    // No caller signal: the engine calls request() without one.
+    const gate = new HttpApprovalGate({ url: "https://cloud.test/approvals", token: "t" }, stalledFetch, {
+      requestMs: 30,
+      statusMs: 30,
+    });
+    await expect(gate.request(REQ)).rejects.toBeInstanceOf(ApprovalUnavailableError);
+    await expect(gate.check("a", null)).rejects.toBeInstanceOf(ApprovalUnavailableError);
+  });
+
+  test("so does the caller's signal", async () => {
     const gate = new HttpApprovalGate({ url: "https://cloud.test/approvals", token: "t" }, stalledFetch);
     const ctl = new AbortController();
     const pending = gate.request(REQ, ctl.signal);
     setTimeout(() => ctl.abort(), 20);
     await expect(pending).rejects.toBeInstanceOf(ApprovalUnavailableError);
+  });
+
+  test("the signed gate posts status to its own status route", async () => {
+    const urls: string[] = [];
+    const gate = new HttpApprovalGate(
+      {
+        url: "https://cloud.test/approvals",
+        statusUrl: "https://cloud.test/elsewhere/status",
+        authorize: () => "Bearer t",
+        verifyOutcome: () => ({}),
+      },
+      (async (url: string) => {
+        urls.push(url);
+        return Response.json({ status: "expired" });
+      }) as unknown as typeof fetch,
+    );
+    expect(await gate.check("a", null)).toEqual({ status: "expired" });
+    expect(urls).toEqual(["https://cloud.test/elsewhere/status"]);
   });
 
   test("signed requests without signed answers is refused at construction", () => {
@@ -425,8 +456,12 @@ describe("signed approval outcomes (gateway mode)", () => {
   });
 
   // Hand-signed with the REAL key, so each case isolates one claim check.
-  function handSigned(over: Record<string, unknown>, typ = "midplane-approval+jws"): string {
+  // `over` may be a function of the iat the payload uses, so a time-relative
+  // case can't straddle a second boundary.
+  type Over = Record<string, unknown> | ((iat: number) => Record<string, unknown>);
+  function handSigned(over: Over, typ = "midplane-approval+jws"): string {
     const iat = Math.floor(Date.now() / 1000);
+    const extra = typeof over === "function" ? over(iat) : over;
     return signJws(
       { alg: "EdDSA", typ, kid: bundleKey.kid },
       JSON.stringify({
@@ -439,7 +474,7 @@ describe("signed approval outcomes (gateway mode)", () => {
         iat,
         exp: iat + 60,
         outcome: { status: "approved", by: "ada@example.com", note: null },
-        ...over,
+        ...extra,
       }),
       bundleKey.privateKey,
     );
@@ -452,11 +487,11 @@ describe("signed approval outcomes (gateway mode)", () => {
   test.each([
     ["another control plane", { iss: "https://other.test" }],
     ["another project", { project_id: "01OTHERPROJECTAAAAAAAAAAAA" }],
-    ["issued in the future", { iat: Math.floor(Date.now() / 1000) + 3600, exp: Math.floor(Date.now() / 1000) + 3660 }],
-    ["valid for longer than 300 s", { exp: Math.floor(Date.now() / 1000) + 301 }],
+    ["issued in the future", (iat: number) => ({ iat: iat + 3600, exp: iat + 3660 })],
+    ["valid for longer than 300 s", (iat: number) => ({ exp: iat + 301 })],
     ["a format this gateway doesn't know", { v: 2 }],
     ["no outcome object", { outcome: "approved" }],
-  ])("an outcome for %s is refused", async (_label, over) => {
+  ] as Array<[string, Over]>)("an outcome for %s is refused", async (_label, over) => {
     await expect(gateAnswering(handSigned(over)).request(REQ)).rejects.toBeInstanceOf(ApprovalUnavailableError);
   });
 
@@ -479,8 +514,14 @@ describe("signed approval outcomes (gateway mode)", () => {
   });
 
   test("the control plane can't sign what a gateway would refuse to read", () => {
-    expect(() => signed({ outcome: { status: "pending" } as unknown as ApprovalOutcomeClaims["outcome"] })).toThrow(/approval_id/);
-    expect(() => signed({ outcome: { status: "denied", by: null, note: "n".repeat(64 * 1024) } })).toThrow(/exceeds/);
+    const bad = (over: Record<string, unknown>) => () => signed(over as Partial<ApprovalOutcomeClaims>);
+    expect(bad({ outcome: { status: "pending" } })).toThrow(/approval_id/);
+    expect(bad({ outcome: { status: "pending", approval_id: "a", expires_at: Math.floor(Date.now() / 1000) } })).toThrow(/ms since the epoch/);
+    expect(bad({ outcome: { status: "consumed" } })).toThrow(/status/);
+    expect(bad({ iat: Date.now() / 1000 })).toThrow(/integers/);
+    expect(bad({ query_id: "" })).toThrow(/query_id/);
+    expect(bad({ sql_sha256: "abc" })).toThrow(/sql_sha256/);
+    expect(bad({ outcome: { status: "denied", by: null, note: "n".repeat(64 * 1024) } })).toThrow(/exceeds/);
   });
 });
 
@@ -557,33 +598,54 @@ describe("policy re-check after an approval", () => {
     expect(JSON.stringify(decided.at(-1)!.payload)).toContain("table_access");
   });
 
-  test("a tightening that also changes masks (a rebuilt Engine) still reaches the waiting write", async () => {
-    // The write is held on the v1 Engine; the mask change builds a new one. The
-    // held write re-checks through the OLD Engine, so its holder must move too.
-    build(() => apply("read", 2, true));
+  // A bundle that REBUILDS the Engine (masks changed) retires the one holding
+  // the write: its masks are stale and later bundles never reach it, so the
+  // approved write is refused and the agent re-runs on the live Engine.
+  const replaced = async () => {
+    const decision = await run();
+    expect(decision).toMatchObject({ allowed: false, reason: "policy_replaced" });
+    expect(executor.calls).toHaveLength(0);
+  };
+
+  test("masks change while the write waits: refused, not run with the old masks", async () => {
+    build(() => apply("read_write", 2, true));
     await apply("read_write", 1);
     const before = handle.registry.get("main").engine;
-    const decision = await run();
+    await replaced();
     expect(handle.registry.get("main").engine).not.toBe(before);
-    expect(decision.allowed).toBe(false);
-    if (!decision.allowed) expect(decision.reason).toBe("table_access");
-    expect(executor.calls).toHaveLength(0);
   });
 
-  test("a bundle that drops the database while the write waits: denied, not run", async () => {
+  test("two bundles while the write waits — a mask rebuild, then a tightening — still refused", async () => {
+    build(async () => {
+      await apply("read_write", 2, true);
+      await apply("read", 3, true);
+    });
+    await apply("read_write", 1);
+    await replaced();
+  });
+
+  test("a bundle that drops the database while the write waits: refused, not run", async () => {
     build(async () => {
       await handle.replacePolicy([], { bundleVersion: 2 });
     });
     await apply("read_write", 1);
-    expect((await run()).allowed).toBe(false);
-    expect(executor.calls).toHaveLength(0);
+    await replaced();
   });
 
-  test("a halt while the write waits: denied, not run", async () => {
+  test("a halt while the write waits: refused, not run", async () => {
     build(() => handle.drain({ bundleVersion: 2, reason: "paused" }));
     await apply("read_write", 1);
-    expect((await run()).allowed).toBe(false);
-    expect(executor.calls).toHaveLength(0);
+    await replaced();
+  });
+
+  test("after a rebuild the re-run is judged by the live Engine", async () => {
+    build(async () => {});
+    await apply("read_write", 1, true);
+    const retired = handle.registry.get("main").engine;
+    await apply("read_write", 2); // masks off: a rebuild
+    expect(handle.registry.get("main").engine).not.toBe(retired);
+    expect((await run()).allowed).toBe(true);
+    expect(executor.calls).toHaveLength(1);
   });
 
   test("without a change in policy, the approved write runs", async () => {

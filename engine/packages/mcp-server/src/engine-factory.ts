@@ -242,9 +242,10 @@ export interface BuildEngineOptions {
   executor?: Executor;
   credentials?: CredentialStore;
   // Approval gate for held writes. Supplied by the server when
-  // MIDPLANE_APPROVAL_URL + MIDPLANE_APPROVAL_TOKEN are configured. Left
-  // undefined otherwise — a policy that enables approvals without one then
-  // fails closed at query time instead of running the write.
+  // MIDPLANE_APPROVAL_URL + MIDPLANE_APPROVAL_TOKEN are configured, and always
+  // by `midplane gateway` (a signed gate over the link). Left undefined
+  // otherwise — a policy that enables approvals without one then fails closed
+  // at query time instead of running the write.
   approvalGate?: ApprovalGate;
   // Gateway mode: start with NO databases and no policy. The registry fills in
   // only when a verified bundle is applied via replacePolicy; until then there
@@ -609,7 +610,8 @@ function buildEntryWith(
     // respawns), and the gateway replace path rebuilds the Engine instead.
     masking: buildMaskingConfig(spec, cfg, executor),
     // Write approvals. The getter mirrors the rules' hot-swap pattern. The gate
-    // comes from the server (HTTP-backed when MIDPLANE_APPROVAL_URL is set);
+    // comes from the server (HTTP-backed when MIDPLANE_APPROVAL_URL is set, or
+    // signed over the link in gateway mode);
     // when approvals are on and no gate was supplied the engine's refusing gate
     // errors rather than letting the write through.
     approvals: {
@@ -868,6 +870,7 @@ async function swapMultiDb(
       const prevTableAccess = existing.holder.tableAccess;
       const prevTenantScope = existing.holder.tenantScope;
       const prevGuardrails = existing.holder.guardrails;
+      retire(existing, `the connection for database "${spec.name}" changed`);
       const maybeClose = (existing.executor as { close?: () => Promise<void> }).close;
       if (typeof maybeClose === "function") {
         await maybeClose.call(existing.executor).catch((err) => {
@@ -941,6 +944,7 @@ async function swapMultiDb(
   for (const name of toRemove) {
     const dropped = entries.get(name)!;
     entries.delete(name);
+    retire(dropped, `database "${name}" was removed from the policy`);
     const maybeClose = (dropped.executor as { close?: () => Promise<void> }).close;
     if (typeof maybeClose === "function") {
       await maybeClose.call(dropped.executor).catch((err) => {
@@ -1037,14 +1041,13 @@ async function replaceAllDatabases(
       entries.set(plan.next.name, plan.next);
       summaries.push(replaceSummary(null, plan.next, "added"));
     } else if (plan.kind === "rebuilt") {
-      const before = snapshotEntry(plan.prev);
       entries.set(plan.next.name, plan.next);
-      // The replaced Engine can still hold a statement — a write waiting at the
-      // approval gate — and once approved that write re-checks policy through
-      // THIS holder, on a pool the mask rebuild kept. Point it at the new policy.
-      applyToHolder(plan.prev.holder, plan.next.holder);
+      // The replaced Engine can still hold a write at the approval gate, on a
+      // pool a mask rebuild kept. Its masks are stale and later bundles never
+      // reach its holder, so once approved that write is refused, not run.
+      retire(plan.prev, `the policy for database "${plan.prev.name}" changed`);
       if (plan.closePrev) toClose.push({ executor: plan.prev.executor, db: plan.prev.name });
-      summaries.push(replaceSummary(before, plan.next, "rebuilt"));
+      summaries.push(replaceSummary(snapshotEntry(plan.prev), plan.next, "rebuilt"));
     } else {
       const before = snapshotEntry(plan.prev);
       applyToHolder(plan.prev.holder, holderFor(plan.spec));
@@ -1055,7 +1058,7 @@ async function replaceAllDatabases(
   for (const [name, e] of [...entries]) {
     if (!incoming.has(name)) {
       entries.delete(name);
-      retireHolder(e.holder);
+      retire(e, `database "${name}" was removed from the policy`);
       toClose.push({ executor: e.executor, db: name });
       removed.push(name);
       logger.info({ db: name }, "bundle removed database");
@@ -1082,7 +1085,7 @@ async function drainAllDatabases(
   const removed = [...entries.keys()].sort();
   for (const [name, e] of [...entries]) {
     entries.delete(name);
-    retireHolder(e.holder);
+    retire(e, "the gateway stopped serving");
     if (e.executor !== opts.executor) void closeExecutor(e.executor, name, "gateway halted");
   }
   logger.info({ databases: removed, bundleVersion: meta.bundleVersion }, "gateway halted: databases drained");
@@ -1111,11 +1114,12 @@ function applyToHolder(h: PolicyHolder, from: PolicyHolder): void {
   h.approvals = from.approvals;
 }
 
-// A database the gateway no longer serves denies everything from here on, so a
-// write still waiting at the approval gate on its Engine is refused by the
-// re-check rather than run on whatever the closing pool still allows.
-function retireHolder(h: PolicyHolder): void {
-  h.tableAccess = { default: "deny", tables: {} };
+// An Engine that no longer serves its database (replaced, dropped, drained)
+// refuses any write it still holds at the approval gate — see Engine.retire.
+function retire(entry: EngineEntry, what: string): void {
+  entry.engine.retire(
+    `Midplane did not run this write: ${what} while it waited for approval. Run it again to have it checked against the policy in force now.`,
+  );
 }
 
 // One POLICY_RELOADED row per database a gateway stopped serving — dropped by a
@@ -1194,11 +1198,10 @@ function snapshotEntry(e: EngineEntry): EntryState {
 }
 
 function replaceSummary(
-  before: EntryState | EngineEntry | null,
+  prev: EntryState | null,
   after: EngineEntry,
   kind: ReloadSummary["kind"],
 ): ReloadSummary {
-  const prev = before === null ? null : "holder" in before ? snapshotEntry(before) : before;
   const nextMasks = nonEmptyMasks(after.columnMasks);
   return {
     name: after.name,

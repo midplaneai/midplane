@@ -2,8 +2,9 @@
 //
 // Both ends of the link use these modules: the gateway to mint request tokens
 // and verify bundles and approval outcomes, the control plane to sign bundles
-// and approval outcomes and verify request tokens. Keeping one implementation of the wire format — rather than a copy on
-// each side held together by a parity test — is the point. Everything here is
+// and approval outcomes and verify request tokens. Keeping one implementation
+// of the wire format — rather than a copy on each side held together by a
+// parity test — is the point. Everything here is
 // pure (node:crypto only, no I/O, no engine internals), so a consumer outside
 // the engine can depend on it.
 
@@ -34,6 +35,7 @@ export { JwsError } from "./jws.ts";
 export {
   APPROVAL_TYP,
   ApprovalOutcomeError,
+  MAX_APPROVAL_BYTES,
   MAX_APPROVAL_OUTCOME_LIFETIME_S,
   encodeApprovalOutcome,
   sqlSha256,

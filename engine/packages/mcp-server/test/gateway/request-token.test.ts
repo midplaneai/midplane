@@ -82,8 +82,26 @@ describe("request tokens", () => {
   test("bound to the exact body", () => {
     expect(failure(() => verifyRequestToken(mint(POST), gw.publicKey, { ...POST, body: '{"state":"halted"}', now: NOW }))).toBe("binding");
     // A token minted for a bodyless request can't be attached to one with a body, and vice versa.
-    expect(failure(() => verifyRequestToken(mint(GET), gw.publicKey, { ...GET, body: "", now: NOW }))).toBe("binding");
+    expect(failure(() => verifyRequestToken(mint(GET), gw.publicKey, { ...GET, body: "x", now: NOW }))).toBe("binding");
     expect(failure(() => verifyRequestToken(mint(POST), gw.publicKey, { ...POST, body: undefined, now: NOW }))).toBe("binding");
+  });
+
+  test("an empty body is no body: a verifier that reads a GET's body as \"\" still accepts the token", () => {
+    expect(failure(() => verifyRequestToken(mint(GET), gw.publicKey, { ...GET, body: "", now: NOW }))).toBe("ok");
+    expect(decodePayload(mint({ ...POST, body: "" })).bh).toBeUndefined();
+  });
+
+  test("a correctly signed token whose payload isn't a JSON object is malformed (a 401, not a 500)", () => {
+    for (const payload of ["not json", "[1]"]) {
+      const token = craftJws({ alg: "EdDSA", typ: REQUEST_TOKEN_TYP, kid: GATEWAY_ID }, payload, (i) => sign(null, i, gw.privateKey));
+      expect(failure(() => verifyRequestToken(token, gw.publicKey, { ...GET, now: NOW }))).toBe("malformed");
+      const proof = craftJws(
+        { alg: "EdDSA", typ: ENROLLMENT_PROOF_TYP, jwk: { kty: "OKP", crv: "Ed25519", x: b64urlEncode(gw.raw) } },
+        payload,
+        (i) => sign(null, i, gw.privateKey),
+      );
+      expect(failure(() => verifyEnrollmentProof(proof, { ...GET, now: NOW }))).toBe("malformed");
+    }
   });
 
   test("time window: skew tolerated up to 60 s either way, not beyond", () => {

@@ -24,9 +24,7 @@ export const ENROLL_PATH = "/api/gateway/v1/enroll";
 export const BUNDLE_PATH = "/api/gateway/v1/bundle";
 export const HEARTBEAT_PATH = "/api/gateway/v1/heartbeat";
 export const APPROVALS_PATH = "/api/gateway/v1/approvals";
-/** Derived, not spelled out: the approval gate reaches status as
- *  `${approvals url}/status` (the same rule as the hosted gate's URL). */
-export const APPROVALS_STATUS_PATH = `${APPROVALS_PATH}/status`;
+export const APPROVALS_STATUS_PATH = "/api/gateway/v1/approvals/status";
 
 export const LINK_ERROR = {
   unauthorized: "unauthorized",

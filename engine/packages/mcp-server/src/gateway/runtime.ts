@@ -33,6 +33,7 @@ import { checkBundlePolicy } from "./policy-check.ts";
 import { HttpApprovalGate } from "../approval-gate.ts";
 import {
   APPROVALS_PATH,
+  APPROVALS_STATUS_PATH,
   BUNDLE_FIELDS_V1,
   LINK_ERROR,
   b64urlDecode,
@@ -128,6 +129,7 @@ export function createGatewayApprovalGate(opts: {
   return new HttpApprovalGate(
     {
       url: `${opts.cloudUrl}${APPROVALS_PATH}`,
+      statusUrl: `${opts.cloudUrl}${APPROVALS_STATUS_PATH}`,
       authorize: (method, path, body) => opts.client.authorization(signer, method, path, body),
       verifyOutcome: (body, req) =>
         verifyApprovalOutcome(body, {

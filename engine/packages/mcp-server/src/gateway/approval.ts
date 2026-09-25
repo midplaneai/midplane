@@ -26,7 +26,12 @@ export const APPROVAL_TYP = "midplane-approval+jws";
 /** Longest validity an approval outcome may claim. */
 export const MAX_APPROVAL_OUTCOME_LIFETIME_S = 300;
 const APPROVAL_FORMAT_VERSION = 1;
-const MAX_APPROVAL_BYTES = 64 * 1024;
+/** Largest approval outcome (the signed form). The approval gate reads answers
+ *  with this cap, so the control plane can't sign one a gateway won't read. */
+export const MAX_APPROVAL_BYTES = 64 * 1024;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+// Epoch milliseconds after 2001: an `expires_at` in seconds is a mistake.
+const MIN_EPOCH_MS = 1e12;
 
 export class ApprovalOutcomeError extends Error {
   constructor(message: string) {
@@ -65,13 +70,8 @@ export function encodeApprovalOutcome(
   claims: ApprovalOutcomeClaims,
   signer: { kid: string; privateKey: KeyObject },
 ): string {
-  if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_APPROVAL_OUTCOME_LIFETIME_S) {
-    throw new Error(`approval outcome lifetime must be 1–${MAX_APPROVAL_OUTCOME_LIFETIME_S} s`);
-  }
-  const o = claims.outcome as Record<string, unknown>;
-  if (o.status === "pending" && (typeof o.approval_id !== "string" || !Number.isSafeInteger(o.expires_at))) {
-    throw new Error("a pending approval outcome needs approval_id and expires_at (ms since the epoch)");
-  }
+  const bad = malformedClaim(claims);
+  if (bad) throw new Error(`approval outcome ${bad}`);
   const jws = signJws(
     { alg: "EdDSA", typ: APPROVAL_TYP, kid: signer.kid },
     JSON.stringify({ v: APPROVAL_FORMAT_VERSION, ...claims }),
@@ -81,6 +81,32 @@ export function encodeApprovalOutcome(
     throw new Error(`approval outcome exceeds ${MAX_APPROVAL_BYTES} bytes; shorten the note`);
   }
   return jws;
+}
+
+function malformedClaim(c: ApprovalOutcomeClaims): string | null {
+  for (const k of ["iss", "project_id", "gateway_id", "query_id"] as const) {
+    if (typeof c[k] !== "string" || c[k].length === 0) return `${k} is missing`;
+  }
+  if (typeof c.sql_sha256 !== "string" || !SHA256_HEX.test(c.sql_sha256)) return "sql_sha256 must be sqlSha256(sql)";
+  if (!Number.isSafeInteger(c.iat) || !Number.isSafeInteger(c.exp)) return "iat and exp must be integers (seconds)";
+  if (c.exp <= c.iat || c.exp - c.iat > MAX_APPROVAL_OUTCOME_LIFETIME_S) {
+    return `lifetime must be 1–${MAX_APPROVAL_OUTCOME_LIFETIME_S} s`;
+  }
+  const o = c.outcome as Record<string, unknown>;
+  switch (o?.status) {
+    case "approved":
+    case "denied":
+    case "expired":
+      return null;
+    case "pending":
+      if (typeof o.approval_id !== "string" || o.approval_id.length === 0) return "pending outcome needs approval_id";
+      if (!Number.isSafeInteger(o.expires_at) || (o.expires_at as number) < MIN_EPOCH_MS) {
+        return "pending outcome needs expires_at in ms since the epoch";
+      }
+      return null;
+    default:
+      return "outcome.status must be approved, denied, expired or pending";
+  }
 }
 
 export interface ApprovalOutcomeExpectations {

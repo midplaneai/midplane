@@ -158,6 +158,38 @@ describe("approved", () => {
   });
 });
 
+describe("replaced while held", () => {
+  test("a retired Engine refuses the approved write with policy_replaced, and runs nothing", async () => {
+    // The Engine was replaced (a reload with new masks or a new connection)
+    // while the gate held the write: approved or not, it must not run here.
+    let engineRef: { retire(message: string): void } | null = null;
+    const gate: ApprovalGate = {
+      async request() {
+        engineRef!.retire("the policy changed while it waited");
+        return APPROVED;
+      },
+    };
+    const { engine, audit, executor } = makeEngine({
+      tableAccess: WRITABLE,
+      approvals: { config: holdAll(true), gate },
+    });
+    engineRef = engine;
+
+    const d = await engine.handle({ sql: WRITE_SQL, ctx: baseCtx });
+    expect(d).toMatchObject({ allowed: false, reason: "policy_replaced", message: "the policy changed while it waited" });
+    expect(executor.calls).toHaveLength(0);
+    expect(audit.byType("DECIDED")).toHaveLength(1);
+    expect(audit.byType("DECIDED")[0]!.payload).toMatchObject({ decision: "DENY", policy_rule: "policy_replaced" });
+  });
+
+  test("retiring doesn't touch statements that aren't held", async () => {
+    const { engine, executor } = harness(APPROVED);
+    engine.retire("replaced");
+    expect((await engine.handle({ sql: "SELECT 1", ctx: baseCtx })).allowed).toBe(true);
+    expect(executor.calls).toHaveLength(1);
+  });
+});
+
 describe("denied", () => {
   test("refuses, does not execute, and records approval_denied", async () => {
     const { engine, audit, executor } = harness({

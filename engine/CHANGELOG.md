@@ -6,11 +6,13 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ### Security
 
-- **An approval never outlives the policy that permitted the write.** The approval gate can hold a write for tens of seconds while a human decides. The policy is now evaluated again once the approval arrives, so a tightening that lands during that wait (a hot reload making the table read-only, a new gateway bundle, a gateway halt) denies the write instead of running it on the earlier decision. A re-run after a "pending" answer was already evaluated from scratch. Applies to every mode.
+- **An approval never outlives the policy that permitted the write.** The approval gate can hold a write for tens of seconds while a human decides. The policy is now evaluated again once the approval arrives, so a tightening that lands during that wait (a hot reload making the table read-only, a new gateway bundle, a gateway halt) denies the write instead of running it on the earlier decision. And if the database's engine was replaced meanwhile (its connection or masks changed, or it was removed), the approved write is refused with `policy_replaced` and the agent runs it again against the current policy. A re-run after a "pending" answer was already evaluated from scratch. Applies to every mode.
 
 ### Changed
 
 - **Waiting for a pooled database connection is bounded at 30 s.** It used to be unbounded, so a caller queued behind a saturated pool could wait forever — and once that pool was being closed (a policy reload that dropped or re-pointed the database), it never got an answer at all.
+- **The approval gate (`MIDPLANE_APPROVAL_URL`) no longer follows redirects, and reads at most 64 KiB of response.** A 3xx or an oversized answer is "approval unavailable": the held write doesn't run, and nothing is recorded as a denial. Point the URL at the final address.
+- **`GET /ready` exists in every mode.** Outside gateway mode it answers like `/health`.
 
 ### Added
 
@@ -22,6 +24,8 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
   - **Loopback only.** `/mcp` has no authentication yet, so the gateway binds to loopback and refuses to start on any other address.
   - **Signed requests and answers.** Held writes go to the approval gate, heartbeats report the enforced policy, and every request to Midplane Cloud carries a short-lived token signed by the gateway's own key. There is no shared secret. The cloud's answer to a held write must itself be signed with the pinned key and bound to that exact statement; an unsigned "approved" never runs a write.
   - **Liveness and readiness.** `GET /health` stays 200 while the process runs (its `ok` means alive, not enforcing) and reports the gateway's state; `GET /ready` is 503 until the gateway enforces a policy, and while it is halted or paused. Both answer on loopback only, like `/mcp`, so probe from inside the container: an exec readiness probe running `curl -sf http://127.0.0.1:8080/ready`, and the same against `/health` for liveness. The image's built-in `HEALTHCHECK` already does the latter.
+  - **Configuration.** Required: `MIDPLANE_CLOUD_URL`, `MIDPLANE_MASK_SALT` (at least 32 characters, even with no masks yet), `MIDPLANE_ENROLL_TOKEN` on first boot, and a `MIDPLANE_DSN_<id>` per database. The gateway refuses to start with `MIDPLANE_POLICY_FILE`, `DATABASE_URL`, `INDEXER_TOKEN`, `MIDPLANE_APPROVAL_URL`/`_TOKEN` or `MIDPLANE_TRANSPORT=stdio` set, since each would be a second source of policy or credentials. `midplane gateway --help` lists everything.
+  - **Agents reconnect to see new databases.** An MCP session opened before the gateway first enforced a policy is told to reconnect. As with `/admin/policy`, a database a later bundle adds shows up in a session's tools after the agent reconnects.
   - **State directory.** The gateway's key, identity and cached bundle live in `MIDPLANE_GATEWAY_STATE_DIR`, which the image sets to `/data/gateway`. Mount a volume at `/data`: a gateway whose state doesn't survive a restart can't come back without a new enrollment token.
   - **Egress proxies.** The image (Bun) honors `HTTPS_PROXY` / `HTTP_PROXY`. The npm package on Node also needs `NODE_USE_ENV_PROXY=1`, and warns at boot when a proxy is set without it.
   - **Threat model.** See the "Gateway mode" section of [`THREAT_MODEL.md`](./THREAT_MODEL.md). It explains why the gateway's own Postgres role is the real floor.

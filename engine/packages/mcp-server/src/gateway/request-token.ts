@@ -194,6 +194,13 @@ export function verifyEnrollmentProof(
   return { publicKeyRaw, jti, exp, rememberUntil: exp + MAX_CLOCK_SKEW_S };
 }
 
+// An empty body and no body are the same request: a verifier that reads a GET's
+// body as "" (what most frameworks hand it) must not demand a `bh` the gateway
+// never sends.
+function hasBody(body: Uint8Array | string | undefined): boolean {
+  return body !== undefined && body.length > 0;
+}
+
 /** sha256 of the request body, as it appears in `bh`. */
 export function bodyHash(body: Uint8Array | string): string {
   return b64urlEncode(createHash("sha256").update(body).digest());
@@ -208,7 +215,7 @@ function bindingClaims(opts: RequestBinding & { now?: number }): Record<string, 
     jti: b64urlEncode(randomBytes(16)),
     htm: opts.method.toUpperCase(),
     htu: opts.path,
-    ...(opts.body !== undefined ? { bh: bodyHash(opts.body) } : {}),
+    ...(hasBody(opts.body) ? { bh: bodyHash(opts.body!) } : {}),
   };
 }
 
@@ -257,11 +264,11 @@ function checkBindingClaims(
   if (htm !== expect.method.toUpperCase() || htu !== expect.path) {
     throw new RequestTokenError("binding", "request token is bound to a different method or path");
   }
-  if (expect.body === undefined) {
+  if (!hasBody(expect.body)) {
     if (bh !== undefined) {
       throw new RequestTokenError("binding", "request token carries a body hash but the request has no body");
     }
-  } else if (bh !== bodyHash(expect.body)) {
+  } else if (bh !== bodyHash(expect.body!)) {
     throw new RequestTokenError("binding", "request token body hash does not match the body");
   }
 

@@ -94,15 +94,39 @@ export function encodeEnrollmentResponse(
   claims: EnrollmentResponseClaims,
   signer: { kid: string; privateKey: KeyObject },
 ): string {
-  if (!Number.isSafeInteger(claims.min_version) || claims.min_version < 1) {
-    throw new Error("enrollment response min_version must be an integer ≥ 1 (max(1, latest bundle version))");
+  // Refuse to sign what every gateway would refuse to read: a bad response is
+  // only found after the one-time token is spent.
+  const bad = malformedField(claims as unknown as Record<string, unknown>);
+  if (bad) throw new Error(`enrollment response ${bad}`);
+  const signing = claims.signing_keys.find((k) => k.kid === signer.kid);
+  if (!signing || keyId(b64urlDecode(signing.x)) !== signing.kid) {
+    throw new Error("enrollment response signing_keys must list the signing key as {kid: keyId(x), x}");
   }
   const payload = { v: ENROLL_RESPONSE_FORMAT_VERSION, ...claims };
-  return signJws(
+  const jws = signJws(
     { alg: "EdDSA", typ: ENROLL_RESPONSE_TYP, kid: signer.kid },
     JSON.stringify(payload),
     signer.privateKey,
   );
+  if (jws.length > MAX_ENROLL_RESPONSE_BYTES) {
+    throw new Error(`enrollment response exceeds ${MAX_ENROLL_RESPONSE_BYTES} bytes`);
+  }
+  return jws;
+}
+
+/** The first malformed field of an enrollment response, described, or null.
+ *  Shared by the encoder and the verifier so the two can't disagree. */
+function malformedField(p: Record<string, unknown>): string | null {
+  const { iss, project_id, gateway_id, min_version, poll_seconds, iat } = p;
+  if (typeof iss !== "string" || !/^https?:\/\/[^/]+$/.test(iss)) return "iss must be a bare origin (no path, no trailing slash)";
+  if (typeof project_id !== "string" || project_id.length === 0) return "project_id is missing";
+  if (typeof gateway_id !== "string" || gateway_id.length === 0) return "gateway_id is missing";
+  if (!Number.isSafeInteger(min_version) || (min_version as number) < 1) {
+    return "min_version must be an integer ≥ 1 (max(1, latest bundle version))";
+  }
+  if (!Number.isSafeInteger(poll_seconds) || (poll_seconds as number) < 1) return "poll_seconds must be an integer ≥ 1";
+  if (!Number.isSafeInteger(iat)) return "iat must be an integer (seconds since the epoch)";
+  return null;
 }
 
 export interface EnrolledIdentity {
@@ -175,26 +199,13 @@ export function verifyEnrollmentResponse(
   if (gateway_key !== b64urlEncode(expect.gatewayPublicKeyRaw)) {
     throw new EnrollmentError("enrollment response is for a different gateway key");
   }
-  if (
-    typeof iss !== "string" ||
-    !/^https?:\/\/[^/]+$/.test(iss) ||
-    typeof project_id !== "string" ||
-    project_id.length === 0 ||
-    typeof gateway_id !== "string" ||
-    gateway_id.length === 0 ||
-    !Number.isSafeInteger(min_version) ||
-    (min_version as number) < 1 ||
-    !Number.isSafeInteger(poll_seconds) ||
-    (poll_seconds as number) < 1 ||
-    !Number.isSafeInteger(iat)
-  ) {
-    throw new EnrollmentError("enrollment response is missing or has malformed fields");
-  }
+  const bad = malformedField(payload);
+  if (bad) throw new EnrollmentError(`enrollment response is malformed: ${bad}`);
 
   return {
-    issuer: iss,
-    projectId: project_id,
-    gatewayId: gateway_id,
+    issuer: iss as string,
+    projectId: project_id as string,
+    gatewayId: gateway_id as string,
     signingKey: { kid: pinned.kid, x: pinned.x },
     minVersion: min_version as number,
     pollSeconds: poll_seconds as number,

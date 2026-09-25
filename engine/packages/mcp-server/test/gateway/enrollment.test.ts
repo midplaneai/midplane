@@ -105,19 +105,31 @@ describe("verifyEnrollmentResponse", () => {
     expect(() => verify(`${h}.${b64urlEncode(JSON.stringify(payload))}.${s}`)).toThrow(/signature/);
   });
 
-  test("malformed fields are refused even when signed", () => {
-    for (const over of [{ iss: "eu.app.midplane.test" }, { gateway_id: "" }, { poll_seconds: 0 }]) {
-      expect(() => verify(respond(over as Partial<EnrollmentResponseClaims>))).toThrow(/malformed/);
+  test("malformed fields can't be encoded, and are refused even when signed", () => {
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ iss: "eu.app.midplane.test" }, /iss/],
+      [{ iss: "https://eu.app.midplane.test/" }, /iss/], // a trailing slash from an env var
+      [{ gateway_id: "" }, /gateway_id/],
+      [{ poll_seconds: 0 }, /poll_seconds/],
+      [{ min_version: 0 }, /min_version/],
+      [{ iat: 1.5 }, /iat/],
+    ];
+    for (const [over, field] of cases) {
+      // The control plane fails where the mistake is made …
+      expect(() => respond(over as Partial<EnrollmentResponseClaims>)).toThrow(field);
+      // … and a hand-signed one is still refused by the gateway, naming the field.
+      const forged = craftJws(
+        { alg: "EdDSA", typ: ENROLL_RESPONSE_TYP, kid: bundleKey.kid },
+        { v: 1, ...claims(), ...over },
+        (i) => sign(null, i, bundleKey.privateKey),
+      );
+      expect(() => verify(forged)).toThrow(field);
     }
-    // min_version 0 can't even be encoded: versions start at 1 …
-    expect(() => respond({ min_version: 0 })).toThrow(/min_version/);
-    // … and a hand-signed one is still refused by the gateway.
-    const zero = craftJws(
-      { alg: "EdDSA", typ: ENROLL_RESPONSE_TYP, kid: bundleKey.kid },
-      { v: 1, ...claims(), min_version: 0 },
-      (i) => sign(null, i, bundleKey.privateKey),
-    );
-    expect(() => verify(zero)).toThrow(/malformed/);
+  });
+
+  test("the encoder refuses a signing key missing from signing_keys", () => {
+    const other = testKey();
+    expect(() => encodeEnrollmentResponse(claims(), { kid: other.kid, privateKey: other.privateKey })).toThrow(/signing_keys/);
   });
 
   test("the wrong typ, or a future format, is refused", () => {

@@ -1,11 +1,12 @@
 // Compact JWS (RFC 7515) with exactly one algorithm: EdDSA over Ed25519 (RFC 8037).
 //
-// Hand-rolled on purpose. The link signs four kinds of object — policy
-// bundles, the enrollment response, approval outcomes, request tokens — and
-// each has one fixed header shape. A general JOSE library brings algorithm negotiation, embedded
-// keys (`jwk`, `jku`, `x5u`) and `crit` header processing, which is exactly the
-// surface the well-known JWT bugs live in. Here the verifier knows the one
-// algorithm and the exact header keys up front, and anything else is refused.
+// Hand-rolled on purpose. The link signs five kinds of object — policy
+// bundles, the enrollment response, approval outcomes, request tokens and
+// enrollment proofs — and each has one fixed header shape. A general JOSE
+// library brings algorithm negotiation, embedded keys (`jwk`, `jku`, `x5u`)
+// and `crit` header processing, which is exactly the surface the well-known
+// JWT bugs live in. Here the verifier knows the one algorithm and the exact
+// header keys up front, and anything else is refused.
 //
 // Signatures cover the exact bytes received (`b64(header) "." b64(payload)`),
 // so nothing is ever re-serialized before verification.

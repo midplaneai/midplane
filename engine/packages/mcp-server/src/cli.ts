@@ -28,6 +28,7 @@ import { runAudit, printAuditHelp } from "./audit-cli.ts";
 import { runPolicy, printPolicyHelp } from "./policy-cli.ts";
 import { parseArgs } from "./argv.ts";
 import { transportFromFlags } from "./config.ts";
+import { MAX_POLL_SECONDS, MIN_MASK_SALT_LENGTH, MIN_POLL_SECONDS } from "./gateway/config.ts";
 import { version as PACKAGE_VERSION } from "../package.json" with { type: "json" };
 
 // `midplane audit tail | head` must exit cleanly when the consumer closes
@@ -182,14 +183,14 @@ Midplane Cloud publishes. Serves /mcp on loopback only.
 
 Required:
   MIDPLANE_CLOUD_URL          Your region's Midplane Cloud origin
-  MIDPLANE_MASK_SALT          ≥ 32 chars, from your secret manager; never sent to the cloud
+  MIDPLANE_MASK_SALT          ≥ ${MIN_MASK_SALT_LENGTH} chars, from your secret manager; never sent to the cloud
   MIDPLANE_ENROLL_TOKEN       First boot only (mpe1_…); ignored once enrolled
   MIDPLANE_DSN_<id>           One per database, as shown in Midplane Cloud
 
 Optional:
   MIDPLANE_GATEWAY_STATE_DIR  Key, identity and last policy (image: /data/gateway; persist it)
   MIDPLANE_GATEWAY_NAME       Defaults to the hostname
-  MIDPLANE_GATEWAY_POLL_SECONDS  5–3600, default set by Midplane Cloud
+  MIDPLANE_GATEWAY_POLL_SECONDS  ${MIN_POLL_SECONDS}–${MAX_POLL_SECONDS}, default set by Midplane Cloud
   MIDPLANE_HOST / PORT        Loopback address only (default 127.0.0.1) / 8080
   HTTPS_PROXY                 Egress proxy (on Node, also NODE_USE_ENV_PROXY=1)
 `);
