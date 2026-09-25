@@ -4,6 +4,18 @@ All notable changes to Midplane are documented here. Entries follow [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- **`midplane gateway`: the engine as a customer-run gateway.** It runs next to your database, enrolls once with Midplane Cloud using a one-time token, and from then on pulls its policy as signed bundles over outbound HTTPS. Nothing dials in, and Midplane Cloud never holds a database credential. Each database's DSN comes from a `MIDPLANE_DSN_<id>` variable in the gateway's own environment, and the masking salt from `MIDPLANE_MASK_SALT`.
+  - **Bundles are verified against a pinned key.** Each bundle is an Ed25519-signed JWS, checked against a key pinned at enrollment from a hash inside the enrollment token. A bundle that is forged, for another project, or older than the one held is rejected, and enforcement stays as it was.
+  - **A bundle replaces the whole policy.** An omitted section means off, so switching approvals or tenant scope off reaches a running gateway. Mask changes apply without a restart, on the same agent session.
+  - **Enforcement survives outages and restarts.** The newest authentic bundle is cached on disk. If Midplane Cloud is unreachable, the gateway keeps enforcing that bundle, and a restart comes back up with it.
+  - **Fail closed.** A gateway that has never received a bundle serves nothing. So does a gateway holding a bundle it can't enforce: an unknown format, critical field or policy feature halts it rather than falling back to an older policy.
+  - **Loopback only.** `/mcp` has no authentication yet, so the gateway binds to loopback and refuses to start on any other address.
+  - **Signed requests.** Held writes go to the approval gate, heartbeats report the enforced policy, and every request to Midplane Cloud carries a short-lived token signed by the gateway's own key. There is no shared secret.
+  - **Threat model.** See the "Gateway mode" section of [`THREAT_MODEL.md`](./THREAT_MODEL.md). It explains why the gateway's own Postgres role is the real floor.
+  - **Not live yet.** Midplane Cloud's side of the link is not live yet.
+
 ## [0.20.0] — 2026-08-25
 
 ### Security

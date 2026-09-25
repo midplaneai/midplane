@@ -33,8 +33,15 @@ const MAX_AUDIT_LIMIT = 1000;
 export interface HttpHandle {
   url: string;
   port: number;
+  /** The address the listener actually bound, as reported by the socket —
+   *  what a caller checks when WHERE it listens is a security property. */
+  address: string;
   close(): Promise<void>;
 }
+
+/** GET /health. Default: 200 {ok:true}. Gateway mode reports its state, and is
+ *  unhealthy (503) until it holds an enforceable policy. */
+export type HealthCheck = () => { status: number; body: unknown };
 
 // Per-session context the transport captures from the initialize request
 // and hands to the server factory. Today this carries the cloud-issued
@@ -90,12 +97,22 @@ export async function startHttp(
     host?: string;
     indexer?: IndexerRoutes;
     admin?: AdminRoutes;
+    health?: HealthCheck;
+    /** Read X-Midplane-Token-Id / X-Midplane-Scope at initialize (default
+     *  true). Gateway mode turns this off: on an unauthenticated transport a
+     *  token id is forgeable attribution and a scope header is only ever a
+     *  narrowing the caller chose, so neither is identity. */
+    identityHeaders?: boolean;
   },
 ): Promise<HttpHandle> {
   const sessions = new Map<string, SessionEntry>();
+  const routeOpts: RouteOptions = {
+    health: opts.health,
+    identityHeaders: opts.identityHeaders ?? true,
+  };
 
   const httpServer = createServer((req, res) =>
-    handle(req, res, serverFactory, sessions, opts.indexer, opts.admin).catch((err) => {
+    handle(req, res, serverFactory, sessions, opts.indexer, opts.admin, routeOpts).catch((err) => {
       logger.error({ err }, "http handler threw");
       if (!res.headersSent) {
         res.statusCode = 500;
@@ -120,12 +137,14 @@ export async function startHttp(
 
   const addr = httpServer.address();
   const boundPort = addr && typeof addr === "object" ? addr.port : opts.port;
+  const boundAddress = addr && typeof addr === "object" ? addr.address : String(addr);
   const url = `http://${hostForUrl(opts.host ?? "0.0.0.0")}:${boundPort}/mcp`;
   logger.info({ port: boundPort, url }, "http transport listening");
 
   return {
     url,
     port: boundPort,
+    address: boundAddress,
     async close() {
       // Snapshot — transport.close() triggers onclose which mutates the map.
       const entries = [...sessions.values()];
@@ -140,6 +159,11 @@ export async function startHttp(
   };
 }
 
+interface RouteOptions {
+  health: HealthCheck | undefined;
+  identityHeaders: boolean;
+}
+
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
@@ -147,13 +171,13 @@ async function handle(
   sessions: Map<string, SessionEntry>,
   indexer: IndexerRoutes | undefined,
   admin: AdminRoutes | undefined,
+  routeOpts: RouteOptions,
 ): Promise<void> {
   const url = req.url ?? "/";
 
   if (req.method === "GET" && url === "/health") {
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ ok: true }));
+    const h = routeOpts.health ? routeOpts.health() : { status: 200, body: { ok: true } };
+    writeJson(res, h.status, h.body);
     return;
   }
 
@@ -217,12 +241,14 @@ async function handle(
     // means the initialize request didn't carry the header (or carried
     // a malformed one); audit rows from this session will have
     // mcp_token_id IS NULL for the session's lifetime.
-    const sessionContext: SessionContext = {
-      mcp_token_id: parseMcpTokenIdHeader(req.headers),
-      // Frozen with the session, same as the token id: the per-agent DB scope
-      // can't change mid-session by re-sending the header on a later request.
-      scope: parseMcpScopeHeader(req.headers),
-    };
+    const sessionContext: SessionContext = routeOpts.identityHeaders
+      ? {
+          mcp_token_id: parseMcpTokenIdHeader(req.headers),
+          // Frozen with the session, same as the token id: the per-agent DB scope
+          // can't change mid-session by re-sending the header on a later request.
+          scope: parseMcpScopeHeader(req.headers),
+        }
+      : { mcp_token_id: null, scope: null };
     const server = serverFactory(sessionContext);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),

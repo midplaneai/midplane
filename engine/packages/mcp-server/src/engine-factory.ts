@@ -1377,8 +1377,10 @@ async function finalizeReload(
           : null,
       })),
       appliedAt,
+      source,
+      ...(meta ? { bundleVersion: meta.bundleVersion } : {}),
     },
-    "policy reloaded via admin endpoint",
+    source === "bundle" ? "policy bundle applied to engines" : "policy reloaded via admin endpoint",
   );
 
   return { applied_at: appliedAt };

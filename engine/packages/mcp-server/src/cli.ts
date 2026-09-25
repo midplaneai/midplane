@@ -49,6 +49,12 @@ async function main(): Promise<void> {
       await runServer();
       return;
     }
+    case "gateway": {
+      // Lazy: the link client and enrollment code stay off every other path.
+      const { runGateway } = await import("./gateway/run.ts");
+      await runGateway();
+      return;
+    }
     case "audit":
       await runAudit(rest);
       return;
@@ -134,6 +140,10 @@ function printHelp(stream: NodeJS.WriteStream = process.stdout): void {
 Usage:
   midplane [server]    Run the MCP server (default subcommand)
                        --stdio | --http  override MIDPLANE_TRANSPORT
+  midplane gateway     Run as a gateway: enroll with Midplane Cloud, enforce its
+                       signed policy bundles, serve /mcp on loopback only
+                       (MIDPLANE_CLOUD_URL, MIDPLANE_ENROLL_TOKEN, MIDPLANE_MASK_SALT,
+                       MIDPLANE_DSN_<id>)
   midplane init        Interactive setup: introspect the DB, write a policy
   midplane query ...   Send one query through the server as an agent would
   midplane doctor      Preflight + smoke checks (config, DB, audit, canary)

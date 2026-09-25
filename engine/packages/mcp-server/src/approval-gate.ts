@@ -45,6 +45,15 @@ export interface ApprovalGateConfig {
   token: string;
 }
 
+/** Gateway mode: no static token. Every call is authorized by a fresh request
+ *  token the gateway signs for that exact method, path and body, so a captured
+ *  header is worthless for any other request. Returns the full Authorization
+ *  header value. */
+export interface SignedApprovalGateConfig {
+  url: string;
+  authorize: (method: string, path: string, body: string) => string;
+}
+
 /** Read + validate the gate config.
  *
  *  Both variables are required TOGETHER. Half-configured is a boot failure, not
@@ -74,9 +83,16 @@ export function loadApprovalGateConfig(
 
 export class HttpApprovalGate implements ApprovalGate {
   constructor(
-    private readonly config: ApprovalGateConfig,
+    private readonly config: ApprovalGateConfig | SignedApprovalGateConfig,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  private authorization(url: string, body: string): string {
+    if ("authorize" in this.config) {
+      return this.config.authorize("POST", new URL(url).pathname, body);
+    }
+    return `Bearer ${this.config.token}`;
+  }
 
   async request(req: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalOutcome> {
     const controller = new AbortController();
@@ -86,14 +102,16 @@ export class HttpApprovalGate implements ApprovalGate {
 
     let res: Response;
     try {
+      // Serialized once: a signed authorization covers these exact bytes.
+      const body = JSON.stringify(toWire(req));
       res = await this.fetchImpl(this.config.url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${this.config.token}`,
+          authorization: this.authorization(this.config.url, body),
           "user-agent": USER_AGENT,
         },
-        body: JSON.stringify(toWire(req)),
+        body,
         signal: controller.signal,
       });
     } catch (err) {
@@ -148,14 +166,16 @@ export class HttpApprovalGate implements ApprovalGate {
 
     let res: Response;
     try {
-      res = await this.fetchImpl(`${this.config.url}/status`, {
+      const url = `${this.config.url}/status`;
+      const body = JSON.stringify({ approval_id: approvalId, mcp_token_id: mcpTokenId });
+      res = await this.fetchImpl(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${this.config.token}`,
+          authorization: this.authorization(url, body),
           "user-agent": USER_AGENT,
         },
-        body: JSON.stringify({ approval_id: approvalId, mcp_token_id: mcpTokenId }),
+        body,
         signal: controller.signal,
       });
     } catch (err) {

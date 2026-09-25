@@ -52,6 +52,19 @@ For hosted only: the customer's Postgres URL is encrypted at rest with a per-ten
 
 Self-host has no Midplane-controlled infrastructure exposure. Customer's Postgres URL stays in their environment. Audit log is local SQLite. Trust posture reduces to "do you trust the OSS code you're running?" — and the answer is "you can read it before you run it."
 
+## Gateway mode (`midplane gateway`)
+
+A gateway runs next to the customer's database and takes its policy from Midplane Cloud as signed bundles. Every connection is outbound from the gateway; the cloud never holds a database credential and never dials in.
+
+- **Policy integrity doesn't rest on TLS.** A bundle is a JWS signed with Ed25519 by the control plane's key. The gateway pins that key at enrollment, from a hash carried in the one-time enrollment token, so a TLS-intercepting proxy cannot substitute its own key. Bundles are signed when published, so write access to the control plane's database alone cannot produce one a gateway accepts. A bundle that is forged, for another project, or older than the one held is rejected, and enforcement stays exactly as it was.
+- **A compromised control plane can loosen policy — down to the database role, no further.** Whoever can sign bundles can publish a looser policy: the signing key, code running in the control plane, or write access to the policy it signs. The gateway's Postgres role is therefore the real floor. Give the gateway a dedicated least-privilege role (`NOSUPERUSER NOBYPASSRLS`, grants only on tables agents may use), never an admin DSN; your RLS policies keep applying.
+- **A bundle names a DSN variable, never a connection.** Each database's `url` must be exactly `${MIDPLANE_DSN_<id>}`; anything else — a literal DSN, a host, a reference to another variable — makes the bundle unenforceable. A compromised control plane can at most swap which of your own DSN variables an alias uses; it cannot point the gateway at a host it chooses or read the gateway's other environment variables.
+- **The masking salt never leaves the gateway.** `MIDPLANE_MASK_SALT` comes from the gateway's environment and is required at boot; no bundle field carries it, so Midplane Cloud cannot reverse consistent-hash values.
+- **A network adversary can freeze a gateway, but not forge or roll it back.** It can withhold new bundles or block heartbeats; the gateway keeps enforcing the newest bundle it holds. The signed `min_version` in the enrollment response stops a freshly enrolled gateway from accepting an old bundle. Withholding is detected, not prevented: the dashboard shows which version a gateway enforces and when it last reported. A signed freshness statement with a maximum staleness is not built yet.
+- **What a gateway can't enforce, it doesn't serve.** An authentic bundle with a format, a critical field, or a policy feature this gateway doesn't implement halts it: every call is refused until a newer bundle applies. It does not fall back to the older bundle the customer replaced. The same holds across restarts, because the gateway caches the newest authentic bundle, not the last applied one.
+- **`/mcp` is unauthenticated and bound to loopback only.** A gateway refuses to start on any non-loopback address, and ignores the `X-Midplane-Token-Id` and `X-Midplane-Scope` headers. Any process on the same host (or pod) has the access the policy allows. The authenticated front door is not built yet; do not expose the port through a proxy.
+- **The state directory holds the gateway's private key.** Anyone who can read it can act as the gateway toward Midplane Cloud (pull its policy, file approval requests, send heartbeats). They cannot forge policy, and the same host already holds the DSNs. Revoking the gateway in the dashboard cuts its link; it does not stop the process, which keeps enforcing its last policy until you stop it.
+
 ## Reporting a vulnerability
 
 See [SECURITY.md](./SECURITY.md).
