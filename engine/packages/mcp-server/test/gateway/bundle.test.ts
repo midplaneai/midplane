@@ -211,8 +211,9 @@ describe("verifyBundle — envelope fields (crit)", () => {
       (input) => sign(null, input, signer.privateKey),
     );
     const v = verifyBundle(jws, expectations());
-    expect(v.kind).toBe("authentic");
-    if (v.kind === "authentic" && !v.envelope.ok) expect(v.envelope.reason).toContain("format v2");
+    if (v.kind !== "authentic") throw new Error(`expected authentic, got ${v.kind}`);
+    expect(v.envelope.ok).toBe(false);
+    if (!v.envelope.ok) expect(v.envelope.reason).toContain("format v2");
   });
 
   test("a paused bundle is authentic and enforceable; pausing is the caller's job", () => {

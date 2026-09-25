@@ -83,6 +83,16 @@ describe("midplane gateway (process)", () => {
     expect(cloud.requests).toHaveLength(0); // refused before calling out
   });
 
+  test("an unenrolled gateway without a token exits 1 with how to fix it, and calls nothing", async () => {
+    // The operator flow this pins: a restart whose state dir wasn't persisted.
+    const p = run(baseEnv(await freePort()));
+    children.push(p.child);
+    expect(await p.exit).toBe(1);
+    expect(p.stderr()).toContain("not enrolled");
+    expect(p.stderr()).toContain("mount a volume");
+    expect(cloud.requests).toHaveLength(0);
+  }, 30_000);
+
   test("enrolls, pulls the bundle, reports healthy, heartbeats, and shuts down cleanly", async () => {
     cloud.publish(POLICY);
     const port = await freePort();

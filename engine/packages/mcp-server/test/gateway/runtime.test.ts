@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -265,7 +266,12 @@ describe("gateway runtime", () => {
 
     cloud.publish(policy());
     expect(await gw.runtime.pollOnce()).toBe("bundle");
-    await query(WRITE);
+    expect(gw.runtime.state).toBe("serving");
+    const ranBefore = gw.executor.calls.length;
+    const res = await query(WRITE);
+    // Not held, and actually executed — not refused for some other reason.
+    expect(res.isError).toBeFalsy();
+    expect(gw.executor.calls.length).toBe(ranBefore + 1);
     expect(cloud.approvalRequests).toHaveLength(1);
   });
 
@@ -432,32 +438,95 @@ describe("gateway runtime", () => {
 });
 
 describe("gateway transport", () => {
-  test("identity headers are ignored: a forged token id or scope never reaches the session", async () => {
-    const seen: unknown[] = [];
+  // One engine for every session the transport opens; closed after each test.
+  let dir: string;
+  let handle: BuiltEngineHandle;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "midplane-gw-transport-"));
+    handle = buildEngine(
+      { port: 0, host: "127.0.0.1", dbPath: join(dir, "a.db"), tenantId: "t", transport: "http", maskSourceRewrite: false },
+      { startEmpty: true, executor: new MockExecutor() },
+    );
+  });
+  afterEach(async () => {
+    await handle.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function serve(opts: { identityHeaders?: boolean; loopbackRequestsOnly?: boolean }, seen: unknown[] = []) {
     const http = await startHttp(
       (ctx) => {
         seen.push(ctx);
-        const dir = mkdtempSync(join(tmpdir(), "midplane-gw-hdr-"));
-        const handle = buildEngine(
-          { port: 0, host: "127.0.0.1", dbPath: join(dir, "a.db"), tenantId: "t", transport: "http", maskSourceRewrite: false },
-          { startEmpty: true, executor: new MockExecutor() },
-        );
         return buildServer({ handle, sessionContext: ctx, serving: { check: () => ({ ok: false, reason: "test" }) } });
       },
-      { port: 0, host: "127.0.0.1", identityHeaders: false },
+      { port: 0, host: "127.0.0.1", ...opts },
     );
-    try {
-      const client = new Client({ name: "t", version: "0" });
-      await client.connect(
-        new StreamableHTTPClientTransport(new URL(http.url), {
-          requestInit: { headers: { "X-Midplane-Token-Id": "01J8Z7FORGEDTOKENAAAAAAAAA", "X-Midplane-Scope": "main:read" } },
-        }),
-      );
-      await client.close();
-      expect(seen).toEqual([{ mcp_token_id: null, scope: null }]);
-      expect(http.address).toBe("127.0.0.1");
-    } finally {
-      await http.close();
+    servers.push(http);
+    return http;
+  }
+
+  const servers: HttpHandle[] = [];
+  afterEach(async () => {
+    for (const s of servers.splice(0)) await s.close();
+  });
+
+  // A syntactically valid ULID: a malformed one would be dropped by the header
+  // parser anyway, and prove nothing about the flag.
+  const TOKEN_ID = "01J8Z7FRGDTKNAAAAAAAAAAAAA";
+
+  async function connect(url: string, headers: Record<string, string>) {
+    const client = new Client({ name: "t", version: "0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }));
+    await client.close();
+  }
+
+  test("identity headers are ignored: a forged token id or scope never reaches the session", async () => {
+    const headers = { "X-Midplane-Token-Id": TOKEN_ID, "X-Midplane-Scope": "main:read" };
+
+    // Control: with the default transport the same headers DO reach the session.
+    const trusted: Array<{ mcp_token_id: string | null }> = [];
+    await connect((await serve({}, trusted)).url, headers);
+    expect(trusted[0]!.mcp_token_id).toBe(TOKEN_ID);
+
+    const seen: unknown[] = [];
+    const http = await serve({ identityHeaders: false }, seen);
+    await connect(http.url, headers);
+    expect(seen).toEqual([{ mcp_token_id: null, scope: null }]);
+    expect(http.address).toBe("127.0.0.1");
+  });
+
+  test("DNS rebinding: a non-loopback Host or Origin is refused before anything is parsed", async () => {
+    const http = await serve({ loopbackRequestsOnly: true, identityHeaders: false });
+    const post = (headers: Record<string, string>) =>
+      new Promise<number>((resolve, reject) => {
+        const req = request(
+          {
+            host: "127.0.0.1",
+            port: http.port,
+            path: "/mcp",
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on("error", reject);
+        req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }));
+      });
+
+    expect(await post({ host: `rebind.attacker.example:${http.port}` })).toBe(403);
+    expect(await post({ host: `127.0.0.1:${http.port}`, origin: "https://rebind.attacker.example" })).toBe(403);
+    expect(await post({ host: `127.0.0.1:${http.port}`, origin: "null" })).toBe(403);
+    // Loopback names get through to the MCP layer (which then answers for itself).
+    for (const host of [`127.0.0.1:${http.port}`, `localhost:${http.port}`, `[::1]:${http.port}`]) {
+      expect(await post({ host })).not.toBe(403);
     }
+    expect(await post({ host: `localhost:${http.port}`, origin: `http://localhost:${http.port}` })).not.toBe(403);
+
+    // A real client on loopback is unaffected, and so is the health probe.
+    await connect(http.url, {});
+    expect((await fetch(`http://127.0.0.1:${http.port}/health`)).status).toBe(200);
   });
 });

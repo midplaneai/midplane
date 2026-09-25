@@ -108,6 +108,10 @@ d("gateway mask hot-swap (live Postgres)", () => {
     };
 
     const masked = await email();
+    // A real, non-empty masked value — not a missing column that happens not to
+    // equal the raw email.
+    expect(typeof masked).toBe("string");
+    expect((masked as string).length).toBeGreaterThan(0);
     expect(masked).not.toBe(RAW_EMAIL);
 
     await apply(false, 2);
