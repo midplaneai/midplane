@@ -76,7 +76,7 @@ jobs:
         working-directory: engine
         env:
           MASKING_LIVE_PG_DSN: postgres://postgres:probe@127.0.0.1:5432/probe
-        run: bun test packages/engine/test/masking/source-rewrite.live.test.ts
+        run: bun test packages/engine/test/masking/source-rewrite.live.test.ts packages/mcp-server/test/gateway/replace-masks.live.test.ts
 
   smoketest:
     runs-on: ubuntu-latest
