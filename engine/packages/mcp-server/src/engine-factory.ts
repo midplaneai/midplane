@@ -14,7 +14,13 @@
 // shape diffs `databases[]` and adds/removes/updates engines as needed.
 // Both `table_access` and `tenant_scope.mappings` swap in place via the
 // holder — the engine never rebuilds for a policy edit.
+//
+// Gateway mode applies signed bundles through a second entrypoint,
+// `replacePolicy`, with FULL-REPLACEMENT semantics: an omitted section means
+// off, the apply is all-or-nothing, and a database whose masks changed gets a
+// freshly built Engine on its existing pool (masks are constructor config).
 
+import { isDeepStrictEqual } from "node:util";
 import { ulid } from "ulid";
 import {
   Engine,
@@ -45,6 +51,7 @@ import {
   type ApprovalGate,
 } from "@midplane/engine";
 import { PgPoolExecutor } from "./executor/pg-pool.ts";
+import { UnconfiguredExecutor } from "./executor/unconfigured.ts";
 import {
   validateDryRunRequest,
   executeDryRun,
@@ -52,6 +59,7 @@ import {
   type DryRunResponse,
 } from "./dry-run.ts";
 import {
+  DEFAULT_APPROVALS,
   DEFAULT_DB_NAME,
   DEFAULT_GUARDRAILS,
   EMPTY_TENANT_SCOPE,
@@ -61,6 +69,7 @@ import {
   type DatabaseSpec,
   type GuardrailsSpec,
   type ApprovalsSpec,
+  type ColumnMasksSpec,
   type LoadedPolicy,
   type TableAccessLevel,
   type TenantScopeSpec,
@@ -100,6 +109,17 @@ interface EngineEntry {
   // The DSN this engine is bound to. Used by the hot-reload path to detect
   // url changes (which require a pool rebuild) versus pure policy edits.
   url: string;
+  // The masks this entry's Engine was constructed with. Masking is engine
+  // constructor config, so the replace path compares these to decide whether
+  // the Engine must be rebuilt (see replacePolicy).
+  columnMasks: ColumnMasksSpec | null;
+  maskSourceRewrite: boolean | null;
+  // Gateway mode: the env var this DB's DSN is read from, and whether it was
+  // set. An unconfigured DB keeps its policy but has no connection — every call
+  // on it fails with a message naming the variable. Null/true outside gateway
+  // mode, where the DSN comes from the YAML or DATABASE_URL directly.
+  dsnEnv: string | null;
+  configured: boolean;
   // The dialect's metadata SQL builders, surfaced here so the list_tables /
   // describe_table tool handlers can build dialect-correct discovery SQL.
   // Engine.dialect is private, so the tools can't reach the dialect directly;
@@ -166,6 +186,51 @@ export interface EngineHandle {
   close(): Promise<void>;
 }
 
+/** One database of a verified gateway bundle, ready to apply. `spec.url` is the
+ *  DSN read from `dsnEnv` when `configured`, and "" when the variable is unset. */
+export interface ReplaceDatabase {
+  spec: DatabaseSpec;
+  dsnEnv: string;
+  configured: boolean;
+}
+
+/** What a gateway reports it enforces, per database. Deliberately NOT part of
+ *  describe(): that one is agent-facing (list_databases), and neither mask
+ *  config nor DSN variable names are the agent's business. No DSN values, no
+ *  salt, ever. */
+export interface PolicySnapshotEntry {
+  name: string;
+  status: "ready" | "unconfigured";
+  dsn_env: string | null;
+  table_access_default: TableAccessLevel | null;
+  table_access_tables: number;
+  guardrails: { block_unqualified_dml: boolean; block_ddl: boolean; block_dml: boolean };
+  approvals: { row_changes: boolean; whole_table_writes: boolean; schema_changes: boolean };
+  tenant_scope: { column: string | null; overrides: Record<string, string>; exempt: string[] } | null;
+  column_masks: ColumnMasksSpec | null;
+  mask_source_rewrite: boolean;
+}
+
+/** The handle buildEngine returns. Adds the gateway-mode entrypoints to the
+ *  EngineHandle every other consumer sees. */
+export interface BuiltEngineHandle extends EngineHandle {
+  /** Gateway mode: apply a verified bundle with FULL-REPLACEMENT semantics — an
+   *  omitted section means off, never "keep the old one" — all-or-nothing.
+   *  Throws (having changed nothing) when any database can't be built. */
+  replacePolicy(
+    databases: readonly ReplaceDatabase[],
+    meta: { bundleVersion: number },
+  ): Promise<{ applied_at: string }>;
+  policySnapshot(): PolicySnapshotEntry[];
+  /** Gateway halt: drop every database and its pool, recording the removal.
+   *  Nothing is "applied" — the gateway serves nothing until a newer bundle
+   *  applies through replacePolicy. */
+  drain(meta: { bundleVersion: number; reason: string }): Promise<void>;
+  /** The audit writer with wrapAudit applied (telemetry, deny webhook): what a
+   *  gateway writes its own refusals through, so they alert like any denial. */
+  auditWriter: AuditWriter;
+}
+
 export interface BuildEngineOptions {
   // Wraps each per-DB audit writer (e.g. with a telemetry tee). The same
   // wrapper instance is applied to all DBs — all telemetry buckets into
@@ -177,16 +242,34 @@ export interface BuildEngineOptions {
   executor?: Executor;
   credentials?: CredentialStore;
   // Approval gate for held writes. Supplied by the server when
-  // MIDPLANE_APPROVAL_URL + MIDPLANE_APPROVAL_TOKEN are configured. Left
-  // undefined otherwise — a policy that enables approvals without one then
-  // fails closed at query time instead of running the write.
+  // MIDPLANE_APPROVAL_URL + MIDPLANE_APPROVAL_TOKEN are configured, and always
+  // by `midplane gateway` (a signed gate over the link). Left undefined
+  // otherwise — a policy that enables approvals without one then fails closed
+  // at query time instead of running the write.
   approvalGate?: ApprovalGate;
+  // Gateway mode: start with NO databases and no policy. The registry fills in
+  // only when a verified bundle is applied via replacePolicy; until then there
+  // is nothing to query (never received a policy ⇒ serve nothing).
+  startEmpty?: boolean;
 }
 
-export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineHandle {
+export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): BuiltEngineHandle {
   // ── 1. Load YAML (if any) and resolve to a DatabaseSpec[] ─────────────
   let policy: LoadedPolicy;
-  if (cfg.policyFile) {
+  if (opts.startEmpty) {
+    policy = {
+      databases: [],
+      hasDatabasesBlock: true,
+      tenantScope: EMPTY_TENANT_SCOPE,
+      tableAccess: null,
+      hasTenantScope: false,
+      hasTableAccess: false,
+      guardrails: DEFAULT_GUARDRAILS,
+      hasGuardrails: false,
+      columnMasks: null,
+      hasColumnMasks: false,
+    };
+  } else if (cfg.policyFile) {
     policy = loadPolicyFile(cfg.policyFile);
   } else {
     // No YAML → synthetic legacy shape with a single default DB.
@@ -421,38 +504,78 @@ export function buildEngine(cfg: Config, opts: BuildEngineOptions = {}): EngineH
   return {
     registry,
     approvalGate: opts.approvalGate,
+    replacePolicy: (databases, meta) =>
+      replaceAllDatabases(databases, meta, cfg, audit, credentials, opts, entries, baseAudit),
+    policySnapshot: () => snapshotPolicy(entries, cfg),
+    drain: (meta) => drainAllDatabases(meta, cfg, opts, entries, baseAudit),
+    auditWriter: audit,
     async close() {
       await registry.close();
     },
   };
 }
 
-// Build an EngineEntry from a single resolved DatabaseSpec. Used both at
-// boot and by the hot-reload path when adding a previously-unseen DB.
+// Gateway-mode extras for makeEngineEntry. `reuseExecutor` keeps an existing
+// pool when only engine-construction config (masks) changed, so a mask edit
+// never churns the customer's database connections.
+interface GatewayEntryOptions {
+  dsnEnv: string;
+  configured: boolean;
+  reuseExecutor?: Executor;
+}
+
+// Build an EngineEntry from a single resolved DatabaseSpec. Used at boot, by
+// the hot-reload path when adding a previously-unseen DB, and by the gateway
+// replace path (which also rebuilds an entry whose masks changed).
 function makeEngineEntry(
   spec: DatabaseSpec,
   cfg: Config,
   audit: AuditWriter,
   credentials: CredentialStore,
   opts: BuildEngineOptions,
+  gw?: GatewayEntryOptions,
 ): EngineEntry {
-  const holder: PolicyHolder = {
-    tableAccess: spec.tableAccess
-      ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
-      : undefined,
-    tenantScope: cloneTenantScope(spec.tenantScope),
-    guardrails: { ...spec.guardrails },
-    approvals: { ...spec.approvals },
-  };
+  // Tests inject one shared executor across DBs (for back-compat with
+  // single-engine tests). Production gets one Postgres pool per DB. A gateway
+  // DB whose DSN variable is unset gets an executor that refuses everything,
+  // whatever the test injection — "not configured" must not depend on it.
+  let executor: Executor;
+  let ownsExecutor = false;
+  if (gw && !gw.configured) {
+    executor = new UnconfiguredExecutor(spec.name, gw.dsnEnv);
+  } else if (gw?.reuseExecutor) {
+    executor = gw.reuseExecutor;
+  } else if (opts.executor) {
+    executor = opts.executor;
+  } else {
+    executor = new PgPoolExecutor({ databaseUrl: spec.url });
+    ownsExecutor = true;
+  }
+  try {
+    return buildEntryWith(spec, cfg, audit, credentials, opts, executor, gw);
+  } catch (err) {
+    // A throw here (e.g. masks the executor can't back) must not strand the
+    // pool we just opened.
+    if (ownsExecutor) void closeExecutor(executor, spec.name, "entry build failed");
+    throw err;
+  }
+}
+
+function buildEntryWith(
+  spec: DatabaseSpec,
+  cfg: Config,
+  audit: AuditWriter,
+  credentials: CredentialStore,
+  opts: BuildEngineOptions,
+  executor: Executor,
+  gw: GatewayEntryOptions | undefined,
+): EngineEntry {
+  const holder = holderFor(spec);
 
   // Resolve the dialect for this DB. Postgres is a stateless singleton; one
   // instance is shared by the engine (parse/normalize) AND the metadata SQL
   // builders exposed on the EngineEntry.
   const dialect = getDialect(spec.dialect);
-
-  // Tests inject one shared executor across DBs (for back-compat with
-  // single-engine tests). Production gets one Postgres pool per DB.
-  const executor = opts.executor ?? new PgPoolExecutor({ databaseUrl: spec.url });
 
   const engine = new Engine({
     policy: {
@@ -481,13 +604,14 @@ function makeEngineEntry(
     credentials,
     executor,
     databaseName: spec.name,
-    // Boot-time column masking (W3:A). Built from the resolved spec + the
-    // pool-backed catalog resolver; undefined when this DB declares no masks.
-    // Column-mask hot-reload is a follow-up — a masks edit currently lands on
-    // the next engine spawn (the same path table_access took pre-hot-reload).
+    // Column masking (W3:A). Built from the resolved spec + the pool-backed
+    // catalog resolver; undefined when this DB declares no masks. Constructor
+    // config: the patch hot-reload can't change it (a hosted masks edit
+    // respawns), and the gateway replace path rebuilds the Engine instead.
     masking: buildMaskingConfig(spec, cfg, executor),
     // Write approvals. The getter mirrors the rules' hot-swap pattern. The gate
-    // comes from the server (HTTP-backed when MIDPLANE_APPROVAL_URL is set);
+    // comes from the server (HTTP-backed when MIDPLANE_APPROVAL_URL is set, or
+    // signed over the link in gateway mode);
     // when approvals are on and no gate was supplied the engine's refusing gate
     // errors rather than letting the write through.
     approvals: {
@@ -535,10 +659,22 @@ function makeEngineEntry(
     holder,
     executor,
     url: spec.url,
+    columnMasks: spec.columnMasks,
+    maskSourceRewrite: spec.maskSourceRewrite,
+    dsnEnv: gw?.dsnEnv ?? null,
+    configured: gw?.configured ?? true,
     listTablesSql,
     describeTableSql,
     defaultSchema,
   };
+}
+
+async function closeExecutor(executor: Executor, db: string, why: string): Promise<void> {
+  const maybeClose = (executor as { close?: () => Promise<void> }).close;
+  if (typeof maybeClose !== "function") return;
+  await maybeClose.call(executor).catch((err) => {
+    logger.warn({ err, db }, `executor close failed (${why})`);
+  });
 }
 
 // Build the engine's MaskingConfig from a resolved DatabaseSpec, or undefined
@@ -734,6 +870,7 @@ async function swapMultiDb(
       const prevTableAccess = existing.holder.tableAccess;
       const prevTenantScope = existing.holder.tenantScope;
       const prevGuardrails = existing.holder.guardrails;
+      retire(existing, `the connection for database "${spec.name}" changed`);
       const maybeClose = (existing.executor as { close?: () => Promise<void> }).close;
       if (typeof maybeClose === "function") {
         await maybeClose.call(existing.executor).catch((err) => {
@@ -807,6 +944,7 @@ async function swapMultiDb(
   for (const name of toRemove) {
     const dropped = entries.get(name)!;
     entries.delete(name);
+    retire(dropped, `database "${name}" was removed from the policy`);
     const maybeClose = (dropped.executor as { close?: () => Promise<void> }).close;
     if (typeof maybeClose === "function") {
       await maybeClose.call(dropped.executor).catch((err) => {
@@ -817,6 +955,300 @@ async function swapMultiDb(
   }
 
   return finalizeReload(cfg, baseAudit, "admin_endpoint", summaries);
+}
+
+// Gateway full-replacement apply. Where swapMultiDb PATCHES (an omitted
+// section means "keep the old one", which is why switching approvals off never
+// reaches a warm hosted engine), this applies the resolved spec of every
+// database unconditionally: omitted tenant_scope / approvals / column_masks are
+// OFF. table_access and guardrails have no safe "off", so a database without
+// them is refused outright (the bundle checker refuses them first).
+//
+// All-or-nothing. PREPARE builds every Engine the new policy needs without
+// touching a live entry — a new database, a changed connection, or changed
+// masks (masking is Engine constructor config, so a mask edit rebuilds the
+// Engine, reusing its pool). Any throw there discards what was built and leaves
+// enforcement exactly as it was. COMMIT then swaps every entry in one
+// synchronous pass: prepare and commit contain no await, so no query can observe
+// a half-applied bundle. Tool handlers resolve registry.get() per call, so an
+// in-flight statement finishes on the Engine it started on and the next one
+// gets the new policy — no restart, no dropped MCP session.
+async function replaceAllDatabases(
+  databases: readonly ReplaceDatabase[],
+  meta: { bundleVersion: number },
+  cfg: Config,
+  audit: AuditWriter,
+  credentials: CredentialStore,
+  opts: BuildEngineOptions,
+  entries: Map<string, EngineEntry>,
+  baseAudit: SqliteAuditWriter,
+): Promise<{ applied_at: string }> {
+  const incoming = new Set<string>();
+  for (const d of databases) {
+    if (incoming.has(d.spec.name)) {
+      throw new Error(`bundle lists database "${d.spec.name}" more than once`);
+    }
+    incoming.add(d.spec.name);
+    if (!d.spec.hasTableAccess || !d.spec.tableAccess) {
+      throw new Error(`bundle database "${d.spec.name}" has no table_access; refusing rather than fall back to the permissive default`);
+    }
+    if (!d.spec.hasGuardrails) {
+      throw new Error(`bundle database "${d.spec.name}" has no guardrails section`);
+    }
+  }
+
+  // ── PREPARE ────────────────────────────────────────────────────────────
+  type Plan =
+    | { kind: "added"; next: EngineEntry }
+    | { kind: "rebuilt"; prev: EngineEntry; next: EngineEntry; closePrev: boolean }
+    | { kind: "swapped"; prev: EngineEntry; spec: DatabaseSpec };
+  const plans: Plan[] = [];
+  const opened: EngineEntry[] = [];
+  try {
+    for (const d of databases) {
+      const gw: GatewayEntryOptions = { dsnEnv: d.dsnEnv, configured: d.configured };
+      const prev = entries.get(d.spec.name);
+      if (!prev) {
+        const next = makeEngineEntry(d.spec, cfg, audit, credentials, opts, gw);
+        opened.push(next);
+        plans.push({ kind: "added", next });
+      } else if (prev.url !== d.spec.url || prev.configured !== d.configured || prev.dsnEnv !== d.dsnEnv) {
+        const next = makeEngineEntry(d.spec, cfg, audit, credentials, opts, gw);
+        opened.push(next);
+        plans.push({ kind: "rebuilt", prev, next, closePrev: true });
+      } else if (!sameMasks(prev, d.spec)) {
+        const next = makeEngineEntry(d.spec, cfg, audit, credentials, opts, {
+          ...gw,
+          reuseExecutor: prev.executor,
+        });
+        plans.push({ kind: "rebuilt", prev, next, closePrev: false });
+      } else {
+        plans.push({ kind: "swapped", prev, spec: d.spec });
+      }
+    }
+  } catch (err) {
+    for (const e of opened) {
+      if (e.executor !== opts.executor) void closeExecutor(e.executor, e.name, "bundle refused");
+    }
+    throw err;
+  }
+
+  // ── COMMIT (synchronous) ───────────────────────────────────────────────
+  const toClose: Array<{ executor: Executor; db: string }> = [];
+  const summaries: ReloadSummary[] = [];
+  for (const plan of plans) {
+    if (plan.kind === "added") {
+      entries.set(plan.next.name, plan.next);
+      summaries.push(replaceSummary(null, plan.next, "added"));
+    } else if (plan.kind === "rebuilt") {
+      entries.set(plan.next.name, plan.next);
+      // The replaced Engine can still hold a write at the approval gate, on a
+      // pool a mask rebuild kept. Its masks are stale and later bundles never
+      // reach its holder, so once approved that write is refused, not run.
+      retire(plan.prev, `the policy for database "${plan.prev.name}" changed`);
+      if (plan.closePrev) toClose.push({ executor: plan.prev.executor, db: plan.prev.name });
+      summaries.push(replaceSummary(snapshotEntry(plan.prev), plan.next, "rebuilt"));
+    } else {
+      const before = snapshotEntry(plan.prev);
+      applyToHolder(plan.prev.holder, holderFor(plan.spec));
+      summaries.push(replaceSummary(before, plan.prev, "swapped"));
+    }
+  }
+  const removed: string[] = [];
+  for (const [name, e] of [...entries]) {
+    if (!incoming.has(name)) {
+      entries.delete(name);
+      retire(e, `database "${name}" was removed from the policy`);
+      toClose.push({ executor: e.executor, db: name });
+      removed.push(name);
+      logger.info({ db: name }, "bundle removed database");
+    }
+  }
+
+  // Drain replaced pools OFF the apply path. pg's end() resolves only once every
+  // checked-out client is released, so awaiting it here would hold the gateway's
+  // next bundle — a pause included — behind whatever long query is running.
+  for (const c of toClose) {
+    if (c.executor !== opts.executor) void closeExecutor(c.executor, c.db, "replaced by bundle");
+  }
+  await writeRemovalRows(cfg, baseAudit, removed, { source: "bundle", bundleVersion: meta.bundleVersion });
+  return finalizeReload(cfg, baseAudit, "bundle", summaries, { bundleVersion: meta.bundleVersion });
+}
+
+async function drainAllDatabases(
+  meta: { bundleVersion: number; reason: string },
+  cfg: Config,
+  opts: BuildEngineOptions,
+  entries: Map<string, EngineEntry>,
+  baseAudit: SqliteAuditWriter,
+): Promise<void> {
+  const removed = [...entries.keys()].sort();
+  for (const [name, e] of [...entries]) {
+    entries.delete(name);
+    retire(e, "the gateway stopped serving");
+    if (e.executor !== opts.executor) void closeExecutor(e.executor, name, "gateway halted");
+  }
+  logger.info({ databases: removed, bundleVersion: meta.bundleVersion }, "gateway halted: databases drained");
+  await writeRemovalRows(cfg, baseAudit, removed, {
+    source: "halt",
+    bundleVersion: meta.bundleVersion,
+    reason: meta.reason,
+  });
+}
+
+function holderFor(spec: DatabaseSpec): PolicyHolder {
+  return {
+    tableAccess: spec.tableAccess
+      ? { default: spec.tableAccess.default, tables: spec.tableAccess.tables }
+      : undefined,
+    tenantScope: cloneTenantScope(spec.tenantScope),
+    guardrails: { ...spec.guardrails },
+    approvals: { ...spec.approvals },
+  };
+}
+
+function applyToHolder(h: PolicyHolder, from: PolicyHolder): void {
+  h.tableAccess = from.tableAccess;
+  h.tenantScope = from.tenantScope;
+  h.guardrails = from.guardrails;
+  h.approvals = from.approvals;
+}
+
+// An Engine that no longer serves its database (replaced, dropped, drained)
+// refuses any write it still holds at the approval gate — see Engine.retire.
+function retire(entry: EngineEntry, what: string): void {
+  entry.engine.retire(
+    `Midplane did not run this write: ${what} while it waited for approval. Run it again to have it checked against the policy in force now.`,
+  );
+}
+
+// One POLICY_RELOADED row per database a gateway stopped serving — dropped by a
+// bundle, or drained by a halt — so the audit log alone shows when enforcement
+// on a database ended and why. Best-effort, like every reload row.
+async function writeRemovalRows(
+  cfg: Config,
+  audit: SqliteAuditWriter,
+  removed: readonly string[],
+  meta: { source: "bundle" | "halt"; bundleVersion: number; reason?: string },
+): Promise<void> {
+  for (const name of removed) {
+    const event = {
+      id: ulid(),
+      query_id: ulid(),
+      tenant_id: cfg.tenantId,
+      database: name,
+      agent_name: null,
+      agent_version: null,
+      agent_intent: null,
+      mcp_token_id: null,
+      ts: Date.now(),
+      schema_version: 3,
+      event_type: "POLICY_RELOADED",
+      payload: {
+        source: meta.source,
+        removed: true,
+        bundle_version: meta.bundleVersion,
+        ...(meta.reason ? { reason: meta.reason } : {}),
+        sections_changed: [],
+        databases_changed: [...removed],
+        table_access: null,
+      },
+    } as unknown as AuditEvent;
+    try {
+      await audit.write(event);
+    } catch (err) {
+      logger.error({ err, db: name }, "database removal applied but audit write failed");
+    }
+  }
+}
+
+// Masks are Engine constructor config: equal masks (and the same enforcement
+// mode) mean the running Engine can stay.
+function sameMasks(entry: EngineEntry, spec: DatabaseSpec): boolean {
+  return (
+    isDeepStrictEqual(nonEmptyMasks(entry.columnMasks), nonEmptyMasks(spec.columnMasks)) &&
+    (entry.maskSourceRewrite ?? null) === (spec.maskSourceRewrite ?? null)
+  );
+}
+
+function nonEmptyMasks(m: ColumnMasksSpec | null): ColumnMasksSpec | null {
+  if (!m) return null;
+  const kept = Object.entries(m).filter(([, cols]) => Object.keys(cols).length > 0);
+  return kept.length > 0 ? Object.fromEntries(kept) : null;
+}
+
+// The policy-relevant state of an entry, frozen — the "before" side of a diff
+// when the entry's holder is about to be mutated in place.
+interface EntryState {
+  tableAccess: TableAccessConfig | undefined;
+  tenantScope: TenantScopeSpec;
+  guardrails: GuardrailsSpec;
+  approvals: ApprovalsSpec;
+  columnMasks: ColumnMasksSpec | null;
+}
+
+function snapshotEntry(e: EngineEntry): EntryState {
+  return {
+    tableAccess: e.holder.tableAccess,
+    tenantScope: cloneTenantScope(e.holder.tenantScope),
+    guardrails: { ...e.holder.guardrails },
+    approvals: { ...e.holder.approvals },
+    columnMasks: nonEmptyMasks(e.columnMasks),
+  };
+}
+
+function replaceSummary(
+  prev: EntryState | null,
+  after: EngineEntry,
+  kind: ReloadSummary["kind"],
+): ReloadSummary {
+  const nextMasks = nonEmptyMasks(after.columnMasks);
+  return {
+    name: after.name,
+    tableAccess: after.holder.tableAccess,
+    tenantScope: after.holder.tenantScope,
+    guardrails: after.holder.guardrails,
+    tableAccessDiff: after.holder.tableAccess
+      ? diffTableAccess(prev?.tableAccess, after.holder.tableAccess)
+      : null,
+    tenantScopeDiff: diffTenantScope(prev?.tenantScope ?? EMPTY_TENANT_SCOPE, after.holder.tenantScope),
+    guardrailsDiff: diffGuardrails(prev?.guardrails ?? DEFAULT_GUARDRAILS, after.holder.guardrails),
+    approvals: after.holder.approvals,
+    approvalsDiff: diffApprovals(prev?.approvals ?? DEFAULT_APPROVALS, after.holder.approvals),
+    columnMasks: nextMasks,
+    columnMasksDiff: diffColumnMasks(prev?.columnMasks ?? null, nextMasks),
+    kind,
+  };
+}
+
+function snapshotPolicy(entries: Map<string, EngineEntry>, cfg: Config): PolicySnapshotEntry[] {
+  return [...entries.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((e) => {
+      const ts = e.holder.tenantScope;
+      const masks = nonEmptyMasks(e.columnMasks);
+      const approvals = e.holder.approvals;
+      return {
+        name: e.name,
+        status: e.configured ? "ready" : "unconfigured",
+        dsn_env: e.dsnEnv,
+        table_access_default: e.holder.tableAccess ? e.holder.tableAccess.default : null,
+        table_access_tables: e.holder.tableAccess ? Object.keys(e.holder.tableAccess.tables).length : 0,
+        guardrails: {
+          block_unqualified_dml: e.holder.guardrails.blockUnqualifiedDml,
+          block_ddl: e.holder.guardrails.blockDdl,
+          block_dml: e.holder.guardrails.blockDml,
+        },
+        approvals: approvalsWire(approvals),
+        tenant_scope: tenantScopeIsActive(ts)
+          ? { column: ts.defaultColumn, overrides: { ...ts.overrides }, exempt: [...ts.exempt] }
+          : null,
+        column_masks: masks ? (JSON.parse(JSON.stringify(masks)) as ColumnMasksSpec) : null,
+        // The mode actually in force: only meaningful with masks, and the
+        // per-DB key wins over the engine-wide default (buildMaskingConfig).
+        mask_source_rewrite: masks ? (e.maskSourceRewrite ?? cfg.maskSourceRewrite) : false,
+      };
+    });
 }
 
 // Per-DB summary the swap path hands to finalizeReload. Carries the
@@ -832,6 +1264,12 @@ interface ReloadSummary {
   tableAccessDiff: TableAccessDiff | null;
   tenantScopeDiff: TenantScopeDiff | null;
   guardrailsDiff: GuardrailsDiff | null;
+  // Set by the gateway replace path only. The patch path never carried
+  // approvals or masks in its reload row, and its rows stay byte-identical.
+  approvals?: ApprovalsSpec;
+  approvalsDiff?: ApprovalsDiff | null;
+  columnMasks?: ColumnMasksSpec | null;
+  columnMasksDiff?: ColumnMasksDiff | null;
   // What kind of change happened to this DB. "added" + "rebuilt" both
   // count as DB-level changes regardless of section diffs (the DB
   // itself appearing or having its pool destroyed IS the event), so
@@ -881,6 +1319,21 @@ interface GuardrailsDiff {
   block_dml?: { from: boolean; to: boolean };
 }
 
+// approvals diff: each write class reports a flip.
+interface ApprovalsDiff {
+  row_changes?: { from: boolean; to: boolean };
+  whole_table_writes?: { from: boolean; to: boolean };
+  schema_changes?: { from: boolean; to: boolean };
+}
+
+// column_masks diff, keyed "schema.table.column". Rules are listed for adds and
+// changes so the row alone says what a column is now masked with.
+interface ColumnMasksDiff {
+  added?: Record<string, MaskRule>;
+  removed?: string[];
+  changed?: Record<string, { from: MaskRule; to: MaskRule }>;
+}
+
 // Write the POLICY_RELOADED audit row. Best-effort — the swap already
 // applied; an audit failure is logged but doesn't roll back.
 async function finalizeReload(
@@ -888,6 +1341,7 @@ async function finalizeReload(
   audit: SqliteAuditWriter,
   source: string,
   summaries: ReloadSummary[],
+  meta?: { bundleVersion: number },
 ): Promise<{ applied_at: string }> {
   const appliedAt = new Date().toISOString();
   // The "databases_changed" field on every row in this batch — the names
@@ -913,6 +1367,8 @@ async function finalizeReload(
     if (diffHasChange(s.tableAccessDiff)) sectionsChanged.push("table_access");
     if (diffHasChange(s.tenantScopeDiff)) sectionsChanged.push("tenant_scope");
     if (diffHasChange(s.guardrailsDiff)) sectionsChanged.push("guardrails");
+    if (diffHasChange(s.approvalsDiff ?? null)) sectionsChanged.push("approvals");
+    if (diffHasChange(s.columnMasksDiff ?? null)) sectionsChanged.push("column_masks");
 
     const event: AuditEvent = {
       id: ulid(),
@@ -969,7 +1425,20 @@ async function finalizeReload(
           table_access: s.tableAccessDiff,
           tenant_scope: s.tenantScopeDiff,
           guardrails: s.guardrailsDiff,
+          ...(s.approvals !== undefined
+            ? { approvals: s.approvalsDiff ?? null, column_masks: s.columnMasksDiff ?? null }
+            : {}),
         },
+        // Gateway bundles: which signed version this row applied, plus the two
+        // sections the patch path never reported, so a bundle row states the
+        // whole enforced policy.
+        ...(meta ? { bundle_version: meta.bundleVersion } : {}),
+        ...(s.approvals !== undefined
+          ? {
+              approvals: approvalsWire(s.approvals),
+              column_masks: s.columnMasks ?? null,
+            }
+          : {}),
       },
     };
     try {
@@ -991,8 +1460,10 @@ async function finalizeReload(
           : null,
       })),
       appliedAt,
+      source,
+      ...(meta ? { bundleVersion: meta.bundleVersion } : {}),
     },
-    "policy reloaded via admin endpoint",
+    source === "bundle" ? "policy bundle applied to engines" : "policy reloaded via admin endpoint",
   );
 
   return { applied_at: appliedAt };
@@ -1010,12 +1481,14 @@ function summaryHasChange(s: ReloadSummary): boolean {
   return (
     diffHasChange(s.tableAccessDiff) ||
     diffHasChange(s.tenantScopeDiff) ||
-    diffHasChange(s.guardrailsDiff)
+    diffHasChange(s.guardrailsDiff) ||
+    diffHasChange(s.approvalsDiff ?? null) ||
+    diffHasChange(s.columnMasksDiff ?? null)
   );
 }
 
 function diffHasChange(
-  diff: TableAccessDiff | TenantScopeDiff | GuardrailsDiff | null,
+  diff: TableAccessDiff | TenantScopeDiff | GuardrailsDiff | ApprovalsDiff | ColumnMasksDiff | null,
 ): boolean {
   if (diff === null) return false;
   for (const key of Object.keys(diff)) {
@@ -1120,6 +1593,56 @@ function diffGuardrails(
   if (prev.blockDml !== next.blockDml) {
     diff.block_dml = { from: prev.blockDml, to: next.blockDml };
   }
+  return diff;
+}
+
+// The snake_case shape approvals take in audit rows and the heartbeat. `?? false`
+// because a holder built from a document with no approvals block may carry an
+// empty object.
+function approvalsWire(a: ApprovalsSpec): { row_changes: boolean; whole_table_writes: boolean; schema_changes: boolean } {
+  return {
+    row_changes: a.rowChanges ?? false,
+    whole_table_writes: a.wholeTableWrites ?? false,
+    schema_changes: a.schemaChanges ?? false,
+  };
+}
+
+function diffApprovals(prev: ApprovalsSpec, next: ApprovalsSpec): ApprovalsDiff {
+  const diff: ApprovalsDiff = {};
+  const from = approvalsWire(prev);
+  const to = approvalsWire(next);
+  for (const k of Object.keys(from) as Array<keyof ApprovalsDiff>) {
+    if (from[k] !== to[k]) diff[k] = { from: from[k], to: to[k] };
+  }
+  return diff;
+}
+
+function diffColumnMasks(
+  prev: ColumnMasksSpec | null,
+  next: ColumnMasksSpec | null,
+): ColumnMasksDiff {
+  const flat = (m: ColumnMasksSpec | null): Map<string, MaskRule> => {
+    const out = new Map<string, MaskRule>();
+    for (const [table, cols] of Object.entries(m ?? {})) {
+      for (const [col, rule] of Object.entries(cols)) out.set(`${table}.${col}`, rule);
+    }
+    return out;
+  };
+  const a = flat(prev);
+  const b = flat(next);
+  const added: Record<string, MaskRule> = {};
+  const changed: Record<string, { from: MaskRule; to: MaskRule }> = {};
+  const removed: string[] = [];
+  for (const [k, rule] of b) {
+    const was = a.get(k);
+    if (was === undefined) added[k] = rule;
+    else if (!isDeepStrictEqual(was, rule)) changed[k] = { from: was, to: rule };
+  }
+  for (const k of a.keys()) if (!b.has(k)) removed.push(k);
+  const diff: ColumnMasksDiff = {};
+  if (Object.keys(added).length > 0) diff.added = added;
+  if (removed.length > 0) diff.removed = removed.sort();
+  if (Object.keys(changed).length > 0) diff.changed = changed;
   return diff;
 }
 

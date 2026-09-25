@@ -33,8 +33,16 @@ const MAX_AUDIT_LIMIT = 1000;
 export interface HttpHandle {
   url: string;
   port: number;
+  /** The address the listener actually bound, as reported by the socket —
+   *  what a caller checks when WHERE it listens is a security property. */
+  address: string;
   close(): Promise<void>;
 }
+
+/** GET /health and /ready. Default for both: 200 {ok:true}. Gateway mode
+ *  reports its state on both, and /ready is 503 until it holds an enforceable
+ *  policy. */
+export type HealthCheck = () => { status: number; body: unknown };
 
 // Per-session context the transport captures from the initialize request
 // and hands to the server factory. Today this carries the cloud-issued
@@ -90,12 +98,34 @@ export async function startHttp(
     host?: string;
     indexer?: IndexerRoutes;
     admin?: AdminRoutes;
+    health?: HealthCheck;
+    /** GET /ready. Default: same as the default /health. Gateway mode answers
+     *  503 until it holds an enforceable policy (readiness), while /health
+     *  stays 200 (liveness). */
+    ready?: HealthCheck;
+    /** Read X-Midplane-Token-Id / X-Midplane-Scope at initialize (default
+     *  true). Gateway mode turns this off: on an unauthenticated transport a
+     *  token id is forgeable attribution and a scope header is only ever a
+     *  narrowing the caller chose, so neither is identity. */
+    identityHeaders?: boolean;
+    /** Refuse (403) any request whose Host, or Origin when present, isn't a
+     *  loopback name (default false). Binding to loopback keeps other hosts
+     *  out; this keeps out a web page on THIS host whose DNS was rebound to
+     *  127.0.0.1 — the browser then sends the page's own name as Host. The MCP
+     *  transport spec requires Origin validation for exactly this reason. */
+    loopbackRequestsOnly?: boolean;
   },
 ): Promise<HttpHandle> {
   const sessions = new Map<string, SessionEntry>();
+  const routeOpts: RouteOptions = {
+    health: opts.health,
+    ready: opts.ready,
+    identityHeaders: opts.identityHeaders ?? true,
+    loopbackRequestsOnly: opts.loopbackRequestsOnly ?? false,
+  };
 
   const httpServer = createServer((req, res) =>
-    handle(req, res, serverFactory, sessions, opts.indexer, opts.admin).catch((err) => {
+    handle(req, res, serverFactory, sessions, opts.indexer, opts.admin, routeOpts).catch((err) => {
       logger.error({ err }, "http handler threw");
       if (!res.headersSent) {
         res.statusCode = 500;
@@ -120,12 +150,14 @@ export async function startHttp(
 
   const addr = httpServer.address();
   const boundPort = addr && typeof addr === "object" ? addr.port : opts.port;
+  const boundAddress = addr && typeof addr === "object" ? addr.address : String(addr);
   const url = `http://${hostForUrl(opts.host ?? "0.0.0.0")}:${boundPort}/mcp`;
   logger.info({ port: boundPort, url }, "http transport listening");
 
   return {
     url,
     port: boundPort,
+    address: boundAddress,
     async close() {
       // Snapshot — transport.close() triggers onclose which mutates the map.
       const entries = [...sessions.values()];
@@ -140,6 +172,13 @@ export async function startHttp(
   };
 }
 
+interface RouteOptions {
+  health: HealthCheck | undefined;
+  ready: HealthCheck | undefined;
+  identityHeaders: boolean;
+  loopbackRequestsOnly: boolean;
+}
+
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
@@ -147,13 +186,19 @@ async function handle(
   sessions: Map<string, SessionEntry>,
   indexer: IndexerRoutes | undefined,
   admin: AdminRoutes | undefined,
+  routeOpts: RouteOptions,
 ): Promise<void> {
   const url = req.url ?? "/";
 
-  if (req.method === "GET" && url === "/health") {
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ ok: true }));
+  if (routeOpts.loopbackRequestsOnly && !isLoopbackRequest(req)) {
+    writeJson(res, 403, { error: "forbidden", reason: "only loopback Host and Origin headers are accepted" });
+    return;
+  }
+
+  if (req.method === "GET" && (url === "/health" || url === "/ready")) {
+    const check = url === "/health" ? routeOpts.health : routeOpts.ready;
+    const h = check ? check() : { status: 200, body: { ok: true } };
+    writeJson(res, h.status, h.body);
     return;
   }
 
@@ -217,12 +262,14 @@ async function handle(
     // means the initialize request didn't carry the header (or carried
     // a malformed one); audit rows from this session will have
     // mcp_token_id IS NULL for the session's lifetime.
-    const sessionContext: SessionContext = {
-      mcp_token_id: parseMcpTokenIdHeader(req.headers),
-      // Frozen with the session, same as the token id: the per-agent DB scope
-      // can't change mid-session by re-sending the header on a later request.
-      scope: parseMcpScopeHeader(req.headers),
-    };
+    const sessionContext: SessionContext = routeOpts.identityHeaders
+      ? {
+          mcp_token_id: parseMcpTokenIdHeader(req.headers),
+          // Frozen with the session, same as the token id: the per-agent DB scope
+          // can't change mid-session by re-sending the header on a later request.
+          scope: parseMcpScopeHeader(req.headers),
+        }
+      : { mcp_token_id: null, scope: null };
     const server = serverFactory(sessionContext);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
@@ -440,6 +487,32 @@ async function readText(req: IncomingMessage): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+// Host (and Origin, when a browser sent one) must name this machine. "localhost"
+// is fine HERE, unlike for the bind address: a rebinding attack arrives with the
+// attacker's own name in Host, never with localhost.
+function isLoopbackRequest(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (typeof host !== "string" || !isLoopbackHostname(hostnameOf(`http://${host}`))) return false;
+  const origin = req.headers.origin;
+  return origin === undefined || isLoopbackHostname(hostnameOf(origin));
+}
+
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(hostname: string | null): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    (hostname !== null && /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname))
+  );
 }
 
 // Bracket an IPv6 literal for use in a URL authority: `::` → `[::]`, so the

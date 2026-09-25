@@ -249,7 +249,10 @@ const ColumnMasksSchema = z.record(
 // future enforcement section can't be silently stripped by this engine. (The
 // current column_masks rollout's old-engine skew is handled by engine-first
 // sequencing E3 — an already-shipped old engine can't be taught to refuse.)
-const ENGINE_FEATURES = new Set<string>([
+// Exported for the gateway's enrollment and heartbeat, which report it as
+// `policy_features` so the control plane can warn before publishing a bundle a
+// gateway can't enforce.
+export const ENGINE_FEATURES: ReadonlySet<string> = new Set<string>([
   "column_masks",
   "mask_source_rewrite",
   "write_approvals",

@@ -106,12 +106,15 @@ export const FailedPayload = z.object({
 });
 export type FailedPayload = z.infer<typeof FailedPayload>;
 
-// POLICY_RELOADED — the in-memory policy was hot-swapped via the admin endpoint.
+// POLICY_RELOADED — the in-memory policy changed: hot-swapped via the admin
+// endpoint (source "admin_endpoint"), applied from a signed gateway bundle
+// ("bundle", which also carries bundle_version, approvals and column_masks), or
+// a database stopped being served ("bundle"/"halt" with removed: true).
 // Not tied to a query; query_id is a synthetic ULID for groupability. The
 // payload captures what changed so operators can confirm the swap landed.
 const TableAccessLevelEnum = z.enum(["deny", "read", "read_write"]);
 export const PolicyReloadedPayload = z.object({
-  source: z.string(),                                      // "admin_endpoint" today; reserves room for "fs_watch" etc.
+  source: z.string(),                                      // "admin_endpoint" | "bundle" | "halt"; reserves room for "fs_watch" etc.
   table_access: z
     .object({
       default: TableAccessLevelEnum,

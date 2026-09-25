@@ -66,7 +66,15 @@ function liftResult(result: pg.QueryResult): ExecutionResult {
 export interface PgPoolExecutorOptions {
   databaseUrl: string;
   max?: number;
+  /** How long a caller waits for a pooled connection (a free one, or a new
+   *  one being opened) before erroring. Default 30 s. Without a bound, a
+   *  caller queued behind a saturated pool waits forever — and once the pool
+   *  is being closed (a policy reload that drops or re-points the database,
+   *  a gateway halt), pg-pool never serves its queue again. */
+  connectionTimeoutMillis?: number;
 }
+
+export const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 
 // Schemas pinned on every transaction. Order matters: `public` first so
 // bare table refs resolve there; `pg_catalog` after so built-ins remain
@@ -136,6 +144,7 @@ export class PgPoolExecutor implements Executor {
     this.pool = new pg.Pool({
       connectionString: libpqCompatDsn(opts.databaseUrl),
       max: opts.max ?? 10,
+      connectionTimeoutMillis: opts.connectionTimeoutMillis ?? DEFAULT_CONNECTION_TIMEOUT_MS,
     });
   }
 

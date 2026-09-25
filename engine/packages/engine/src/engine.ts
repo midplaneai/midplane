@@ -33,6 +33,10 @@ import { AuditUnavailableError, ApprovalPendingError } from "./errors.ts";
 import { NO_APPROVALS, REFUSING_APPROVAL_GATE } from "./approvals.ts";
 import type { ApprovalConfig, ApprovalGate } from "./approvals.ts";
 
+// resolveApproval's "a human approved it" — distinct from "no approval was
+// needed", because only the former has to survive a policy re-check.
+const APPROVED: unique symbol = Symbol("approved");
+
 export type EngineContext = {
   tenant_id: string;
   // MCP `clientInfo.name`/`version`, captured at MCP `initialize` and
@@ -186,6 +190,8 @@ export class Engine {
   private readonly dialect: Dialect;
   private readonly now: () => number;
   private readonly idGen: () => string;
+  // Set by retire(): the refusal a write still held at the approval gate gets.
+  private retiredMessage: string | null = null;
 
   constructor(opts: EngineOptions) {
     this.rules = opts.policy.rules;
@@ -206,6 +212,17 @@ export class Engine {
     this.dialect = opts.dialect ?? postgresDialect;
     this.now = opts.now ?? Date.now;
     this.idGen = opts.idGen ?? ulid;
+  }
+
+  /** This Engine has been replaced for its database: a newer Engine took over
+   *  (new masks or a new connection), or the database stopped being served. A
+   *  write this Engine still holds at the approval gate is refused once
+   *  approved, with `message`, rather than run here: this Engine's masks and
+   *  connection are no longer the database's, and re-checking its policy can't
+   *  fix that. The agent's re-run reaches the live Engine. Statements already
+   *  executing finish; nothing else about this Engine changes. */
+  retire(message: string): void {
+    this.retiredMessage = message;
   }
 
   async handle(input: {
@@ -253,7 +270,7 @@ export class Engine {
     //    never disappear the query from audit; Engine.decide() reuses this
     //    same guarded evaluation so a dry-run can't disagree with the live
     //    decision.
-    const evalResult = this.evaluateGuarded(parseResult, input.ctx);
+    let evalResult = this.evaluateGuarded(parseResult, input.ctx);
 
     // ── 3b. approvals (T3 amendment) — ask a human about a write the policy
     //    already permits. Runs ONLY on ALLOW, so approvals sit strictly under
@@ -269,7 +286,23 @@ export class Engine {
     //
     //    Costs nothing when unconfigured: no gate call, no allocation, and for
     //    a read the boolean short-circuits before the array scan.
-    const approval = await this.resolveApproval(evalResult, input, intent, queryId);
+    const resolution = await this.resolveApproval(evalResult, input, intent, queryId);
+
+    // The gate can hold this attempt for tens of seconds while a human rules.
+    // If the policy was tightened while it waited — a hot reload, a gateway
+    // bundle — the policy in force NOW decides: re-evaluate, and a denial
+    // replaces the ALLOW the human was asked about. An approval covers a
+    // statement the policy permits; it never outlives that permission. And if
+    // this Engine was replaced meanwhile, the write doesn't run here at all.
+    let approval = resolution === APPROVED ? null : resolution;
+    if (resolution === APPROVED) {
+      if (this.retiredMessage !== null) {
+        approval = { rule: "policy_replaced", message: this.retiredMessage };
+      } else {
+        const current = this.evaluateGuarded(parseResult, input.ctx);
+        if (current.verdict.decision === "DENY") evalResult = current;
+      }
+    }
 
     // ── 4. audit DECIDED — failure here aborts the pipeline.
     const decidedId = this.idGen();
@@ -680,9 +713,10 @@ export class Engine {
 
   // Ask a human about an ALLOWed write, when the policy says to.
   //
-  // Returns null when the statement may proceed — approvals off, not a write,
-  // policy already denied it, or a human approved it. Returns a refusal for the
-  // DECIDED row when a human said no or the window closed.
+  // Returns null when the statement may proceed without asking — approvals
+  // off, not a write, or the policy already denied it — and APPROVED when a
+  // human approved it (the caller re-checks the policy then). Returns a refusal
+  // for the DECIDED row when a human said no or the window closed.
   //
   // Throws (never returns) for the two states that are NOT decisions:
   // ApprovalUnavailableError when the gate can't be reached, ApprovalPendingError
@@ -693,7 +727,7 @@ export class Engine {
     input: { sql: string; ctx: EngineContext },
     intent: string,
     queryId: string,
-  ): Promise<{ rule: string; message: string } | null> {
+  ): Promise<{ rule: string; message: string } | typeof APPROVED | null> {
     // Order matters for cost: the config check is three field reads, so a
     // project without approvals never touches the classification.
     const cfg = this.approvalConfig();
@@ -729,7 +763,7 @@ export class Engine {
 
     switch (outcome.status) {
       case "approved":
-        return null;
+        return APPROVED;
       case "denied":
         return {
           rule: "approval_denied",

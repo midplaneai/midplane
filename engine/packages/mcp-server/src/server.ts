@@ -54,6 +54,7 @@ import {
 } from "./tools/describe-table.ts";
 import { handleListDatabases } from "./tools/list-databases.ts";
 import { ceilingFor, scopedRegistry, type SessionScope } from "./scope.ts";
+import { logger } from "./logger.ts";
 
 export interface BuildServerOptions {
   handle: EngineHandle;
@@ -77,6 +78,28 @@ export interface BuildServerOptions {
     // access (an empty map = scope active with zero DBs → deny-all, fail-closed).
     scope?: SessionScope | null;
   };
+  /** Gateway mode: whether this process may serve at all right now. Checked
+   *  before EVERY tool call; while it says no (no policy received yet, or the
+   *  gateway halted) every call is refused with the reason and nothing reaches
+   *  the engine or the database. Absent everywhere else. */
+  serving?: ServingGuard;
+}
+
+export type Availability = { ok: true } | { ok: false; reason: string };
+
+export interface ToolRefusal {
+  tool: string;
+  database: string | null;
+  intent: string | null;
+  agentName: string | null;
+  agentVersion: string | null;
+  reason: string;
+}
+
+export interface ServingGuard {
+  check(): Availability;
+  /** Every refusal is a decision, and every decision gets a record. */
+  onRefused?(refusal: ToolRefusal): void | Promise<void>;
 }
 
 const NOOP_TELEMETRY: TelemetryHandle = {
@@ -124,6 +147,8 @@ export function buildServer(opts: BuildServerOptions): McpServer {
     };
   };
 
+  if (opts.serving) guardToolCalls(server, opts.serving, agentInfo);
+
   const ctxFor = (dbName: string): EngineContext => {
     const entry = registry.get(dbName);
     const { name, version } = agentInfo();
@@ -147,6 +172,14 @@ export function buildServer(opts: BuildServerOptions): McpServer {
   // that denies cleanly instead of throwing at construction.
   if (scope && registry.count() === 0) {
     registerEmptyScopeSurface(server);
+    return server;
+  }
+
+  // Gateway with no databases yet: the session started before the first policy
+  // arrived (or while halted). Same four tools, all refusing — the guard answers
+  // while the gateway isn't serving, and the handlers below answer once it is.
+  if (opts.serving && registry.count() === 0) {
+    registerAwaitingPolicySurface(server);
     return server;
   }
 
@@ -493,6 +526,80 @@ function toStatusWire(s: {
         next: "No such request for this agent. It may belong to a different agent, or never existed.",
       };
   }
+}
+
+// Wrap registerTool so every tool this server registers — on every branch below,
+// including check_approval — runs the gateway's serving check first. One seam
+// instead of a check per handler, so a new tool can't be added without it.
+function guardToolCalls(
+  server: McpServer,
+  guard: ServingGuard,
+  agentInfo: () => { name: string | null; version: string | null },
+): void {
+  // The SDK's registerTool is heavily overloaded; the wrapper only forwards.
+  const register = server.registerTool.bind(server) as unknown as (
+    name: string,
+    config: unknown,
+    handler: (...args: unknown[]) => unknown,
+  ) => unknown;
+  (server as unknown as { registerTool: typeof register }).registerTool = (name, config, handler) =>
+    register(name, config, async (...args: unknown[]) => {
+      const availability = guard.check();
+      if (availability.ok) return handler(...args);
+      const input = (args[0] ?? {}) as Record<string, unknown>;
+      const agent = agentInfo();
+      try {
+        await guard.onRefused?.({
+          tool: name,
+          database: typeof input.database === "string" ? input.database : null,
+          intent: typeof input.intent === "string" ? input.intent : null,
+          agentName: agent.name,
+          agentVersion: agent.version,
+          reason: availability.reason,
+        });
+      } catch (err) {
+        // The refusal stands whether or not its record could be written — but a
+        // missing record is an operator problem, so say so.
+        logger.error({ err, tool: name }, "refusal applied but its audit write failed");
+      }
+      return gatewayStateResult(availability.reason);
+    });
+}
+
+function gatewayStateResult(reason: string) {
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({ allowed: false, policy_rule: "gateway_state", reason }),
+      },
+    ],
+  };
+}
+
+// Reached only after the guard says the gateway IS serving — i.e. the policy
+// arrived after this session was set up, so its tool list predates the
+// databases. Reconnecting rebuilds the surface.
+function registerAwaitingPolicySurface(server: McpServer): void {
+  const reconnect = () =>
+    gatewayStateResult(
+      "This gateway received its policy after this session started. Reconnect the MCP client to see the databases.",
+    );
+  const description =
+    "This gateway was not serving when this session started (no policy from Midplane Cloud yet, or halted). Every call is refused; reconnect once the gateway is serving.";
+  server.registerTool("query", { title: "Run a SQL query", description, inputSchema: QueryInputSchema }, async () => reconnect());
+  server.registerTool("list_tables", { title: "List tables", description, inputSchema: ListTablesInputSchema }, async () => reconnect());
+  server.registerTool(
+    "describe_table",
+    { title: "Describe a table", description, inputSchema: DescribeTableInputSchema },
+    async () => reconnect(),
+  );
+  server.registerTool(
+    "list_databases",
+    { title: "List databases", description, inputSchema: {} },
+    async () => reconnect(),
+  );
 }
 
 // Tool surface for an active-but-empty scope (a malformed/empty X-Midplane-Scope
