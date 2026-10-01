@@ -12,7 +12,8 @@ publishes that same tarball:
   public repository;
 - the image `ghcr.io/midplaneai/midplane:X.Y.Z` (amd64 and arm64), with an
   SBOM and build provenance attached, signed keyless with cosign by the same
-  workflow's identity.
+  workflow's identity. `:latest` moves to each release; deploy a version tag
+  or, better, the digest.
 
 Versions stay below 1.0 until the gateway has been used and tested more
 widely; v0.21.0 is the first of this gateway (earlier `midplane` versions on

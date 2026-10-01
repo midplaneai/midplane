@@ -9,9 +9,10 @@ name: release
 #     smoke test on that very tarball and on an image built from it;
 #   - publish (the `release` environment): publish that tarball to npm with
 #     provenance through trusted publishing (GitHub's OIDC token, no npm
-#     token), push the image ghcr.io/midplaneai/midplane:X.Y.Z for amd64 and
-#     arm64 built from it, with an SBOM and build provenance, and sign it
-#     keyless with cosign. This job installs and runs no dependencies.
+#     token), push the image ghcr.io/midplaneai/midplane:X.Y.Z (and :latest)
+#     for amd64 and arm64 built from it, with an SBOM and build provenance,
+#     and sign it keyless with cosign. This job installs and runs no
+#     dependencies.
 #
 # How to verify both: docs/releases.md. Actions are pinned by commit.
 on:
@@ -130,7 +131,10 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           build-args: TARBALL=image/midplane-${{ env.VERSION }}.tgz
-          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          # :latest moves with each release; the version tag never does.
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:latest
           push: true
           sbom: true
           provenance: mode=max

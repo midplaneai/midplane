@@ -13,6 +13,11 @@
 # node:24-slim, pinned by digest; Node 24.19 (the gateway needs 24.16+).
 FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 
+# The source label links the image to its repository on GHCR.
+LABEL org.opencontainers.image.source="https://github.com/midplaneai/midplane" \
+  org.opencontainers.image.description="A gateway between AI agents and your Postgres databases" \
+  org.opencontainers.image.licenses="MIT"
+
 ARG TARBALL
 COPY ${TARBALL} /tmp/midplane.tgz
 # The tarball's npm-shrinkwrap.json pins every dependency to what the
