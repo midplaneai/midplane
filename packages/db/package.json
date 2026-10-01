@@ -22,7 +22,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "drizzle-orm": "^0.38.0",
+    "drizzle-orm": "^0.45.3",
     "postgres": "^3.4.5",
     "ulid": "^2.3.0"
   },
