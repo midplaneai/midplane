@@ -80,6 +80,13 @@ jobs:
           docker build --build-arg "TARBALL=image/midplane-$VERSION.tgz" -t midplane:release .
           node apps/gateway/scripts/package-smoke.ts --tarball "image/midplane-$VERSION.tgz" --image midplane:release
 
+      # The publish job's command, without publishing: npm must read the
+      # argument as this file and accept the package.
+      - name: npm takes the tarball as the publish job will give it
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: npm publish "./image/midplane-$VERSION.tgz" --dry-run --access public
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tarball
@@ -114,7 +121,8 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Publish the tested tarball to npm, with provenance
-        run: npm publish "image/midplane-$VERSION.tgz" --provenance --access public
+        # "./": without it npm reads "image/midplane-…" as a GitHub repository.
+        run: npm publish "./image/midplane-$VERSION.tgz" --provenance --access public
 
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
