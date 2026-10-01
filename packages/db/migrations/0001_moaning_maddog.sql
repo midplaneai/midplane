@@ -1,1 +1,0 @@
-ALTER TABLE "project_databases" ADD COLUMN "column_masks" jsonb DEFAULT '{}'::jsonb NOT NULL;

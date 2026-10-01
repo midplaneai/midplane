@@ -1,0 +1,42 @@
+# Midplane in local mode: the policy lives in this file and tokens come from
+# `midplane token`, with no Midplane Cloud. Secrets are named, never inline:
+# the DSN and the mask salt come from the environment.
+listen:
+  host: 127.0.0.1
+  port: 7433
+audit:
+  file: midplane-audit.db
+mask_salt:
+  env: MIDPLANE_MASK_SALT
+auth:
+  issuer: midplane-quickstart
+  public_key_file: midplane-verify-key.json
+databases:
+  shop:
+    dsn:
+      env: SHOP_DSN
+    policy:
+      table_access:
+        # Everything else is denied.
+        tables:
+          public.customers: read
+          public.support_tickets: read_write
+          public.api_keys: read
+      writes:
+        # Row changes wait for a person; local mode can't approve, so they
+        # are refused with a pointer to linking the gateway.
+        row_changes: hold
+      masks:
+        public.customers:
+          id: none
+          name: none
+          email: consistent-hash
+          phone: { t: partial, keepEnd: 4 }
+          plan: none
+          created_at: { t: generalize, granularity: month }
+      labels:
+        # Anyone can write a ticket's body: reading it taints the agent.
+        untrusted_columns:
+          public.support_tickets: [body]
+        # A tainted agent can't read these at all.
+        secret_tables: [public.api_keys]

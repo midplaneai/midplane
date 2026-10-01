@@ -1,0 +1,774 @@
+{
+  "description": "Masking, functions and covert channels: with any mask on the database, every function and operator must be a vetted builtin. Channels that read data around the wrap (dynamic SQL, the salt setting, files, whole-row and json/xml serialization, set-returning functions, user code) deny.",
+  "catalog": "app",
+  "policies": {
+    "masked": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      }
+    },
+    "masked_ddl": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "masked_hold": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      },
+      "writes": {
+        "row_changes": "hold"
+      }
+    },
+    "unmasked": {
+      "table_access": {
+        "default": "read_write"
+      }
+    }
+  },
+  "defaults": {
+    "policy": "masked"
+  },
+  "cases": [
+    {
+      "name": "aggregates, arithmetic and comparison are mask-safe",
+      "sql": "SELECT count(*), sum(salary), avg(salary) FROM users WHERE org_id + 1 > 5 GROUP BY name",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "FROM public.users ) AS users"
+        ]
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: aggregates + arithmetic + comparison pass, and report the names used"
+    },
+    {
+      "name": "a statement with no functions or operators",
+      "sql": "SELECT email FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: a query with no functions or operators passes"
+    },
+    {
+      "sql": "SELECT round(avg(salary), 2), stddev(salary), corr(id, org_id), upper(name), regexp_replace(name, 'a', 'b'), string_agg(name, ','), date_bin('1 hour', created_at, created_at), rank() OVER (ORDER BY salary), ntile(4) OVER (ORDER BY salary) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users"]
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: expanded analytics functions pass (math / string / date / stat / window)"
+    },
+    {
+      "sql": "SELECT name FROM users WHERE name ~ '^A' AND (org_id & 1) = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users"]
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: regex + bitwise operators pass"
+    },
+    {
+      "name": "json built from explicit arguments serializes the masked arguments",
+      "sql": "SELECT json_build_object('id', id, 'cc', ssn), jsonb_build_array(name, salary) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "FROM public.users ) AS users"
+        ]
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: json CONSTRUCTION from explicit scalar args passes (B6) — the arg is masked by the wrap"
+    },
+    {
+      "sql": "SELECT json_build_object('id', id, 'cc', ssn) AS j FROM users WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users WHERE id = 1"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: json_build_object over a masked column serializes the MASKED value (B6)"
+    },
+    {
+      "name": "bare, pg_catalog-qualified and upper-case spellings of a mask-safe builtin",
+      "sql": "SELECT lower(email), pg_catalog.upper(ssn), LENGTH(phone) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users"]
+      }
+    },
+    {
+      "sql": "SELECT md5(ssn), format('%s', email), concat_ws(',', email, phone) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users"]
+      }
+    },
+    {
+      "name": "SIMILAR TO and AT TIME ZONE desugar to mask-safe functions",
+      "sql": "SELECT id FROM users WHERE email SIMILAR TO 'a%' AND created_at AT TIME ZONE 'UTC' > now()",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users"]
+      }
+    },
+    {
+      "name": "a user-defined function could read the table without the wrap",
+      "sql": "SELECT get_ssn(id) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT public.get_ssn(id) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "schema-qualified"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies schema-qualified UDF"
+    },
+    {
+      "name": "with any mask on the database, the list gates every statement, masked table or not",
+      "sql": "SELECT get_ssn(id) FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "without masks a user function runs",
+      "sql": "SELECT get_ssn(id) FROM orders",
+      "policy": "unmasked",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT get_ssn(id) FROM orders"
+      }
+    },
+    {
+      "sql": "SELECT pg_sleep(10)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies pg_sleep — DoS"
+    },
+    {
+      "name": "a timing oracle",
+      "sql": "SELECT id FROM users WHERE CASE WHEN ssn = 'x' THEN pg_sleep(1) IS NULL ELSE true END",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT generate_series(1, 100)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies generate_series — set-returning"
+    },
+    {
+      "name": "a set-returning function in FROM",
+      "sql": "SELECT * FROM generate_series(1, 3)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT unnest(tags) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT nextval('s')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies nextval — dereferences a sequence"
+    },
+    {
+      "sql": "SELECT pg_relation_size('users')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies pg_relation_size — reads the named object"
+    },
+    {
+      "sql": "SELECT hashtext(email) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT to_json(email) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT jsonb_agg(ssn) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT json_object_agg(id, email) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT array_to_json(array_agg(email)) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a cast to a type outside pg_catalog can run a user function (a cast function or a domain CHECK)",
+      "sql": "SELECT ssn::public.leaky FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a user-defined operator",
+      "sql": "SELECT id FROM users WHERE email @@@ 'x'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT 1 OPERATOR(public.=) 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: a schema-qualified operator is denied"
+    },
+    {
+      "name": "OPERATOR(pg_catalog.=) is the builtin",
+      "sql": "SELECT id FROM users WHERE ssn OPERATOR(pg_catalog.=) 'x'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "an operator off the list",
+      "sql": "SELECT tags @> ARRAY[1] FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "ORDER BY USING an operator off the list",
+      "sql": "SELECT id FROM users ORDER BY email USING ~<~",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users ORDER BY email USING <",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a prefix operator off the list",
+      "sql": "SELECT |/ salary FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "unary minus",
+      "sql": "SELECT -salary FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT email ^@ 'a' FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "query_to_xml runs SQL the policy can't see (the old engine denied it as column_masking)",
+      "sql": "SELECT query_to_xml('SELECT email FROM users', true, false, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/engine-source-rewrite.test.ts: covert-channel: query_to_xml is denied, never executes, and is NOT audited as EXECUTED (reviewer #3)"
+    },
+    {
+      "sql": "SELECT query_to_xml('SELECT cc FROM customers', true, false, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies query_to_xml (executes an opaque SQL string)"
+    },
+    {
+      "sql": "SELECT pg_catalog.query_to_xml('x', true, false, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies pg_catalog-qualified reflective fn"
+    },
+    {
+      "sql": "SELECT table_to_xml('users', true, false, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "sql": "SELECT cursor_to_xml('c', 1, false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "name": "reading the mask salt",
+      "sql": "SELECT current_setting('midplane.mask_salt')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/engine-source-rewrite.test.ts: current_setting (salt-read attempt) is denied and audited as a masking denial, not executed"
+    },
+    {
+      "sql": "SELECT current_setting('midplane.mask_salt')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies current_setting (would read the mask-salt GUC)"
+    },
+    {
+      "sql": "SELECT pg_catalog.current_setting('midplane.mask_salt', true)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "name": "the denylist is case-folded",
+      "sql": "SELECT \"CURRENT_SETTING\"('midplane.mask_salt')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "name": "replacing the salt with a known one before the hash is computed",
+      "sql": "SELECT set_config('midplane.mask_salt', 'known', true), ssn FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "name": "computing the token of a guessed value needs the salt",
+      "sql": "SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), '079-05-1120'), 'UTF8')), 'hex')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "sql": "SET midplane.mask_salt = 'known'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SHOW midplane.mask_salt",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "RESET midplane.mask_salt",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "name": "pg_settings is closed on a masked database: it may list the salt setting",
+      "sql": "SELECT setting FROM pg_settings WHERE name = 'midplane.mask_salt'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "pg_settings"
+      }
+    },
+    {
+      "name": "XML constructor syntax",
+      "sql": "SELECT xmlelement(name x, email) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT xmlagg(xmlparse(content email)) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT xmlforest(email, ssn) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "name": "SQL/JSON constructor syntax",
+      "sql": "SELECT JSON_OBJECT('e': email) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT JSON_ARRAYAGG(ssn) FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT json_populate_record(null::users, '{}')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies json_populate_record — rowtype/table-name deref (bypasses the wrap)"
+    },
+    {
+      "name": "a column definition list is refused before the function lists are consulted",
+      "sql": "SELECT * FROM jsonb_to_record('{}') AS x(a int)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies jsonb_to_record — untyped record from json"
+    },
+    {
+      "sql": "SELECT * FROM dblink('host=x', 'SELECT cc FROM customers') AS t(cc text)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies dblink (reads another database)"
+    },
+    {
+      "sql": "SELECT dblink('host=x', 'SELECT ssn FROM users')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "sql": "SELECT pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies off-allowlist scalar fn"
+    },
+    {
+      "name": "reading the table's heap file",
+      "sql": "SELECT pg_read_binary_file('base/16384/16385')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "sql": "SELECT lo_get(1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies lo_get — large object"
+    },
+    {
+      "sql": "SELECT lo_import('/var/lib/postgresql/data/base/16384/16385')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "sql": "COPY users TO STDOUT",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "COPY (SELECT ssn FROM users) TO STDOUT",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "EXPLAIN (ANALYZE, VERBOSE) SELECT email FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "PREPARE p AS SELECT email FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "DECLARE c CURSOR FOR SELECT ssn FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE VIEW v AS SELECT email FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE MATERIALIZED VIEW mv AS SELECT ssn FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE TEMP TABLE t AS SELECT * FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT email FROM users; SELECT 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      }
+    },
+    {
+      "sql": "SELECT email FROM users WHERE id = $1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT email FROM users FOR UPDATE",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "MERGE INTO users u USING orders o ON u.email = o.note WHEN MATCHED THEN DELETE",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    }
+  ]
+}

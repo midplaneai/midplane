@@ -1,0 +1,210 @@
+{
+  "description": "The resolve stage: every output field traces to its base columns through aliases, joins, CTEs, subqueries, set operations and views; a name that doesn't bind denies.",
+  "catalog": "app",
+  "policies": {
+    "read_all": { "table_access": { "default": "read" } }
+  },
+  "defaults": { "policy": "read_all" },
+  "cases": [
+    {
+      "sql": "SELECT id, email FROM users",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true,
+        "statement": "SELECT id, email FROM users",
+        "tables": ["public.users"],
+        "output": [
+          { "name": "id", "sources": ["public.users.id"] },
+          { "name": "email", "sources": ["public.users.email"] }
+        ]
+      }
+    },
+    {
+      "name": "aliases and a join",
+      "sql": "SELECT u.email AS contact, o.total FROM users u JOIN orders o ON o.user_id = u.id",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.users", "public.orders"],
+        "output": [
+          { "name": "contact", "sources": ["public.users.email"] },
+          { "name": "total", "sources": ["public.orders.total"] }
+        ]
+      }
+    },
+    {
+      "name": "JOIN USING merges the join column from both sides",
+      "sql": "SELECT id FROM y JOIN archive USING (id)",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          { "name": "id", "sources": ["public.y.id", "public.archive.id"] }
+        ]
+      }
+    },
+    {
+      "name": "an unqualified column present on both sides of a plain join is ambiguous",
+      "sql": "SELECT id FROM y JOIN archive ON y.n = archive.n",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved",
+        "reason_includes": "ambiguous"
+      }
+    },
+    {
+      "name": "a CTE carries its lineage",
+      "sql": "WITH big AS (SELECT user_id, total * 2 AS doubled FROM orders) SELECT doubled FROM big",
+      "expect": {
+        "verdict": "allow",
+        "output": [{ "name": "doubled", "sources": ["public.orders.total"] }]
+      }
+    },
+    {
+      "name": "a subquery in FROM with column aliases",
+      "sql": "SELECT a FROM (SELECT email FROM users) AS s(a)",
+      "expect": {
+        "verdict": "allow",
+        "output": [{ "name": "a", "sources": ["public.users.email"] }]
+      }
+    },
+    {
+      "name": "a UNION's columns take lineage from both arms",
+      "sql": "SELECT name FROM users UNION ALL SELECT title FROM posts",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "name",
+            "sources": ["public.users.name", "public.posts.title"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a scalar subquery's value flows to the output",
+      "sql": "SELECT (SELECT max(total) FROM orders o WHERE o.user_id = u.id) AS biggest FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "output": [{ "name": "biggest", "sources": ["public.orders.total"] }]
+      }
+    },
+    {
+      "name": "conditions carry no value",
+      "sql": "SELECT CASE WHEN ssn = 'x' THEN 'yes' ELSE 'no' END AS flag, EXISTS (SELECT 1 FROM orders) AS any FROM users",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          { "name": "flag", "sources": [] },
+          { "name": "any", "sources": [] }
+        ]
+      }
+    },
+    {
+      "name": "a bare relation name is its whole row",
+      "sql": "SELECT y FROM y",
+      "expect": {
+        "verdict": "allow",
+        "output": [{ "name": "y", "sources": ["public.y.id", "public.y.n"] }]
+      }
+    },
+    {
+      "name": "star expands through the catalog",
+      "sql": "SELECT * FROM y",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          { "name": "id", "sources": ["public.y.id"] },
+          { "name": "n", "sources": ["public.y.n"] }
+        ]
+      }
+    },
+    {
+      "name": "a view traces to its base columns",
+      "sql": "SELECT email FROM active_users",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.active_users"],
+        "output": [{ "name": "email", "sources": ["public.users.email"] }]
+      }
+    },
+    {
+      "name": "a view without a definition can't be traced",
+      "sql": "SELECT id FROM opaque_view",
+      "expect": { "verdict": "deny", "rule": "unresolved" }
+    },
+    {
+      "name": "information_schema views describe the catalog and need no definition",
+      "sql": "SELECT table_name FROM information_schema.tables",
+      "expect": { "verdict": "allow" }
+    },
+    {
+      "name": "recursive CTE",
+      "sql": "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT n FROM r",
+      "expect": {
+        "verdict": "allow",
+        "output": [{ "name": "n", "sources": [] }]
+      }
+    },
+    {
+      "name": "LATERAL sees earlier FROM items",
+      "sql": "SELECT s.t2 FROM orders o, LATERAL (SELECT o.total * 2 AS t2) s",
+      "expect": {
+        "verdict": "allow",
+        "output": [{ "name": "t2", "sources": ["public.orders.total"] }]
+      }
+    },
+    {
+      "name": "a non-LATERAL subquery doesn't see its siblings",
+      "sql": "SELECT 1 FROM orders o, (SELECT o.total) s",
+      "expect": { "verdict": "deny", "rule": "unresolved" }
+    },
+    {
+      "name": "a plain CTE doesn't see itself, so its own name is the real table",
+      "sql": "WITH y AS (SELECT n FROM y) SELECT n FROM y",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.y"],
+        "output": [{ "name": "n", "sources": ["public.y.n"] }]
+      }
+    },
+    {
+      "name": "ORDER BY an output name and GROUP BY a position",
+      "sql": "SELECT status AS s, count(*) FROM orders GROUP BY 1 ORDER BY s",
+      "expect": { "verdict": "allow" }
+    },
+    {
+      "sql": "SELECT nope FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved",
+        "reason_includes": "\"nope\""
+      }
+    },
+    {
+      "sql": "SELECT * FROM missing_table",
+      "expect": { "verdict": "deny", "rule": "unresolved" }
+    },
+    {
+      "name": "a qualifier naming nothing in FROM",
+      "sql": "SELECT z.id FROM users u",
+      "expect": { "verdict": "deny", "rule": "unresolved" }
+    },
+    {
+      "name": "function-call notation on a row (users.f) is not a column",
+      "sql": "SELECT u.fullname FROM users u",
+      "expect": { "verdict": "deny", "rule": "unresolved" }
+    },
+    {
+      "sql": "SELECT * FROM users WHERE id = $1",
+      "expect": { "verdict": "deny", "rule": "unsupported" }
+    },
+    {
+      "sql": "SELECT * FROM users FOR UPDATE",
+      "expect": { "verdict": "deny", "rule": "unsupported" }
+    },
+    {
+      "name": "XML constructors are not analyzed",
+      "sql": "SELECT xmlelement(name x, email) FROM users",
+      "expect": { "verdict": "deny", "rule": "unsupported" }
+    }
+  ]
+}

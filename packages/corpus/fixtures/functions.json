@@ -1,0 +1,1201 @@
+{
+  "description": "The dangerous_function rule: an always-on denylist of builtins that reach data outside their arguments (dynamic SQL and XML export, files, large objects, dblink, session settings, rowtype dereference, setval, admin). Matched on the bare name, case-folded, at any depth and in any clause, whatever the table policy; ordinary analytics, user functions, nextval and the *_to_record family stay allowed. Converted from the old engine's dangerous-function corpus plus quoting, escape and clause-position variants.",
+  "catalog": "functions",
+  "policies": {
+    "permissive": {
+      "table_access": {
+        "default": "read_write"
+      }
+    },
+    "deny_all": {
+      "table_access": {
+        "default": "deny"
+      },
+      "writes": {
+        "row_changes": "deny",
+        "schema_changes": "deny"
+      }
+    },
+    "users_read": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.users": "read"
+        }
+      }
+    },
+    "masked": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "email": "full-redact"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "policy": "permissive"
+  },
+  "cases": [
+    {
+      "sql": "SELECT query_to_xml('SELECT ssn FROM secrets', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function",
+        "reason_includes": "`query_to_xml`"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies query_to_xml runs a SQL string"
+    },
+    {
+      "sql": "SELECT query_to_xmlschema('SELECT 1', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies query_to_xmlschema"
+    },
+    {
+      "sql": "SELECT query_to_xml_and_xmlschema('SELECT 1', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies query_to_xml_and_xmlschema"
+    },
+    {
+      "sql": "SELECT table_to_xml('secrets'::regclass, false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies table_to_xml dumps a named relation"
+    },
+    {
+      "sql": "SELECT schema_to_xml('public', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies schema_to_xml dumps a schema"
+    },
+    {
+      "sql": "SELECT database_to_xml(false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies database_to_xml dumps everything"
+    },
+    {
+      "sql": "SELECT cursor_to_xml('c'::refcursor, 100, false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies cursor_to_xml"
+    },
+    {
+      "name": "dblink with a column definition list: v2 refuses the definition list before the function check",
+      "sql": "SELECT * FROM dblink('host=x', 'SELECT 1') AS t(a int)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies dblink reads another server"
+    },
+    {
+      "name": "dblink in FROM with an alias list (not a column definition list) reaches the function check",
+      "sql": "SELECT * FROM dblink('host=x', 'SELECT 1') AS t(a)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: dblink reads another server"
+    },
+    {
+      "name": "dblink in the select list",
+      "sql": "SELECT dblink('host=x', 'SELECT 1')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: dblink reads another server"
+    },
+    {
+      "sql": "SELECT dblink_connect('host=evil.example.com')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > denies dblink_connect"
+    },
+    {
+      "name": "the deny message names the bypass, not a config key",
+      "sql": "SELECT query_to_xml('SELECT ssn FROM secrets', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function",
+        "reason_includes": "reads tables the policy cannot see"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — dynamic SQL / relation dump (no privileges needed) > the deny message names the bypass, not a config key"
+    },
+    {
+      "sql": "SELECT pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function",
+        "reason_includes": "filesystem"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_read_file"
+    },
+    {
+      "sql": "SELECT pg_read_binary_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_read_binary_file"
+    },
+    {
+      "sql": "SELECT pg_stat_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_stat_file"
+    },
+    {
+      "sql": "SELECT pg_ls_dir('/')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_ls_dir in the target list"
+    },
+    {
+      "name": "pg_ls_dir in FROM under *: v2 can't expand * over a function of unknown shape and refuses it at resolve",
+      "sql": "SELECT * FROM pg_ls_dir('/')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_ls_dir in FROM position"
+    },
+    {
+      "name": "pg_ls_dir in FROM, its column named by the alias",
+      "sql": "SELECT d FROM pg_ls_dir('/') AS d",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_ls_dir in FROM position"
+    },
+    {
+      "name": "pg_ls_dir in FROM, its columns named by an alias list",
+      "sql": "SELECT * FROM pg_ls_dir('/') AS d(name)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_ls_dir in FROM position"
+    },
+    {
+      "sql": "SELECT lo_export(lo_import('/etc/passwd'), '/tmp/x')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies lo_export writes a file"
+    },
+    {
+      "sql": "SELECT lo_put(1234, 0, '\\xdeadbeef'::bytea)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies lo_put"
+    },
+    {
+      "sql": "SELECT current_setting('midplane.mask_salt')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies current_setting can reach the mask salt"
+    },
+    {
+      "sql": "SELECT set_config('search_path', 'evil', false)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies set_config"
+    },
+    {
+      "sql": "SELECT json_populate_record(null::secrets, '{}')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies json_populate_record derefs a rowtype"
+    },
+    {
+      "sql": "SELECT jsonb_populate_recordset(null::secrets, '[]')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies jsonb_populate_recordset derefs a rowtype"
+    },
+    {
+      "sql": "SELECT pg_terminate_backend(1234)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_terminate_backend"
+    },
+    {
+      "sql": "SELECT pg_reload_conf()",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — filesystem / large object / admin > denies pg_reload_conf"
+    },
+    {
+      "sql": "SELECT setval('users_id_seq', 1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function",
+        "reason_includes": "`setval`"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — sequence writes > denies setval"
+    },
+    {
+      "sql": "SELECT id FROM orders WHERE id = setval('users_id_seq', 1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — sequence writes > denies setval nested in an allowed-looking read"
+    },
+    {
+      "name": "the setval message explains the consequence, not just the name",
+      "sql": "SELECT setval('users_id_seq', 1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function",
+        "reason_includes": "primary-key collisions"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — sequence writes > the message explains the consequence, not just the name"
+    },
+    {
+      "sql": "SELECT nextval('users_id_seq')",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — sequence writes > allows nextval (deliberate)"
+    },
+    {
+      "sql": "INSERT INTO t (id, v) VALUES (nextval('t_id_seq'), 'x')",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — sequence writes > allows nextval inside a legitimate INSERT (deliberate)"
+    },
+    {
+      "sql": "SELECT currval('users_id_seq')",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — sequence writes > allows currval (deliberate)"
+    },
+    {
+      "sql": "SELECT lastval()",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — sequence writes > allows lastval (deliberate)"
+    },
+    {
+      "sql": "SELECT pg_catalog.pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > schema qualification does not evade (pg_catalog.)"
+    },
+    {
+      "sql": "SELECT pg_catalog.query_to_xml('SELECT 1', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > schema qualification does not evade (pg_catalog.)"
+    },
+    {
+      "name": "a user-schema function of the same name (public.pg_read_file is in the catalog's routines) is also refused",
+      "sql": "SELECT public.pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > a user-schema function of the same name is also refused"
+    },
+    {
+      "sql": "SELECT PG_READ_FILE('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > case does not evade"
+    },
+    {
+      "sql": "SELECT Query_To_Xml('SELECT 1', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > case does not evade"
+    },
+    {
+      "sql": "SELECT upper(pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > nesting does not evade (GHSA-468r-mhwc-vxjc shape)"
+    },
+    {
+      "sql": "SELECT length(convert_from(pg_read_binary_file('/etc/passwd'), 'UTF8'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > nesting does not evade (GHSA-468r-mhwc-vxjc shape)"
+    },
+    {
+      "sql": "SELECT pg_catalog.upper(public.pg_read_file('/etc/passwd')::text)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > nesting does not evade (GHSA-468r-mhwc-vxjc shape)"
+    },
+    {
+      "sql": "WITH x AS (SELECT pg_read_file('/etc/passwd') AS f) SELECT * FROM x",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > hiding the call in a CTE, subquery, or WHERE clause does not evade"
+    },
+    {
+      "sql": "SELECT (SELECT pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > hiding the call in a CTE, subquery, or WHERE clause does not evade"
+    },
+    {
+      "sql": "SELECT id FROM orders WHERE note = pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > hiding the call in a CTE, subquery, or WHERE clause does not evade"
+    },
+    {
+      "sql": "SELECT id FROM orders ORDER BY pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > hiding the call in a CTE, subquery, or WHERE clause does not evade"
+    },
+    {
+      "sql": "INSERT INTO exfil (data) VALUES (pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > hiding the call inside a write statement does not evade"
+    },
+    {
+      "sql": "UPDATE t SET c = pg_read_file('/etc/passwd') WHERE id = 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — evasion > hiding the call inside a write statement does not evade"
+    },
+    {
+      "sql": "SELECT query_to_xml('SELECT ssn, api_key FROM secrets', false, true, '')",
+      "policy": "deny_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — closes the reported bypasses > denies SELECT query_to_xml('SELECT ssn, api_key FROM secrets', false, true, '') under default:deny"
+    },
+    {
+      "sql": "SELECT table_to_xml('secrets'::regclass, false, true, '')",
+      "policy": "deny_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — closes the reported bypasses > denies SELECT table_to_xml('secrets'::regclass, false, true, '') under default:deny"
+    },
+    {
+      "sql": "SELECT database_to_xml(false, true, '')",
+      "policy": "deny_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — closes the reported bypasses > denies SELECT database_to_xml(false, true, '') under default:deny"
+    },
+    {
+      "sql": "SELECT pg_read_file('/etc/passwd')",
+      "policy": "deny_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — closes the reported bypasses > denies SELECT pg_read_file('/etc/passwd') under default:deny"
+    },
+    {
+      "sql": "SELECT lo_export(lo_import('/etc/passwd'), '/tmp/x')",
+      "policy": "deny_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — closes the reported bypasses > denies SELECT lo_export(lo_import('/etc/passwd'), '/tmp/x') under default:deny"
+    },
+    {
+      "name": "the read spelled as a function argument is refused (tenant-scope half of the old test skipped)",
+      "sql": "SELECT query_to_xml('SELECT * FROM users', false, true, '')",
+      "policy": "users_read",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — closes the reported bypasses > tenant isolation holds against the function-argument form"
+    },
+    {
+      "name": "the relation named by a regclass cast is refused (tenant-scope half of the old test skipped)",
+      "sql": "SELECT table_to_xml('users'::regclass, false, true, '')",
+      "policy": "users_read",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — closes the reported bypasses > tenant isolation holds against the function-argument form"
+    },
+    {
+      "sql": "SELECT id, email FROM users WHERE org_id = '42'",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows plain select"
+    },
+    {
+      "sql": "SELECT count(*), sum(total), avg(total), max(created_at) FROM orders",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows aggregates"
+    },
+    {
+      "sql": "SELECT upper(name), substr(email, 1, 5), concat(a, b) FROM users",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows string functions"
+    },
+    {
+      "sql": "SELECT date_trunc('day', created_at), now(), age(created_at) FROM orders",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows date functions"
+    },
+    {
+      "sql": "SELECT json_build_object('id', id, 'email', email) FROM users",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows json construction"
+    },
+    {
+      "sql": "SELECT row_number() OVER (ORDER BY id), rank() OVER () FROM orders",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows window functions"
+    },
+    {
+      "sql": "SELECT my_business_helper(total) FROM orders",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows a user-defined function"
+    },
+    {
+      "sql": "SELECT analytics.compute_ltv(id) FROM users",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows a schema-qualified user function"
+    },
+    {
+      "sql": "SELECT generate_series(1, 10)",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows set-returning builtins"
+    },
+    {
+      "sql": "SELECT unnest(tags) FROM posts",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows unnest"
+    },
+    {
+      "sql": "SELECT coalesce(a, b)::text FROM t",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows coalesce and casts"
+    },
+    {
+      "sql": "WITH r AS (SELECT * FROM orders) SELECT count(*) FROM r JOIN users USING (id)",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows a CTE with joins"
+    },
+    {
+      "sql": "SELECT to_json(a) FROM t",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows to_json is not denied here"
+    },
+    {
+      "sql": "SELECT pg_typeof(id) FROM users",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows pg_typeof is introspection, not data reach"
+    },
+    {
+      "name": "json_to_record with a column definition list: not denylisted, but v2 refuses the definition list",
+      "sql": "SELECT * FROM json_to_record('{\"a\":1}') AS r(a int, b text)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows json_to_record"
+    },
+    {
+      "name": "jsonb_to_record with a column definition list: not denylisted, but v2 refuses the definition list",
+      "sql": "SELECT * FROM jsonb_to_record('{\"a\":1}') AS r(a int)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows jsonb_to_record"
+    },
+    {
+      "name": "json_to_recordset with a column definition list: not denylisted, but v2 refuses the definition list",
+      "sql": "SELECT * FROM json_to_recordset('[{\"a\":1}]') AS r(a int)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows json_to_recordset"
+    },
+    {
+      "name": "jsonb_to_recordset with a column definition list: not denylisted, but v2 refuses the definition list",
+      "sql": "SELECT * FROM jsonb_to_recordset('[{\"a\":1}]') AS r(a int)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-function.test.ts: dangerous_function — does not over-refuse ordinary queries > allows jsonb_to_recordset"
+    },
+    {
+      "name": "json_to_record in the select list is not a dangerous function",
+      "sql": "SELECT json_to_record('{\"a\":1}')",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: the *_to_record family is not denylisted"
+    },
+    {
+      "name": "jsonb_to_recordset in the select list is not a dangerous function",
+      "sql": "SELECT jsonb_to_recordset('[{\"a\":1}]')",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: the *_to_record family is not denylisted"
+    },
+    {
+      "name": "a quoted function name",
+      "sql": "SELECT \"pg_read_file\"('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a quoted upper-case name is a different function to Postgres, but matching is case-folded (conservative)",
+      "sql": "SELECT \"PG_READ_FILE\"('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "quoted schema and function name",
+      "sql": "SELECT \"pg_catalog\".\"pg_read_file\"('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "upper-case qualified name",
+      "sql": "SELECT PG_CATALOG.PG_READ_FILE('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a unicode-escaped function name",
+      "sql": "SELECT U&\"pg\\005fread\\005ffile\"('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a unicode-escaped function name with a custom UESCAPE character",
+      "sql": "SELECT U&\"pg!005fread!005ffile\" UESCAPE '!'('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a block comment between the name and its arguments",
+      "sql": "SELECT pg_read_file/**/('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a line comment inside the qualified name",
+      "sql": "SELECT pg_catalog -- split\n.pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a dollar-quoted argument",
+      "sql": "SELECT pg_read_file($$/etc/passwd$$)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a stacked-looking payload inside a dollar-quoted argument is one statement, and the call is refused",
+      "sql": "SELECT query_to_xml($q$SELECT ssn FROM secrets; DROP TABLE users$q$, false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a trailing semicolon and comment",
+      "sql": "SELECT pg_read_file('/etc/passwd'); -- done",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "named-argument notation",
+      "sql": "SELECT pg_read_file(filename => '/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "inside CAST(...)",
+      "sql": "SELECT CAST(pg_read_file('/etc/passwd') AS text)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "the relation named through CAST(... AS regclass)",
+      "sql": "SELECT table_to_xml(CAST('secrets' AS regclass), false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "a parenthesized cast of the call",
+      "sql": "SELECT (pg_read_file('/etc/passwd')::text)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: evasion"
+    },
+    {
+      "name": "in a JOIN condition",
+      "sql": "SELECT o.id FROM orders o JOIN users u ON u.name = pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in GROUP BY",
+      "sql": "SELECT count(*) FROM orders GROUP BY pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in HAVING",
+      "sql": "SELECT user_id FROM orders GROUP BY user_id HAVING max(note) = pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in LIMIT",
+      "sql": "SELECT id FROM orders LIMIT length(pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in OFFSET",
+      "sql": "SELECT id FROM orders OFFSET length(current_setting('midplane.mask_salt'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in a named WINDOW clause",
+      "sql": "SELECT row_number() OVER w FROM orders WINDOW w AS (ORDER BY pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in an inline window PARTITION BY",
+      "sql": "SELECT sum(total) OVER (PARTITION BY pg_read_file('/etc/passwd')) FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in an aggregate FILTER",
+      "sql": "SELECT count(*) FILTER (WHERE note = pg_read_file('/etc/passwd')) FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in an aggregate ORDER BY",
+      "sql": "SELECT string_agg(note, ',' ORDER BY pg_read_file('/etc/passwd')) FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in WITHIN GROUP",
+      "sql": "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY length(pg_read_file('/etc/passwd'))) FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in a CASE branch",
+      "sql": "SELECT CASE WHEN id > 0 THEN pg_read_file('/etc/passwd') END FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in COALESCE",
+      "sql": "SELECT coalesce(note, pg_read_file('/etc/passwd')) FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in an ARRAY constructor",
+      "sql": "SELECT ARRAY[pg_read_file('/etc/passwd')]",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in VALUES",
+      "sql": "VALUES (pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in a UNION arm",
+      "sql": "SELECT note FROM orders UNION ALL SELECT pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in EXISTS",
+      "sql": "SELECT id FROM orders WHERE EXISTS (SELECT pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in an IN subquery",
+      "sql": "SELECT id FROM orders WHERE note IN (SELECT pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in a FROM subquery",
+      "sql": "SELECT * FROM (SELECT pg_read_file('/etc/passwd') AS f) AS s",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "a LATERAL function in FROM",
+      "sql": "SELECT o.id, d FROM orders o, LATERAL pg_ls_dir(o.note) AS d",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in a CTE nested inside a FROM subquery",
+      "sql": "SELECT * FROM (WITH x AS (SELECT current_setting('midplane.mask_salt') AS s) SELECT s FROM x) AS y",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "in a second CTE whose output the outer query never selects",
+      "sql": "WITH a AS (SELECT 1 AS n), b AS (SELECT n, set_config('search_path', 'evil', false) AS s FROM a) SELECT n FROM b",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call does not evade"
+    },
+    {
+      "name": "next to a DEFAULT in INSERT VALUES",
+      "sql": "INSERT INTO t (id, v) VALUES (DEFAULT, pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "INSERT ... SELECT",
+      "sql": "INSERT INTO exfil (data) SELECT pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in RETURNING",
+      "sql": "INSERT INTO t (id) VALUES (1) RETURNING pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in ON CONFLICT DO UPDATE SET",
+      "sql": "INSERT INTO t (id, v) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET v = pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in an UPDATE's WHERE",
+      "sql": "UPDATE t SET v = 'x' WHERE c = pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in UPDATE ... FROM",
+      "sql": "UPDATE t SET v = f.x FROM (SELECT pg_read_file('/etc/passwd') AS x) AS f WHERE t.id = 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in a DELETE's WHERE",
+      "sql": "DELETE FROM t WHERE c = pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in DELETE ... USING",
+      "sql": "DELETE FROM t USING pg_ls_dir('/') AS d WHERE t.c = d",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "where_required fires before dangerous_function on an unqualified UPDATE",
+      "sql": "UPDATE t SET v = pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "CREATE TABLE AS",
+      "sql": "CREATE TABLE loot AS SELECT pg_read_file('/etc/passwd') AS f",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "SELECT INTO",
+      "sql": "SELECT pg_read_file('/etc/passwd') AS f INTO loot",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "a column DEFAULT in CREATE TABLE, which would run on every later insert",
+      "sql": "CREATE TABLE loot (f text DEFAULT pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "a generated column expression",
+      "sql": "CREATE TABLE loot (f text GENERATED ALWAYS AS (pg_read_file('/etc/passwd')) STORED)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "ALTER COLUMN SET DEFAULT (dangerous_function precedes the schema_changes write class)",
+      "sql": "ALTER TABLE t ALTER COLUMN v SET DEFAULT pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "ADD COLUMN ... DEFAULT",
+      "sql": "ALTER TABLE t ADD COLUMN f text DEFAULT current_setting('midplane.mask_salt')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in a CHECK constraint",
+      "sql": "ALTER TABLE t ADD CONSTRAINT k CHECK (v <> pg_read_file('/etc/passwd'))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in ALTER COLUMN TYPE ... USING",
+      "sql": "ALTER TABLE t ALTER COLUMN v TYPE text USING pg_read_file(v)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "in an index expression",
+      "sql": "CREATE INDEX ON t ((pg_read_file(v)))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "control: the same ALTER without the call is refused only by the schema_changes class",
+      "sql": "ALTER TABLE t ALTER COLUMN v SET DEFAULT 'x'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: hiding the call inside a write statement does not evade"
+    },
+    {
+      "name": "a call inside a comment is not a call",
+      "sql": "SELECT 1 /* pg_read_file('/etc/passwd') */",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: does not over-refuse"
+    },
+    {
+      "name": "a call inside a string literal is not a call",
+      "sql": "SELECT 'pg_read_file(''/etc/passwd'')'",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: does not over-refuse"
+    },
+    {
+      "name": "a dangerous name used as a column alias is not a call",
+      "sql": "SELECT 1 AS pg_read_file",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: does not over-refuse"
+    },
+    {
+      "name": "a regclass cast alone names a relation but reads nothing",
+      "sql": "SELECT 'secrets'::regclass",
+      "policy": "deny_all",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: does not over-refuse"
+    },
+    {
+      "name": "on a masked database, query_to_xml is refused as dangerous_function, before the mask allowlist",
+      "sql": "SELECT query_to_xml('SELECT email FROM users', false, true, '')",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: dangerous_function precedes the mask gate"
+    },
+    {
+      "name": "on a masked database, reading the mask salt is refused as dangerous_function",
+      "sql": "SELECT current_setting('midplane.mask_salt')",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/dangerous-function.test.ts: dangerous_function precedes the mask gate"
+    }
+  ]
+}

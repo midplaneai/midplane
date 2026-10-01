@@ -1,0 +1,671 @@
+{
+  "description": "Masking against a catalog with builtins shadowed outside pg_catalog, views and a materialized view over a masked table, an inheritance child, a same-named table in another schema, and pg_stats. Most cases convert the old source rewriter's unit and live tests on its customers schema.",
+  "catalog": "masking",
+  "policies": {
+    "masked": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.customers": {
+          "id": "none",
+          "name": "none",
+          "age": "none",
+          "country": "none",
+          "credit_card": "full-redact",
+          "email": "consistent-hash"
+        },
+        "public.ghosts": {
+          "id": "none"
+        },
+        "public.People": {
+          "SSN": "none",
+          "ssn": "full-redact",
+          "select": "consistent-hash",
+          "my col": "none"
+        },
+        "My Schema.cards": {
+          "id": "none"
+        }
+      }
+    },
+    "private_masked": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "private.customers": {
+          "id": "none",
+          "email": "full-redact"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "policy": "masked"
+  },
+  "cases": [
+    {
+      "sql": "SELECT credit_card FROM customers",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT credit_card FROM ( SELECT id AS id, name AS name, age AS age, country AS country, '***'::text AS credit_card, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), email), 'UTF8')), 'hex') AS email FROM public.customers ) AS customers",
+        "tables": ["public.customers"],
+        "output": [
+          {
+            "name": "credit_card",
+            "sources": ["public.customers.credit_card"]
+          }
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: wraps a masked table; output reparses and masks the column"
+    },
+    {
+      "name": "the coordinator executes the rewritten statement",
+      "sql": "SELECT credit_card FROM customers",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "FROM public.customers ) AS customers"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.test.ts: happy path: sets salt, resolves, rewrites, executes rewritten SQL on the tx"
+    },
+    {
+      "name": "the user's clauses survive the rewrite (deparsed, not spliced)",
+      "sql": "SELECT count(*) FROM customers c WHERE c.id=1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.customers ) AS c WHERE c.id = 1"]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: keeps the user's clause text verbatim (minimal blast radius)"
+    },
+    {
+      "sql": "SELECT count(*) FROM products",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT count(*) FROM products"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: unmasked table → returned byte-for-byte unchanged"
+    },
+    {
+      "sql": "SELECT credit_card FROM cust_view",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "view"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: masked view → fail closed"
+    },
+    {
+      "name": "a view over a view over a masked table",
+      "sql": "SELECT id FROM cust_ids",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a view that only aggregates a masked table still reads it raw",
+      "sql": "SELECT country, n FROM country_counts",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a materialized view stores raw values, so the wrap can't help",
+      "sql": "SELECT email FROM customers_mv",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: matview output REJECTS"
+    },
+    {
+      "name": "a view that only filters on a masked column is an oracle for the raw value",
+      "sql": "SELECT id FROM products_for_visa",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a view over an unmasked table whose definition calls a user function: the function can read the masked table raw",
+      "sql": "SELECT card FROM product_cards",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a view whose definition calls query_to_xml is refused: calls inside a view count",
+      "sql": "SELECT x FROM customer_dump",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      }
+    },
+    {
+      "name": "a view over an unmasked table",
+      "sql": "SELECT id, price_cents FROM product_prices",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT id, price_cents FROM product_prices"
+      }
+    },
+    {
+      "name": "a masked table missing from the catalog snapshot can't be wrapped",
+      "sql": "SELECT credit_card FROM ghosts",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: masked table absent from catalog (stale) → fail closed, retryable phrasing"
+    },
+    {
+      "sql": "SELECT a.credit_card, b.name FROM customers a JOIN customers b ON a.id=b.id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.customers ) AS a JOIN ( SELECT",
+          "FROM public.customers ) AS b ON a.id = b.id"
+        ],
+        "statement_excludes": ["FROM customers", "JOIN customers"]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: self-join of a masked table wraps both references"
+    },
+    {
+      "sql": "SELECT * FROM customers c JOIN orders o ON o.cid=c.id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.customers ) AS c JOIN orders AS o ON o.cid = c.id"
+        ],
+        "tables": ["public.customers", "public.orders"]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: returns every relation reference"
+    },
+    {
+      "sql": "UPDATE customers SET name='x' FROM orders WHERE orders.cid=customers.id",
+      "expect": {
+        "verdict": "allow",
+        "statement": "UPDATE customers SET name='x' FROM orders WHERE orders.cid=customers.id",
+        "tables": ["public.customers", "public.orders"]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: includes the write TARGET (inline relation, missed by the RangeVar walk)"
+    },
+    {
+      "sql": "UPDATE customers SET name='x' WHERE credit_card='4111'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "outside a plain RETURNING"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: UPDATE with a WHERE on a masked column → fail closed (inference hole)"
+    },
+    {
+      "sql": "DELETE FROM customers WHERE credit_card='4111'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: DELETE with a WHERE on a masked column → fail closed"
+    },
+    {
+      "sql": "UPDATE customers SET name='x' WHERE id=1",
+      "expect": {
+        "verdict": "allow",
+        "statement": "UPDATE customers SET name='x' WHERE id=1"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: write target is NOT wrapped — a plain write to a masked table passes verbatim (no invalid SQL)"
+    },
+    {
+      "sql": "INSERT INTO customers (name) VALUES ('x')",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO customers (name) VALUES ('x')"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: INSERT without masked-col refs → verbatim (target not wrapped)"
+    },
+    {
+      "sql": "SELECT ctid FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: system column on a wrapped table → fail closed"
+    },
+    {
+      "sql": "SELECT customers.tableoid FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: qualified system column on a wrapped table → fail closed"
+    },
+    {
+      "sql": "SELECT ctid FROM products",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: system column on an UNmasked table → verbatim (no wrap, no reject)"
+    },
+    {
+      "sql": "INSERT INTO customers (name) VALUES ('x') RETURNING credit_card",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO customers (name) VALUES ('x') RETURNING '***'::text AS credit_card"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING a masked column → masks it in place, output name preserved"
+    },
+    {
+      "sql": "UPDATE customers SET name='x' WHERE id=1 RETURNING credit_card AS cc",
+      "expect": {
+        "verdict": "allow",
+        "statement": "UPDATE customers SET name = 'x' WHERE id = 1 RETURNING '***'::text AS cc"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING masked col AS alias → masks, explicit alias kept verbatim"
+    },
+    {
+      "sql": "INSERT INTO customers (name) VALUES ('x') RETURNING id, credit_card, name",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO customers (name) VALUES ('x') RETURNING id, '***'::text AS credit_card, name"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING mixed masked + unmasked → only the masked column is rewritten"
+    },
+    {
+      "sql": "INSERT INTO customers (name) VALUES ('x') RETURNING *",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO customers (name) VALUES ('x') RETURNING id AS id, name AS name, age AS age, country AS country, '***'::text AS credit_card, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), email), 'UTF8')), 'hex') AS email"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING * → expands to the full masked projection"
+    },
+    {
+      "sql": "INSERT INTO customers (name) VALUES ('x') RETURNING id, name",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO customers (name) VALUES ('x') RETURNING id, name"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING only unmasked columns → verbatim, target not wrapped"
+    },
+    {
+      "sql": "DELETE FROM customers WHERE id=1 RETURNING credit_card || 'z'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING a computed expression over a masked column → fail closed (v1)"
+    },
+    {
+      "sql": "UPDATE customers t SET name='x' WHERE id=1 RETURNING t.*",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING <table>.* (qualified whole-row) → fail closed (v1)"
+    },
+    {
+      "sql": "UPDATE customers SET name='x' WHERE id=1 RETURNING customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING whole-row composite of the target → fail closed"
+    },
+    {
+      "name": "a CTE named like a masked table is the CTE (the old rewriter failed closed)",
+      "sql": "WITH customers AS (SELECT 1 AS id) SELECT * FROM customers",
+      "expect": {
+        "verdict": "allow",
+        "statement": "WITH customers AS (SELECT 1 AS id) SELECT * FROM customers"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: a CTE named like a masked table → fail closed (would rewrite the CTE as the base table)"
+    },
+    {
+      "sql": "WITH recent AS (SELECT credit_card FROM customers) SELECT * FROM recent",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "FROM public.customers ) AS customers"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: a non-colliding CTE reading a masked table in its body still wraps the base table"
+    },
+    {
+      "sql": "SELECT count(*)::int AS c FROM products",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT count(*)::int AS c FROM products"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: count over an UNMASKED table is untouched (the ISSUE-007 regression)"
+    },
+    {
+      "sql": "SELECT count(*)::int AS c, avg(age)::float8 AS a FROM customers WHERE country='DE'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.customers ) AS customers WHERE country = 'DE'"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: aggregate over a masked table: count + avg(unmasked col) match the original"
+    },
+    {
+      "sql": "SELECT id, name, credit_card FROM customers ORDER BY id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "FROM public.customers ) AS customers ORDER BY id"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: full-redact: masked column is '***', other columns unchanged, no raw card leaks"
+    },
+    {
+      "sql": "SELECT id, email FROM customers ORDER BY id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), email), 'UTF8')), 'hex') AS email",
+          "FROM public.customers ) AS customers"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: consistent-hash token parity: in-DB md5 == JS applyTransform (ET5 alignment)"
+    },
+    {
+      "sql": "SELECT count(*)::int AS c FROM customers WHERE credit_card = '4111111111111111'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "FROM public.customers ) AS customers WHERE credit_card = '4111111111111111'"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: WHERE / JOIN / GROUP BY on a masked column operate on the masked value (inference closed)"
+    },
+    {
+      "sql": "INSERT INTO customers (id, credit_card) VALUES (90, '4900000000000000') RETURNING id, credit_card",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO customers (id, credit_card) VALUES (90, '4900000000000000') RETURNING id, '***'::text AS credit_card"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: RETURNING a masked column: the write stores the RAW value, RETURNING returns it MASKED (B4)"
+    },
+    {
+      "sql": "INSERT INTO customers (id, name, credit_card, email) VALUES (91, 'Zed', '4911111111111111', 'zed@acme.io') RETURNING *",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO customers (id, name, credit_card, email) VALUES (91, 'Zed', '4911111111111111', 'zed@acme.io') RETURNING id AS id, name AS name, age AS age, country AS country, '***'::text AS credit_card, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), email), 'UTF8')), 'hex') AS email"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: RETURNING *: masked columns come back masked, others real (B4)"
+    },
+    {
+      "sql": "UPDATE customers SET name=name WHERE id=1 RETURNING credit_card || 'x'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: RETURNING a computed expression over a masked column → rejected (fail-closed, B4)"
+    },
+    {
+      "sql": "SELECT json_build_object('id', id, 'cc', credit_card) AS j FROM customers WHERE id=1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "FROM public.customers ) AS customers WHERE id = 1"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: json_build_object over a masked column serializes the MASKED value (B6)"
+    },
+    {
+      "name": "public.|| can win over the builtin operator, and its body could read raw data",
+      "sql": "SELECT name || 'x' FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "defined outside pg_catalog"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: operator shadow scan rejects a user-schema operator that redefines a builtin (Codex High)"
+    },
+    {
+      "sql": "SELECT name || 'x' FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: public.|| shadowing a builtin OPERATOR → reject (Codex allowlist review, High)"
+    },
+    {
+      "name": "a shadowed operator is refused however it is spelled",
+      "sql": "SELECT name OPERATOR(pg_catalog.||) 'x' FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT sum(age) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "defined outside pg_catalog"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: public.sum shadowing the builtin FUNCTION → reject (Codex #5)"
+    },
+    {
+      "name": "an allowlisted builtin nobody shadows",
+      "sql": "SELECT max(age) FROM customers",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.customers ) AS customers"]
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: allowlisted name with no user-schema definition → ok"
+    },
+    {
+      "name": "no functions, nothing to shadow",
+      "sql": "SELECT credit_card FROM customers",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "FROM public.customers ) AS customers"
+        ]
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: no names → no round-trip"
+    },
+    {
+      "sql": "SELECT lower(credit_card) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "an unquoted name folds to the shadowed lower",
+      "sql": "SELECT LOWER(credit_card) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a quoted upper-case name is a different function, defined in public",
+      "sql": "SELECT \"LOWER\"(credit_card) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a shadowed name is refused even pg_catalog-qualified",
+      "sql": "SELECT pg_catalog.lower(credit_card) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "the shadow check applies to every statement once the database has masks",
+      "sql": "SELECT lower('x')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a same-named function in a schema off the search path shadows nothing",
+      "sql": "SELECT upper(name) FROM customers",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.customers ) AS customers"]
+      }
+    },
+    {
+      "sql": "SELECT private.upper(name) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "schema-qualified"
+      }
+    },
+    {
+      "sql": "SELECT exfil(credit_card) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT public.exfil(credit_card) FROM customers",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies schema-qualified UDF"
+    },
+    {
+      "name": "an unshadowed alternative to the shadowed operator",
+      "sql": "SELECT concat(name, 'x') FROM customers",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.customers ) AS customers"]
+      }
+    },
+    {
+      "name": "pg_stats publishes sampled raw values of every column the role can read, masked ones included",
+      "sql": "SELECT most_common_vals, histogram_bounds FROM pg_catalog.pg_stats WHERE tablename = 'customers' AND attname = 'credit_card'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "column names and types are not row data",
+      "sql": "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'customers'",
+      "expect": {
+        "verdict": "allow",
+        "statement_excludes": ["( SELECT"]
+      }
+    },
+    {
+      "name": "an inheritance child takes its parent's masks",
+      "sql": "SELECT credit_card FROM customers_2024",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), email), 'UTF8')), 'hex') AS email",
+          "FROM public.customers_2024 ) AS customers_2024"
+        ]
+      }
+    },
+    {
+      "name": "the wrap keeps ONLY, so child rows stay excluded",
+      "sql": "SELECT credit_card FROM ONLY customers",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS credit_card",
+          "FROM ONLY public.customers ) AS customers"
+        ]
+      }
+    },
+    {
+      "name": "a same-named table in another schema isn't masked by public's entry",
+      "sql": "SELECT email FROM private.customers",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT email FROM private.customers"
+      }
+    },
+    {
+      "name": "masks key on the resolved schema",
+      "sql": "SELECT email FROM private.customers",
+      "policy": "private_masked",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT email FROM ( SELECT id AS id, '***'::text AS email FROM private.customers ) AS customers"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: non-public schema: direct private.users.email is masked"
+    },
+    {
+      "name": "public.customers is not masked by private's entry",
+      "sql": "SELECT email FROM customers",
+      "policy": "private_masked",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT email FROM customers"
+      }
+    },
+    {
+      "sql": "SELECT to_jsonb(u) AS j FROM private.customers u",
+      "policy": "private_masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: to_jsonb over a non-public masked table REJECTS (was the schema-qualified leak)"
+    },
+    {
+      "sql": "SELECT private.customers.email FROM private.customers",
+      "policy": "private_masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "schema.table.column"
+      }
+    },
+    {
+      "name": "column names differing only in case, a reserved word and a space stay quoted in the wrap, so the clear \"SSN\" never stands in for the masked ssn",
+      "sql": "SELECT * FROM \"People\"",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT * FROM ( SELECT \"SSN\" AS \"SSN\", '***'::text AS ssn, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), \"select\"), 'UTF8')), 'hex') AS \"select\", \"my col\" AS \"my col\" FROM public.\"People\" ) AS \"People\""
+      }
+    },
+    {
+      "sql": "SELECT \"SSN\", ssn FROM \"People\" p",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "\"SSN\" AS \"SSN\", '***'::text AS ssn",
+          "FROM public.\"People\" ) AS p"
+        ]
+      }
+    },
+    {
+      "name": "a schema name with a space",
+      "sql": "SELECT pan FROM \"My Schema\".cards",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT pan FROM ( SELECT id AS id, '***'::text AS pan FROM \"My Schema\".cards ) AS cards"
+      }
+    }
+  ]
+}

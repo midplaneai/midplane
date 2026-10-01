@@ -1,0 +1,82 @@
+# Approvals and taint
+
+Two controls that need state shared by every gateway instance, so in linked
+mode both live in Midplane Cloud. People decide approvals in the dashboard;
+this page is what an operator needs to know about how gateways behave.
+
+## Held writes
+
+A policy can hold a class of write (`writes.row_changes` or
+`writes.schema_changes` set to `hold`), and a tainted agent's allowed writes
+are held too. A held write doesn't run:
+
+1. The gateway counts the rows it would change (a `SELECT count(*)` built from
+   the write, run read-only, for at most 5 seconds) and files the write with
+   Midplane Cloud: the statement, the intent, the count. Never the rows.
+2. The agent gets the request's id and a review link at once. A project
+   manager approves or denies it on the Approvals page; Slack can announce
+   new requests (one webhook per project).
+3. The agent re-runs the same statement with the same intent, or calls
+   `check_approval` with the id. An approval binds the database, the exact
+   statement, the intent and the agent's grant: change a byte and it's a new
+   request.
+4. On the re-run, the gateway claims the approval (once, atomically), checks
+   the decision's signature, and runs the write in a transaction that rolls
+   back if it changes a different number of rows than the approver saw (more,
+   for an upsert, whose count is an upper bound). A write that couldn't be
+   counted runs without that check, and its approver was told so.
+
+Approvals expire: a pending request after 60 minutes, an approved one 15
+minutes after the decision, both adjustable per project (at most 24 hours and
+2 hours). A re-run is evaluated again under the current policy: an approval
+never lifts a denial.
+
+**In local mode** there is nobody to ask: a held write is refused, and the
+agent is told to link the gateway to have such writes approved.
+
+## Taint
+
+Columns labeled untrusted (`labels.untrusted_columns`) hold text anyone may
+have written: support tickets, emails, scraped pages. An agent that reads one
+may have read instructions meant for it.
+
+- **Reading taints.** Before returning a result that carries an untrusted
+  column (or storing one with a write), the gateway records that the agent's
+  grant is tainted. If it can't record it, the read is refused.
+- **Tainted agents are contained.** Their writes are held for a person, and
+  tables labeled secret (`labels.secret_tables`) are closed to them entirely.
+- **Every instance agrees.** Taint lives in Midplane Cloud, keyed by grant:
+  tainted on one gateway, contained on all of them.
+- **Only people clear it.** A project manager clears an agent's taint on the
+  Agents page, or it ends with the grant (revoking the agent or the token, or
+  the person leaving the organization).
+
+In local mode, each gateway keeps taint in its audit file; local processes
+sharing one file share its taint.
+
+## What fails closed
+
+| When | The gateway |
+| --- | --- |
+| Midplane Cloud can't be reached to check taint | Counts the agent as tainted: secret tables are closed, and a write only taint would hold is refused rather than filed |
+| It can't record taint | Refuses the read |
+| It can't file a held write | Runs nothing, and says why |
+| A claim's answer is lost or doesn't verify | Runs nothing; the request shows it was claimed and didn't run |
+| A signed answer doesn't verify (a decision, a claim, a taint record) | Treats it as no answer |
+| The project is paused, or a new policy arrived, while a write waited | Runs nothing |
+
+Answers the gateway acts on are signed with Midplane Cloud's key, the one it
+pinned at enrollment, so a proxy between the two can't approve a write or
+report a tainted agent clean.
+
+## Deploy the cloud first
+
+A gateway that files held writes and checks taint needs a Midplane Cloud that
+answers those calls. Against an older cloud, every held write and every
+untrusted read fails closed. An older gateway against a newer cloud keeps
+working as before; the dashboard says which features it lacks.
+
+*Tested by* `apps/gateway/test/approvals.e2e.test.ts` (filing, counting,
+the claim and its signatures, the row-count check, taint before a result,
+every failure above closed, against a stand-in for the cloud) and
+`apps/gateway/test/quickstart.e2e.test.ts` (local mode).

@@ -1,0 +1,14 @@
+{
+  "name": "@midplane/corpus",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@midplane/protocol": "workspace:*",
+    "zod": "4.6.5"
+  }
+}

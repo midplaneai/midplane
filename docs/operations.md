@@ -1,0 +1,90 @@
+# Operations
+
+## Health
+
+| Endpoint | Answers |
+| --- | --- |
+| `GET /healthz` | `200 ok` while the process serves HTTP: for liveness |
+| `GET /readyz` | `200 ready` only while the gateway enforces a policy and every database answers; `503` otherwise (waiting for a first bundle, paused, halted, or a database down): for readiness |
+
+Both are unauthenticated and say nothing else. A linked gateway with no bundle
+yet answers `/mcp` with a plain `503`, so clients don't loop through sign-in.
+
+## Logs
+
+JSON lines on stderr, one object each, with `time`, `level` and `msg` (stdout
+carries MCP in stdio mode). The ones worth alerting on:
+
+| `msg` | Means |
+| --- | --- |
+| `gateway halted` | An authentic bundle can't be enforced here; `reason` says why. Everything is refused until it's fixed |
+| `bundle rejected` | A bundle failed its signature, issuer, project or version check; nothing changed |
+| `audit write after execution failed` | A statement ran but its outcome couldn't be recorded: check the disk |
+| `audit push failed` | Midplane Cloud couldn't be reached, or answered with an error (a 5xx); the events wait in the file and are retried, backing off to every five minutes. A 429, another replica's batch in progress, is retried within seconds and not logged, for up to two minutes in a row |
+| `audit push waiting: Midplane Cloud keeps answering 429` | The cloud, or a proxy before it, has answered 429 for two minutes, longer than any replica's turn: said once until a batch is acked again, and each further 429 is an `audit push failed`. `from` and `to` name the batch |
+| `Midplane Cloud's audit answer didn't verify` | An ack that isn't the cloud's, or covers other bytes than the batch sent (a proxy's, say, or one that forwarded only part of the batch), names another event than the one sent, or a conflict at the very event sent, or a page in place of an answer: the events stay owed, so nothing is pruned, and the push is retried |
+| `audit file forked from what Midplane Cloud holds; sending it as a new instance` | The cloud holds another event at `seq` than the file's: the file was restored from a backup, or copied to a second replica, or a forged copy reached the cloud first. The cloud stored the batch up to the event before, and those are acked; the file goes on as the new `instance` from `seq`, sending the rest; nothing is lost here. `from` is the instance it was, under which the cloud's export holds its earlier events; the Gateways page flags that one's conflict |
+| `Midplane Cloud holds another event for the new instance too` | As above, but for the new instance too, which the cloud can't have seen: the events stay owed and the push is retried. Report it |
+| `Midplane Cloud refused audit events` | The cloud refused a batch, even one event at a time; `from` and `to` name its events. The push stops there: the same events are tried again every five minutes, and none is skipped |
+| `Midplane Cloud doesn't take audit events yet; upgrade it` | The cloud has no audit endpoint (a 404). Events wait in the file until it's upgraded, tried every five minutes |
+| `audit event sent without its details` | An event couldn't be projected, so it went with no statement text; `seq` names it, and the file keeps all of it |
+| `audit pruning failed` | Retention couldn't delete old events, so the file keeps growing; `error` says why |
+| `audit events recorded while linked never reached Midplane Cloud; local mode doesn't send them` | The file last ran linked, and `events` of its events were still waiting when it was opened in local mode. They stay in the file for the retention window from now (export them to keep them longer) and are never sent, even if it is linked again |
+| `link cut` | The cloud refused the gateway's credentials: it was revoked |
+| `taint check failed; the grant counts as tainted` | The cloud couldn't be asked; the agent was contained |
+| `public URL not registered` | A URL in `public_urls` isn't one of the gateway's yet ([hosted agents](hosted-agents.md)) |
+| `view definitions withheld from the cloud` | Some views' definitions couldn't be redacted, so they weren't sent; simulation denies statements through them |
+
+`mcp client` notes each new agent (client, person and MCP protocol version)
+once.
+
+## Stopping
+
+`SIGTERM` or `SIGINT` closes the listener, its connections and the database
+pools, then exits. Nothing is lost: every event was already on disk.
+
+## Resources
+
+Each database gets a pool of up to 10 connections. A query returns at most
+`limits.max_rows` rows and `limits.max_bytes` bytes, and stops at either. A
+write drains its `RETURNING` rows, so its row count stays exact. Statement and
+lock timeouts come from the policy.
+
+The catalog (names and types) is re-read at start, after every write, when a
+statement names something unknown (at most every five seconds), and in linked
+mode every five minutes.
+
+## Upgrades
+
+- **Deploy Midplane Cloud before gateways.** A gateway's sync reports what it
+  supports, and a newer gateway's calls need a cloud that knows them; an older
+  cloud refuses its status, and the sync fails until the cloud is upgraded.
+- **Gateways halt rather than half-enforce.** A bundle that needs a feature a
+  gateway lacks halts it, and the dashboard warns before publishing one to a
+  gateway that would.
+- **Restarts keep enforcing.** A linked gateway enforces its cached bundle
+  while it reconnects, and resumes pushing its audit log where it stopped.
+- The audit file, the bundle cache and the identity carry over between
+  versions; keep them on a volume.
+
+## Backups
+
+Back up the audit file if you rely on it as your record (or export it on a
+schedule with `midplane audit export --since`), and keep the identity in your
+secret manager. The bundle cache is rebuilt from the cloud.
+
+A restored audit file is behind what Midplane Cloud holds: its next events
+take sequences the cloud already has, with other events. The cloud stores a
+batch only up to the first of them, and its signed ack says where; that
+makes the file a new instance (logged once, with `from` naming the old one),
+which sends the rest. The cloud keeps the old instance's events, flagged as a
+conflict. Events recorded after the backup survive only as far as the cloud
+got them, in its export under the old instance: the file keeps every
+instance it was, oldest first, in its `previous_instances` row (`sqlite3
+audit.db "SELECT value FROM meta WHERE key = 'previous_instances'"`).
+`verify --checkpoints` then matches the new instance's hashes
+([audit](audit.md#export-and-verify)).
+
+*Tested by* `apps/gateway/test/link.e2e.test.ts` (readiness, 503 without a
+bundle, halting, SIGTERM, restarts with the cloud down) and
+`apps/gateway/test/gateway.e2e.test.ts` (caps, timeouts, the catalog).

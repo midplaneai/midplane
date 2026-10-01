@@ -1,0 +1,20 @@
+{
+  "name": "@midplane/core",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@midplane/protocol": "workspace:*",
+    "@noble/hashes": "2.4.0",
+    "@pgsql/types": "18.0.0",
+    "libpg-query": "18.1.5",
+    "pgsql-deparser": "18.3.8"
+  },
+  "devDependencies": {
+    "@midplane/corpus": "workspace:*"
+  }
+}

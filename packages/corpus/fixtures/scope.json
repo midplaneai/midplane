@@ -1,0 +1,52 @@
+{
+  "description": "Caller scopes: reads need the database's read or write scope, anything else needs its write scope. Checked before any name is resolved.",
+  "catalog": "app",
+  "policies": {
+    "open": { "table_access": { "default": "read_write" } }
+  },
+  "defaults": { "policy": "open" },
+  "cases": [
+    {
+      "sql": "SELECT id FROM users",
+      "scopes": ["db:main:read"],
+      "expect": { "verdict": "allow", "read_only": true }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "scopes": ["db:main:write"],
+      "expect": { "verdict": "allow" }
+    },
+    {
+      "sql": "INSERT INTO logs (msg) VALUES ('x')",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope",
+        "reason_includes": "read-only"
+      }
+    },
+    {
+      "name": "a read-only caller can't create a table from a read",
+      "sql": "SELECT * INTO copy_of_users FROM users",
+      "scopes": ["db:main:read"],
+      "expect": { "verdict": "deny", "rule": "scope" }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "scopes": [],
+      "expect": { "verdict": "deny", "rule": "scope" }
+    },
+    {
+      "name": "another database's scope grants nothing here",
+      "sql": "SELECT id FROM users",
+      "scopes": ["db:other:write"],
+      "expect": { "verdict": "deny", "rule": "scope" }
+    },
+    {
+      "name": "the scope check comes before resolution, so it can't be used to probe names",
+      "sql": "SELECT no_such_column FROM no_such_table",
+      "scopes": [],
+      "expect": { "verdict": "deny", "rule": "scope" }
+    }
+  ]
+}

@@ -1,0 +1,266 @@
+{
+  "relations": [
+    {
+      "schema": "public",
+      "name": "users",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "org_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "orders",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "user_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "org_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "total",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "refunds",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "order_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "amount",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "webhooks",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "uid",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "category": "B"
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
+          "category": "U"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "posts",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "org_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "author_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "audit_log",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "archive",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "y",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "secrets",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "value",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "active_users",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id, email FROM public.users WHERE created_at > '2020-01-01'"
+    }
+  ],
+  "routines": []
+}

@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "rootDir": ".",
+    "outDir": "dist/tools"
+  },
+  "include": [
+    "scripts",
+    "test",
+    "vitest.config.ts",
+    "packages/*/test",
+    "apps/*/test"
+  ],
+  "references": [
+    { "path": "./packages/protocol" },
+    { "path": "./packages/core" },
+    { "path": "./packages/corpus" },
+    { "path": "./apps/gateway" }
+  ]
+}

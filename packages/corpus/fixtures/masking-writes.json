@@ -1,0 +1,1041 @@
+{
+  "description": "Masking, writes and schema changes: a masked write target is never wrapped, so its masked columns may appear only as bare RETURNING outputs, masked in place. Masked tables read inside a write are wrapped like any read, and a held write's preview counts over the same masked sources. Renaming or moving a masked or labeled table, and schema changes that reference or evaluate masked data, deny.",
+  "catalog": "app",
+  "policies": {
+    "masked": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      }
+    },
+    "masked_ddl": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "masked_hold": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      },
+      "writes": {
+        "row_changes": "hold"
+      }
+    },
+    "unmasked": {
+      "table_access": {
+        "default": "read_write"
+      }
+    },
+    "labels_only": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "schema_changes": "allow"
+      },
+      "labels": {
+        "secret_tables": ["public.secrets"],
+        "untrusted_columns": {
+          "public.comments": ["body"]
+        }
+      }
+    },
+    "misfit_hash_numeric": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "salary": "consistent-hash"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "policy": "masked"
+  },
+  "cases": [
+    {
+      "name": "a write that doesn't touch a masked column runs as written",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement": "UPDATE users SET name = 'x' WHERE id = 1"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: write target is NOT wrapped — a plain write to a masked table passes verbatim (no invalid SQL)"
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ('x')",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO users (name) VALUES ('x')"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: INSERT without masked-col refs → verbatim (target not wrapped)"
+    },
+    {
+      "name": "writing a masked column is allowed: masks protect reads",
+      "sql": "UPDATE users SET email = 'new@acme.io', ssn = '000-00-0000' WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement": "UPDATE users SET email = 'new@acme.io', ssn = '000-00-0000' WHERE id = 1"
+      }
+    },
+    {
+      "name": "filtering a write on a masked column turns the affected-row count into an oracle for the raw value",
+      "sql": "UPDATE users SET name = 'x' WHERE email = 'ada@acme.io'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "outside a plain RETURNING"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: UPDATE with a WHERE on a masked column → fail closed (inference hole)"
+    },
+    {
+      "sql": "DELETE FROM users WHERE ssn = '079-05-1120'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: DELETE with a WHERE on a masked column → fail closed"
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE ssn LIKE '079%'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "an unlisted column is masked for writes too",
+      "sql": "DELETE FROM users WHERE id = 1 AND bio IS NOT NULL",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "copying a masked value into a clear column",
+      "sql": "UPDATE users SET name = email WHERE id = 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "computing from a masked value",
+      "sql": "UPDATE users SET salary = salary * 2 WHERE id = 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a correlated reference to the target's masked column",
+      "sql": "UPDATE users SET name = 'x' WHERE id IN (SELECT id FROM orders WHERE note = users.ssn)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "DELETE FROM users WHERE id = 1 AND EXISTS (SELECT 1 WHERE users.ssn = '079-05-1120')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "the target's own table read in a subquery is a read, wrapped, so the filter only sees the token",
+      "sql": "DELETE FROM users WHERE id IN (SELECT id FROM users WHERE ssn = '079-05-1120')",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "DELETE FROM users WHERE id IN (SELECT id FROM ( SELECT",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users WHERE ssn = '079-05-1120')"
+        ]
+      }
+    },
+    {
+      "name": "a value copied from a read of the masked table is the masked value",
+      "sql": "UPDATE users SET name = (SELECT email FROM users u2 WHERE u2.id = users.id) WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SET name = (SELECT email FROM ( SELECT",
+          "'***'::text AS email",
+          "FROM public.users ) AS u2"
+        ],
+        "statement_excludes": ["email = '***'::text"]
+      }
+    },
+    {
+      "name": "a subquery in SET reads the masked table through the wrap; the wrap's columns must keep their names, or email falls through to the target row's raw email",
+      "sql": "UPDATE users SET name = (SELECT email FROM users x LIMIT 1) WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SET name = (SELECT email FROM ( SELECT",
+          "'***'::text AS email",
+          "FROM public.users ) AS x LIMIT 1) WHERE id = 1"
+        ],
+        "statement_excludes": ["email = '***'::text"]
+      }
+    },
+    {
+      "name": "the masked row copied through a SET subquery carries masked values, not comparisons against the raw ones",
+      "sql": "UPDATE orders SET note = (SELECT u::text FROM users u LIMIT 1) WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS u LIMIT 1) WHERE id = 1"
+        ],
+        "statement_excludes": ["email = '***'::text"]
+      }
+    },
+    {
+      "name": "a subquery nested inside a SET expression",
+      "sql": "UPDATE orders SET note = coalesce((SELECT ssn FROM users LIMIT 1), 'x') WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users LIMIT 1)"
+        ]
+      }
+    },
+    {
+      "name": "a subquery in ON CONFLICT DO UPDATE SET is wrapped like any read",
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = (SELECT email FROM users x LIMIT 1)",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS x LIMIT 1)"
+        ],
+        "statement_excludes": ["email = '***'::text"]
+      }
+    },
+    {
+      "name": "a subquery in RETURNING",
+      "sql": "UPDATE orders SET note = 'x' WHERE id = 1 RETURNING (SELECT email FROM users LIMIT 1)",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "RETURNING (SELECT email FROM ( SELECT",
+          "'***'::text AS email",
+          "FROM public.users ) AS users LIMIT 1)"
+        ]
+      }
+    },
+    {
+      "name": "a multi-column SET from a subquery over the masked table copies masked values",
+      "sql": "UPDATE users SET (name, bio) = (SELECT email, ssn FROM users WHERE id = 2) WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users WHERE id = 2"
+        ]
+      }
+    },
+    {
+      "name": "allowed; a NOT NULL or CHECK violation's DETAIL prints the failing row raw, so the gateway must not pass error details of writes to masked tables through",
+      "sql": "UPDATE users SET name = NULL WHERE id = 2",
+      "expect": {
+        "verdict": "allow",
+        "statement": "UPDATE users SET name = NULL WHERE id = 2"
+      }
+    },
+    {
+      "name": "a bare masked RETURNING column is masked in place, its name kept",
+      "sql": "INSERT INTO users (name) VALUES ('x') RETURNING email",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO users (name) VALUES ('x') RETURNING '***'::text AS email"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING a masked column → masks it in place, output name preserved"
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING email AS e",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["RETURNING '***'::text AS e"]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING masked col AS alias → masks, explicit alias kept verbatim"
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ('x') RETURNING id, ssn, name",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "RETURNING id, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn, name"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING mixed masked + unmasked → only the masked column is rewritten"
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ('x') RETURNING *",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO users (name) VALUES ('x') RETURNING id AS id, org_id AS org_id, '***'::text AS email, name AS name, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn, CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone, '***'::text AS bio, pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary, (pg_catalog.date_trunc('year', birthday))::date AS birthday, created_at AS created_at, CASE WHEN false THEN tags END AS tags"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING * → expands to the full masked projection"
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ('x') RETURNING id, name",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO users (name) VALUES ('x') RETURNING id, name"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING only unmasked columns → verbatim, target not wrapped"
+    },
+    {
+      "sql": "DELETE FROM users WHERE id = 1 RETURNING email || 'z'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING a computed expression over a masked column → fail closed (v1)"
+    },
+    {
+      "sql": "UPDATE users SET name = name WHERE id = 1 RETURNING ssn || 'x'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: RETURNING a computed expression over a masked column → rejected (fail-closed, B4)"
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING lower(email)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "UPDATE users t SET name = 'x' WHERE id = 1 RETURNING t.*",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING <table>.* (qualified whole-row) → fail closed (v1)"
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "whole row"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: RETURNING whole-row composite of the target → fail closed"
+    },
+    {
+      "name": "a field of the target's whole row",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING (users).email",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "old and new qualify the target in RETURNING",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING old.email, new.ssn",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "RETURNING '***'::text AS email, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), new.ssn), 'UTF8')), 'hex') AS ssn"
+        ]
+      }
+    },
+    {
+      "sql": "UPDATE users t SET name = 'x' WHERE id = 1 RETURNING t.email",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["RETURNING '***'::text AS email"]
+      }
+    },
+    {
+      "name": "the raw value is stored; RETURNING hands back the masked one",
+      "sql": "INSERT INTO users (id, email) VALUES (90, '4900000000000000') RETURNING id, email",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO users (id, email) VALUES (90, '4900000000000000') RETURNING id, '***'::text AS email"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: RETURNING a masked column: the write stores the RAW value, RETURNING returns it MASKED (B4)"
+    },
+    {
+      "sql": "INSERT INTO users (id, name, email, ssn) VALUES (91, 'Zed', 'zed@acme.io', '123-45-6789') RETURNING *",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "VALUES (91, 'Zed', 'zed@acme.io', '123-45-6789') RETURNING id AS id",
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: RETURNING *: masked columns come back masked, others real (B4)"
+    },
+    {
+      "name": "allowed by design: a caller who can write a masked table can learn the token of a value it chooses",
+      "sql": "INSERT INTO users (id, ssn) VALUES (999, '079-05-1120') RETURNING ssn",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "RETURNING pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn"
+        ]
+      }
+    },
+    {
+      "sql": "DELETE FROM users WHERE id = 1 RETURNING *",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "RETURNING id AS id",
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "CASE WHEN false THEN tags END AS tags"
+        ]
+      }
+    },
+    {
+      "name": "RETURNING * with USING would also return the joined rows",
+      "sql": "DELETE FROM users USING orders WHERE users.id = orders.user_id AND orders.id = 1 RETURNING *",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "RETURNING *"
+      }
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' FROM orders WHERE users.id = orders.user_id AND orders.id = 1 RETURNING *",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "DELETE FROM users USING orders WHERE users.id = orders.user_id AND orders.id = 1 RETURNING users.id, email",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["RETURNING users.id, '***'::text AS email"]
+      }
+    },
+    {
+      "name": "a RETURNING column whose mask doesn't fit its type",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING salary",
+      "policy": "misfit_hash_numeric",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "DO UPDATE copying the existing row's masked value",
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = users.email",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "INSERT INTO users AS u (id, email) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = u.ssn",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a DO UPDATE WHERE on a masked column is an oracle",
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = 'x' WHERE users.ssn = '079-05-1120'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "an arbiter predicate on a masked column",
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (id) WHERE email = 'x' DO NOTHING",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "an arbiter expression over a masked column",
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (lower(email)) DO NOTHING",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "an arbiter column that is masked: whether the row inserts reveals whether the raw value exists",
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (email) DO NOTHING",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "EXCLUDED is the caller's own proposed row, not stored data",
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET email = excluded.email, name = excluded.name",
+      "expect": {
+        "verdict": "allow",
+        "statement": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET email = excluded.email, name = excluded.name"
+      }
+    },
+    {
+      "sql": "INSERT INTO users (id, email) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = 'x' RETURNING email",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["RETURNING '***'::text AS email"]
+      }
+    },
+    {
+      "name": "INSERT ... SELECT from the masked table copies masked values",
+      "sql": "INSERT INTO users (id, name) SELECT id + 1000, email FROM users WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "INSERT INTO users (id, name) SELECT id + 1000, email FROM ( SELECT",
+          "FROM public.users ) AS users WHERE id = 1"
+        ]
+      }
+    },
+    {
+      "name": "copying a masked column into an unmasked table copies the token",
+      "sql": "INSERT INTO logs (msg) SELECT ssn FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "INSERT INTO logs (msg) SELECT ssn FROM ( SELECT",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "INSERT INTO archive (id, n) SELECT id, length(email) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users"],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "sql": "INSERT INTO users (id) VALUES ((SELECT count(*) FROM users WHERE ssn = '079-05-1120'))",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users WHERE ssn = '079-05-1120'"
+        ]
+      }
+    },
+    {
+      "name": "UPDATE ... FROM a masked table",
+      "sql": "UPDATE orders SET note = u.ssn FROM users u WHERE u.id = orders.user_id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "UPDATE orders SET note = u.ssn FROM ( SELECT",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS u WHERE u.id = orders.user_id"
+        ]
+      }
+    },
+    {
+      "name": "the target's own table joined in FROM is a read: wrapped, so the filter sees the masked value",
+      "sql": "UPDATE users SET name = 'x' FROM users u2 WHERE u2.id = users.id AND u2.email = 'ada@acme.io'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "UPDATE users SET name = 'x' FROM ( SELECT",
+          "'***'::text AS email",
+          "FROM public.users ) AS u2 WHERE u2.id = users.id"
+        ]
+      }
+    },
+    {
+      "name": "copying from the target's own table joined in FROM copies the masked value",
+      "sql": "UPDATE users SET name = u2.email FROM users u2 WHERE u2.id = users.id AND users.id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "UPDATE users SET name = u2.email FROM ( SELECT",
+          "'***'::text AS email",
+          "FROM public.users ) AS u2"
+        ]
+      }
+    },
+    {
+      "name": "RETURNING a column of a masked FROM item returns the wrap's masked value",
+      "sql": "UPDATE orders SET note = 'x' FROM users u WHERE u.id = orders.user_id AND orders.id = 1 RETURNING orders.id, u.email, u.ssn",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS u WHERE u.id = orders.user_id",
+          "RETURNING orders.id, u.email, u.ssn"
+        ]
+      }
+    },
+    {
+      "sql": "UPDATE orders SET note = users.email FROM users WHERE users.id = orders.user_id AND orders.id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "a correlated SET subquery over the masked table",
+      "sql": "UPDATE orders SET note = (SELECT phone FROM users WHERE users.id = orders.user_id) WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "DELETE ... USING a masked table",
+      "sql": "DELETE FROM orders USING users u WHERE u.id = orders.user_id AND u.email = 'ada@acme.io'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "DELETE FROM orders USING ( SELECT",
+          "FROM public.users ) AS u WHERE u.id = orders.user_id AND u.email = 'ada@acme.io'"
+        ]
+      }
+    },
+    {
+      "name": "a read-only CTE under an INSERT",
+      "sql": "WITH x AS (SELECT email FROM users) INSERT INTO logs (msg) SELECT email FROM x",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "WITH x AS (SELECT email FROM ( SELECT",
+          "FROM public.users ) AS users)"
+        ]
+      }
+    },
+    {
+      "name": "CREATE TABLE AS copies masked values only",
+      "sql": "CREATE TABLE leak AS SELECT * FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "CREATE TABLE public.leak AS SELECT * FROM ( SELECT",
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "SELECT INTO copies masked values only",
+      "sql": "SELECT email, ssn INTO leak FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "INTO public.leak",
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "WITH d AS (DELETE FROM users WHERE id = 1 RETURNING email) SELECT * FROM d",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH x AS (UPDATE users SET name = email WHERE id = 1 RETURNING 1) SELECT 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "name": "the preview of an UPDATE ... FROM counts over the wrap, so it is no oracle for the raw value",
+      "sql": "UPDATE orders SET note = 'x' FROM users u WHERE u.id = orders.user_id AND u.ssn = 'abc'",
+      "policy": "masked_hold",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "statement_includes": ["FROM public.users ) AS u"],
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE EXISTS (SELECT FROM ( SELECT id AS id, org_id AS org_id, '***'::text AS email, name AS name, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn, CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone, '***'::text AS bio, pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary, (pg_catalog.date_trunc('year', birthday))::date AS birthday, created_at AS created_at, CASE WHEN false THEN tags END AS tags FROM public.users ) AS u WHERE u.id = orders.user_id AND u.ssn = 'abc')",
+          "exact": true
+        }
+      }
+    },
+    {
+      "sql": "INSERT INTO logs (msg) SELECT email FROM users WHERE email LIKE '%@acme.io'",
+      "policy": "masked_hold",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT email FROM ( SELECT id AS id, org_id AS org_id, '***'::text AS email, name AS name, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn, CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone, '***'::text AS bio, pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary, (pg_catalog.date_trunc('year', birthday))::date AS birthday, created_at AS created_at, CASE WHEN false THEN tags END AS tags FROM public.users ) AS users WHERE email LIKE '%@acme.io' ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "sql": "DELETE FROM orders WHERE user_id IN (SELECT id FROM users WHERE ssn = 'abc')",
+      "policy": "masked_hold",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE user_id IN (SELECT id FROM ( SELECT id AS id, org_id AS org_id, '***'::text AS email, name AS name, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn, CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone, '***'::text AS bio, pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary, (pg_catalog.date_trunc('year', birthday))::date AS birthday, created_at AS created_at, CASE WHEN false THEN tags END AS tags FROM public.users ) AS users WHERE ssn = 'abc')",
+          "exact": true
+        }
+      }
+    },
+    {
+      "sql": "CREATE TABLE leak AS SELECT ssn FROM users WHERE ssn = 'abc'",
+      "policy": "masked_hold",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT ssn FROM ( SELECT id AS id, org_id AS org_id, '***'::text AS email, name AS name, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn, CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone, '***'::text AS bio, pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary, (pg_catalog.date_trunc('year', birthday))::date AS birthday, created_at AS created_at, CASE WHEN false THEN tags END AS tags FROM public.users ) AS users WHERE ssn = 'abc' ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING email",
+      "policy": "masked_hold",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "statement": "UPDATE users SET name = 'x' WHERE id = 1 RETURNING '***'::text AS email",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM users WHERE id = 1",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "a held write is checked before it is held",
+      "sql": "UPDATE users SET name = 'x' WHERE ssn = 'abc'",
+      "policy": "masked_hold",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "masks are keyed by name, so a masked table can't be renamed (checked before the schema-change class)",
+      "sql": "ALTER TABLE users RENAME TO users_old",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "renamed or moved"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users RENAME TO users_old",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "ALTER TABLE IF EXISTS public.users RENAME TO u2",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "moving a masked table",
+      "sql": "ALTER TABLE users SET SCHEMA archive",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "renaming a column: masks are keyed by column name too, so swapping names would unmask a column",
+      "sql": "ALTER TABLE users RENAME COLUMN email TO contact",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "ALTER TABLE stripe.charges SET SCHEMA public",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a partition of a masked parent",
+      "sql": "ALTER TABLE events_2024 RENAME TO events_old",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders RENAME TO orders_old",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "allow",
+        "statement": "ALTER TABLE orders RENAME TO orders_old"
+      }
+    },
+    {
+      "name": "a table with labels can't be renamed either",
+      "sql": "ALTER TABLE secrets RENAME TO s2",
+      "policy": "labels_only",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "ALTER TABLE comments SET SCHEMA archive",
+      "policy": "labels_only",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "LIKE a masked table",
+      "sql": "CREATE TABLE leak (LIKE users)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a foreign key into a masked table",
+      "sql": "CREATE TABLE child (user_id int REFERENCES users (id))",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a foreign key whose validation compares against a masked column",
+      "sql": "ALTER TABLE orders ADD CONSTRAINT fk FOREIGN KEY (note) REFERENCES users (email)",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a user function in an index expression",
+      "sql": "CREATE INDEX ON users (get_ssn(id))",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "ALTER COLUMN ... USING copies the raw masked value into a clear column",
+      "sql": "ALTER TABLE users ALTER COLUMN name TYPE text USING email",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a CHECK over a masked column: whether validation fails reveals whether the raw value exists",
+      "sql": "ALTER TABLE users ADD CONSTRAINT probe CHECK (ssn <> '079-05-1120')",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a foreign key from a masked column to values the caller controls is a membership oracle",
+      "sql": "ALTER TABLE users ADD CONSTRAINT probe FOREIGN KEY (email) REFERENCES orders (note)",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a unique index whose predicate reads a masked column: whether the build fails reveals whether the raw value exists",
+      "sql": "CREATE UNIQUE INDEX probe ON users ((1)) WHERE ssn = '079-05-1120' OR id = 1",
+      "policy": "masked_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    }
+  ]
+}

@@ -1,52 +1,27 @@
 {
-  "name": "midplane-cloud",
-  "version": "0.0.0",
+  "name": "midplane-oss",
   "private": true,
-  "description": "Hosted Midplane. Sign up, paste a Postgres URL, get a Postgres MCP endpoint that runs the OSS engine with your credentials — masking, policy, approvals, audit.",
   "license": "MIT",
   "type": "module",
-  "workspaces": [
-    "apps/*",
-    "packages/*",
-    "infra/*",
-    "engine/packages/*",
-    "engine/examples/*"
-  ],
+  "packageManager": "pnpm@12.6.0",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.16.0",
+      "onFail": "download"
+    }
+  },
   "scripts": {
-    "dev": "bun --filter '@midplane-cloud/web' dev",
-    "dev:image": "bash scripts/dev-image.sh",
-    "build": "bun --filter '@midplane-cloud/*' build",
-    "build:engine-binary": "bash scripts/build-engine-binary.sh",
+    "typecheck": "tsc -b",
+    "lint": "biome ci .",
+    "boundaries": "node scripts/check-boundaries.ts .",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "test:engine": "cd engine && bun test",
-    "test:e2e": "playwright test",
-    "test:e2e:live": "E2E_LIVE=1 playwright test",
-    "lint": "bun --filter '@midplane-cloud/*' lint",
-    "typecheck": "bun --filter '@midplane-cloud/*' typecheck",
-    "check:pins": "bun scripts/check-image-pin.ts",
-    "check:server-json": "bun scripts/check-server-json.ts",
-    "build:npm": "bun engine/packages/mcp-server/scripts/build-npm.ts",
-    "check:transforms": "bun scripts/check-mask-transforms.ts",
-    "check:no-inline-secrets": "bun scripts/check-no-inline-secrets.ts",
-    "db:generate": "bun --filter '@midplane-cloud/db' generate",
-    "db:studio": "bun --filter '@midplane-cloud/db' studio",
-    "migrate:eu": "bun --filter '@midplane-cloud/db' migrate:eu",
-    "migrate:us": "bun --filter '@midplane-cloud/db' migrate:us",
-    "migrate:all": "bun run migrate:eu && bun run migrate:us",
-    "migrate:self-host": "bun --filter '@midplane-cloud/db' migrate:self-host"
+    "ci": "pnpm typecheck && pnpm lint && pnpm boundaries && pnpm test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.1",
-    "@types/bun": "^1.1.14",
-    "@types/node": "^22.10.0",
-    "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
-  },
-  "engines": {
-    "bun": ">=1.3.0",
-    "node": ">=22.0.0"
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
   }
 }

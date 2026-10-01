@@ -1,0 +1,2026 @@
+{
+  "description": "Masking, reads: every masked table a statement reads is replaced by a subquery projecting its columns through their masks, so filters, joins, groupings, aggregates, set operations and CTEs above it only ever see masked values. Views over masked tables, schema.table.column references, system columns, TABLESAMPLE and misfit transforms deny.",
+  "catalog": "app",
+  "policies": {
+    "masked": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      }
+    },
+    "masked_ddl": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "masked_hold": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        },
+        "stripe.charges": {
+          "id": "none",
+          "customer": "none",
+          "amount": {
+            "t": "noise",
+            "ratio": 0.1
+          },
+          "card_last4": "null-out"
+        },
+        "public.events": {
+          "id": "none",
+          "kind": {
+            "t": "partial",
+            "keepEnd": 4
+          },
+          "payload": "full-redact",
+          "at": {
+            "t": "generalize",
+            "granularity": "month"
+          }
+        },
+        "public.secrets": {}
+      },
+      "writes": {
+        "row_changes": "hold"
+      }
+    },
+    "unmasked": {
+      "table_access": {
+        "default": "read_write"
+      }
+    },
+    "users_denied": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.users": "deny"
+        }
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "org_id": "none",
+          "name": "none",
+          "created_at": "none",
+          "email": "full-redact",
+          "ssn": "consistent-hash",
+          "phone": {
+            "t": "partial",
+            "keepStart": 0,
+            "keepEnd": 4,
+            "glyph": "*"
+          },
+          "salary": {
+            "t": "generalize",
+            "granularity": 1000
+          },
+          "birthday": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        }
+      }
+    },
+    "typo": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "emial": "none"
+        }
+      }
+    },
+    "child_only": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.events_2024": {
+          "id": "none",
+          "kind": "none",
+          "payload": "full-redact",
+          "at": "none"
+        }
+      }
+    },
+    "fit_types": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": {
+            "t": "noise",
+            "ratio": 0.5
+          },
+          "org_id": {
+            "t": "generalize",
+            "granularity": 100
+          },
+          "email": "null-out",
+          "name": "none",
+          "ssn": {
+            "t": "partial",
+            "keepStart": 3,
+            "keepEnd": 0,
+            "glyph": "#"
+          },
+          "phone": "consistent-hash",
+          "bio": "none",
+          "salary": "full-redact",
+          "birthday": {
+            "t": "generalize",
+            "granularity": "day"
+          },
+          "created_at": {
+            "t": "generalize",
+            "granularity": "month"
+          },
+          "tags": "null-out"
+        },
+        "public.webhooks": {
+          "id": "none",
+          "url": {
+            "t": "partial",
+            "keepStart": 8
+          },
+          "payload": "full-redact"
+        }
+      }
+    },
+    "glyph_quote": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "name": {
+            "t": "partial",
+            "keepEnd": 2,
+            "glyph": "'--"
+          }
+        }
+      }
+    },
+    "misfit_hash_numeric": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "salary": "consistent-hash"
+        }
+      }
+    },
+    "misfit_hash_date": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "birthday": "consistent-hash"
+        }
+      }
+    },
+    "misfit_hash_array": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "tags": "consistent-hash"
+        }
+      }
+    },
+    "misfit_partial_numeric": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "salary": {
+            "t": "partial",
+            "keepEnd": 2
+          }
+        }
+      }
+    },
+    "misfit_partial_json": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.webhooks": {
+          "id": "none",
+          "payload": {
+            "t": "partial",
+            "keepStart": 2
+          }
+        }
+      }
+    },
+    "misfit_year_numeric": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "salary": {
+            "t": "generalize",
+            "granularity": "year"
+          }
+        }
+      }
+    },
+    "misfit_day_text": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "email": {
+            "t": "generalize",
+            "granularity": "day"
+          }
+        }
+      }
+    },
+    "misfit_bucket_date": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "birthday": {
+            "t": "generalize",
+            "granularity": 10
+          }
+        }
+      }
+    },
+    "misfit_bucket_text": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "email": {
+            "t": "generalize",
+            "granularity": 10
+          }
+        }
+      }
+    },
+    "misfit_noise_text": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "email": {
+            "t": "noise",
+            "ratio": 0.2
+          }
+        }
+      }
+    },
+    "misfit_noise_date": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "masks": {
+        "public.users": {
+          "id": "none",
+          "created_at": {
+            "t": "noise",
+            "ratio": 0.2
+          }
+        }
+      }
+    }
+  },
+  "defaults": {
+    "policy": "masked"
+  },
+  "cases": [
+    {
+      "name": "a masked column is read through the masking subquery; every column of the table is projected, each through its own mask",
+      "sql": "SELECT email FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT email FROM ( SELECT id AS id, org_id AS org_id, '***'::text AS email, name AS name, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn, CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone, '***'::text AS bio, pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary, (pg_catalog.date_trunc('year', birthday))::date AS birthday, created_at AS created_at, CASE WHEN false THEN tags END AS tags FROM public.users ) AS users",
+        "read_only": true,
+        "tables": ["public.users"],
+        "output": [
+          {
+            "name": "email",
+            "sources": ["public.users.email"]
+          }
+        ]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: direct masked column is redacted"
+    },
+    {
+      "name": "engine wiring: the executed statement is the wrapped one, not the original",
+      "sql": "SELECT email FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["'***'::text AS email", "FROM ( SELECT"],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      },
+      "origin": "engine/test/masking/engine-source-rewrite.test.ts: a masked query executes the REWRITTEN sql (wrap) on the tx and audits columns_masked"
+    },
+    {
+      "name": "a read-only caller gets the same masked statement",
+      "sql": "SELECT email FROM users",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ],
+        "read_only": true
+      },
+      "origin": "engine/test/masking/engine-masking.test.ts: masks the declared column in the returned result and audits columns_masked"
+    },
+    {
+      "name": "without masks the statement runs unchanged",
+      "sql": "SELECT email FROM users",
+      "policy": "unmasked",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT email FROM users"
+      },
+      "origin": "engine/test/masking/engine-masking.test.ts: no masking config is a transparent passthrough (plaintext returned)"
+    },
+    {
+      "name": "an aliased masked column: the wrap takes the table alias",
+      "sql": "SELECT u.email AS contact FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS u"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"],
+        "output": [
+          {
+            "name": "contact",
+            "sources": ["public.users.email"]
+          }
+        ]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: aliased masked column is redacted by its output name"
+    },
+    {
+      "name": "star over a masked table expands over the masked projection",
+      "sql": "SELECT * FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SELECT * FROM ( SELECT",
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: SELECT * masks email + ssn, leaves id"
+    },
+    {
+      "name": "consistent-hash: salted sha256 of the value, every call pg_catalog-qualified",
+      "sql": "SELECT ssn FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "partial on a varchar column keeps the last 4 and masks the rest; a value no longer than the kept window is masked whole",
+      "sql": "SELECT phone FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "generalize: numeric bucket and year truncation",
+      "sql": "SELECT salary, birthday FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "(pg_catalog.date_trunc('year', birthday))::date AS birthday",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "columns a masked table's entry doesn't list are fully redacted: text to '***', other types to a typed NULL",
+      "sql": "SELECT bio, tags FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS bio",
+          "CASE WHEN false THEN tags END AS tags",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a mask entry for a misspelled column unmasks nothing: the real column is unlisted, so redacted",
+      "sql": "SELECT email FROM users",
+      "policy": "typo",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "columns marked none are clear, but the table is still read through the wrap",
+      "sql": "SELECT name, created_at FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "name AS name",
+          "created_at AS created_at",
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "an empty mask entry redacts every column of the table",
+      "sql": "SELECT id, name, value FROM secrets",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT id, name, value FROM ( SELECT CASE WHEN false THEN id END AS id, '***'::text AS name, '***'::text AS value FROM public.secrets ) AS secrets"
+      }
+    },
+    {
+      "name": "a masked table outside public: noise on numeric, null-out as a typed NULL; the wrap is named after the table",
+      "sql": "SELECT customer, amount, card_last4 FROM stripe.charges",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT customer, amount, card_last4 FROM ( SELECT id AS id, customer AS customer, amount OPERATOR(pg_catalog.*) (1 OPERATOR(pg_catalog.+) (((pg_catalog.random() OPERATOR(pg_catalog.*) 2) OPERATOR(pg_catalog.-) 1) OPERATOR(pg_catalog.*) 0.1)) AS amount, CASE WHEN false THEN card_last4 END AS card_last4 FROM stripe.charges ) AS charges",
+        "output": [
+          {
+            "name": "customer",
+            "sources": ["stripe.charges.customer"]
+          },
+          {
+            "name": "amount",
+            "sources": ["stripe.charges.amount"]
+          },
+          {
+            "name": "card_last4",
+            "sources": ["stripe.charges.card_last4"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "an aggregate over a masked table runs over the wrap (the old post-exec masker rejected it)",
+      "sql": "SELECT count(*) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SELECT count(*) FROM ( SELECT",
+          "FROM public.users ) AS users"
+        ]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: aggregate over masked table REJECTS"
+    },
+    {
+      "name": "a statement touching no masked table is not rewritten (the ISSUE-007 regression)",
+      "sql": "SELECT count(*) FROM orders",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT count(*) FROM orders"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: computed output REJECTS even over an unrelated table (fail-closed)"
+    },
+    {
+      "name": "an unmasked table stays byte-for-byte",
+      "sql": "SELECT count(*)::int AS c FROM orders",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT count(*)::int AS c FROM orders"
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: count over an UNMASKED table is untouched (the ISSUE-007 regression)"
+    },
+    {
+      "name": "TABLE is SELECT * and is wrapped the same way",
+      "sql": "TABLE users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SELECT * FROM ( SELECT",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a schema-qualified table name is wrapped and aliased to the bare name",
+      "sql": "SELECT email FROM public.users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "quoted identifiers resolve to the same masked table",
+      "sql": "SELECT \"email\" FROM \"public\".\"users\"",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ],
+        "statement_excludes": ["\"users\""]
+      }
+    },
+    {
+      "name": "unquoted names fold to lower case",
+      "sql": "SELECT EMAIL FROM PUBLIC.USERS",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a Unicode-escaped identifier is the same table",
+      "sql": "SELECT email FROM U&\"\\0075sers\"",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "comments don't hide the masked table",
+      "sql": "SELECT /* FROM orders */ email FROM users -- FROM orders",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "an alias borrowed from an unmasked table still gets the wrap",
+      "sql": "SELECT orders.email FROM users orders",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS orders"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "column aliases on the table carry over to the wrap",
+      "sql": "SELECT x.c FROM users AS x(a, b, c)",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS x(a, b, c)"],
+        "output": [
+          {
+            "name": "c",
+            "sources": ["public.users.email"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "filtering on a masked column filters the masked value, so the count is no oracle for the raw one",
+      "sql": "SELECT count(*) FROM users WHERE email = 'ada@acme.io'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users WHERE email = 'ada@acme.io'"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: WHERE / JOIN / GROUP BY on a masked column operate on the masked value (inference closed)"
+    },
+    {
+      "name": "a prefix probe on a hashed column sees the hash",
+      "sql": "SELECT id FROM users WHERE ssn LIKE '079%'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users WHERE ssn LIKE '079%'"
+        ]
+      }
+    },
+    {
+      "name": "a substring probe sees the hash",
+      "sql": "SELECT id FROM users WHERE substr(ssn, 1, 3) = '079'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users WHERE substr(ssn, 1, 3) = '079'"
+        ]
+      }
+    },
+    {
+      "name": "a CASE oracle sees the masked value",
+      "sql": "SELECT CASE WHEN email LIKE 'a%' THEN 1 ELSE 0 END AS starts_a FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "an error raised on a masked value can only echo the masked value",
+      "sql": "SELECT id FROM users WHERE email::int > 0",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users WHERE email::int > 0"
+        ]
+      }
+    },
+    {
+      "name": "a join: only the masked side is wrapped",
+      "sql": "SELECT u.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email = o.note",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.users ) AS u JOIN orders AS o ON o.user_id = u.id WHERE u.email = o.note"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "sql": "SELECT u.email, o.total FROM users u JOIN orders o ON o.user_id = u.id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS u JOIN orders AS o"
+        ],
+        "output": [
+          {
+            "name": "email",
+            "sources": ["public.users.email"]
+          },
+          {
+            "name": "total",
+            "sources": ["public.orders.total"]
+          }
+        ]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: join masks the masked table's column, leaves the other table's"
+    },
+    {
+      "name": "a self-join on a hashed column wraps both references and joins on the tokens",
+      "sql": "SELECT a.id FROM users a JOIN users b ON a.ssn = b.ssn AND a.id <> b.id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.users ) AS a JOIN ( SELECT",
+          "FROM public.users ) AS b ON a.ssn = b.ssn"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "JOIN USING on a masked column",
+      "sql": "SELECT count(*) FROM users a JOIN users b USING (ssn)",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.users ) AS a JOIN ( SELECT",
+          "FROM public.users ) AS b USING (ssn)"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "NATURAL JOIN over the wrap keeps every column name, so it joins the same columns",
+      "sql": "SELECT count(*) FROM users NATURAL JOIN orders",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.users ) AS users NATURAL JOIN orders"
+        ]
+      }
+    },
+    {
+      "name": "a comma join",
+      "sql": "SELECT u.email FROM orders, users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "GROUP BY a masked column groups the masked values",
+      "sql": "SELECT email, count(*) FROM users GROUP BY email",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users GROUP BY email"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT email, count(*) FROM users GROUP BY ROLLUP (email)",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "HAVING over a masked aggregate",
+      "sql": "SELECT org_id FROM users GROUP BY org_id HAVING max(ssn) > 'a'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "ORDER BY a masked column orders the tokens, not the raw values",
+      "sql": "SELECT id FROM users ORDER BY ssn DESC",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users ORDER BY ssn DESC"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT DISTINCT ON (email) id FROM users ORDER BY email, id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "aggregates see only masked inputs",
+      "sql": "SELECT max(salary), min(birthday), string_agg(ssn, ',' ORDER BY phone) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "(pg_catalog.date_trunc('year', birthday))::date AS birthday",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "CASE WHEN pg_catalog.length(phone) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('*', GREATEST(pg_catalog.length(phone), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(phone, 0), pg_catalog.repeat('*', pg_catalog.length(phone) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(phone, 4)) END AS phone",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "an aggregate FILTER sees the masked value",
+      "sql": "SELECT count(*) FILTER (WHERE ssn = '079-05-1120') FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY salary) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "window partitions and orders see masked values",
+      "sql": "SELECT id, rank() OVER (PARTITION BY email ORDER BY salary) FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT count(*)::int AS c, avg(salary)::float8 AS a FROM users WHERE org_id = 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "FROM public.users ) AS users WHERE org_id = 1"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: aggregate over a masked table: count + avg(unmasked col) match the original"
+    },
+    {
+      "sql": "SELECT id, name, email FROM users ORDER BY id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "name AS name",
+          "FROM public.users ) AS users ORDER BY id"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: full-redact: masked column is '***', other columns unchanged, no raw card leaks"
+    },
+    {
+      "sql": "SELECT id, ssn FROM users ORDER BY id",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      },
+      "origin": "engine/test/masking/source-rewrite.live.test.ts: consistent-hash token parity: in-DB md5 == JS applyTransform (ET5 alignment)"
+    },
+    {
+      "name": "a scalar subquery over a masked table",
+      "sql": "SELECT (SELECT email FROM users u WHERE u.id = o.user_id) AS contact FROM orders o",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.users ) AS u WHERE u.id = o.user_id",
+          "FROM orders AS o"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "an EXISTS oracle over a masked column sees the masked value",
+      "sql": "SELECT id FROM orders o WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = o.user_id AND u.email = 'ada@acme.io')",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "an IN-subquery oracle",
+      "sql": "SELECT id FROM orders WHERE user_id IN (SELECT id FROM users WHERE ssn = '079-05-1120')",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users WHERE ssn = '079-05-1120'"
+        ]
+      }
+    },
+    {
+      "name": "a masked value in LIMIT",
+      "sql": "SELECT id FROM orders LIMIT (SELECT length(email) FROM users LIMIT 1)",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users LIMIT 1"]
+      }
+    },
+    {
+      "name": "LATERAL",
+      "sql": "SELECT s.e FROM orders o, LATERAL (SELECT email AS e FROM users u WHERE u.id = o.user_id) s",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "a masked table inside an aliased join",
+      "sql": "SELECT j.email FROM (users u JOIN orders o ON o.user_id = u.id) AS j",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS u JOIN orders AS o ON o.user_id = u.id"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"],
+        "output": [
+          {
+            "name": "email",
+            "sources": ["public.users.email"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a function in FROM over a masked column",
+      "sql": "SELECT l FROM users u, LATERAL lower(u.email) l",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.users ) AS u, LATERAL lower(u.email) AS l"
+        ]
+      }
+    },
+    {
+      "name": "a LATERAL VALUES list over a masked column",
+      "sql": "SELECT v.x FROM users u CROSS JOIN LATERAL (VALUES (u.ssn)) v(x)",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS u CROSS JOIN LATERAL"
+        ]
+      }
+    },
+    {
+      "name": "a subscript on a redacted array reads the typed NULL",
+      "sql": "SELECT tags[1] FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "CASE WHEN false THEN tags END AS tags",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT email COLLATE \"C\" FROM users ORDER BY 1",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "IN, = ANY, IS DISTINCT FROM and NULLIF are comparisons on the masked value",
+      "sql": "SELECT id FROM users WHERE email IN ('a@acme.io', 'b@acme.io') AND ssn = ANY (ARRAY['079-05-1120']) AND phone IS DISTINCT FROM '555' AND nullif(name, '') IS NOT NULL",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "BETWEEN is >= AND <=, both mask-safe, over the masked value",
+      "sql": "SELECT id FROM users WHERE salary BETWEEN 50000 AND 60000",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.floor(salary OPERATOR(pg_catalog./) 1000) OPERATOR(pg_catalog.*) 1000 AS salary",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a CTE over a masked table",
+      "sql": "WITH s AS (SELECT email FROM users) SELECT email FROM s",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "WITH s AS (SELECT email FROM ( SELECT",
+          "FROM public.users ) AS users) SELECT email FROM s"
+        ],
+        "output": [
+          {
+            "name": "email",
+            "sources": ["public.users.email"]
+          }
+        ]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: inline-CTE pass-through still masks (provenance resolves to base)"
+    },
+    {
+      "sql": "WITH recent AS (SELECT ssn FROM users) SELECT * FROM recent",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: a non-colliding CTE reading a masked table in its body still wraps the base table"
+    },
+    {
+      "name": "a CTE named like a masked table is the CTE, not the table: nothing to wrap (the old name-based rewriter failed closed)",
+      "sql": "WITH users AS (SELECT 1 AS id) SELECT * FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement": "WITH users AS (SELECT 1 AS id) SELECT * FROM users",
+        "output": [
+          {
+            "name": "id",
+            "sources": []
+          }
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: a CTE named like a masked table → fail closed (would rewrite the CTE as the base table)"
+    },
+    {
+      "name": "a CTE doesn't see itself: its body reads the real table (wrapped), the outer reference is the CTE",
+      "sql": "WITH users AS (SELECT email FROM users) SELECT email FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "WITH users AS (SELECT email FROM ( SELECT",
+          "FROM public.users ) AS users) SELECT email FROM users"
+        ],
+        "output": [
+          {
+            "name": "email",
+            "sources": ["public.users.email"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a schema-qualified name skips the CTE and reaches the masked table",
+      "sql": "WITH users AS (SELECT 1 AS id) SELECT email FROM public.users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a CTE is scoped to its subquery: the outer users is the masked table",
+      "sql": "SELECT * FROM (WITH users AS (SELECT 1 AS x) SELECT x FROM users) s, users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "WITH users AS (SELECT 1 AS x) SELECT x FROM users ) AS s, ( SELECT",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a sibling subquery's CTE doesn't shadow the masked table in another subquery",
+      "sql": "SELECT (WITH users AS (SELECT 'x' AS email) SELECT email FROM users) AS a, (SELECT email FROM users LIMIT 1) AS b",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "WITH users AS (SELECT 'x' AS email) SELECT email FROM users)",
+          "FROM public.users ) AS users LIMIT 1"
+        ]
+      }
+    },
+    {
+      "name": "a recursive CTE named like a masked table",
+      "sql": "WITH RECURSIVE users(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM users WHERE n < 3) SELECT n FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement": "WITH RECURSIVE users(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM users WHERE n < 3) SELECT n FROM users"
+      }
+    },
+    {
+      "name": "both arms of a recursive CTE read the masked table through the wrap",
+      "sql": "WITH RECURSIVE r(id, email) AS (SELECT id, email FROM users WHERE id = 1 UNION ALL SELECT u.id, u.email FROM users u JOIN r ON u.id = r.id + 1) SELECT email FROM r",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "FROM public.users ) AS users WHERE id = 1",
+          "FROM public.users ) AS u JOIN r ON"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "name": "nested WITH",
+      "sql": "WITH a AS (WITH b AS (SELECT ssn FROM users) SELECT ssn FROM b) SELECT ssn FROM a",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "WITH s AS MATERIALIZED (SELECT ssn FROM users) SELECT * FROM s",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "a subquery in FROM",
+      "sql": "SELECT e FROM (SELECT email AS e FROM users) sub",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users"
+        ],
+        "output": [
+          {
+            "name": "e",
+            "sources": ["public.users.email"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a derived table aliased like a masked table reads no table",
+      "sql": "SELECT email FROM (SELECT 'x' AS email) AS users",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT email FROM (SELECT 'x' AS email) AS users"
+      }
+    },
+    {
+      "name": "both UNION arms are wrapped (the old post-exec masker rejected set operations)",
+      "sql": "SELECT email FROM users UNION SELECT email FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SELECT email FROM ( SELECT",
+          "UNION SELECT email FROM ( SELECT"
+        ],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: UNION / set-op REJECTS"
+    },
+    {
+      "name": "the masked table in the second arm",
+      "sql": "SELECT note FROM orders UNION ALL SELECT email FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SELECT note FROM orders UNION ALL SELECT email FROM ( SELECT",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "name": "an INTERSECT membership probe compares the masked value",
+      "sql": "SELECT email FROM users INTERSECT SELECT 'ada@acme.io'",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS email",
+          "FROM public.users ) AS users INTERSECT SELECT 'ada@acme.io'"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT ssn FROM users EXCEPT SELECT note FROM orders",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS users EXCEPT SELECT note FROM orders"
+        ]
+      }
+    },
+    {
+      "name": "a masked table inside VALUES",
+      "sql": "VALUES ((SELECT email FROM users LIMIT 1))",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS users LIMIT 1"]
+      }
+    },
+    {
+      "name": "a view over a masked table can't be wrapped from outside, so it is denied",
+      "sql": "SELECT email FROM active_users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "view"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: view output REJECTS (the silent-leak hole)"
+    },
+    {
+      "sql": "SELECT email FROM active_users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/engine-masking.test.ts: rejects a view output: rows withheld, structured denial, audit marks masking_rejected"
+    },
+    {
+      "name": "denied whichever of the view's columns is read",
+      "sql": "SELECT id FROM active_users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "denied even when every column the view exposes is marked none",
+      "sql": "SELECT id, name FROM user_names",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT to_jsonb(active_users) AS j FROM active_users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: to_jsonb over a view REJECTS"
+    },
+    {
+      "name": "a view inside a CTE",
+      "sql": "WITH v AS (SELECT email FROM active_users) SELECT * FROM v",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a view in a WHERE subquery",
+      "sql": "SELECT o.id FROM orders o WHERE o.user_id IN (SELECT id FROM active_users)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a view over an unmasked table is fine",
+      "sql": "SELECT user_id, total FROM order_totals",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT user_id, total FROM order_totals"
+      }
+    },
+    {
+      "name": "a materialized view over an unmasked table is fine",
+      "sql": "SELECT day, n FROM daily_orders",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT day, n FROM daily_orders"
+      }
+    },
+    {
+      "name": "information_schema discovery works with masks on",
+      "sql": "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+      "expect": {
+        "verdict": "allow",
+        "statement_excludes": ["( SELECT"]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: information_schema discovery is NOT rejected with masking on"
+    },
+    {
+      "sql": "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'",
+      "expect": {
+        "verdict": "allow",
+        "statement_excludes": ["( SELECT"]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: describe_table (information_schema.columns) is NOT rejected"
+    },
+    {
+      "name": "table access is checked before masks",
+      "sql": "SELECT email FROM users",
+      "policy": "users_denied",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "name": "a view is table-access checked by its own name, then denied for reading a masked table",
+      "sql": "SELECT email FROM active_users",
+      "policy": "users_denied",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "once wrapped, the table is a subquery and schema.table.column can't reach it",
+      "sql": "SELECT public.users.email FROM public.users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "schema.table.column"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: schema-qualified column ref on a wrapped table → fail closed (Codex #5a)"
+    },
+    {
+      "name": "even for a column marked none",
+      "sql": "SELECT public.users.id FROM public.users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "in WHERE",
+      "sql": "SELECT id FROM public.users WHERE public.users.ssn = '079-05-1120'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a schema-qualified star",
+      "sql": "SELECT public.users.* FROM public.users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "outside public",
+      "sql": "SELECT stripe.charges.amount FROM stripe.charges",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "an unmasked table accepts schema.table.column",
+      "sql": "SELECT public.orders.total FROM public.orders",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT public.orders.total FROM public.orders"
+      }
+    },
+    {
+      "name": "an alias hides the table name",
+      "sql": "SELECT public.users.email FROM public.users u",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      }
+    },
+    {
+      "name": "system columns aren't in the catalog",
+      "sql": "SELECT ctid FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: system column on a wrapped table → fail closed"
+    },
+    {
+      "sql": "SELECT users.tableoid FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: qualified system column on a wrapped table → fail closed"
+    },
+    {
+      "sql": "SELECT xmin, email FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      }
+    },
+    {
+      "name": "a system column in WHERE",
+      "sql": "SELECT id FROM users WHERE ctid = '(0,1)'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      }
+    },
+    {
+      "name": "system columns are unresolved on every table (the old engine passed this one through)",
+      "sql": "SELECT ctid FROM orders",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: system column on an UNmasked table → verbatim (no wrap, no reject)"
+    },
+    {
+      "name": "a whole-row reference is the wrap's row, so every field in it is masked",
+      "sql": "SELECT users FROM users",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SELECT users FROM ( SELECT",
+          "FROM public.users ) AS users"
+        ]
+      }
+    },
+    {
+      "sql": "SELECT u FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "SELECT u FROM ( SELECT",
+          "FROM public.users ) AS u"
+        ]
+      }
+    },
+    {
+      "name": "field selection and expansion over the masked row",
+      "sql": "SELECT (u).email, (u).* FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"],
+        "statement_excludes": ["FROM users", "JOIN users"]
+      }
+    },
+    {
+      "sql": "SELECT (u.*).ssn FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), ssn), 'UTF8')), 'hex') AS ssn",
+          "FROM public.users ) AS u"
+        ]
+      }
+    },
+    {
+      "name": "casting the masked row to text",
+      "sql": "SELECT u::text FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"]
+      }
+    },
+    {
+      "sql": "SELECT ROW(u.*) FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"]
+      }
+    },
+    {
+      "name": "row comparison",
+      "sql": "SELECT count(*) FROM users u WHERE u = u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"]
+      }
+    },
+    {
+      "name": "json_build_object over the masked row serializes masked values",
+      "sql": "SELECT json_build_object('u', u) FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"]
+      }
+    },
+    {
+      "sql": "SELECT array_agg(u) FROM users u",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["FROM public.users ) AS u"]
+      }
+    },
+    {
+      "name": "whole-row json serialization is off the mask-safe list",
+      "sql": "SELECT to_jsonb(users) AS j FROM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: whole-row to_jsonb REJECTS"
+    },
+    {
+      "sql": "SELECT to_jsonb(u) FROM users u",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies to_jsonb whole-row serialization"
+    },
+    {
+      "sql": "SELECT row_to_json(u) FROM users u",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies row_to_json — whole-row serialization (composite-capable)"
+    },
+    {
+      "sql": "SELECT json_agg(u) FROM users u",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/mask-safety.test.ts: denies json_agg — whole-row/json serialization"
+    },
+    {
+      "name": "functional notation email(u) is a function call",
+      "sql": "SELECT email(u) FROM users u",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT to_jsonb(c) AS j FROM stripe.charges c",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: to_jsonb over a non-public masked table REJECTS (was the schema-qualified leak)"
+    },
+    {
+      "name": "a partitioned parent",
+      "sql": "SELECT payload FROM events",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS payload",
+          "FROM public.events ) AS events"
+        ]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: partition parent masks"
+    },
+    {
+      "name": "a partition read directly takes its parent's masks",
+      "sql": "SELECT kind FROM events_2024",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "CASE WHEN pg_catalog.length(kind) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('•', GREATEST(pg_catalog.length(kind), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(kind, 0), pg_catalog.repeat('•', pg_catalog.length(kind) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(kind, 4)) END AS kind",
+          "'***'::text AS payload",
+          "pg_catalog.date_trunc('month', at) AS at",
+          "FROM public.events_2024 ) AS events_2024"
+        ]
+      },
+      "origin": "engine/test/masking/provenance.live.test.ts: partition child queried directly masks via the parent"
+    },
+    {
+      "name": "the wrap keeps ONLY",
+      "sql": "SELECT kind FROM ONLY events",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "CASE WHEN pg_catalog.length(kind) OPERATOR(pg_catalog.<=) 4 THEN pg_catalog.repeat('•', GREATEST(pg_catalog.length(kind), 1)) ELSE pg_catalog.textcat(pg_catalog.textcat(pg_catalog.left(kind, 0), pg_catalog.repeat('•', pg_catalog.length(kind) OPERATOR(pg_catalog.-) 4)), pg_catalog.right(kind, 4)) END AS kind",
+          "FROM ONLY public.events ) AS events"
+        ]
+      }
+    },
+    {
+      "name": "TABLESAMPLE on a partition of a masked parent",
+      "sql": "SELECT payload FROM events_2024 TABLESAMPLE SYSTEM (10)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "a partition with its own mask entry",
+      "sql": "SELECT payload FROM events_2024",
+      "policy": "child_only",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "'***'::text AS payload",
+          "FROM public.events_2024 ) AS events_2024"
+        ]
+      }
+    },
+    {
+      "name": "reading the parent returns the masked partition's rows, so it must not run unmasked",
+      "sql": "SELECT payload FROM events",
+      "policy": "child_only",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "sql": "SELECT email FROM users TABLESAMPLE SYSTEM (10)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "TABLESAMPLE"
+      }
+    },
+    {
+      "sql": "SELECT count(*) FROM users TABLESAMPLE BERNOULLI (100) REPEATABLE (1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "under a join",
+      "sql": "SELECT u.id FROM orders o JOIN users u TABLESAMPLE SYSTEM (50) ON u.id = o.user_id",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "TABLESAMPLE on an unmasked table is fine",
+      "sql": "SELECT total FROM orders TABLESAMPLE BERNOULLI (50)",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT total FROM orders TABLESAMPLE BERNOULLI (50)"
+      }
+    },
+    {
+      "name": "full-redact on a numeric column is a NULL of the column's type",
+      "sql": "SELECT salary FROM users",
+      "policy": "fit_types",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["CASE WHEN false THEN salary END AS salary"]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: full-redact: text only"
+    },
+    {
+      "name": "null-out on text and on an array: a typed NULL",
+      "sql": "SELECT email, tags FROM users",
+      "policy": "fit_types",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "CASE WHEN false THEN email END AS email",
+          "CASE WHEN false THEN tags END AS tags"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: null-out is type-preserving (untyped NULL)"
+    },
+    {
+      "name": "consistent-hash on a varchar column",
+      "sql": "SELECT phone FROM users",
+      "policy": "fit_types",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.textcat(pg_catalog.current_setting('midplane.mask_salt'), phone), 'UTF8')), 'hex') AS phone"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: consistent-hash: md5 over the salt GUC, text only"
+    },
+    {
+      "name": "partial keeping the start, with a custom glyph",
+      "sql": "SELECT ssn FROM users",
+      "policy": "fit_types",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.left(ssn, 3)",
+          "pg_catalog.repeat('#', ",
+          "END AS ssn"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: partial: CASE guard, text only; glyph is escaped"
+    },
+    {
+      "name": "generalize to day on a date, to month on a timestamp",
+      "sql": "SELECT birthday, created_at FROM users",
+      "policy": "fit_types",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "(pg_catalog.date_trunc('day', birthday))::date AS birthday",
+          "pg_catalog.date_trunc('month', created_at) AS created_at"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: generalize: date_trunc on D, floor-bucket on N, domain-checked"
+    },
+    {
+      "name": "noise and a numeric bucket on integer columns",
+      "sql": "SELECT id, org_id FROM users",
+      "policy": "fit_types",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "id OPERATOR(pg_catalog.*) (1 OPERATOR(pg_catalog.+) (((pg_catalog.random() OPERATOR(pg_catalog.*) 2) OPERATOR(pg_catalog.-) 1) OPERATOR(pg_catalog.*) 0.5)) AS id",
+          "pg_catalog.floor(org_id OPERATOR(pg_catalog./) 100) OPERATOR(pg_catalog.*) 100 AS org_id"
+        ]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: noise: numeric only"
+    },
+    {
+      "name": "partial on text, full-redact on jsonb",
+      "sql": "SELECT url, payload FROM webhooks",
+      "policy": "fit_types",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "pg_catalog.left(url, 8)",
+          "CASE WHEN false THEN payload END AS payload",
+          "FROM public.webhooks ) AS webhooks"
+        ]
+      }
+    },
+    {
+      "name": "a glyph with a quote is a quoted literal, never SQL",
+      "sql": "SELECT name FROM users",
+      "policy": "glyph_quote",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": ["pg_catalog.repeat('''--', "]
+      },
+      "origin": "engine/test/masking/postgres-source-rewrite.test.ts: quoteLiteral doubles embedded quotes"
+    },
+    {
+      "name": "consistent-hash on a numeric column (public.users.salary) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_hash_numeric",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "consistent-hash applies to text columns only"
+      }
+    },
+    {
+      "name": "consistent-hash on a date column (public.users.birthday) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_hash_date",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "consistent-hash applies to text columns only"
+      }
+    },
+    {
+      "name": "consistent-hash on an array column (public.users.tags) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_hash_array",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "consistent-hash applies to text columns only"
+      }
+    },
+    {
+      "name": "partial on a numeric column (public.users.salary) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_partial_numeric",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "partial applies to text columns only"
+      }
+    },
+    {
+      "name": "partial on a jsonb column (public.webhooks.payload) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM webhooks",
+      "policy": "misfit_partial_json",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "partial applies to text columns only"
+      }
+    },
+    {
+      "name": "generalize to year on a numeric column (public.users.salary) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_year_numeric",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "applies to date and time columns only"
+      }
+    },
+    {
+      "name": "generalize to day on a text column (public.users.email) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_day_text",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "applies to date and time columns only"
+      }
+    },
+    {
+      "name": "a numeric bucket on a date column (public.users.birthday) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_bucket_date",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "a numeric bucket applies to numeric columns only"
+      }
+    },
+    {
+      "name": "a numeric bucket on a text column (public.users.email) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_bucket_text",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "a numeric bucket applies to numeric columns only"
+      }
+    },
+    {
+      "name": "noise on a text column (public.users.email) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_noise_text",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "noise applies to numeric columns only"
+      }
+    },
+    {
+      "name": "noise on a timestamp column (public.users.created_at) doesn't fit, so any read of the table is denied",
+      "sql": "SELECT id FROM users",
+      "policy": "misfit_noise_date",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "noise applies to numeric columns only"
+      }
+    },
+    {
+      "name": "a misfit mask denies reads of its own table only",
+      "sql": "SELECT total FROM orders",
+      "policy": "misfit_hash_numeric",
+      "expect": {
+        "verdict": "allow",
+        "statement": "SELECT total FROM orders"
+      }
+    },
+    {
+      "name": "the misfit column needn't be selected: the wrap projects every column",
+      "sql": "SELECT u.id FROM orders o JOIN users u ON u.id = o.user_id",
+      "policy": "misfit_hash_numeric",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask"
+      }
+    },
+    {
+      "name": "noise redraws on every scan, so averaging many scans converges on the raw value; allowed by design, use generalize or full-redact where that matters",
+      "sql": "WITH RECURSIVE r(i, a) AS (SELECT 1, amount FROM stripe.charges WHERE id = 1 UNION ALL SELECT r.i + 1, c.amount FROM r, stripe.charges c WHERE c.id = 1 AND r.i < 1000) SELECT avg(a) FROM r",
+      "expect": {
+        "verdict": "allow",
+        "statement_includes": [
+          "amount OPERATOR(pg_catalog.*) (1 OPERATOR(pg_catalog.+) (((pg_catalog.random() OPERATOR(pg_catalog.*) 2) OPERATOR(pg_catalog.-) 1) OPERATOR(pg_catalog.*) 0.1)) AS amount",
+          "FROM stripe.charges ) AS charges WHERE id = 1",
+          "FROM stripe.charges ) AS c WHERE c.id = 1"
+        ]
+      }
+    }
+  ]
+}

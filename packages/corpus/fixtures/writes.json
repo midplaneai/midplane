@@ -1,0 +1,1465 @@
+{
+  "description": "Write classes, WHERE-required, hidden writes, holds and their approval previews, and taint turning allowed writes into holds. Converted from the old engine's dangerous-statement, write-classes and approvals gate suites, plus v2 preview and taint cases.",
+  "catalog": "writes",
+  "policies": {
+    "rw": {
+      "table_access": {
+        "default": "read_write"
+      }
+    },
+    "rw_ddl": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "mixed": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.users": "read",
+          "public.webhooks": "read_write",
+          "public.posts": "read_write"
+        }
+      }
+    },
+    "mixed_ddl": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.users": "read",
+          "public.webhooks": "read_write",
+          "public.posts": "read_write"
+        }
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "read_all": {
+      "table_access": {
+        "default": "read"
+      }
+    },
+    "rw_refuse_rows": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "row_changes": "deny",
+        "schema_changes": "allow"
+      }
+    },
+    "rw_hold_rows": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "row_changes": "hold",
+        "schema_changes": "allow"
+      }
+    },
+    "rw_hold_schema": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "row_changes": "allow",
+        "schema_changes": "hold"
+      }
+    },
+    "rw_hold_all": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "row_changes": "hold",
+        "schema_changes": "hold"
+      }
+    },
+    "read_hold_all": {
+      "table_access": {
+        "default": "read"
+      },
+      "writes": {
+        "row_changes": "hold",
+        "schema_changes": "hold"
+      }
+    },
+    "rw_secret": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "labels": {
+        "secret_tables": ["public.secrets"]
+      }
+    }
+  },
+  "defaults": {
+    "policy": "rw"
+  },
+  "cases": [
+    {
+      "name": "DROP TABLE on a read_write table is a schema change, refused by default",
+      "sql": "DROP TABLE webhooks",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: DROP TABLE → deny dangerous_statement (regardless of read_write policy)"
+    },
+    {
+      "sql": "ALTER TABLE webhooks ADD COLUMN flag boolean",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: ALTER TABLE … ADD COLUMN → deny"
+    },
+    {
+      "sql": "ALTER TABLE webhooks RENAME TO hooks",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: ALTER TABLE … RENAME (RenameStmt) → deny"
+    },
+    {
+      "name": "SELECT INTO is a table-creating write: a read-only policy denies the new table",
+      "sql": "SELECT id, email INTO _mp_leaked FROM users",
+      "policy": "read_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "public._mp_leaked"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: SELECT … INTO under default:read + block_ddl ON → denied (table_access catches the table-creating copy first)"
+    },
+    {
+      "name": "SELECT INTO on a read_write policy runs, with the new table's schema pinned",
+      "sql": "SELECT id INTO snapshot FROM users",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "statement": "SELECT id INTO public.snapshot FROM users",
+        "tables": ["public.snapshot", "public.users"]
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: SELECT … INTO on a read_write policy + block_ddl ON → allowed, same as CREATE TABLE AS"
+    },
+    {
+      "name": "CREATE TABLE AS is the same write as SELECT INTO",
+      "sql": "CREATE TABLE snapshot AS SELECT id FROM users",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "statement": "CREATE TABLE public.snapshot AS SELECT id FROM users",
+        "tables": ["public.snapshot", "public.users"]
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: SELECT … INTO on a read_write policy + block_ddl ON → allowed, same as CREATE TABLE AS"
+    },
+    {
+      "sql": "DROP TABLE webhooks",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: block_ddl: false → DDL allowed by the guardrail (table_access permits)"
+    },
+    {
+      "sql": "DROP TABLE users",
+      "policy": "mixed_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: block_ddl: false → DROP on a `read` table still denied by table_access"
+    },
+    {
+      "sql": "DELETE FROM webhooks",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: DELETE with no WHERE → deny dangerous_statement"
+    },
+    {
+      "sql": "UPDATE webhooks SET enabled = true",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: UPDATE with no WHERE → deny"
+    },
+    {
+      "sql": "DELETE FROM webhooks WHERE id = 1",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: DELETE WITH a WHERE → allow (guardrail is missing-WHERE only)"
+    },
+    {
+      "sql": "UPDATE webhooks SET enabled = true WHERE id = 1",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: UPDATE WITH a WHERE → allow"
+    },
+    {
+      "sql": "DELETE FROM webhooks WHERE true",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: DELETE WHERE true → allow (an explicit WHERE is not unqualified)"
+    },
+    {
+      "name": "a no-WHERE DELETE hidden in a CTE is a hidden write",
+      "sql": "WITH d AS (DELETE FROM webhooks RETURNING *) SELECT * FROM d",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: no-WHERE DELETE hidden in a CTE → deny (fail-closed on nested DML)"
+    },
+    {
+      "name": "the old block_unqualified_dml opt-out is gone: WHERE is always required",
+      "sql": "DELETE FROM webhooks",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: block_unqualified_dml: false → no-WHERE DELETE allowed"
+    },
+    {
+      "sql": "ALTER TABLE users SET SCHEMA other",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: guardrail denies `ALTER TABLE users SET SCHEMA other`"
+    },
+    {
+      "name": "ALTER TABLE ... RENAME COLUMN is a schema change (old SQL renamed a column that doesn't exist; this renames a real one)",
+      "sql": "ALTER TABLE users RENAME COLUMN email TO contact_email",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: guardrail denies `ALTER TABLE users RENAME COLUMN a TO b`"
+    },
+    {
+      "sql": "ALTER TABLE users RENAME TO u",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: guardrail denies `ALTER TABLE users RENAME TO u`"
+    },
+    {
+      "sql": "ALTER TABLE users RENAME TO u",
+      "policy": "mixed_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: ALTER TABLE … RENAME on a `read` table → table_access (block_ddl off)"
+    },
+    {
+      "sql": "ALTER TABLE users SET SCHEMA other",
+      "policy": "mixed_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: ALTER TABLE … SET SCHEMA on a `read` table → table_access (block_ddl off)"
+    },
+    {
+      "sql": "ALTER TABLE webhooks RENAME TO hooks",
+      "policy": "mixed_ddl",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: ALTER TABLE … RENAME on a read_write table → allow (block_ddl off)"
+    },
+    {
+      "name": "table access on a read table outranks the schema-change refusal",
+      "sql": "DROP TABLE users",
+      "policy": "mixed",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: DROP on `read` table → table_access wins (more-specific reason)"
+    },
+    {
+      "sql": "DELETE FROM webhooks",
+      "policy": "mixed",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: no-WHERE DELETE on read_write + unscoped → guardrail is the net that catches it"
+    },
+    {
+      "sql": "SELECT * FROM webhooks",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: SELECT is never a dangerous statement → allow"
+    },
+    {
+      "sql": "INSERT INTO webhooks (uid) VALUES (1)",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: INSERT is not covered by these guardrails → allow"
+    },
+    {
+      "name": "with schema changes allowed, a no-WHERE DELETE still denies",
+      "sql": "DELETE FROM webhooks",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: both guards off → no-WHERE DELETE + DDL both allow"
+    },
+    {
+      "sql": "UPDATE orders SET status='refunded' WHERE id=1",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses row-scoped writes and nothing else"
+    },
+    {
+      "sql": "INSERT INTO orders (id) VALUES (1)",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses row-scoped writes and nothing else"
+    },
+    {
+      "name": "a DELETE hidden in a CTE is a hidden write under any policy",
+      "sql": "WITH d AS (DELETE FROM orders WHERE id=1 RETURNING *) SELECT count(*) FROM d",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses row-scoped writes and nothing else"
+    },
+    {
+      "sql": "SELECT 1 FROM orders",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses row-scoped writes and nothing else"
+    },
+    {
+      "sql": "CREATE TABLE staging (id int)",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses writes the dialect emits no site for"
+    },
+    {
+      "sql": "CREATE TABLE staging AS SELECT * FROM orders",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses writes the dialect emits no site for"
+    },
+    {
+      "sql": "SELECT id, email INTO snapshot FROM orders",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses writes the dialect emits no site for"
+    },
+    {
+      "name": "CREATE TABLE runs when row changes are allowed",
+      "sql": "CREATE TABLE staging (id int)",
+      "policy": "rw",
+      "expect": {
+        "verdict": "allow",
+        "statement": "CREATE TABLE public.staging (id int)"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: block_dml refuses writes the dialect emits no site for"
+    },
+    {
+      "sql": "UPDATE orders SET status='refunded' WHERE id=1",
+      "policy": "rw_hold_rows",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE id = 1",
+          "exact": true
+        }
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "sql": "INSERT INTO orders (id) VALUES (1)",
+      "policy": "rw_hold_rows",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(1 AS bigint) AS count",
+          "exact": true
+        }
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "name": "a CTE-hidden DELETE is denied, not held",
+      "sql": "WITH d AS (DELETE FROM orders WHERE id=1 RETURNING *) SELECT count(*) FROM d",
+      "policy": "rw_hold_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "sql": "CREATE TABLE staging (id int)",
+      "policy": "rw_hold_rows",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": null
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "sql": "CREATE TABLE staging AS SELECT * FROM orders",
+      "policy": "rw_hold_rows",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "sql": "SELECT id INTO snapshot FROM orders",
+      "policy": "rw_hold_rows",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "sql": "SELECT id INTO snapshot FROM orders",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "name": "CREATE INDEX is a schema change, not a row change: holding row changes doesn't hold it",
+      "sql": "CREATE INDEX idx ON orders (id)",
+      "policy": "rw_hold_rows",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "name": "CREATE INDEX is a schema change, not a row change: refusing row changes doesn't refuse it",
+      "sql": "CREATE INDEX idx ON orders (id)",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: MONOTONICITY: Refuse never permits what Ask would have held"
+    },
+    {
+      "sql": "DELETE FROM orders",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: refusing row changes leaves the other two classes to their own flags"
+    },
+    {
+      "sql": "DROP TABLE orders",
+      "policy": "rw_refuse_rows",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: refusing row changes leaves the other two classes to their own flags"
+    },
+    {
+      "sql": "DELETE FROM orders",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: a no-WHERE DELETE is a whole-table write, not a row change"
+    },
+    {
+      "sql": "UPDATE orders SET status='refunded' WHERE id=1",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: a no-WHERE DELETE is a whole-table write, not a row change"
+    },
+    {
+      "sql": "UPDATE orders SET status='refunded' WHERE id=1",
+      "policy": "rw_hold_schema",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: holding one class does not hold the others"
+    },
+    {
+      "sql": "DELETE FROM orders",
+      "policy": "rw_hold_schema",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: holding one class does not hold the others"
+    },
+    {
+      "sql": "DROP TABLE orders",
+      "policy": "rw_hold_schema",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes",
+        "preview": null
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: holding one class does not hold the others"
+    },
+    {
+      "name": "a no-WHERE DELETE nested under a row-scoped UPDATE is a hidden write",
+      "sql": "WITH d AS (DELETE FROM audit_log RETURNING id) UPDATE orders SET status='x' WHERE id=1",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: a statement carrying two classes is held if EITHER is held"
+    },
+    {
+      "sql": "SELECT count(*) FROM orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: reads are never held, whatever every class says"
+    },
+    {
+      "sql": "DROP TABLE orders",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: all three classes off never consults the gate"
+    },
+    {
+      "sql": "CREATE TABLE staging (id int)",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: all three classes off never consults the gate"
+    },
+    {
+      "name": "a refused class is denied, never held",
+      "sql": "DROP TABLE orders",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      },
+      "origin": "engine/test/approvals/write-classes.test.ts: a refused class never reaches a human"
+    },
+    {
+      "sql": "UPDATE orders SET status='refunded' WHERE id=1",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      },
+      "origin": "engine/test/approvals/gate.test.ts: a write runs without ever consulting the gate"
+    },
+    {
+      "sql": "SELECT * FROM orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      },
+      "origin": "engine/test/approvals/gate.test.ts: a read is never held, even with approvals on"
+    },
+    {
+      "sql": "WITH d AS (DELETE FROM orders WHERE id=1 RETURNING *) SELECT count(*) FROM d",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      },
+      "origin": "engine/test/approvals/gate.test.ts: a write hidden in a CTE is still held"
+    },
+    {
+      "sql": "UPDATE orders SET status='refunded' WHERE id=1",
+      "policy": "rw_hold_all",
+      "intent": "refund dupes",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "tables": ["public.orders"],
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE id = 1",
+          "exact": true
+        }
+      },
+      "origin": "engine/test/approvals/gate.test.ts: the gate is told what a human needs, and never a credential"
+    },
+    {
+      "sql": "UPDATE orders SET status='refunded' WHERE id=1",
+      "policy": "read_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      },
+      "origin": "engine/test/approvals/gate.test.ts: a table_access denial never reaches a human"
+    },
+    {
+      "sql": "UPDATE orders SET status='x'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      },
+      "origin": "engine/test/approvals/gate.test.ts: a guardrail denial never reaches a human"
+    },
+    {
+      "name": "preview: UPDATE ... WHERE counts the target rows the WHERE matches",
+      "sql": "UPDATE orders SET status = 'refunded' WHERE status = 'open' AND created_at < '2024-01-01'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE status = 'open' AND created_at < '2024-01-01'",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: the target's alias carries over",
+      "sql": "UPDATE orders AS o SET status = 'refunded' WHERE o.id = 1",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders AS o WHERE o.id = 1",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: ONLY carries over",
+      "sql": "UPDATE ONLY orders SET status = 'x' WHERE id = 1",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ONLY orders WHERE id = 1",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: UPDATE ... FROM counts each target row once, through EXISTS",
+      "sql": "UPDATE orders SET status = 'refunded' FROM refunds r WHERE r.order_id = orders.id",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "tables": ["public.orders", "public.refunds"],
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE EXISTS (SELECT FROM refunds AS r WHERE r.order_id = orders.id)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: UPDATE ... FROM with a target alias",
+      "sql": "UPDATE orders o SET status = 'refunded', total = o.total - r.amount FROM refunds r WHERE r.order_id = o.id AND r.amount > 0",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders AS o WHERE EXISTS (SELECT FROM refunds AS r WHERE r.order_id = o.id AND r.amount > 0)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: UPDATE ... FROM whose WHERE names only the target still needs a FROM row to change anything",
+      "sql": "UPDATE orders SET total = r.amount FROM refunds r WHERE orders.id = 5",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE EXISTS (SELECT FROM refunds AS r WHERE orders.id = 5)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: UPDATE ... FROM a join",
+      "sql": "UPDATE orders SET status = 'x' FROM refunds r JOIN users u ON u.id = r.order_id WHERE r.order_id = orders.id AND u.org_id = 7",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE EXISTS (SELECT FROM refunds AS r JOIN users AS u ON u.id = r.order_id WHERE r.order_id = orders.id AND u.org_id = 7)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: bulk UPDATE ... FROM VALUES",
+      "sql": "UPDATE orders SET status = v.status FROM (VALUES (1, 'shipped'), (2, 'refunded')) AS v(id, status) WHERE v.id = orders.id",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE EXISTS (SELECT FROM ( VALUES (1, 'shipped'), (2, 'refunded') ) AS v(id, status) WHERE v.id = orders.id)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: a read-only WITH on the write carries over",
+      "sql": "WITH big AS (SELECT order_id FROM refunds WHERE amount > 100) UPDATE orders SET status = 'review' WHERE id IN (SELECT order_id FROM big)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "WITH big AS (SELECT order_id FROM refunds WHERE amount > 100) SELECT pg_catalog.count(*) AS count FROM orders WHERE id IN (SELECT order_id FROM big)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: DELETE ... WHERE",
+      "sql": "DELETE FROM orders WHERE status = 'cancelled'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE status = 'cancelled'",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: RETURNING doesn't change the count",
+      "sql": "DELETE FROM orders WHERE id IN (SELECT order_id FROM refunds) RETURNING id",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE id IN (SELECT order_id FROM refunds)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: DELETE ... USING counts each target row once, through EXISTS",
+      "sql": "DELETE FROM orders o USING refunds r WHERE r.order_id = o.id",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "tables": ["public.orders", "public.refunds"],
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders AS o WHERE EXISTS (SELECT FROM refunds AS r WHERE r.order_id = o.id)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: DELETE ... USING with an uncorrelated WHERE counts every target row when any USING row matches",
+      "sql": "DELETE FROM orders USING refunds WHERE refunds.amount > 100",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE EXISTS (SELECT FROM refunds WHERE refunds.amount > 100)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: DELETE ... USING VALUES",
+      "sql": "DELETE FROM orders USING (VALUES (1), (2)) AS v(id) WHERE v.id = orders.id",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE EXISTS (SELECT FROM ( VALUES (1), (2) ) AS v(id) WHERE v.id = orders.id)",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: INSERT ... VALUES is counted as a literal, not evaluated",
+      "sql": "INSERT INTO orders (id, status) VALUES (1, 'new')",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(1 AS bigint) AS count",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: a multi-row VALUES counts its rows",
+      "sql": "INSERT INTO y (id, n) VALUES (1, 2), (3, 4), (5, 6)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(3 AS bigint) AS count",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: DEFAULT VALUES is one row",
+      "sql": "INSERT INTO y DEFAULT VALUES",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(1 AS bigint) AS count",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: INSERT ... SELECT counts the SELECT",
+      "sql": "INSERT INTO archive (id, n) SELECT id, n FROM y WHERE n > 10",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "tables": ["public.archive", "public.y"],
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM y WHERE n > 10 ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: INSERT ... SELECT keeps the SELECT's LIMIT",
+      "sql": "INSERT INTO archive (id, n) SELECT id, n FROM y ORDER BY n DESC LIMIT 5",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM y ORDER BY n DESC LIMIT 5 ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: INSERT ... a set operation",
+      "sql": "INSERT INTO y (id, n) SELECT id, n FROM archive UNION ALL SELECT id, n FROM y",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM archive UNION ALL SELECT id, n FROM y ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: the INSERT's WITH carries over",
+      "sql": "WITH src AS (SELECT id, n FROM y WHERE n > 10) INSERT INTO archive (id, n) SELECT id, n FROM src",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "WITH src AS (SELECT id, n FROM y WHERE n > 10) SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM src ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: ON CONFLICT DO NOTHING may insert fewer rows, so it isn't exact",
+      "sql": "INSERT INTO y (id, n) VALUES (1, 2) ON CONFLICT DO NOTHING",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(1 AS bigint) AS count",
+          "exact": false
+        }
+      }
+    },
+    {
+      "name": "preview: ON CONFLICT (target) DO NOTHING isn't exact",
+      "sql": "INSERT INTO y (id, n) VALUES (1, 2), (3, 4) ON CONFLICT (id) DO NOTHING",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(2 AS bigint) AS count",
+          "exact": false
+        }
+      }
+    },
+    {
+      "name": "preview: INSERT ... SELECT ... ON CONFLICT DO NOTHING isn't exact",
+      "sql": "INSERT INTO archive (id, n) SELECT id, n FROM y ON CONFLICT (id) DO NOTHING",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM y ) AS rows",
+          "exact": false
+        }
+      }
+    },
+    {
+      "name": "preview: ON CONFLICT DO UPDATE without WHERE inserts or updates every row, so it is exact",
+      "sql": "INSERT INTO y (id, n) VALUES (1, 2) ON CONFLICT (id) DO UPDATE SET n = excluded.n",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(1 AS bigint) AS count",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: multi-row VALUES with ON CONFLICT DO UPDATE",
+      "sql": "INSERT INTO y (id, n) VALUES (1, 2), (3, 4) ON CONFLICT (id) DO UPDATE SET n = excluded.n",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(2 AS bigint) AS count",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: ON CONFLICT DO UPDATE ... WHERE may skip rows, so it isn't exact",
+      "sql": "INSERT INTO y (id, n) VALUES (1, 2) ON CONFLICT (id) DO UPDATE SET n = excluded.n WHERE y.n < excluded.n",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(1 AS bigint) AS count",
+          "exact": false
+        }
+      }
+    },
+    {
+      "name": "preview: INSERT ... SELECT ... ON CONFLICT DO UPDATE is exact",
+      "sql": "INSERT INTO archive (id, n) SELECT id, n FROM y ON CONFLICT (id) DO UPDATE SET n = excluded.n",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM y ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: INSERT ... SELECT ... ON CONFLICT DO UPDATE ... WHERE isn't exact",
+      "sql": "INSERT INTO archive (id, n) SELECT id, n FROM y ON CONFLICT (id) DO UPDATE SET n = excluded.n WHERE archive.n <> excluded.n",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM y ) AS rows",
+          "exact": false
+        }
+      }
+    },
+    {
+      "name": "preview: CREATE TABLE AS counts its query",
+      "sql": "CREATE TABLE snapshot AS SELECT id, status FROM orders WHERE status = 'open'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "statement": "CREATE TABLE public.snapshot AS SELECT id, status FROM orders WHERE status = 'open'",
+        "tables": ["public.snapshot", "public.orders"],
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, status FROM orders WHERE status = 'open' ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: CREATE TABLE AS TABLE",
+      "sql": "CREATE TABLE snapshot AS TABLE orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT * FROM orders ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: CREATE TABLE AS with a WITH in its query",
+      "sql": "CREATE TABLE snapshot AS WITH o AS (SELECT id FROM orders) SELECT id FROM o",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( WITH o AS (SELECT id FROM orders) SELECT id FROM o ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: CREATE TABLE AS ... WITH NO DATA copies no rows, so there is no preview",
+      "sql": "CREATE TABLE snapshot AS SELECT id FROM orders WITH NO DATA",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "CREATE TABLE IF NOT EXISTS ... AS may copy nothing, so its count is an upper bound",
+      "sql": "CREATE TABLE IF NOT EXISTS snapshot AS SELECT id FROM orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "statement": "CREATE TABLE IF NOT EXISTS public.snapshot AS SELECT id FROM orders",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id FROM orders ) AS rows",
+          "exact": false
+        }
+      }
+    },
+    {
+      "name": "preview: SELECT INTO counts its query, without the INTO",
+      "sql": "SELECT id, status INTO snapshot FROM orders WHERE status = 'open'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "statement": "SELECT id, status INTO public.snapshot FROM orders WHERE status = 'open'",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, status FROM orders WHERE status = 'open' ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: SELECT INTO under a WITH",
+      "sql": "WITH o AS (SELECT id FROM orders) SELECT id INTO snapshot FROM o",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( WITH o AS (SELECT id FROM orders) SELECT id FROM o ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "preview: CREATE TABLE copies no rows, so there is no preview",
+      "sql": "CREATE TABLE staging (id int)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "preview: a schema change has no row count",
+      "sql": "ALTER TABLE orders ADD COLUMN refunded_at timestamptz",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "preview: CREATE INDEX has no row count",
+      "sql": "CREATE INDEX orders_status_idx ON orders (status)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "preview: DROP TABLE has no row count",
+      "sql": "DROP TABLE orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "tainted: an allowed UPDATE is held",
+      "sql": "UPDATE orders SET status = 'refunded' WHERE id = 1",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE id = 1",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "tainted: an allowed INSERT is held",
+      "sql": "INSERT INTO orders (id, status) VALUES (1, 'new')",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT CAST(1 AS bigint) AS count",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "tainted: an allowed DELETE is held",
+      "sql": "DELETE FROM orders WHERE id = 1",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM orders WHERE id = 1",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "tainted: an allowed CREATE TABLE AS is held",
+      "sql": "CREATE TABLE snapshot AS SELECT id FROM orders",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id FROM orders ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "tainted: an allowed SELECT INTO is held",
+      "sql": "SELECT id INTO snapshot FROM orders",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "name": "tainted: an allowed CREATE TABLE is held",
+      "sql": "CREATE TABLE staging (id int)",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "tainted: an allowed DROP TABLE is held",
+      "sql": "DROP TABLE orders",
+      "policy": "rw_ddl",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "tainted: an allowed CREATE INDEX is held",
+      "sql": "CREATE INDEX idx ON orders (id)",
+      "policy": "rw_ddl",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "name": "untainted control: the same CREATE INDEX runs",
+      "sql": "CREATE INDEX idx ON orders (id)",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "tainted: a refused class stays refused, never held",
+      "sql": "DROP TABLE orders",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      }
+    },
+    {
+      "name": "tainted: refused row changes stay refused",
+      "sql": "UPDATE orders SET status = 'refunded' WHERE id = 1",
+      "policy": "rw_refuse_rows",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      }
+    },
+    {
+      "name": "tainted: reads are not held",
+      "sql": "SELECT id, status FROM orders",
+      "tainted": true,
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      }
+    },
+    {
+      "name": "tainted: a no-WHERE DELETE is still denied, not held",
+      "sql": "DELETE FROM orders",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      }
+    },
+    {
+      "name": "tainted: a table-access denial is not turned into a hold",
+      "sql": "UPDATE orders SET status = 'refunded' WHERE id = 1",
+      "policy": "read_all",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "name": "tainted: INSERT ... SELECT from a secret table is contained, not held",
+      "sql": "INSERT INTO archive (id, n) SELECT id, id FROM secrets",
+      "policy": "rw_secret",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "containment"
+      }
+    },
+    {
+      "name": "tainted: UPDATE ... FROM a secret table is contained, not held",
+      "sql": "UPDATE orders SET status = s.value FROM secrets s WHERE s.id = orders.id",
+      "policy": "rw_secret",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "containment"
+      }
+    },
+    {
+      "name": "tainted: any statement touching a secret table denies, writes included",
+      "sql": "INSERT INTO secrets (id, name, value) VALUES (1, 'k', 'v')",
+      "policy": "rw_secret",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "containment"
+      }
+    },
+    {
+      "name": "tainted: RETURNING a secret table's column reads it (conservative reading)",
+      "sql": "UPDATE secrets SET name = name WHERE id = 1 RETURNING value",
+      "policy": "rw_secret",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "containment"
+      }
+    },
+    {
+      "name": "tainted: a WHERE on a secret table's column reads it (conservative reading)",
+      "sql": "DELETE FROM secrets WHERE value LIKE 'sk_live%'",
+      "policy": "rw_secret",
+      "tainted": true,
+      "expect": {
+        "verdict": "deny",
+        "rule": "containment"
+      }
+    },
+    {
+      "name": "untainted control: RETURNING from a secret table runs",
+      "sql": "UPDATE secrets SET name = name WHERE id = 1 RETURNING value",
+      "policy": "rw_secret",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "a read-only caller can't SELECT INTO: it creates a table",
+      "sql": "SELECT id INTO snapshot FROM users",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope"
+      }
+    },
+    {
+      "name": "a read-only caller can't CREATE TABLE AS",
+      "sql": "CREATE TABLE snapshot AS SELECT id FROM users",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope"
+      }
+    },
+    {
+      "name": "a read-only caller can't UPDATE",
+      "sql": "UPDATE orders SET status = 'refunded' WHERE id = 1",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope"
+      }
+    },
+    {
+      "name": "a held write whose rows depend on random() gets no preview",
+      "sql": "DELETE FROM orders WHERE random() < 0.1",
+      "policy": "rw_hold_all",
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "a held write that sleeps gets no preview: counting it would stall whoever counts",
+      "sql": "DELETE FROM orders WHERE pg_sleep(30) IS NOT NULL",
+      "policy": "rw_hold_all",
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "a held write calling nextval() gets no preview: it can't run read-only",
+      "sql": "INSERT INTO y (id, n) SELECT nextval('s'), n FROM archive",
+      "policy": "rw_hold_all",
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "preview": null
+      }
+    },
+    {
+      "name": "SELECT INTO over a UNION is a write, its INTO on the leftmost arm",
+      "sql": "SELECT id, n INTO snap FROM y UNION SELECT id, n FROM archive",
+      "policy": "rw_hold_all",
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "statement_includes": ["INTO public.snap"],
+        "preview": {
+          "sql": "SELECT pg_catalog.count(*) AS count FROM ( SELECT id, n FROM y UNION SELECT id, n FROM archive ) AS rows",
+          "exact": true
+        }
+      }
+    },
+    {
+      "name": "a read-only caller can't SELECT INTO over a UNION either",
+      "sql": "SELECT id INTO snap FROM y UNION SELECT id FROM archive",
+      "scopes": ["db:main:read"],
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope"
+      }
+    }
+  ]
+}

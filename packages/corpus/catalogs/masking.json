@@ -1,0 +1,185 @@
+{
+  "relations": [
+    {
+      "schema": "public",
+      "name": "customers",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "name", "type": "text", "category": "S" },
+        { "name": "age", "type": "integer", "category": "N" },
+        { "name": "country", "type": "text", "category": "S" },
+        { "name": "credit_card", "type": "text", "category": "S" },
+        { "name": "email", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "customers_2024",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "name", "type": "text", "category": "S" },
+        { "name": "age", "type": "integer", "category": "N" },
+        { "name": "country", "type": "text", "category": "S" },
+        { "name": "credit_card", "type": "text", "category": "S" },
+        { "name": "email", "type": "text", "category": "S" }
+      ],
+      "parent": { "schema": "public", "name": "customers" }
+    },
+    {
+      "schema": "public",
+      "name": "products",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "price_cents", "type": "integer", "category": "N" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "orders",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "cid", "type": "integer", "category": "N" },
+        { "name": "amount", "type": "integer", "category": "N" }
+      ]
+    },
+    {
+      "schema": "private",
+      "name": "customers",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "email", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "People",
+      "kind": "table",
+      "columns": [
+        { "name": "SSN", "type": "text", "category": "S" },
+        { "name": "ssn", "type": "text", "category": "S" },
+        { "name": "select", "type": "text", "category": "S" },
+        { "name": "my col", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "My Schema",
+      "name": "cards",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "pan", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "cust_view",
+      "kind": "view",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "credit_card", "type": "text", "category": "S" }
+      ],
+      "definition": "SELECT id, credit_card FROM public.customers"
+    },
+    {
+      "schema": "public",
+      "name": "cust_ids",
+      "kind": "view",
+      "columns": [{ "name": "id", "type": "integer", "category": "N" }],
+      "definition": "SELECT id FROM public.cust_view"
+    },
+    {
+      "schema": "public",
+      "name": "country_counts",
+      "kind": "view",
+      "columns": [
+        { "name": "country", "type": "text", "category": "S" },
+        { "name": "n", "type": "bigint", "category": "N" }
+      ],
+      "definition": "SELECT country, count(*) AS n FROM public.customers GROUP BY country"
+    },
+    {
+      "schema": "public",
+      "name": "customers_mv",
+      "kind": "materialized_view",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "email", "type": "text", "category": "S" }
+      ],
+      "definition": "SELECT id, email FROM public.customers"
+    },
+    {
+      "schema": "public",
+      "name": "product_prices",
+      "kind": "view",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "price_cents", "type": "integer", "category": "N" }
+      ],
+      "definition": "SELECT id, price_cents FROM public.products"
+    },
+    {
+      "schema": "public",
+      "name": "products_for_visa",
+      "kind": "view",
+      "columns": [{ "name": "id", "type": "integer", "category": "N" }],
+      "definition": "SELECT id FROM public.products WHERE id IN (SELECT id FROM public.customers WHERE credit_card LIKE '4%')"
+    },
+    {
+      "schema": "public",
+      "name": "product_cards",
+      "kind": "view",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "card", "type": "text", "category": "S" }
+      ],
+      "definition": "SELECT id, public.exfil(id) AS card FROM public.products"
+    },
+    {
+      "schema": "public",
+      "name": "customer_dump",
+      "kind": "view",
+      "columns": [{ "name": "x", "type": "xml", "category": "U" }],
+      "definition": "SELECT query_to_xml('SELECT * FROM public.customers', true, false, '') AS x"
+    },
+    {
+      "schema": "pg_catalog",
+      "name": "pg_stats",
+      "kind": "view",
+      "columns": [
+        { "name": "schemaname", "type": "name", "category": "S" },
+        { "name": "tablename", "type": "name", "category": "S" },
+        { "name": "attname", "type": "name", "category": "S" },
+        { "name": "most_common_vals", "type": "anyarray", "category": "P" },
+        { "name": "histogram_bounds", "type": "anyarray", "category": "P" }
+      ]
+    },
+    {
+      "schema": "information_schema",
+      "name": "columns",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "table_schema",
+          "type": "character varying",
+          "category": "S"
+        },
+        { "name": "table_name", "type": "character varying", "category": "S" },
+        { "name": "column_name", "type": "character varying", "category": "S" },
+        { "name": "data_type", "type": "character varying", "category": "S" }
+      ]
+    }
+  ],
+  "routines": [
+    { "schema": "public", "name": "lower", "kind": "function" },
+    { "schema": "public", "name": "sum", "kind": "function" },
+    { "schema": "public", "name": "LOWER", "kind": "function" },
+    { "schema": "public", "name": "exfil", "kind": "function" },
+    { "schema": "public", "name": "||", "kind": "operator" },
+    { "schema": "private", "name": "upper", "kind": "function" }
+  ]
+}

@@ -1,0 +1,1059 @@
+{
+  "description": "Views as Postgres 17 prints them (pg_get_viewdef), introspected by the gateway from a real database, each seeding literals the cloud must never see. Every case must evaluate the same on the redacted copy (the core's agreement test). Two views Postgres prints in forms pgsql-deparser can't say faithfully (a quoted \"bit\" cast, FETCH ... WITH TIES) are left out: the gateway withholds their definitions (see the core's redaction test).",
+  "catalog": "postgres-views",
+  "policies": {
+    "open": {
+      "table_access": {
+        "default": "read"
+      }
+    },
+    "masked": {
+      "table_access": {
+        "default": "read"
+      },
+      "masks": {
+        "public.t": {
+          "id": "none",
+          "name": "none",
+          "email": "full-redact",
+          "amount": "none",
+          "at": "none",
+          "d": "none",
+          "tm": "none",
+          "data": "none",
+          "tags": "none",
+          "code": "none",
+          "flag": "none",
+          "kind": "none",
+          "bits": "none",
+          "ip": "none"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "policy": "open",
+    "tainted": false
+  },
+  "cases": [
+    {
+      "sql": "SELECT * FROM v_aggregates",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "name",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "n",
+            "sources": []
+          },
+          {
+            "name": "emails",
+            "sources": ["public.t.email"]
+          },
+          {
+            "name": "s",
+            "sources": ["public.t.amount"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_any_array",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_arrays",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "first",
+            "sources": ["public.t.tags"]
+          },
+          {
+            "name": "len",
+            "sources": ["public.t.tags"]
+          },
+          {
+            "name": "xy",
+            "sources": []
+          },
+          {
+            "name": "has_z",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_at_time_zone",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "z",
+            "sources": ["public.t.at"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_between",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_bit_typed",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "b",
+            "sources": ["public.t.bits"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_case_",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "k",
+            "sources": []
+          },
+          {
+            "name": "size",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_casts",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "a",
+            "sources": ["public.t.amount"]
+          },
+          {
+            "name": "dt",
+            "sources": ["public.t.d"]
+          },
+          {
+            "name": "b",
+            "sources": []
+          },
+          {
+            "name": "v",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "c",
+            "sources": ["public.t.code"]
+          },
+          {
+            "name": "bo",
+            "sources": []
+          },
+          {
+            "name": "nt",
+            "sources": []
+          },
+          {
+            "name": "dd",
+            "sources": []
+          },
+          {
+            "name": "tt",
+            "sources": []
+          },
+          {
+            "name": "cv",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_char_type",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "is_a",
+            "sources": ["public.t.kind"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_coalesce",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "n",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "e",
+            "sources": ["public.t.email"]
+          },
+          {
+            "name": "g",
+            "sources": ["public.t.amount"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_collated",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "n",
+            "sources": ["public.t.name"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_cte_recursive",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_current_values",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "cd",
+            "sources": []
+          },
+          {
+            "name": "ct",
+            "sources": []
+          },
+          {
+            "name": "lt",
+            "sources": []
+          },
+          {
+            "name": "cu",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_distinct_on",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "name",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "at",
+            "sources": ["public.t.at"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_extract",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "y",
+            "sources": ["public.t.at"]
+          },
+          {
+            "name": "e",
+            "sources": ["public.t.at"]
+          },
+          {
+            "name": "m",
+            "sources": ["public.t.at"]
+          },
+          {
+            "name": "w",
+            "sources": ["public.t.at"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_grouping_sets",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "name",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "code",
+            "sources": ["public.t.code"]
+          },
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_in_list",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_inet_ops",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_interval_math",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "since",
+            "sources": ["public.t.at"]
+          },
+          {
+            "name": "h",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_is_distinct",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_joins",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "note",
+            "sources": ["public.u.note"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_json_ops",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "a",
+            "sources": ["public.t.data"]
+          },
+          {
+            "name": "b",
+            "sources": ["public.t.data"]
+          },
+          {
+            "name": "cd",
+            "sources": ["public.t.data"]
+          },
+          {
+            "name": "has_e",
+            "sources": ["public.t.data"]
+          },
+          {
+            "name": "obj",
+            "sources": ["public.t.name"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_like_ilike",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_limit_offset",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_normalize",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "n",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "nn",
+            "sources": ["public.t.name"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_numeric_lits",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "a",
+            "sources": ["public.t.amount"]
+          },
+          {
+            "name": "b",
+            "sources": ["public.t.amount"]
+          },
+          {
+            "name": "c",
+            "sources": ["public.t.amount"]
+          },
+          {
+            "name": "d",
+            "sources": []
+          },
+          {
+            "name": "e",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_quotes",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "q",
+            "sources": []
+          },
+          {
+            "name": "e",
+            "sources": []
+          },
+          {
+            "name": "u",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_regexp",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "local",
+            "sources": ["public.t.email"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_row_cmp",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_set_ops",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id", "public.u.t_id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_string_fns",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "s1",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "s2",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "tr",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "p",
+            "sources": ["public.t.email"]
+          },
+          {
+            "name": "o",
+            "sources": ["public.t.name"]
+          },
+          {
+            "name": "ul",
+            "sources": ["public.t.name"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_subqueries",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_to_char",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "day",
+            "sources": ["public.t.at"]
+          },
+          {
+            "name": "f",
+            "sources": ["public.t.name", "public.t.email"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_values_view",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "n",
+            "sources": []
+          },
+          {
+            "name": "s",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_windows",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.t.id"]
+          },
+          {
+            "name": "rn",
+            "sources": []
+          },
+          {
+            "name": "prev",
+            "sources": ["public.t.amount"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_aggregates",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_any_array",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_arrays",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "which is not on the mask-safe list"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_at_time_zone",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_between",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_bit_typed",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_case_",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_casts",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_char_type",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_coalesce",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_collated",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_cte_recursive",
+      "policy": "masked",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_current_values",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_distinct_on",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_extract",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_grouping_sets",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_in_list",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_inet_ops",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_interval_math",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_is_distinct",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_joins",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_json_ops",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_like_ilike",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_limit_offset",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_normalize",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "which is not on the mask-safe list"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_numeric_lits",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_quotes",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_regexp",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_row_cmp",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_set_ops",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_string_fns",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_subqueries",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_to_char",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_values_view",
+      "policy": "masked",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "n",
+            "sources": []
+          },
+          {
+            "name": "s",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM v_windows",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.t`"
+      }
+    }
+  ]
+}

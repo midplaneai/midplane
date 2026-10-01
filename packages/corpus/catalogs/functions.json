@@ -1,0 +1,130 @@
+{
+  "relations": [
+    {
+      "schema": "public",
+      "name": "users",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "org_id", "type": "integer", "category": "N" },
+        { "name": "email", "type": "text", "category": "S" },
+        { "name": "name", "type": "text", "category": "S" },
+        { "name": "n", "type": "integer", "category": "N" },
+        { "name": "a", "type": "text", "category": "S" },
+        { "name": "b", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "orders",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "user_id", "type": "integer", "category": "N" },
+        { "name": "total", "type": "numeric", "category": "N" },
+        { "name": "note", "type": "text", "category": "S" },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "secrets",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "ssn", "type": "text", "category": "S" },
+        { "name": "api_key", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "exfil",
+      "kind": "table",
+      "columns": [{ "name": "data", "type": "text", "category": "S" }]
+    },
+    {
+      "schema": "public",
+      "name": "t",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "x", "type": "integer", "category": "N" },
+        { "name": "a", "type": "text", "category": "S" },
+        { "name": "b", "type": "text", "category": "S" },
+        { "name": "c", "type": "text", "category": "S" },
+        { "name": "v", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "posts",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "org_id", "type": "integer", "category": "N" },
+        { "name": "tags", "type": "text[]", "category": "A" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "logs",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "msg", "type": "text", "category": "S" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "events",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "data", "type": "jsonb", "category": "U" },
+        { "name": "meta", "type": "jsonb", "category": "U" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "bookings",
+      "kind": "table",
+      "columns": [
+        { "name": "id", "type": "integer", "category": "N" },
+        { "name": "during", "type": "tsrange", "category": "R" }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "my table",
+      "kind": "table",
+      "columns": [{ "name": "id", "type": "integer", "category": "N" }]
+    },
+    {
+      "schema": "public",
+      "name": "üsers",
+      "kind": "table",
+      "columns": [{ "name": "id", "type": "integer", "category": "N" }]
+    },
+    {
+      "schema": "public",
+      "name": "t1",
+      "kind": "table",
+      "columns": [{ "name": "id", "type": "integer", "category": "N" }]
+    },
+    {
+      "schema": "public",
+      "name": "t2",
+      "kind": "table",
+      "columns": [{ "name": "id", "type": "integer", "category": "N" }]
+    }
+  ],
+  "routines": [
+    { "schema": "public", "name": "my_business_helper", "kind": "function" },
+    { "schema": "analytics", "name": "compute_ltv", "kind": "function" },
+    { "schema": "public", "name": "pg_read_file", "kind": "function" }
+  ]
+}

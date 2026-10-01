@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+  - apps/*
+minimumReleaseAgeExclude:
+  - '@hono/node-server@2.1.3'
+  - '@modelcontextprotocol/core@2.2.0'
+  - '@modelcontextprotocol/server@2.2.0'
+  - hono@4.13.11
+  - '@modelcontextprotocol/client@2.2.0'

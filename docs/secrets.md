@@ -1,0 +1,61 @@
+# Secrets
+
+The gateway holds the secrets Midplane Cloud never sees: database credentials,
+the mask salt and its own identity. Name each in `midplane.yaml` by
+environment variable or file; none of them is ever sent over the link.
+
+## Database credentials
+
+```yaml
+databases:
+  main: { dsn: { env: DSN_MAIN } }       # or { file: /run/secrets/dsn-main }
+```
+
+One DSN per database id. Give the gateway a login role with only what agents
+should ever be able to do: Midplane narrows a role's permissions, it never
+widens them, and row-level security still applies. A policy's `role` runs
+every statement as another role (`SET LOCAL ROLE`), which the login role must
+be a member of.
+
+## The mask salt
+
+`consistent-hash` masks are `sha256(salt || value)`: the same value always
+masks to the same token, so joins and counts work, and without the salt the
+tokens can't be reversed by hashing guesses.
+
+- **Generate** at least 32 random characters once, for example
+  `openssl rand -hex 32`, and keep it in your secret manager.
+- **Share** it across every instance that serves the same databases, so they
+  mask alike.
+- **Rotate** by hand: a new salt changes every masked token, so anything that
+  stored old tokens no longer matches.
+
+A policy with masks halts a linked gateway that has no `mask_salt`, and stops
+a local one from starting.
+
+## The identity (linked mode)
+
+The identity file, or the `MIDPLANE_IDENTITY` variable, holds the gateway's
+private key: whoever has it can act as the gateway on the link (fetch its
+bundles, file held writes, record taint). The file is written with mode 0600.
+If it leaks, revoke the gateway on the Gateways page and enroll a new one.
+
+Enrollment tokens are single use and expire after 24 hours; the gateway reads
+one only until its identity exists.
+
+## Local signing keys (local mode)
+
+`midplane-signing-key.json` mints tokens for every database the config
+names. Keep it off the gateway's host when you can: the gateway only needs the
+public half.
+
+## The audit file
+
+Not a secret, but sensitive: it holds every statement as agents wrote it and
+their stated intents, which can include values a person typed. It never holds
+results. Protect it like the database's own logs ([audit](audit.md)).
+
+*Tested by* `apps/gateway/test/config.test.ts` (secret sources, the salt's
+length), and the approvals and audit suites
+(`apps/gateway/test/approvals.e2e.test.ts`, `audit.e2e.test.ts`), which scan
+everything the gateway sends for the DSN, the salt and row values.

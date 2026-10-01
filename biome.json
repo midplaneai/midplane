@@ -1,0 +1,134 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/coverage",
+      "!apps/gateway/bundle",
+      "!image"
+    ]
+  },
+  "formatter": {
+    "indentStyle": "space"
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUndeclaredDependencies": "error"
+      },
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": [
+                  "@midplane-cloud/*",
+                  "@midplane/engine",
+                  "@midplane/engine/*"
+                ],
+                "message": "v2 never imports the old tree. Copy the module into v2 instead."
+              },
+              {
+                "group": ["@midplane/cloud-*"],
+                "message": "Nothing in oss/ imports from cloud/."
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/test/**", "scripts/**", "vitest.config.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUndeclaredDependencies": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/core/src/**", "packages/protocol/src/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noNodejsModules": "error"
+          },
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@midplane-cloud/*",
+                      "@midplane/engine",
+                      "@midplane/engine/*"
+                    ],
+                    "message": "v2 never imports the old tree. Copy the module into v2 instead."
+                  },
+                  {
+                    "group": ["@midplane/cloud-*"],
+                    "message": "Nothing in oss/ imports from cloud/."
+                  },
+                  {
+                    "group": [
+                      "pg",
+                      "pg/*",
+                      "postgres",
+                      "undici",
+                      "ws",
+                      "node-fetch"
+                    ],
+                    "message": "core and protocol are pure: no database, network or file access."
+                  }
+                ]
+              }
+            },
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "fetch": "core and protocol are pure: no network access.",
+                  "XMLHttpRequest": "core and protocol are pure: no network access.",
+                  "WebSocket": "core and protocol are pure: no network access.",
+                  "process": "core and protocol are pure: no environment reads.",
+                  "require": "core and protocol are pure: import declared dependencies only.",
+                  "Buffer": "core and protocol are pure: use Uint8Array.",
+                  "globalThis": "core and protocol are pure: no ambient globals.",
+                  "Date": "core and protocol are pure: no clock. Take time as an input.",
+                  "performance": "core and protocol are pure: no clock.",
+                  "setTimeout": "core and protocol are pure: no timers.",
+                  "setInterval": "core and protocol are pure: no timers.",
+                  "setImmediate": "core and protocol are pure: no timers.",
+                  "queueMicrotask": "core and protocol are pure: no scheduling.",
+                  "crypto": "core and protocol are pure: no randomness.",
+                  "console": "core and protocol are pure: return data, let the caller log."
+                }
+              }
+            }
+          },
+          "nursery": {
+            "noJsRestrictedProperties": {
+              "level": "error",
+              "options": {
+                "entries": [
+                  {
+                    "object": "Math",
+                    "property": "random",
+                    "message": "core and protocol are pure: no randomness."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

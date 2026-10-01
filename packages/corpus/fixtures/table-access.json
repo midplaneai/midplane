@@ -1,0 +1,1503 @@
+{
+  "description": "Table access, converted from the old engine's table_access corpus. Old configs map as: no YAML -> `legacy` (default read); YAML_CONFIG -> `yaml` with schema-qualified keys; the old harness's guardrails were inert, so both allow schema changes. Old scope_max_access=read -> caller scopes [\"db:main:read\"].",
+  "catalog": "table-access",
+  "policies": {
+    "legacy": {
+      "table_access": {
+        "default": "read"
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "yaml": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.users": "read",
+          "public.posts": "read",
+          "public.audit_log": "deny",
+          "public.webhooks": "read_write",
+          "public.feature_flags": "read_write",
+          "stripe.charges": "read"
+        }
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "read_all": {
+      "table_access": {
+        "default": "read"
+      }
+    },
+    "deny_all": {
+      "table_access": {
+        "default": "deny"
+      }
+    },
+    "empty": {},
+    "default_rw": {
+      "table_access": {
+        "default": "read_write"
+      }
+    },
+    "stripe_rw": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "stripe.charges": "read_write"
+        }
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "stripe_rw_v2_writes": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "stripe.charges": "read_write"
+        }
+      }
+    },
+    "charges_read": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.charges": "read"
+        }
+      }
+    },
+    "users_read": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.users": "read"
+        }
+      }
+    },
+    "users_rw": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.users": "read_write"
+        }
+      }
+    },
+    "users_deny": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.users": "deny"
+        }
+      }
+    },
+    "users_deny_else_rw": {
+      "table_access": {
+        "default": "read_write",
+        "tables": {
+          "public.users": "deny"
+        }
+      }
+    },
+    "users_deny_else_read": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.users": "deny"
+        }
+      }
+    },
+    "audit_deny": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.audit_log": "deny"
+        }
+      }
+    },
+    "real_read": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.real": "read"
+        }
+      }
+    },
+    "allowed_read": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.allowed": "read"
+        }
+      }
+    },
+    "info_schema_denied_key": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "information_schema.tables": "deny"
+        }
+      }
+    },
+    "webhooks_rw": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.webhooks": "read_write"
+        }
+      }
+    },
+    "all_rw": {
+      "table_access": {
+        "default": "read_write",
+        "tables": {
+          "public.users": "read_write"
+        }
+      }
+    },
+    "into_dst": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.dst": "read_write",
+          "public.secrets": "deny"
+        }
+      }
+    },
+    "snapshot_rw": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.snapshot": "read_write",
+          "public.users": "read"
+        }
+      }
+    },
+    "pg_class_shadow": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.pg_class": "read"
+        }
+      }
+    },
+    "view_denied": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.active_users": "deny"
+        }
+      }
+    },
+    "ddl_refs": {
+      "table_access": {
+        "default": "read_write",
+        "tables": {
+          "public.audit_log": "deny",
+          "public.users": "read"
+        }
+      }
+    },
+    "partitions": {
+      "table_access": {
+        "default": "read",
+        "tables": {
+          "public.events": "deny",
+          "public.orders": "read_write"
+        }
+      }
+    },
+    "partition_override": {
+      "table_access": {
+        "default": "deny",
+        "tables": {
+          "public.events": "deny",
+          "public.events_2024": "read"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "policy": "legacy"
+  },
+  "cases": [
+    {
+      "name": "table access (stage 4) fires before where_required (stage 5)",
+      "sql": "DELETE FROM users",
+      "origin": "engine/test/adversarial/table-access.test.ts: DELETE FROM users (no WHERE) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "DELETE FROM users WHERE id = 1",
+      "origin": "engine/test/adversarial/table-access.test.ts: DELETE FROM users WHERE id = 1 → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "UPDATE users SET name='b' WHERE org_id=42",
+      "origin": "engine/test/adversarial/table-access.test.ts: UPDATE users SET name='b' WHERE org_id=42 → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "sql": "UPDATE a SET n=1 FROM b WHERE a.id = b.id",
+      "origin": "engine/test/adversarial/table-access.test.ts: UPDATE … FROM (multi-table form) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.a`"
+      }
+    },
+    {
+      "sql": "INSERT INTO users (org_id, name) VALUES (42, 'a')",
+      "origin": "engine/test/adversarial/table-access.test.ts: INSERT INTO users (org_id, name) VALUES (42, 'a') → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "sql": "INSERT INTO logs (msg) VALUES ('x') RETURNING id, msg",
+      "origin": "engine/test/adversarial/table-access.test.ts: INSERT … RETURNING * → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.logs`"
+      }
+    },
+    {
+      "sql": "INSERT INTO t (x) VALUES (1) ON CONFLICT (x) DO NOTHING",
+      "origin": "engine/test/adversarial/table-access.test.ts: INSERT … ON CONFLICT DO NOTHING → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "sql": "INSERT INTO t (x, y) VALUES (1, 2) ON CONFLICT (x) DO UPDATE SET y = excluded.y",
+      "origin": "engine/test/adversarial/table-access.test.ts: INSERT … ON CONFLICT DO UPDATE → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "sql": "MERGE INTO target t USING source s ON t.id = s.id\n       WHEN MATCHED THEN UPDATE SET v = s.v\n       WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id, s.v)",
+      "origin": "engine/test/adversarial/table-access.test.ts: MERGE (when matched + when not matched) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "MERGE INTO target t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v",
+      "origin": "engine/test/adversarial/table-access.test.ts: MERGE (only when matched) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "DROP TABLE x",
+      "origin": "engine/test/adversarial/table-access.test.ts: DROP TABLE x → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.x`"
+      }
+    },
+    {
+      "sql": "DROP TABLE public.users",
+      "origin": "engine/test/adversarial/table-access.test.ts: DROP TABLE schema.t (schema-qualified) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "TRUNCATE t",
+      "origin": "engine/test/adversarial/table-access.test.ts: TRUNCATE t → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      }
+    },
+    {
+      "sql": "CREATE TABLE foo (id int)",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE TABLE foo (id int) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.foo`"
+      }
+    },
+    {
+      "sql": "CREATE TABLE foo AS SELECT * FROM users",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE TABLE AS SELECT → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.foo`"
+      }
+    },
+    {
+      "sql": "SELECT id, email INTO foo FROM users",
+      "origin": "engine/test/adversarial/table-access.test.ts: SELECT … INTO foo → deny (legacy CREATE TABLE AS spelling)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.foo`"
+      }
+    },
+    {
+      "sql": "SELECT id INTO TEMP foo FROM users",
+      "origin": "engine/test/adversarial/table-access.test.ts: SELECT … INTO TEMP foo → deny (TEMP is no escape hatch)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users ADD COLUMN flag boolean",
+      "origin": "engine/test/adversarial/table-access.test.ts: ALTER TABLE … ADD COLUMN → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "CREATE INDEX idx_users_email ON users (email)",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE INDEX → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "CREATE VIEW v AS SELECT 1",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE VIEW v AS SELECT → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "REFRESH MATERIALIZED VIEW v",
+      "origin": "engine/test/adversarial/table-access.test.ts: REFRESH MATERIALIZED VIEW → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "GRANT SELECT ON users TO some_role",
+      "origin": "engine/test/adversarial/table-access.test.ts: GRANT SELECT → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "REVOKE SELECT ON users FROM some_role",
+      "origin": "engine/test/adversarial/table-access.test.ts: REVOKE SELECT → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "GRANT admin TO some_user",
+      "origin": "engine/test/adversarial/table-access.test.ts: GRANT role → deny (GrantRoleStmt; non-table object)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE SCHEMA s",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE SCHEMA → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE ROLE bob",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE ROLE → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE FUNCTION → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE DATABASE d",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE DATABASE → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "ALTER DOMAIN d SET DEFAULT 1",
+      "origin": "engine/test/adversarial/table-access.test.ts: ALTER DOMAIN → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE RULE r AS ON SELECT TO t DO INSTEAD SELECT 1",
+      "origin": "engine/test/adversarial/table-access.test.ts: CREATE RULE → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "WITH x AS (DELETE FROM y RETURNING *) SELECT * FROM x",
+      "origin": "engine/test/adversarial/table-access.test.ts: WITH x AS (DELETE FROM y RETURNING *) SELECT * FROM x → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH x AS (UPDATE y SET n=1 RETURNING *) SELECT * FROM x",
+      "origin": "engine/test/adversarial/table-access.test.ts: WITH x AS (UPDATE y SET n=1 RETURNING *) SELECT * FROM x → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH x AS (INSERT INTO y (n) VALUES (1) RETURNING *) SELECT * FROM x",
+      "origin": "engine/test/adversarial/table-access.test.ts: WITH x AS (INSERT INTO y VALUES (1) RETURNING *) SELECT * FROM x → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH a AS (SELECT 1 AS n),\n            b AS (DELETE FROM y RETURNING n)\n       SELECT * FROM a, b",
+      "origin": "engine/test/adversarial/table-access.test.ts: write hidden in second CTE (not first) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write",
+        "reason_includes": "\"b\""
+      }
+    },
+    {
+      "sql": "WITH outer_cte AS (\n         WITH inner_cte AS (DELETE FROM y RETURNING id)\n         SELECT id FROM inner_cte\n       ) SELECT * FROM outer_cte",
+      "origin": "engine/test/adversarial/table-access.test.ts: write hidden under nested CTE (CTE within CTE) → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH d AS (DELETE FROM y RETURNING id) INSERT INTO archive (id) SELECT id FROM d",
+      "origin": "engine/test/adversarial/table-access.test.ts: WITH-modifying chain feeding INSERT → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH RECURSIVE r AS (\n         SELECT 1 AS n\n         UNION\n         SELECT n+1 FROM r WHERE n < 5\n       ), w AS (DELETE FROM y RETURNING id)\n       SELECT * FROM r, w",
+      "origin": "engine/test/adversarial/table-access.test.ts: RECURSIVE CTE wrapping a write → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH d AS (DELETE FROM y RETURNING id)\n       SELECT id FROM x WHERE EXISTS (SELECT 1 FROM d WHERE d.id = x.id)",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE write referenced by EXISTS subquery → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH d AS (DELETE FROM y RETURNING id) SELECT id FROM x UNION SELECT id FROM d",
+      "origin": "engine/test/adversarial/table-access.test.ts: write in UNION arm via CTE → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH d AS (DELETE FROM y RETURNING id) SELECT id FROM x INTERSECT SELECT id FROM d",
+      "origin": "engine/test/adversarial/table-access.test.ts: write in INTERSECT arm via CTE → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH d AS (DELETE FROM y RETURNING id) SELECT id FROM x EXCEPT SELECT id FROM d",
+      "origin": "engine/test/adversarial/table-access.test.ts: write in EXCEPT arm via CTE → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "DO $$ BEGIN DELETE FROM users; END $$",
+      "origin": "engine/test/adversarial/table-access.test.ts: DO $$ ... DELETE FROM users ... $$ → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "DO $$ BEGIN PERFORM 1; END $$",
+      "origin": "engine/test/adversarial/table-access.test.ts: DO $$ ... read-only body ... $$ → still deny (body opaque)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "DO $tag$ BEGIN PERFORM 1; END $tag$",
+      "origin": "engine/test/adversarial/table-access.test.ts: DO with custom $tag$ delimiter → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT id, email FROM users WHERE org_id = 42",
+      "origin": "engine/test/adversarial/table-access.test.ts: plain SELECT → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true,
+        "statement": "SELECT id, email FROM users WHERE org_id = 42",
+        "tables": ["public.users"]
+      }
+    },
+    {
+      "sql": "SELECT id FROM (SELECT id FROM users) AS u",
+      "origin": "engine/test/adversarial/table-access.test.ts: SELECT with subquery → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true,
+        "tables": ["public.users"]
+      }
+    },
+    {
+      "sql": "WITH u AS (SELECT id FROM users) SELECT * FROM u",
+      "origin": "engine/test/adversarial/table-access.test.ts: SELECT with CTE → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true,
+        "tables": ["public.users"]
+      }
+    },
+    {
+      "sql": "DELETE FROM anywhere",
+      "origin": "engine/docs/adversarial-corpus.md §1: Legacy parity: DELETE FROM anywhere",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.anywhere`"
+      }
+    },
+    {
+      "sql": "INSERT INTO anywhere VALUES (1)",
+      "origin": "engine/docs/adversarial-corpus.md §1: Legacy parity: INSERT INTO anywhere VALUES (1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "sql": "SELECT * FROM anywhere",
+      "origin": "engine/docs/adversarial-corpus.md §1: Legacy parity: SELECT * FROM anywhere",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "sql": "SELECT * FROM users WHERE id = 1",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: read on `read` table → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      }
+    },
+    {
+      "sql": "DELETE FROM users WHERE id = 1",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: write on `read` table → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "DELETE FROM webhooks WHERE id = 1",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: write on `read_write` table → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "tables": ["public.webhooks"]
+      }
+    },
+    {
+      "sql": "INSERT INTO feature_flags (name) VALUES ('beta')",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: INSERT on `read_write` table → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "tables": ["public.feature_flags"]
+      }
+    },
+    {
+      "sql": "UPDATE feature_flags SET enabled = true WHERE name = 'beta'",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: UPDATE on `read_write` table → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      }
+    },
+    {
+      "sql": "SELECT * FROM audit_log",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: read on `deny` table → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "INSERT INTO audit_log (msg) VALUES ('x')",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: write on `deny` table → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "WITH x AS (DELETE FROM users RETURNING *) SELECT * FROM x",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE write at depth on `read` → deny on inner DELETE",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "name": "a write inside WITH denies even when its target is read_write (old engine allowed this)",
+      "sql": "WITH x AS (DELETE FROM webhooks RETURNING *) SELECT * FROM x",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE write at depth on `read_write` → allow",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "INSERT INTO webhooks (msg) SELECT msg FROM audit_log",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: INSERT INTO read_write SELECT FROM deny → deny on read side",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "INSERT INTO webhooks (uid) SELECT id FROM users",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: INSERT INTO read_write SELECT FROM read → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "tables": ["public.webhooks", "public.users"]
+      }
+    },
+    {
+      "sql": "SELECT * FROM stripe.charges WHERE id = 1",
+      "policy": "stripe_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: schema-qualified key matches before bare name",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["stripe.charges"]
+      }
+    },
+    {
+      "sql": "DELETE FROM stripe.charges WHERE id = 1",
+      "policy": "stripe_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: schema-qualified key matches before bare name",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "tables": ["stripe.charges"]
+      }
+    },
+    {
+      "name": "DROP TABLE on a read_write table with schema_changes allowed (old guardrails inert)",
+      "sql": "DROP TABLE stripe.charges",
+      "policy": "stripe_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: DROP TABLE on schema-qualified `read_write` → allow",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "tables": ["stripe.charges"]
+      }
+    },
+    {
+      "name": "table access passes, but schema_changes defaults to deny",
+      "sql": "DROP TABLE stripe.charges",
+      "policy": "stripe_rw_v2_writes",
+      "origin": "v2 spec, no old equivalent: DROP TABLE on a read_write table under the default writes policy",
+      "expect": {
+        "verdict": "deny",
+        "rule": "write_class"
+      }
+    },
+    {
+      "name": "old bare key `charges` becomes `public.charges` (bare keys are invalid in v2)",
+      "sql": "SELECT * FROM public.charges",
+      "policy": "charges_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: bare-name match wins when schema-qualified key absent",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.charges"]
+      }
+    },
+    {
+      "sql": "SELECT * FROM stripe.charges",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: schema-qualified key on `read` denies write",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "table access (stage 4) fires before where_required (stage 5)",
+      "sql": "DELETE FROM stripe.charges",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: schema-qualified key on `read` denies write",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `stripe.charges`"
+      }
+    },
+    {
+      "sql": "INSERT INTO unlisted (n) VALUES (1)",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: YAML present, table unlisted, default `read`, write → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.unlisted`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM unlisted",
+      "policy": "yaml",
+      "origin": "engine/test/adversarial/table-access.test.ts: YAML present, table unlisted, default `read`, read → allow",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "sql": "SELECT * FROM something",
+      "policy": "allowed_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: default `deny`: read on unlisted table → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.something`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM allowed",
+      "policy": "allowed_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: default `deny`: read on listed `read` table → allow",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "sql": "SELECT COUNT(*) FROM users",
+      "policy": "users_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: default `deny` + `public.users: read` + `FROM users` → allow (the new fallback)",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.users"]
+      }
+    },
+    {
+      "sql": "SELECT * FROM other_schema.users",
+      "policy": "users_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: default `deny` + `public.users: read` + `FROM other_schema.users` → deny (different schema)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `other_schema.users`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM users",
+      "policy": "users_deny_else_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: ambiguous policy: `public.users: deny` + `users: read_write` + bare ref → qualified form wins (deny)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.users`"
+      }
+    },
+    {
+      "name": "old bare key `users` becomes `public.users` (bare keys are invalid in v2)",
+      "sql": "SELECT * FROM users",
+      "policy": "users_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: default `deny` + `users: read` + `FROM users` → allow (bare-key fallback still works)",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.users"]
+      }
+    },
+    {
+      "sql": "INSERT INTO users (id, name) VALUES (1, 'a')",
+      "policy": "users_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: `public.users: read` + write `INSERT INTO users` → deny (read perm doesn't satisfy write)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "WITH users AS (SELECT 1) SELECT * FROM users",
+      "policy": "users_deny_else_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE name shadows even when `public.<name>` policy entry exists",
+      "expect": {
+        "verdict": "allow",
+        "tables": []
+      }
+    },
+    {
+      "sql": "SELECT relname FROM pg_class",
+      "policy": "pg_class_shadow",
+      "origin": "v2 spec, no old equivalent: search path is pg_catalog first, so a bare name can't reach a same-named public table",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `pg_catalog.pg_class`"
+      }
+    },
+    {
+      "sql": "WITH x AS (SELECT 1) SELECT * FROM x",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: default `deny`: WITH x AS (...) SELECT FROM x → allow when no real tables touched",
+      "expect": {
+        "verdict": "allow",
+        "tables": []
+      }
+    },
+    {
+      "sql": "WITH audit_log AS (SELECT 1) SELECT * FROM audit_log",
+      "policy": "audit_deny",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE name colliding with `deny` table → CTE shadows base table",
+      "expect": {
+        "verdict": "allow",
+        "tables": []
+      }
+    },
+    {
+      "sql": "WITH audit_log AS (SELECT 1) SELECT * FROM public.audit_log",
+      "policy": "audit_deny",
+      "origin": "engine/test/adversarial/table-access.test.ts: schema-qualified ref does NOT match a CTE name",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "WITH cte AS (SELECT * FROM audit_log) SELECT * FROM cte",
+      "policy": "audit_deny",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE body still checked against policy",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "WITH audit_log AS (SELECT * FROM audit_log) SELECT * FROM audit_log",
+      "policy": "audit_deny",
+      "origin": "engine/test/adversarial/table-access.test.ts: self-shadow: CTE named after a denied table reads the REAL table → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "WITH x AS (DELETE FROM real RETURNING *) SELECT * FROM x",
+      "policy": "real_read",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE write at depth on real `read` table still denies",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "sql": "WITH outer_cte AS (\n         WITH inner_cte AS (SELECT 1) SELECT * FROM inner_cte\n       ) SELECT * FROM outer_cte",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: nested CTEs: inner CTE name only shadows in its own scope",
+      "expect": {
+        "verdict": "allow",
+        "tables": []
+      }
+    },
+    {
+      "sql": "WITH RECURSIVE r AS (\n         SELECT 1 AS n\n         UNION ALL\n         SELECT n+1 FROM r WHERE n < 5\n       ) SELECT * FROM r",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: RECURSIVE CTE self-reference is treated as CTE, not base table",
+      "expect": {
+        "verdict": "allow",
+        "tables": []
+      }
+    },
+    {
+      "sql": "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: default deny + SELECT from information_schema.tables → allow",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["information_schema.tables"]
+      }
+    },
+    {
+      "sql": "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: default deny + SELECT from information_schema.columns → allow (describe_table)",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "sql": "SELECT t.table_name, u.id FROM information_schema.tables t JOIN public.users u ON true",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: default deny + JOIN information_schema.tables with public.users → deny on user table",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.users`"
+      }
+    },
+    {
+      "sql": "SELECT table_name FROM information_schema.tables",
+      "policy": "info_schema_denied_key",
+      "origin": "engine/test/adversarial/table-access.test.ts: explicit `information_schema.tables: deny` ignored — carve-out is unconditional",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "information_schema.tables is a view, and writing to a view is unsupported",
+      "sql": "UPDATE information_schema.tables SET table_name = 'x'",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: default deny + UPDATE on information_schema.* → still deny via write path",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "UPDATE information_schema.sql_features SET comments = 'x' WHERE feature_id = 'x'",
+      "policy": "default_rw",
+      "origin": "v2 spec, no old equivalent: information_schema is readable, never writable, even under default read_write",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "system catalog"
+      },
+      "name": "a system catalog table is never a write target, whatever the policy"
+    },
+    {
+      "sql": "SELECT rolname FROM pg_catalog.pg_roles",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: pg_catalog is NOT carved out — default deny + SELECT pg_catalog.pg_roles → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `pg_catalog.pg_roles`"
+      }
+    },
+    {
+      "sql": "SELECT tablename FROM pg_catalog.pg_tables",
+      "policy": "read_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: pg_catalog allowed when default permits or table explicitly listed",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["pg_catalog.pg_tables"]
+      }
+    },
+    {
+      "sql": "SELECT * FROM pg_temp_3.scratch",
+      "policy": "deny_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: carve-out does NOT extend to pg_temp_* or other schemas",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `pg_temp_3.scratch`"
+      }
+    },
+    {
+      "sql": "COPY webhooks TO '/tmp/leak'",
+      "policy": "webhooks_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: COPY webhooks TO '/tmp/leak' → deny even when webhooks is read_write",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "COPY webhooks FROM '/etc/passwd'",
+      "policy": "webhooks_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: COPY webhooks FROM '/etc/passwd' → deny even when webhooks is read_write",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "LOCK TABLE webhooks IN ACCESS EXCLUSIVE MODE",
+      "policy": "webhooks_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: LOCK TABLE webhooks → deny even when webhooks is read_write",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SET search_path = malicious_schema",
+      "origin": "engine/test/adversarial/table-access.test.ts: SET search_path = malicious → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SET search_path = malicious_schema, public",
+      "origin": "engine/test/adversarial/table-access.test.ts: SET search_path with multiple schemas → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SET timezone = 'UTC'",
+      "origin": "engine/test/adversarial/table-access.test.ts: SET timezone = 'UTC' → deny (any SET, not just search_path)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SET LOCAL search_path = elsewhere",
+      "origin": "engine/test/adversarial/table-access.test.ts: SET LOCAL search_path → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SET SESSION search_path = elsewhere",
+      "origin": "engine/test/adversarial/table-access.test.ts: SET SESSION search_path → deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "RESET search_path",
+      "origin": "engine/test/adversarial/table-access.test.ts: RESET search_path → deny (RESET parses as VariableSetStmt)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SET search_path = whatever",
+      "policy": "all_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: SET denies under YAML config too — no key can grant it",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT id, email INTO _mp_leaked FROM users",
+      "policy": "read_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: default: read → write to the creation target is denied",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public._mp_leaked`"
+      }
+    },
+    {
+      "sql": "SELECT id INTO public.snapshot FROM users",
+      "policy": "read_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: schema-qualified target → denied on the qualified name",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.snapshot`"
+      }
+    },
+    {
+      "sql": "WITH foo AS (SELECT id FROM users) SELECT * INTO foo FROM foo",
+      "policy": "read_all",
+      "origin": "engine/test/adversarial/table-access.test.ts: CTE-name collision does not suppress the write — WITH foo … SELECT * INTO foo",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.foo`"
+      }
+    },
+    {
+      "sql": "SELECT * INTO dst FROM secrets",
+      "policy": "into_dst",
+      "origin": "engine/test/adversarial/table-access.test.ts: read side is still enforced — INTO a writable target FROM a denied table denies the read",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.secrets`"
+      }
+    },
+    {
+      "sql": "SELECT id INTO snapshot FROM users",
+      "policy": "snapshot_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: read_write target → allowed (operator authorized the write), same as CREATE TABLE AS",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      }
+    },
+    {
+      "sql": "CREATE TABLE snapshot AS SELECT id FROM users",
+      "policy": "snapshot_rw",
+      "origin": "engine/test/adversarial/table-access.test.ts: read_write target → allowed (operator authorized the write), same as CREATE TABLE AS",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      }
+    },
+    {
+      "sql": "SELECT id, email INTO _mp_leaked FROM users",
+      "policy": "default_rw",
+      "scopes": ["db:main:read"],
+      "origin": "engine/test/adversarial/table-access.test.ts: read-only scope ceiling denies INTO even when policy permits the write",
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope",
+        "reason_includes": "read-only"
+      }
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "policy": "users_rw",
+      "scopes": ["db:main:read"],
+      "origin": "engine/test/policy/table-access-scope.test.ts: \"read\" ceiling denies a write the policy would allow",
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope",
+        "reason_includes": "read-only"
+      }
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "policy": "users_rw",
+      "scopes": ["db:main:write"],
+      "origin": "engine/test/policy/table-access-scope.test.ts: \"read_write\" ceiling leaves a policy-permitted write allowed",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      }
+    },
+    {
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "policy": "users_rw",
+      "origin": "engine/test/policy/table-access-scope.test.ts: no ceiling (undefined) is unchanged back-compat — write allowed",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "policy": "users_rw",
+      "scopes": ["db:main:read"],
+      "origin": "engine/test/policy/table-access-scope.test.ts: \"read\" ceiling never blocks reads",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      }
+    },
+    {
+      "name": "scope (stage 3) is checked before table access (stage 4), so the scope reason wins",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "policy": "users_read",
+      "scopes": ["db:main:read"],
+      "origin": "engine/test/policy/table-access-scope.test.ts: a policy-denied write under a \"read\" ceiling reports the POLICY reason, not the scope one",
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "policy": "users_read",
+      "scopes": [],
+      "origin": "v2 spec, no old equivalent: a caller with no scope on the database can't read",
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "policy": "users_read",
+      "origin": "engine/test/policy/table-access-swap.test.ts: swap from policy A → policy B flips the next query's verdict",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "policy": "users_deny",
+      "origin": "engine/test/policy/table-access-swap.test.ts: swap from policy A → policy B flips the next query's verdict",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.users`"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "policy": "deny_all",
+      "origin": "engine/test/policy/table-access-swap.test.ts: swap to undefined falls back to legacy no-yaml config",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "origin": "engine/test/policy/table-access-swap.test.ts: swap to undefined falls back to legacy no-yaml config",
+      "expect": {
+        "verdict": "allow"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users",
+      "policy": "empty",
+      "origin": "v2 spec, no old equivalent: an omitted table_access section is default deny",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.users`"
+      }
+    },
+    {
+      "sql": "SELECT id FROM users WHERE org_id=42",
+      "origin": "engine/test/engine.test.ts: writes ATTEMPTED, DECIDED, EXECUTED in order — and executes",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true,
+        "statement": "SELECT id FROM users WHERE org_id=42",
+        "tables": ["public.users"]
+      }
+    },
+    {
+      "sql": "SELECT 1",
+      "origin": "engine/test/engine.test.ts: ATTEMPTED captures sql_fingerprint as 16 hex chars",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true,
+        "tables": []
+      }
+    },
+    {
+      "sql": "DELETE FROM users",
+      "origin": "engine/test/engine.test.ts: DENY: writes ATTEMPTED + DECIDED, does NOT execute",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "table-access policy"
+      }
+    },
+    {
+      "sql": "garbage in",
+      "origin": "engine/test/engine.test.ts: parse_error denial includes parse_error rule + does not include exec",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      }
+    },
+    {
+      "sql": "DROP TABLE webhooks, users",
+      "policy": "yaml",
+      "origin": "v2 spec, no old equivalent: DROP TABLE with an object list checks every table",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "sql": "DROP TABLE webhooks, feature_flags",
+      "policy": "yaml",
+      "origin": "v2 spec, no old equivalent: DROP TABLE with an object list, every table read_write",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "tables": ["public.webhooks", "public.feature_flags"]
+      }
+    },
+    {
+      "sql": "GRANT SELECT ON users, posts TO some_role",
+      "origin": "v2 spec, no old equivalent: GRANT with an object list",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "SELECT email FROM active_users",
+      "policy": "users_deny_else_read",
+      "origin": "v2 spec, no old equivalent: a view is checked by its own name, not the tables in its definition",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.active_users"]
+      }
+    },
+    {
+      "sql": "SELECT email FROM active_users",
+      "policy": "view_denied",
+      "origin": "v2 spec, no old equivalent: a denied view",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.active_users`"
+      }
+    },
+    {
+      "sql": "UPDATE active_users SET email = 'x' WHERE id = 1",
+      "policy": "default_rw",
+      "origin": "v2 spec, no old equivalent: writing to a view",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE TABLE t2 (LIKE audit_log)",
+      "policy": "ddl_refs",
+      "origin": "v2 spec, no old equivalent: CREATE TABLE (LIKE t) reads t, so a denied t denies",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "CREATE TABLE t2 (LIKE users)",
+      "policy": "ddl_refs",
+      "origin": "v2 spec, no old equivalent: CREATE TABLE (LIKE t) needs only read on t",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      }
+    },
+    {
+      "sql": "CREATE TABLE t2 (id int REFERENCES audit_log (id))",
+      "policy": "ddl_refs",
+      "origin": "v2 spec, no old equivalent: REFERENCES reads the referenced table",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "reads from table `public.audit_log`"
+      }
+    },
+    {
+      "sql": "CREATE TABLE t2 () INHERITS (users)",
+      "policy": "ddl_refs",
+      "origin": "v2 spec, no old equivalent: INHERITS puts rows into the parent, so the parent needs read_write",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "writes to table `public.users`"
+      }
+    },
+    {
+      "name": "a partition takes its parent's level when it has none of its own",
+      "sql": "SELECT id FROM events_2024",
+      "policy": "partitions",
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "reason_includes": "public.events_2024"
+      }
+    },
+    {
+      "name": "reading the denied parent itself",
+      "sql": "SELECT id FROM events",
+      "policy": "partitions",
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access"
+      }
+    },
+    {
+      "name": "a partition's own entry wins over its parent's",
+      "sql": "SELECT id FROM events_2024",
+      "policy": "partition_override",
+      "origin": "v2 spec, no old equivalent",
+      "expect": {
+        "verdict": "allow"
+      }
+    }
+  ]
+}

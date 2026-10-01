@@ -1,0 +1,161 @@
+# Audit
+
+Every statement an agent sends is recorded on the gateway's own disk before it
+runs. The file is the full record, it stays in your network, and you can
+export and verify it. A linked gateway also sends Midplane Cloud a projection
+of each event for the dashboard's query log: metadata and the statement with
+its values replaced, unless you turn on full statements for a database.
+
+## The file
+
+`audit.file` is a SQLite database (Node's built-in SQLite, WAL, full sync):
+an event is on disk before the gateway goes on.
+
+| Event | When | Holds |
+| --- | --- | --- |
+| `ATTEMPTED` | Before the statement is evaluated | Database, person (`sub`), agent (`client_id`), grant, the statement as sent, the intent |
+| `DECIDED` | Before anything runs | Verdict, rule and reason, write class, fingerprint, tables, whether it taints or comes back masked, the policy version |
+| `APPROVAL` | When a held write is filed, claimed, recounted, or its claim fails | Approval id, step, status, the row count |
+| `EXECUTED` | After it ran | Row count, duration, whether the result was cut at the caps |
+| `FAILED` | After it failed | SQLSTATE and the message |
+
+- **Nothing runs unrecorded.** If `ATTEMPTED` or `DECIDED` can't be written
+  (a full or read-only disk), the statement doesn't run; the agent is told the
+  audit log can't be written. The gateway also refuses to start on a file it
+  can't write.
+- **No results.** The record proves what ran, never what it returned. It does
+  hold statements as written, which can contain values a person typed.
+- **A hash chain.** Each event carries the hash of the one before it, so an
+  event removed or changed breaks the chain from there on.
+- **Several local processes, one file.** Processes may share a file (two
+  Claude Code sessions, each starting `midplane local --stdio`): each event
+  takes its sequence and the hash before it from the file as it is written,
+  so they keep one chain, and share the taint it holds.
+- **One linked gateway per file.** Each file has a random instance id, which
+  a linked gateway pushes it under; replicas each keep their own. A file
+  whose events part from what Midplane Cloud holds under its id (restored
+  from a backup, or copied to a second replica) gets a new id the first time
+  the cloud answers one of its batches with a conflict, an event it holds
+  under another hash: the cloud stores and acks the batch only up to there,
+  and the file sends the rest as the new instance (see
+  [operations](operations.md#backups)).
+
+## What goes to Midplane Cloud (linked mode)
+
+The gateway sends each event once it is on disk, on a loop of its own: pushing
+never holds up a statement, and a cloud that is down or refuses the push
+changes nothing on the gateway. Events wait in the file until the cloud has
+them; each sync reports how many wait, and the Gateways page shows it.
+
+| Sent | Never sent |
+| --- | --- |
+| Times, query id, database, person, agent, grant; each statement's kind (`InsertStmt`, `CopyStmt`); verdict, rule, write class, the tables the catalog knows, taint, masked, policy version; approval steps and counts; row counts, durations, SQLSTATEs; each event's position in the chain, and its hash keyed with the file's secret | Results; Postgres error messages (they can quote a row); the DSN and the salt; the statement's fingerprint (it covers names, so a guessed name could be confirmed against it); the chain's own hashes, and the key |
+| The statement with every literal replaced by `$1, $2…`, every name the database's catalog doesn't have replaced by `_1, _2…`, and comments dropped | The statement as written, the agent's intent and a denial's reason, **unless** the database's switch is on |
+
+- **Redaction is checked twice, and fails closed.** The redacted text must
+  parse back to the same statement, then pass an allowlist read token by
+  token: keywords, names, `$n` markers, punctuation and operators, integers up
+  to 1000 (positions and type modifiers are small), and no quoted name but one
+  the catalog has, a built-in collation or a keyword. Anything else fails it:
+  strings of every spelling, bit and hex strings, floats, comments. A
+  statement that can't be vouched for goes with no text, only why: it doesn't
+  parse, it is a kind Midplane doesn't evaluate (`COPY`, `ALTER ROLE …
+  PASSWORD`), it is over 16 KiB, or it failed a check. Midplane Cloud applies
+  the same allowlist, reading text that holds an integer as a tree too, and
+  stores any statement that fails without text; text cut to fit that holds an
+  integer is stored without text too, since a position can't be told from a
+  value there.
+- **Hashes are keyed.** The cloud holds every field of an event but its
+  text, and the hash before it, so the chain's own hash would let it test a
+  guess at a literal offline (a four-digit one falls in milliseconds). It
+  gets each event's hash as HMAC-SHA256 under a random key made with the file
+  instead; the key leaves the file only in its exports, so the cloud has
+  nothing to test a guess against. The file's own chain is plain SHA-256, and `verify` checks it without the
+  key.
+- **One known gap:** an unquoted lowercase name in a position the walker
+  doesn't rename (a function or type name, say `jane(id)`) goes as written.
+  Values written as names need quoting almost always (`"jane@example.com"`,
+  `"4111-1111"`), and those are caught.
+- **The switch.** "Send full statements and intents" is per database, off by
+  default: when you add a database, and on its policy page. It travels in the
+  signed bundle; the gateway reads it from there, never from an unsigned
+  answer. It applies when an event is sent, not when it was recorded: turning
+  it on also sends as written the events from while it was off that haven't
+  gone yet (a backlog from a cloud that was down, say). Turning it off stops
+  full text from the next batch, and deletes the full text Midplane Cloud kept
+  for that database. Held writes always send their statement when filed,
+  switch or not: an approver has to read it.
+- **Text is capped** at 16 KiB per statement in what's sent (the file keeps
+  all of it).
+- **Only what was recorded while linked.** Events recorded in local mode stay
+  in the file and are never sent. So do the events in a file from a gateway
+  before 0.21: linked, it sends only what it records from then on. Opening a
+  file in local mode stops sending the events a linked gateway left waiting;
+  the gateway logs how many, and keeps them the full window from then.
+
+## Retention
+
+- **On the gateway:** `audit.retention_days` (default 30; `0` keeps
+  everything). Events are kept that many days after Midplane Cloud has them
+  (in local mode, after they are recorded), so a backlog sent after an outage
+  still stays the full window, and an event the cloud doesn't have yet stays
+  however old. Events a linked gateway left unsent count from when the file
+  is opened in local mode, and a file from before 0.21 from when 0.21 first
+  opens it. Whatever the window, an event younger than 26 hours stays: a held
+  write's request may wait 24 hours and then run within 2, and its approval
+  reads its events back all that time. Hourly, and at start, the gateway
+  deletes the oldest events past that, and keeps the last one's hash as the
+  anchor the chain is verified from. Only the oldest run is ever deleted, so
+  what remains still verifies.
+- **In Midplane Cloud:** the query log keeps 30 days by default; its page says how long.
+
+## Export and verify
+
+```sh
+midplane audit export --config midplane.yaml [--out audit.jsonl] [--since <seq>]
+midplane audit verify --file audit.jsonl [--checkpoints cloud-export.jsonl]
+midplane audit verify --config midplane.yaml
+```
+
+- Both read only `audit.file` from the config, so they need none of its
+  secrets, and they open the file read-only beside a running gateway. Each
+  reads one snapshot of the file, so a prune meanwhile changes nothing in
+  it. `--audit <file>` names the file directly.
+- An export is JSON lines: a header with the file's instance, the anchor and
+  the checkpoint key, then each event with its sequence, the hash before it
+  and its own hash. Keep it as private as the file: it holds the statements
+  as written, and the key.
+- `verify` recomputes the chain from the anchor and names the first event that
+  doesn't follow. With `--checkpoints` (the query log's Export from the
+  dashboard), every hash Midplane Cloud recorded for this file must match, and
+  the file must be one the cloud knows: its instance appears in the export,
+  under one gateway, at least one of the cloud's hashes falls within it, and
+  its anchor, if the cloud saw that event, has the cloud's hash. The cloud's
+  hashes are keyed, so checking them takes the key: the file's, or the one
+  in the export's header. An export without one fails with `--checkpoints`,
+  saying so; without them, its chain still verifies alone. A
+  live file the cloud saw past is reported as cut short. Only the hashes of
+  the file's current instance count: after a restore made it a new instance,
+  the events pushed under the old one are checked by the chain alone.
+- `verify` exits `0` when the record verifies. It exits `1` when it doesn't (a
+  broken chain, a checkpoint that doesn't match), and also when it can't check
+  at all: an input or config it can't read, a config with no `audit.file`, an
+  unknown option. It exits `2`, printing its usage, when given nothing to read.
+  Treat only `0` as verified.
+- **What it proves:** the record is internally consistent from its anchor,
+  and nothing Midplane Cloud saw was changed afterwards. **What it can't:**
+  the chain is a plain SHA-256 chain, so events the cloud never received can
+  be rewritten undetectably by whoever controls the file; take exports, and
+  keep the cloud's, on a schedule.
+
+*Tested by* `apps/gateway/test/audit.test.ts` (the chain, two processes on
+one file, retention from the ack and the anchor and around live approvals,
+files from before 0.21 and a switch to local mode, a new instance, export and
+verify beside a prune, checkpoints and their key, the projection and its
+keyed hash), `apps/gateway/test/audit.e2e.test.ts` (the push, the switch on
+and off, a cloud that refuses or keeps answering 429, acks that don't verify
+or cover part of a batch, an answer cut off mid-body, a conflict, a forged
+copy stored first, a restored file, and a scan of everything sent for row
+values, the DSN, the salt, the checkpoint key, Postgres messages, literals and
+intents), and
+`apps/gateway/test/gateway.e2e.test.ts` (a read-only audit file runs nothing).

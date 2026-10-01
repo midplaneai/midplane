@@ -1,0 +1,883 @@
+{
+  "relations": [
+    {
+      "schema": "public",
+      "name": "users",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "org_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "ssn",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "phone",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "bio",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "salary",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "birthday",
+          "type": "date",
+          "category": "D"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        },
+        {
+          "name": "tags",
+          "type": "integer[]",
+          "category": "A"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "orders",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "user_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "org_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "total",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "logs",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "msg",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "level",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "secrets",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "value",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "webhooks",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
+          "category": "U"
+        },
+        {
+          "name": "msg",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "uid",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "posts",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "org_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "author_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "comments",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "post_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "t",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "x",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "y",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "y",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "archive",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "stripe",
+      "name": "charges",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "amount",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "card_last4",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "events",
+      "kind": "partitioned_table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "payload",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "events_2024",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "payload",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ],
+      "parent": {
+        "schema": "public",
+        "name": "events"
+      }
+    },
+    {
+      "schema": "public",
+      "name": "active_users",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id, email FROM public.users WHERE created_at > '2020-01-01'"
+    },
+    {
+      "schema": "public",
+      "name": "order_totals",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "user_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "total",
+          "type": "numeric",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT user_id, sum(total) AS total FROM public.orders GROUP BY user_id"
+    },
+    {
+      "schema": "public",
+      "name": "user_names",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id, name FROM public.users"
+    },
+    {
+      "schema": "public",
+      "name": "opaque_view",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "daily_orders",
+      "kind": "materialized_view",
+      "columns": [
+        {
+          "name": "day",
+          "type": "date",
+          "category": "D"
+        },
+        {
+          "name": "n",
+          "type": "bigint",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT created_at::date AS day, count(*) AS n FROM public.orders GROUP BY 1"
+    },
+    {
+      "schema": "public",
+      "name": "remote_items",
+      "kind": "foreign_table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "information_schema",
+      "name": "tables",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "table_schema",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "table_name",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "table_type",
+          "type": "character varying",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "information_schema",
+      "name": "columns",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "table_schema",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "table_name",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "column_name",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "data_type",
+          "type": "character varying",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "pg_catalog",
+      "name": "pg_class",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "relname",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "relkind",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "pg_catalog",
+      "name": "pg_settings",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "setting",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "audit_log",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "msg",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "feature_flags",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "category": "B"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "unlisted",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "something",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "allowed",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "real",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "charges",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "amount",
+          "type": "numeric",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "anywhere",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "a",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "b",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "x",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "target",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "v",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "source",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "v",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "pg_class",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "relname",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "other_schema",
+      "name": "users",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "pg_temp_3",
+      "name": "scratch",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ]
+    },
+    {
+      "schema": "information_schema",
+      "name": "sql_features",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "feature_id",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "feature_name",
+          "type": "character varying",
+          "category": "S"
+        },
+        {
+          "name": "comments",
+          "type": "character varying",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "pg_catalog",
+      "name": "pg_roles",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "rolname",
+          "type": "name",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "pg_catalog",
+      "name": "pg_tables",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "schemaname",
+          "type": "name",
+          "category": "S"
+        },
+        {
+          "name": "tablename",
+          "type": "name",
+          "category": "S"
+        }
+      ]
+    }
+  ],
+  "routines": [
+    {
+      "schema": "public",
+      "name": "get_ssn",
+      "kind": "function"
+    },
+    {
+      "schema": "public",
+      "name": "@@@",
+      "kind": "operator"
+    }
+  ]
+}

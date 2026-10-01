@@ -1,0 +1,1085 @@
+{
+  "relations": [
+    {
+      "schema": "public",
+      "name": "t",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "email",
+          "type": "character varying(200)",
+          "category": "S"
+        },
+        {
+          "name": "amount",
+          "type": "numeric(12,2)",
+          "category": "N"
+        },
+        {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        },
+        {
+          "name": "d",
+          "type": "date",
+          "category": "D"
+        },
+        {
+          "name": "tm",
+          "type": "time without time zone",
+          "category": "D"
+        },
+        {
+          "name": "data",
+          "type": "jsonb",
+          "category": "U"
+        },
+        {
+          "name": "tags",
+          "type": "text[]",
+          "category": "A"
+        },
+        {
+          "name": "code",
+          "type": "character(3)",
+          "category": "S"
+        },
+        {
+          "name": "flag",
+          "type": "boolean",
+          "category": "B"
+        },
+        {
+          "name": "kind",
+          "type": "\"char\"",
+          "category": "Z"
+        },
+        {
+          "name": "bits",
+          "type": "bit(4)",
+          "category": "V"
+        },
+        {
+          "name": "ip",
+          "type": "inet",
+          "category": "I"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "u",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "t_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "category": "S"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "v_aggregates",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "n",
+          "type": "bigint",
+          "category": "N"
+        },
+        {
+          "name": "emails",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "s",
+          "type": "numeric",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT name,\n    count(*) FILTER (WHERE amount > 4711::numeric) AS n,\n    string_agg(email::text, 's3cr3t'::text ORDER BY (email::text)) AS emails,\n    sum(amount) AS s\n   FROM t\n  GROUP BY name\n HAVING count(*) > 4711"
+    },
+    {
+      "schema": "public",
+      "name": "v_any_array",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  WHERE id = ANY (ARRAY[4711, 2, 3])"
+    },
+    {
+      "schema": "public",
+      "name": "v_arrays",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "first",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "len",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "xy",
+          "type": "text[]",
+          "category": "A"
+        },
+        {
+          "name": "has_z",
+          "type": "boolean",
+          "category": "B"
+        }
+      ],
+      "definition": "SELECT id,\n    tags[4711] AS first,\n    array_length(tags, 1) AS len,\n    ARRAY['s3cr3t'::text, 'y'::text] AS xy,\n    's3cr3t'::text = ANY (tags) AS has_z\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_at_time_zone",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "z",
+          "type": "timestamp without time zone",
+          "category": "D"
+        }
+      ],
+      "definition": "SELECT id,\n    (at AT TIME ZONE 's3cr3t/Zone'::text) AS z\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_between",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  WHERE amount >= 4711::numeric AND amount <= 47.11"
+    },
+    {
+      "schema": "public",
+      "name": "v_bit_typed",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "b",
+          "type": "boolean",
+          "category": "B"
+        }
+      ],
+      "definition": "SELECT id,\n    bits = '1010'::bit(4) AS b\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_case_",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "k",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "size",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n        CASE kind\n            WHEN 'a'::\"char\" THEN 's3cr3t'::text\n            ELSE 'other'::text\n        END AS k,\n        CASE\n            WHEN amount > 4711::numeric THEN 'big'::text\n            ELSE NULL::text\n        END AS size\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_casts",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "a",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "dt",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "b",
+          "type": "bigint",
+          "category": "N"
+        },
+        {
+          "name": "v",
+          "type": "character varying(10)",
+          "category": "S"
+        },
+        {
+          "name": "c",
+          "type": "bpchar",
+          "category": "S"
+        },
+        {
+          "name": "bo",
+          "type": "boolean",
+          "category": "B"
+        },
+        {
+          "name": "nt",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "dd",
+          "type": "date",
+          "category": "D"
+        },
+        {
+          "name": "tt",
+          "type": "time without time zone",
+          "category": "D"
+        },
+        {
+          "name": "cv",
+          "type": "character varying",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n    amount::integer AS a,\n    d::text AS dt,\n    '4711'::bigint AS b,\n    name::character varying(10) AS v,\n    code::bpchar AS c,\n    true AS bo,\n    NULL::text AS nt,\n    '2024-01-01'::date AS dd,\n    '12:00:00'::time without time zone AS tt,\n    's3cr3t'::character varying AS cv\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_char_type",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "is_a",
+          "type": "boolean",
+          "category": "B"
+        }
+      ],
+      "definition": "SELECT id,\n    kind = 'a'::\"char\" AS is_a\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_coalesce",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "e",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "g",
+          "type": "numeric",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id,\n    COALESCE(name, 's3cr3t'::text) AS n,\n    NULLIF(email::text, ''::text) AS e,\n    GREATEST(amount, 4711::numeric) AS g\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_collated",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n    name COLLATE \"C\" AS n\n   FROM t\n  WHERE name > 's3cr3t'::text\n  ORDER BY (name COLLATE \"C\") NULLS FIRST"
+    },
+    {
+      "schema": "public",
+      "name": "v_cte_recursive",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "WITH RECURSIVE r(n) AS (\n         SELECT 1 AS \"?column?\"\n        UNION ALL\n         SELECT r_1.n + 1\n           FROM r r_1\n          WHERE r_1.n < 4711\n        )\n SELECT n\n   FROM r"
+    },
+    {
+      "schema": "public",
+      "name": "v_current_values",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "cd",
+          "type": "date",
+          "category": "D"
+        },
+        {
+          "name": "ct",
+          "type": "timestamp with time zone",
+          "category": "D"
+        },
+        {
+          "name": "lt",
+          "type": "time without time zone",
+          "category": "D"
+        },
+        {
+          "name": "cu",
+          "type": "name",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n    CURRENT_DATE AS cd,\n    CURRENT_TIMESTAMP AS ct,\n    LOCALTIME AS lt,\n    CURRENT_USER AS cu\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_distinct_on",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ],
+      "definition": "SELECT DISTINCT ON (name) name,\n    at\n   FROM t\n  ORDER BY name, at DESC"
+    },
+    {
+      "schema": "public",
+      "name": "v_extract",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "y",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "e",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "m",
+          "type": "double precision",
+          "category": "N"
+        },
+        {
+          "name": "w",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ],
+      "definition": "SELECT id,\n    EXTRACT(year FROM at) AS y,\n    EXTRACT(epoch FROM at) AS e,\n    date_part('month'::text, at) AS m,\n    date_trunc('week'::text, at) AS w\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_grouping_sets",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "code",
+          "type": "character(3)",
+          "category": "S"
+        },
+        {
+          "name": "n",
+          "type": "bigint",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT name,\n    code,\n    count(*) AS n\n   FROM t\n  GROUP BY GROUPING SETS ((name), (code), ())"
+    },
+    {
+      "schema": "public",
+      "name": "v_in_list",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  WHERE name = ANY (ARRAY['s3cr3t'::text, 'bob'::text])"
+    },
+    {
+      "schema": "public",
+      "name": "v_inet_ops",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  WHERE ip << '10.47.11.0/24'::inet"
+    },
+    {
+      "schema": "public",
+      "name": "v_interval_math",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "since",
+          "type": "timestamp with time zone",
+          "category": "D"
+        },
+        {
+          "name": "h",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ],
+      "definition": "SELECT id,\n    at - '4711 days'::interval AS since,\n    now() - '4711:00:00'::interval AS h\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_is_distinct",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  WHERE name IS DISTINCT FROM 's3cr3t'::text AND flag IS TRUE AND email IS NOT NULL"
+    },
+    {
+      "schema": "public",
+      "name": "v_joins",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT t.id,\n    u.note\n   FROM t\n     JOIN u ON u.t_id = t.id AND u.note <> 's3cr3t'::text\n     LEFT JOIN LATERAL ( SELECT 4711 AS one) l ON true"
+    },
+    {
+      "schema": "public",
+      "name": "v_json_ops",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "a",
+          "type": "jsonb",
+          "category": "U"
+        },
+        {
+          "name": "b",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "cd",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "has_e",
+          "type": "boolean",
+          "category": "B"
+        },
+        {
+          "name": "obj",
+          "type": "jsonb",
+          "category": "U"
+        }
+      ],
+      "definition": "SELECT id,\n    data -> 's3cr3t'::text AS a,\n    data ->> 'b'::text AS b,\n    data #>> '{s3cr3t,d}'::text[] AS cd,\n    data ? 's3cr3t'::text AS has_e,\n    jsonb_build_object('s3cr3t', name) AS obj\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_like_ilike",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  WHERE name ~~ 's3cr3t%'::text OR name ~~* '%s3cr3t'::text OR name ~ similar_to_escape('s3cr3t%'::text) OR name ~ '^s3cr3t'::text"
+    },
+    {
+      "schema": "public",
+      "name": "v_limit_offset",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  ORDER BY amount\n OFFSET 47\n LIMIT 4711"
+    },
+    {
+      "schema": "public",
+      "name": "v_normalize",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "nn",
+          "type": "boolean",
+          "category": "B"
+        }
+      ],
+      "definition": "SELECT id,\n    NORMALIZE(name, NFKC) AS n,\n    (name IS NFC NORMALIZED) AS nn\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_numeric_lits",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "a",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "b",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "c",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "d",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "e",
+          "type": "numeric",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id,\n    amount * 47.11 AS a,\n    amount / 4711::numeric AS b,\n    - amount AS c,\n    '4711000'::numeric AS d,\n    0.0004711 AS e\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_quotes",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "q",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "e",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "u",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n    'it''s s3cr3t'::text AS q,\n    'tab\ts3cr3t'::text AS e,\n    '😀 s3cr3t'::text AS u\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_regexp",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "local",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n    regexp_replace(email::text, '@s3cr3t$'::text, ''::text) AS local\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_row_cmp",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id\n   FROM t\n  WHERE id = 4711 AND name = 's3cr3t'::text OR ROW(id, amount) IS NOT NULL"
+    },
+    {
+      "schema": "public",
+      "name": "v_set_ops",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "(\n         SELECT t.id\n           FROM t\n        UNION\n         SELECT u.t_id AS id\n           FROM u\n) EXCEPT\n SELECT 4711 AS id"
+    },
+    {
+      "schema": "public",
+      "name": "v_string_fns",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "s1",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "s2",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "tr",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "p",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "o",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "ul",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n    SUBSTRING(name FROM 4711 FOR 3) AS s1,\n    \"substring\"(name, 2) AS s2,\n    TRIM(BOTH 's3cr3t'::text FROM name) AS tr,\n    POSITION(('s3cr3t'::text) IN (email)) AS p,\n    OVERLAY(name PLACING 's3cr3t'::text FROM 1 FOR 1) AS o,\n    (upper(name) || 's3cr3t'::text) || lower(name) AS ul\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_subqueries",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "bigint",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id,\n    ( SELECT count(*) AS count\n           FROM u\n          WHERE u.t_id = t.id) AS n\n   FROM t\n  WHERE (EXISTS ( SELECT 1\n           FROM u\n          WHERE u.note = 's3cr3t'::text))"
+    },
+    {
+      "schema": "public",
+      "name": "v_to_char",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "day",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "f",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id,\n    to_char(at, 'YYYY-s3cr3t'::text) AS day,\n    format('%s <s3cr3t>'::text, name, email) AS f\n   FROM t"
+    },
+    {
+      "schema": "public",
+      "name": "v_values_view",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "n",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "s",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT n,\n    s\n   FROM ( VALUES (4711,'s3cr3t'::text), (2,'b'::text)) v(n, s)"
+    },
+    {
+      "schema": "public",
+      "name": "v_windows",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "rn",
+          "type": "bigint",
+          "category": "N"
+        },
+        {
+          "name": "prev",
+          "type": "numeric",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id,\n    row_number() OVER (PARTITION BY name ORDER BY at DESC) AS rn,\n    lag(amount, 4711, 0::numeric) OVER w AS prev\n   FROM t\n  WINDOW w AS (ORDER BY id ROWS 4711 PRECEDING)"
+    }
+  ],
+  "routines": [
+    {
+      "schema": "public",
+      "name": "_t",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_u",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_aggregates",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_any_array",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_arrays",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_at_time_zone",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_between",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_bit_typed",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_case_",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_casts",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_char_type",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_coalesce",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_collated",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_cte_recursive",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_current_values",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_distinct_on",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_extract",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_grouping_sets",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_in_list",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_inet_ops",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_interval_math",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_is_distinct",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_joins",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_json_ops",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_like_ilike",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_limit_offset",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_normalize",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_numeric_lits",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_quotes",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_regexp",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_row_cmp",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_set_ops",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_string_fns",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_subqueries",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_to_char",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_values_view",
+      "kind": "type"
+    },
+    {
+      "schema": "public",
+      "name": "_v_windows",
+      "kind": "type"
+    }
+  ]
+}

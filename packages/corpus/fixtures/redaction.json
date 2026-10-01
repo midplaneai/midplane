@@ -1,0 +1,425 @@
+{
+  "description": "Views whose definitions carry literals of every kind. The cloud's copy of this catalog has each literal replaced by a placeholder, and the core's agreement test requires every evaluation to be the same with either copy.",
+  "catalog": "redaction",
+  "policies": {
+    "open": {
+      "table_access": {
+        "default": "read"
+      }
+    },
+    "masked": {
+      "table_access": {
+        "default": "read"
+      },
+      "masks": {
+        "public.accounts": {
+          "id": "none",
+          "email": "full-redact",
+          "balance": "none",
+          "created_at": "none",
+          "tags": "none",
+          "data": "none",
+          "flags": "none"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "policy": "open",
+    "tainted": false
+  },
+  "cases": [
+    {
+      "sql": "SELECT * FROM vip_accounts",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          },
+          {
+            "name": "email",
+            "sources": ["public.accounts.email"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM escapes",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          },
+          {
+            "name": "e",
+            "sources": []
+          },
+          {
+            "name": "u",
+            "sources": []
+          },
+          {
+            "name": "d",
+            "sources": []
+          },
+          {
+            "name": "q",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM typed",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          },
+          {
+            "name": "i",
+            "sources": []
+          },
+          {
+            "name": "v",
+            "sources": []
+          },
+          {
+            "name": "n",
+            "sources": []
+          },
+          {
+            "name": "a",
+            "sources": []
+          },
+          {
+            "name": "b",
+            "sources": []
+          },
+          {
+            "name": "x",
+            "sources": []
+          },
+          {
+            "name": "neg",
+            "sources": []
+          },
+          {
+            "name": "sci",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "a GROUP BY and ORDER BY position stays a position",
+      "sql": "SELECT * FROM positional",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "kind",
+            "sources": ["public.events.kind"]
+          },
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "positions inside ROLLUP stay positions",
+      "sql": "SELECT * FROM rolled_up",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "kind",
+            "sources": ["public.events.kind"]
+          },
+          {
+            "name": "account_id",
+            "sources": ["public.events.account_id"]
+          },
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "DISTINCT ON and ORDER BY positions stay positions",
+      "sql": "SELECT * FROM latest_event",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "account_id",
+            "sources": ["public.events.account_id"]
+          },
+          {
+            "name": "at",
+            "sources": ["public.events.at"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM running_balance",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          },
+          {
+            "name": "running",
+            "sources": ["public.accounts.balance"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM json_paths",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          },
+          {
+            "name": "k",
+            "sources": ["public.accounts.data"]
+          },
+          {
+            "name": "t",
+            "sources": ["public.accounts.tags"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM tiered",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          },
+          {
+            "name": "name",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "a set operation's ORDER BY position stays a position",
+      "sql": "SELECT * FROM sources",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id", "public.events.id"]
+          },
+          {
+            "name": "src",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM tiers_case",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          },
+          {
+            "name": "tier",
+            "sources": []
+          },
+          {
+            "name": "active",
+            "sources": []
+          },
+          {
+            "name": "closed",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM like_escaped",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM event_totals",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "account_id",
+            "sources": ["public.events.account_id"]
+          },
+          {
+            "name": "s",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "a view over a view with literals in both",
+      "sql": "SELECT * FROM nested",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.accounts.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT * FROM sampled",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "id",
+            "sources": ["public.events.id"]
+          }
+        ]
+      }
+    },
+    {
+      "sql": "SELECT id FROM vip_accounts",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.accounts`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM json_paths",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.accounts`"
+      }
+    },
+    {
+      "sql": "SELECT * FROM nested",
+      "policy": "masked",
+      "expect": {
+        "verdict": "deny",
+        "rule": "mask",
+        "reason_includes": "reads masked table `public.accounts`"
+      }
+    },
+    {
+      "name": "positional: reads no masked table, so the masked database allows it",
+      "sql": "SELECT * FROM positional",
+      "policy": "masked",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "kind",
+            "sources": ["public.events.kind"]
+          },
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "latest_event: reads no masked table, so the masked database allows it",
+      "sql": "SELECT * FROM latest_event",
+      "policy": "masked",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "account_id",
+            "sources": ["public.events.account_id"]
+          },
+          {
+            "name": "at",
+            "sources": ["public.events.at"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "event_totals: reads no masked table, so the masked database allows it",
+      "sql": "SELECT * FROM event_totals",
+      "policy": "masked",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "account_id",
+            "sources": ["public.events.account_id"]
+          },
+          {
+            "name": "s",
+            "sources": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "rolled_up: reads no masked table, so the masked database allows it",
+      "sql": "SELECT * FROM rolled_up",
+      "policy": "masked",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "kind",
+            "sources": ["public.events.kind"]
+          },
+          {
+            "name": "account_id",
+            "sources": ["public.events.account_id"]
+          },
+          {
+            "name": "n",
+            "sources": []
+          }
+        ]
+      }
+    }
+  ]
+}

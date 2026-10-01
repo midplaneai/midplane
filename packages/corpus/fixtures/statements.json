@@ -1,0 +1,1044 @@
+{
+  "description": "Statement kinds: which are supported and in which write class, and which are refused (session state, server side effects, non-table DDL, TEMP tables) before any policy applies. Converted from the old engine's exec-side-effects suite and the statement-kind half of dangerous-statement, plus the v2 kind list.",
+  "catalog": "app",
+  "policies": {
+    "read_all": {
+      "table_access": {
+        "default": "read"
+      }
+    },
+    "rw": {
+      "table_access": {
+        "default": "read_write"
+      }
+    },
+    "rw_ddl": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "schema_changes": "allow"
+      }
+    },
+    "rw_hold_all": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "row_changes": "hold",
+        "schema_changes": "hold"
+      }
+    }
+  },
+  "defaults": {
+    "policy": "read_all"
+  },
+  "cases": [
+    {
+      "sql": "CALL my_proc()",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "CALL"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: CALL my_proc() → deny (CallStmt)"
+    },
+    {
+      "sql": "EXECUTE my_prepared",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "EXECUTE"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: EXECUTE my_prepared → deny (ExecuteStmt)"
+    },
+    {
+      "name": "PREPARE is refused (was an allowed known gap)",
+      "sql": "PREPARE my_p AS SELECT 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "PREPARE"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: PREPARE my_p AS SELECT 1 → currently allow (V1 known gap)"
+    },
+    {
+      "name": "DEALLOCATE is refused (was an allowed known gap)",
+      "sql": "DEALLOCATE my_p",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "DEALLOCATE"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: DEALLOCATE my_p → currently allow (V1 known gap)"
+    },
+    {
+      "sql": "NOTIFY ch, 'msg'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "NOTIFY"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: NOTIFY ch, 'msg' → deny (publishes pubsub event)"
+    },
+    {
+      "sql": "LISTEN ch",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "LISTEN"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: LISTEN ch → deny (mutates session subscription state)"
+    },
+    {
+      "sql": "UNLISTEN ch",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "UNLISTEN"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: UNLISTEN ch → deny"
+    },
+    {
+      "sql": "UNLISTEN *",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "UNLISTEN"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: UNLISTEN * → deny"
+    },
+    {
+      "sql": "LOCK TABLE users IN ACCESS EXCLUSIVE MODE",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "LOCK"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: LOCK TABLE users IN ACCESS EXCLUSIVE MODE → deny"
+    },
+    {
+      "sql": "LOCK TABLE users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "LOCK"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: LOCK TABLE users (default mode) → deny"
+    },
+    {
+      "sql": "COPY t FROM '/etc/passwd'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "COPY"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: COPY t FROM '/etc/passwd' → deny (server-side filesystem read)"
+    },
+    {
+      "sql": "COPY t TO '/tmp/leak'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "COPY"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: COPY t TO '/tmp/leak' → deny (server-side filesystem write)"
+    },
+    {
+      "sql": "COPY t FROM STDIN",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "COPY"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: COPY t FROM STDIN → deny"
+    },
+    {
+      "sql": "COPY (SELECT * FROM users) TO '/tmp/dump'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "COPY"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: COPY (SELECT * FROM users) TO '/tmp/dump' → deny"
+    },
+    {
+      "name": "BEGIN is refused (was an allowed known gap)",
+      "sql": "BEGIN",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "transaction control"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: BEGIN → currently allow (V1 known gap)"
+    },
+    {
+      "name": "VACUUM is refused (was an allowed known gap)",
+      "sql": "VACUUM users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "VACUUM"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: VACUUM → currently allow (V1 known gap)"
+    },
+    {
+      "sql": "SELECT pg_terminate_backend(123)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: SELECT pg_terminate_backend(123) → deny (changes server state)"
+    },
+    {
+      "sql": "SELECT pg_cancel_backend(123)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: SELECT pg_cancel_backend(123) → deny (changes server state)"
+    },
+    {
+      "sql": "SELECT lo_unlink(1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: SELECT lo_unlink(1) → deny (a write disguised as a SELECT)"
+    },
+    {
+      "sql": "SELECT pg_read_file('/etc/passwd')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: SELECT pg_read_file('/etc/passwd') → deny (server-side file read)"
+    },
+    {
+      "sql": "SELECT query_to_xml('SELECT * FROM users', false, true, '')",
+      "expect": {
+        "verdict": "deny",
+        "rule": "dangerous_function"
+      },
+      "origin": "engine/test/adversarial/exec-side-effects.test.ts: SELECT query_to_xml('SELECT * FROM users', …) → deny (reads a table via a string)"
+    },
+    {
+      "sql": "TRUNCATE webhooks",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required",
+        "reason_includes": "TRUNCATE"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: TRUNCATE → deny"
+    },
+    {
+      "sql": "DROP INDEX webhooks_idx",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "index"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: DROP INDEX → deny"
+    },
+    {
+      "sql": "DROP SCHEMA public CASCADE",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "schema"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: DROP SCHEMA → table_access (no_target) catches it first; still denied"
+    },
+    {
+      "sql": "ALTER TYPE mood ADD VALUE 'sad'",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: guardrail denies `ALTER TYPE mood ADD VALUE 'sad'`"
+    },
+    {
+      "sql": "ALTER ROLE bob WITH PASSWORD 'x'",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: guardrail denies `ALTER ROLE bob WITH PASSWORD 'x'`"
+    },
+    {
+      "sql": "ALTER SEQUENCE s RESTART",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: guardrail denies `ALTER SEQUENCE s RESTART`"
+    },
+    {
+      "sql": "ALTER INDEX i RENAME TO j",
+      "policy": "rw",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "index"
+      },
+      "origin": "engine/test/adversarial/dangerous-statement.test.ts: guardrail denies `ALTER INDEX i RENAME TO j`"
+    },
+    {
+      "sql": "SELECT 1",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      }
+    },
+    {
+      "sql": "VALUES (1), (2)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      }
+    },
+    {
+      "sql": "SELECT id FROM users UNION SELECT user_id FROM orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      }
+    },
+    {
+      "sql": "INSERT INTO orders (id) VALUES (1) RETURNING id",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "UPDATE orders SET status = 'x' WHERE id = 1 RETURNING id, status",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "DELETE FROM orders WHERE id = 1 RETURNING id",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "INSERT INTO y (id, n) VALUES (1, 2) ON CONFLICT (id) DO UPDATE SET n = excluded.n",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "CREATE TABLE staging (id int)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "CREATE UNLOGGED TABLE staging (id int)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "CREATE TABLE users_copy (LIKE users)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "CREATE TABLE events_2025 PARTITION OF events FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "CREATE TABLE staging AS SELECT id FROM orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "SELECT id INTO staging FROM orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes"
+      }
+    },
+    {
+      "sql": "CREATE INDEX orders_status_idx ON orders (status)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "CREATE UNIQUE INDEX CONCURRENTLY orders_id_idx ON orders (id)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ADD COLUMN refunded_at timestamptz",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders DROP COLUMN note",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ALTER COLUMN status TYPE varchar(32)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ALTER COLUMN status SET DEFAULT 'open'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ALTER COLUMN status DROP DEFAULT",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ALTER COLUMN status SET NOT NULL",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ALTER COLUMN status DROP NOT NULL",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ADD CONSTRAINT total_positive CHECK (total >= 0) NOT VALID",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders VALIDATE CONSTRAINT total_positive",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ALTER CONSTRAINT orders_user_fk DEFERRABLE",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders DROP CONSTRAINT total_positive",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders ADD COLUMN flagged boolean, DROP COLUMN note",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders RENAME TO orders_old",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders RENAME COLUMN status TO state",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders RENAME CONSTRAINT total_positive TO total_nonnegative",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "ALTER TABLE orders SET SCHEMA stripe",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "DROP TABLE orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "DROP TABLE IF EXISTS orders, logs CASCADE",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "hold",
+        "class": "schema_changes"
+      }
+    },
+    {
+      "sql": "EXPLAIN SELECT 1",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "EXPLAIN"
+      }
+    },
+    {
+      "sql": "EXPLAIN ANALYZE DELETE FROM orders WHERE id = 1",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "EXPLAIN"
+      }
+    },
+    {
+      "sql": "SET search_path = public",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "SET"
+      }
+    },
+    {
+      "sql": "SET ROLE postgres",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "SET"
+      }
+    },
+    {
+      "sql": "RESET ALL",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "SET"
+      }
+    },
+    {
+      "sql": "SHOW search_path",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "SHOW"
+      }
+    },
+    {
+      "sql": "COMMIT",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "transaction control"
+      }
+    },
+    {
+      "sql": "ROLLBACK",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "transaction control"
+      }
+    },
+    {
+      "sql": "SAVEPOINT s",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "transaction control"
+      }
+    },
+    {
+      "sql": "DO $$ BEGIN PERFORM 1; END $$",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "DO"
+      }
+    },
+    {
+      "sql": "GRANT SELECT ON users TO bob",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "GRANT"
+      }
+    },
+    {
+      "sql": "REVOKE SELECT ON users FROM bob",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "REVOKE"
+      }
+    },
+    {
+      "sql": "CREATE VIEW v AS SELECT id FROM users",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "CREATE VIEW"
+      }
+    },
+    {
+      "sql": "CREATE FUNCTION f() RETURNS int AS 'SELECT 1' LANGUAGE sql",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "CREATE FUNCTION"
+      }
+    },
+    {
+      "sql": "CREATE SCHEMA s",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "CREATE SCHEMA"
+      }
+    },
+    {
+      "sql": "CREATE ROLE bob",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "CREATE ROLE"
+      }
+    },
+    {
+      "sql": "CREATE DATABASE d",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "CREATE DATABASE"
+      }
+    },
+    {
+      "sql": "CREATE RULE r AS ON INSERT TO orders DO INSTEAD NOTHING",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "CREATE RULE"
+      }
+    },
+    {
+      "sql": "CREATE MATERIALIZED VIEW mv AS SELECT id FROM orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "REFRESH MATERIALIZED VIEW daily_orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "REFRESH MATERIALIZED VIEW"
+      }
+    },
+    {
+      "sql": "CREATE TRIGGER trg BEFORE INSERT ON orders FOR EACH ROW EXECUTE FUNCTION f()",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE EXTENSION dblink",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "ALTER SYSTEM SET work_mem = '1GB'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE POLICY p ON orders USING (true)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "COMMENT ON TABLE orders IS 'x'",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "DECLARE c CURSOR FOR SELECT 1",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "DECLARE"
+      }
+    },
+    {
+      "sql": "FETCH c",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "FETCH"
+      }
+    },
+    {
+      "sql": "ANALYZE users",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "ANALYZE"
+      }
+    },
+    {
+      "sql": "MERGE INTO t USING y ON t.id = y.id WHEN MATCHED THEN DELETE",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "MERGE"
+      }
+    },
+    {
+      "sql": "DISCARD ALL",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "DISCARD"
+      }
+    },
+    {
+      "sql": "CHECKPOINT",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "DROP VIEW active_users",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "view"
+      }
+    },
+    {
+      "sql": "DROP MATERIALIZED VIEW daily_orders",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "DROP FOREIGN TABLE remote_items",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "foreign table"
+      }
+    },
+    {
+      "sql": "DROP SEQUENCE s",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "sequence"
+      }
+    },
+    {
+      "sql": "DROP TYPE mood",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "type"
+      }
+    },
+    {
+      "sql": "DROP FUNCTION f()",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "function"
+      }
+    },
+    {
+      "sql": "ALTER VIEW active_users RENAME TO au",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "view"
+      }
+    },
+    {
+      "sql": "ALTER FOREIGN TABLE remote_items ADD COLUMN x int",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "foreign table"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users OWNER TO bob",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "OWNER"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users ENABLE ROW LEVEL SECURITY",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "ROW SECURITY"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users DISABLE ROW LEVEL SECURITY",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "ROW SECURITY"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users DISABLE TRIGGER ALL",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users SET (fillfactor = 50)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "ALTER TABLE users ADD COLUMN nickname text, OWNER TO bob",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "OWNER"
+      }
+    },
+    {
+      "sql": "ALTER TABLE events DETACH PARTITION events_2024",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "sql": "CREATE TEMP TABLE tmp (id int)",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "temporary table"
+      }
+    },
+    {
+      "sql": "CREATE TEMPORARY TABLE tmp AS SELECT id FROM users",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "temporary table"
+      }
+    },
+    {
+      "sql": "SELECT id INTO TEMP tmp FROM users",
+      "policy": "rw_hold_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported",
+        "reason_includes": "temporary table"
+      }
+    },
+    {
+      "name": "stage order: an unsupported ALTER TABLE subcommand is refused by kind before table access",
+      "sql": "ALTER TABLE users OWNER TO bob",
+      "policy": "read_all",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "name": "stage order: a TEMP table is refused by kind before the scope check",
+      "sql": "CREATE TEMP TABLE tmp (id int)",
+      "policy": "rw",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "name": "stage order: an unsupported DROP is refused by kind before the scope check",
+      "sql": "DROP INDEX webhooks_idx",
+      "policy": "rw",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "name": "stage order: TRUNCATE is refused by kind before the scope check",
+      "sql": "TRUNCATE users",
+      "policy": "rw",
+      "scopes": ["db:main:read"],
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required"
+      }
+    },
+    {
+      "name": "ALTER TABLE naming a view is DDL on a non-table object (Postgres runs it)",
+      "sql": "ALTER TABLE active_users RENAME TO au",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    },
+    {
+      "name": "DROP TABLE naming a view is DDL on a non-table object",
+      "sql": "DROP TABLE active_users",
+      "policy": "rw_ddl",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unsupported"
+      }
+    }
+  ]
+}

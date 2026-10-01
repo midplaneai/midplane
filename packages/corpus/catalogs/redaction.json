@@ -1,0 +1,399 @@
+{
+  "relations": [
+    {
+      "schema": "public",
+      "name": "accounts",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "balance",
+          "type": "numeric",
+          "category": "N"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        },
+        {
+          "name": "tags",
+          "type": "text[]",
+          "category": "A"
+        },
+        {
+          "name": "data",
+          "type": "jsonb",
+          "category": "U"
+        },
+        {
+          "name": "flags",
+          "type": "bit(4)",
+          "category": "V"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "events",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "category": "N"
+        },
+        {
+          "name": "account_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "vip_accounts",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id, email FROM public.accounts WHERE email = 's3cr3t@example.com' OR balance > 4711.5 OR id IN (4711, 4712)"
+    },
+    {
+      "schema": "public",
+      "name": "escapes",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "e",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "u",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "d",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "q",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id, E'line\\ns3cr3t' AS e, U&'s3cr3\\0074' AS u, $$dollar s3cr3t$$ AS d, $q$quoted s3cr3t$q$ AS q FROM public.accounts"
+    },
+    {
+      "schema": "public",
+      "name": "typed",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "i",
+          "type": "interval",
+          "category": "T"
+        },
+        {
+          "name": "v",
+          "type": "character varying(10)",
+          "category": "S"
+        },
+        {
+          "name": "n",
+          "type": "numeric(10,2)",
+          "category": "N"
+        },
+        {
+          "name": "a",
+          "type": "text[]",
+          "category": "A"
+        },
+        {
+          "name": "b",
+          "type": "bit(8)",
+          "category": "V"
+        },
+        {
+          "name": "x",
+          "type": "bit(16)",
+          "category": "V"
+        },
+        {
+          "name": "neg",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "sci",
+          "type": "numeric",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id, '4711 days'::interval AS i, 's3cr3t'::varchar(10) AS v, 47.11::numeric(10,2) AS n, '{s3cr3t}'::text[] AS a, B'10100111' AS b, X'1F2E' AS x, -4711 AS neg, 4711e3 AS sci FROM public.accounts"
+    },
+    {
+      "schema": "public",
+      "name": "positional",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "kind",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "n",
+          "type": "bigint",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT kind, count(*) AS n FROM public.events GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 4711 OFFSET 42"
+    },
+    {
+      "schema": "public",
+      "name": "rolled_up",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "kind",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "account_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "n",
+          "type": "bigint",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT kind, account_id, count(*) AS n FROM public.events GROUP BY ROLLUP (1, 2)"
+    },
+    {
+      "schema": "public",
+      "name": "latest_event",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "account_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "category": "D"
+        }
+      ],
+      "definition": "SELECT DISTINCT ON (1) account_id, at FROM public.events ORDER BY 1, 2 DESC"
+    },
+    {
+      "schema": "public",
+      "name": "running_balance",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "running",
+          "type": "numeric",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id, sum(balance) OVER (ORDER BY id ROWS BETWEEN 4711 PRECEDING AND CURRENT ROW) AS running FROM public.accounts"
+    },
+    {
+      "schema": "public",
+      "name": "json_paths",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "k",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "t",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id, data ->> 's3cr3t_key' AS k, tags[4711] AS t FROM public.accounts WHERE data @> '{\"tier\": \"s3cr3t\"}'::jsonb"
+    },
+    {
+      "schema": "public",
+      "name": "tiered",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "WITH tiers(name, floor) AS (VALUES ('s3cr3t-gold', 4711), ('silver', 42)) SELECT a.id, t.name FROM public.accounts a JOIN tiers t ON a.balance >= t.floor"
+    },
+    {
+      "schema": "public",
+      "name": "sources",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "category": "N"
+        },
+        {
+          "name": "src",
+          "type": "text",
+          "category": "S"
+        }
+      ],
+      "definition": "SELECT id, 's3cr3t' AS src FROM public.accounts UNION ALL SELECT id, 'other' FROM public.events ORDER BY 1"
+    },
+    {
+      "schema": "public",
+      "name": "tiers_case",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "tier",
+          "type": "text",
+          "category": "S"
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "category": "B"
+        },
+        {
+          "name": "closed",
+          "type": "boolean",
+          "category": "B"
+        }
+      ],
+      "definition": "SELECT id, CASE WHEN balance > 4711 THEN 'rich-s3cr3t' ELSE NULL END AS tier, true AS active, false AS closed FROM public.accounts"
+    },
+    {
+      "schema": "public",
+      "name": "like_escaped",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id FROM public.accounts WHERE email LIKE '%s3cr3t%' ESCAPE '!'"
+    },
+    {
+      "schema": "public",
+      "name": "event_totals",
+      "kind": "materialized_view",
+      "columns": [
+        {
+          "name": "account_id",
+          "type": "integer",
+          "category": "N"
+        },
+        {
+          "name": "s",
+          "type": "bigint",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT account_id, sum(4711) AS s FROM public.events GROUP BY 1"
+    },
+    {
+      "schema": "public",
+      "name": "nested",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id FROM public.vip_accounts WHERE email <> 's3cr3t'"
+    },
+    {
+      "schema": "public",
+      "name": "sampled",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "category": "N"
+        }
+      ],
+      "definition": "SELECT id FROM public.events TABLESAMPLE BERNOULLI (47.11) REPEATABLE (4711)"
+    }
+  ],
+  "routines": []
+}

@@ -1,0 +1,70 @@
+{
+  "name": "midplane",
+  "version": "0.21.0",
+  "description": "The Midplane gateway: an MCP server between AI agents and Postgres that enforces table access, masks, approvals and containment, and keeps an audit log.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/midplaneai/midplane.git",
+    "directory": "apps/gateway"
+  },
+  "homepage": "https://github.com/midplaneai/midplane#readme",
+  "bugs": "https://github.com/midplaneai/midplane/issues",
+  "keywords": [
+    "mcp",
+    "postgres",
+    "ai-agents",
+    "masking",
+    "audit",
+    "gateway"
+  ],
+  "engines": {
+    "node": ">=24.16.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "bundle",
+    "README.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "bin": {
+      "midplane": "./bundle/cli.js"
+    },
+    "exports": {
+      "./package.json": "./package.json"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.3",
+    "@modelcontextprotocol/hono": "2.0.1",
+    "@modelcontextprotocol/server": "2.2.0",
+    "@noble/hashes": "2.4.0",
+    "@pgsql/types": "18.0.0",
+    "hono": "4.13.11",
+    "jose": "6.2.12",
+    "libpg-query": "18.1.5",
+    "pg": "8.23.0",
+    "pg-cursor": "2.22.0",
+    "pgsql-deparser": "18.3.8",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@midplane/core": "workspace:*",
+    "@midplane/corpus": "workspace:*",
+    "@midplane/protocol": "workspace:*",
+    "@modelcontextprotocol/client": "2.2.0",
+    "@types/pg": "8.15.6",
+    "@types/pg-cursor": "2.7.2",
+    "rolldown": "1.2.11"
+  }
+}

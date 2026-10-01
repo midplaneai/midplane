@@ -1,0 +1,69 @@
+name: ci
+
+# Inert inside the monorepo (GitHub reads only the root .github/); this is the
+# public mirror's CI once oss/ becomes that repo's root. The release workflow
+# runs it first.
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    # The gateway's end-to-end tests need a Postgres they can create
+    # databases and roles on.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIDPLANE_TEST_PG: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          require-lockfile: true
+      - run: pnpm run ci
+
+  # What a release publishes, before it is published: the npm tarball
+  # installed with npm runs the local quickstart and linked mode, and the
+  # image built from it runs the quickstart too.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          require-lockfile: true
+      - name: Start the quickstart's database
+        run: docker compose -f examples/quickstart/compose.yaml up -d --wait
+      - name: Pack the gateway and build its image
+        run: |
+          node apps/gateway/scripts/build.ts --shrinkwrap
+          mkdir -p image
+          (cd apps/gateway && pnpm pack --pack-destination ../../image)
+          version=$(node -p "require('./apps/gateway/package.json').version")
+          docker build --build-arg "TARBALL=image/midplane-$version.tgz" -t midplane:ci .
+      - name: npx midplane, the quickstart, linked mode and the image
+        run: |
+          version=$(node -p "require('./apps/gateway/package.json').version")
+          node apps/gateway/scripts/package-smoke.ts --tarball "image/midplane-$version.tgz" --image midplane:ci

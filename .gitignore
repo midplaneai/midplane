@@ -1,38 +1,10 @@
 node_modules/
-.env
-.env.local
-.env.*.local
-.env.self-host
-!.env.self-host.example
-.envvars
-*.log
-.DS_Store
-
-# signing keys
-mcp-registry-key.pem
-
-# build outputs
 dist/
-.next/
-out/
-.turbo/
-.vercel/
-*.tsbuildinfo
-
-# bun
-.bun/
-bun-debug.log*
-
-# test
 coverage/
-test-results/
-playwright-report/
-playwright/.cache/
-
-# drizzle
-drizzle/.snapshots/
-
-# local
-.context/
-.claude/
-.gstack/
+*.tsbuildinfo
+# The gateway's npm bundle, and the license copied beside it at build.
+apps/gateway/bundle/
+apps/gateway/LICENSE
+apps/gateway/npm-shrinkwrap.json
+# Tarballs packed for an image build.
+image/

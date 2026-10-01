@@ -1,0 +1,106 @@
+# Configuration
+
+One YAML file, `midplane.yaml`, named with `--config`. Relative paths in it
+are relative to the file. Secrets never appear inline: a DSN, the mask salt,
+the identity and the enrollment token each name an environment variable or a
+file, so the config itself can be committed.
+
+```yaml
+dsn: { env: DSN_MAIN }            # an environment variable
+dsn: { file: /run/secrets/dsn }   # or a file, read once at start
+```
+
+Unknown keys are errors, and so is anything that doesn't validate: the
+gateway won't start on a config it can't fully read.
+
+## Both modes
+
+| Key | Default | What |
+| --- | --- | --- |
+| `listen.host` | `127.0.0.1` | Interface to listen on. Anything but loopback requires `tls`. `0.0.0.0` or `::` also requires `public_urls` |
+| `listen.port` | `7433` | |
+| `listen.allowed_hosts` | `[]` | More host names the `Host` header may carry, for a proxy that rewrites it. Not token audiences ([hosted agents](hosted-agents.md)) |
+| `public_urls` | none | Up to eight base URLs agents reach the gateway at (`https://…`, no credentials, query or fragment). Each `<url>/mcp` is a token audience. Without them, the listener's own URL |
+| `public_url` | none | Shorthand for one; not with `public_urls` |
+| `tls.cert_file`, `tls.key_file` | none | PEM files; HTTPS on the listener |
+| `audit.file` | required | The audit log, a SQLite file ([audit](audit.md)). Local processes may share one; give each linked gateway its own |
+| `audit.retention_days` | `30` | Days to keep each event after Midplane Cloud has it (in local mode, after it is recorded; an event a linked gateway left unsent, after the file is opened in local mode). An event the cloud hasn't acked is kept however old. `0` keeps everything |
+| `mask_salt` | none | A secret source for the salt that keys `consistent-hash` masks: at least 32 characters, the same on every instance ([secrets](secrets.md)). Required once a policy has masks |
+| `limits.max_rows` | `1000` | Rows returned per query, at most 1,000,000. A read stops at the cap and says it was truncated |
+| `limits.max_bytes` | `1048576` | Bytes returned per query, at least 1 KiB |
+| `databases.<id>.dsn` | required | A secret source for the connection string. The id is lowercase, up to 32 characters (`main`, `billing-eu`) |
+
+## Local mode only (`midplane local`)
+
+| Key | Default | What |
+| --- | --- | --- |
+| `project` | `local` | The `project` claim tokens must carry |
+| `auth.issuer` | required | The `iss` tokens must carry |
+| `auth.public_key_file` | required | A public JWK (or a JWKS) that tokens are verified with; `midplane keygen` writes one |
+| `auth.revoked_token_ids` | `[]` | Token ids (`jti`) to refuse |
+| `databases.<id>.policy` | `{}` | The database's policy (below). `{}` means nothing is readable |
+
+## Linked mode only (`midplane gateway`)
+
+| Key | Default | What |
+| --- | --- | --- |
+| `link.cloud_url` | required | Midplane Cloud's URL: https, or http on loopback |
+| `link.identity` | required | Where the gateway's identity lives: `{ file: identity.json }`, written at enrollment, or `{ env: VAR }` holding what `midplane enroll` printed ([linked mode](linked-mode.md)) |
+| `link.enrollment_token` | none | A secret source for the one-time token from the project's Gateways page; read only until the identity exists |
+| `link.bundle_cache` | `bundle.jws` | The newest authentic bundle, enforced again after a restart with the cloud down |
+| `link.name` | none | How the dashboard names this gateway |
+
+Linked databases have no `policy`: policies come in signed bundles from
+Midplane Cloud.
+
+## The policy
+
+A database's policy, in local mode under `databases.<id>.policy`, in linked
+mode authored in the dashboard (which shows it as JSON too). Strict: an
+unknown key anywhere refuses the whole policy, never part of it.
+
+```yaml
+table_access:
+  default: deny                  # deny | read | read_write
+  tables:
+    public.customers: read       # schema-qualified
+    public.notes: read_write
+writes:
+  row_changes: hold              # allow | hold | deny; INSERT, UPDATE, DELETE, CREATE TABLE [AS]
+  schema_changes: deny           # allow | hold | deny; ALTER, DROP, CREATE INDEX
+masks:
+  public.customers:
+    id: none                     # reviewed and left clear
+    email: consistent-hash
+    phone: { t: partial, keepEnd: 4 }
+    created_at: { t: generalize, granularity: month }
+labels:
+  untrusted_columns:
+    public.support_tickets: [body]
+  secret_tables: [public.api_keys]
+role: agent_readonly             # SET LOCAL ROLE for every statement
+limits:
+  statement_timeout_ms: 30000
+  lock_timeout_ms: 5000
+```
+
+| Section | Default | What |
+| --- | --- | --- |
+| `table_access.default` | `deny` | Access to a table not listed. `information_schema` is always readable, `pg_catalog` never. A partition without its own entry takes its parent's |
+| `table_access.tables` | `{}` | `schema.table` → `deny`, `read` or `read_write` |
+| `writes.row_changes` | `allow` | `hold` waits for a person's approval (linked mode); while an agent is tainted, `allow` becomes `hold` |
+| `writes.schema_changes` | `deny` | Only shape changes are ever allowed: owners, row security, triggers and storage options are refused |
+| `masks` | `{}` | `schema.table` → column → rule ([masking](masking.md)). In a table with an entry, a column without one is fully redacted until reviewed |
+| `labels.untrusted_columns` | `{}` | Columns whose values anyone may have written. Reading one taints the agent's grant |
+| `labels.secret_tables` | `[]` | Tables a tainted grant may not touch ([approvals and taint](approvals-and-taint.md)) |
+| `role` | none | Role every statement runs as (`SET LOCAL ROLE`); the gateway's login role must be a member |
+| `limits.statement_timeout_ms` | `30000` | Up to an hour |
+| `limits.lock_timeout_ms` | `5000` | Up to an hour |
+
+Whatever the policy says, a statement must be one statement Midplane can
+parse and resolve; writes need a `WHERE`; writes hidden inside a `WITH` are
+denied; and reads run in read-only transactions.
+
+*Tested by* `apps/gateway/test/config.test.ts` (secrets and paths, TLS off
+loopback, public URLs, the salt, retention, unknown keys, both modes) and the
+core's corpus (`packages/corpus`) for what a policy means.

@@ -1,0 +1,17 @@
+# A sample database for trying Midplane on your own machine. Docker is only
+# for this example: the gateway itself runs with `npx midplane`.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: quickstart-admin
+      POSTGRES_DB: shop
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - ./seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shop"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

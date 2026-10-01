@@ -1,0 +1,545 @@
+{
+  "description": "The parse stage: exactly one statement or deny. Comments, stray semicolons, string, dollar-quoted and unicode-escaped literals never add or hide a statement; empty, comment-only and unparseable input denies as parse_error; Postgres-specific syntax parses and reaches the later stages. Converted from the old engine's multi-statement, parse-edges and dialect parse tests; the 1 MiB size cap is not representable in JSON and is left to unit tests.",
+  "catalog": "functions",
+  "policies": {
+    "read_all": {
+      "table_access": {
+        "default": "read"
+      }
+    },
+    "read_write": {
+      "table_access": {
+        "default": "read_write"
+      }
+    }
+  },
+  "defaults": {
+    "policy": "read_all"
+  },
+  "cases": [
+    {
+      "sql": "SELECT 1; DROP TABLE users;",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement",
+        "reason_includes": "2 statements"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: SELECT 1; DROP TABLE users; → deny on multi_statement"
+    },
+    {
+      "sql": "SELECT 1; SELECT 2; SELECT 3",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement",
+        "reason_includes": "3 statements"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: three statements → deny on multi_statement"
+    },
+    {
+      "name": "multi_statement fires before resolution: x does not exist and the write is never classified",
+      "sql": "UPDATE x SET n=1; SELECT 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: write stacked on read → deny on multi_statement (rule order)"
+    },
+    {
+      "sql": "SELECT 1; -- ; DROP TABLE x;",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: line comment hides DROP → 1 stmt, allow"
+    },
+    {
+      "sql": "/* ; SELECT 99; */ SELECT 1",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: block comment hides DROP → 1 stmt, allow"
+    },
+    {
+      "sql": "-- ; ; ;\nSELECT 1",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: line comment with semicolons before SELECT → allow"
+    },
+    {
+      "sql": "/* DROP TABLE x; */ SELECT 1",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: nested-looking block comment with semicolons → allow"
+    },
+    {
+      "sql": "SELECT 1; /* benign */ SELECT 2",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: comment AFTER stmt + actual stacked stmt → still deny on multi"
+    },
+    {
+      "sql": "SELECT 'a;b'",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: single-quoted string with embedded ; → 1 stmt, allow"
+    },
+    {
+      "sql": "SELECT 'a; DROP TABLE x; --b'",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: string literal with stacked-looking content → allow"
+    },
+    {
+      "sql": "SELECT E'a\\'; b'",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: escaped quote with embedded ; → allow"
+    },
+    {
+      "sql": "SELECT $$multi; line; here$$",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: dollar-quoted string with embedded ; → 1 stmt, allow"
+    },
+    {
+      "sql": "SELECT $tag$x; y; z$tag$",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: dollar-quoted with $tag$ delimiter and ; → allow"
+    },
+    {
+      "sql": "SELECT 1;",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: trailing ; on single stmt → 1 stmt, allow"
+    },
+    {
+      "sql": "SELECT 1;;;",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: multiple trailing semicolons collapse to one stmt → allow"
+    },
+    {
+      "sql": ";SELECT 1",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: leading ; before single stmt → 1 stmt, allow"
+    },
+    {
+      "sql": ";",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: only semicolons → parse_error (no real statements)"
+    },
+    {
+      "sql": ";;;",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: only semicolons → parse_error (no real statements)"
+    },
+    {
+      "sql": "CREATE TABLE x (id int); DROP TABLE x;",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: stacked CREATE + DROP → deny on multi_statement"
+    },
+    {
+      "sql": "SELECT 1; GRANT SELECT ON users TO some_role",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: stacked SELECT + GRANT → deny on multi_statement"
+    },
+    {
+      "sql": "SELECT 1; COPY users TO '/tmp/leak'",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: stacked SELECT + COPY → deny on multi_statement"
+    },
+    {
+      "sql": "BEGIN; UPDATE users SET name='b' WHERE id=1; COMMIT",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      },
+      "origin": "engine/test/adversarial/multi-statement.test.ts: stacked transaction control + write → deny on multi_statement"
+    },
+    {
+      "name": "Postgres block comments nest: the DROP sits inside the still-open outer comment",
+      "sql": "/* outer /* inner */ ; DROP TABLE users; */ SELECT 1",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/multi-statement.test.ts: comment-as-injection"
+    },
+    {
+      "name": "an unterminated block comment is a parse error, not a hidden statement",
+      "sql": "SELECT 1 /* ; DROP TABLE users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/multi-statement.test.ts: comment-as-injection"
+    },
+    {
+      "name": "a real statement stacked after a dollar-quoted decoy is still stacked",
+      "sql": "SELECT $$; DROP TABLE users; $$; DROP TABLE users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "multi_statement"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/multi-statement.test.ts: semicolons in string literals"
+    },
+    {
+      "name": "a different dollar tag inside a dollar-quoted body does not close it",
+      "sql": "SELECT $a$ $b$; DROP TABLE users; $b$ $a$",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/multi-statement.test.ts: semicolons in string literals"
+    },
+    {
+      "name": "an unterminated dollar quote is a parse error",
+      "sql": "SELECT $$unterminated; DROP TABLE users",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/multi-statement.test.ts: semicolons in string literals"
+    },
+    {
+      "name": "a unicode-escaped semicolon inside a U& string is data, not a separator",
+      "sql": "SELECT U&'a\\003B DROP TABLE users'",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/multi-statement.test.ts: semicolons in string literals"
+    },
+    {
+      "name": "a semicolon inside a quoted identifier is part of the name",
+      "sql": "SELECT 1 AS \"a; DROP TABLE users\"",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/multi-statement.test.ts: semicolons in string literals"
+    },
+    {
+      "sql": "",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error",
+        "reason_includes": "empty input"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: empty string → parse_error"
+    },
+    {
+      "sql": "   \n\t  ",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error",
+        "reason_includes": "empty input"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: whitespace only → parse_error"
+    },
+    {
+      "sql": "-- nothing here",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error",
+        "reason_includes": "no statements"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: comment-only input → parse_error"
+    },
+    {
+      "sql": "/* nothing */",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error",
+        "reason_includes": "no statements"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: block-comment-only input → parse_error"
+    },
+    {
+      "sql": "this is not sql",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: totally invalid SQL → parse_error"
+    },
+    {
+      "sql": "SELECT 'unterminated",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: unterminated string literal → parse_error"
+    },
+    {
+      "sql": "SELECT * FROM",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: dangling FROM with no relation → parse_error"
+    },
+    {
+      "sql": "INSERT INTO logs (msg) VALUES ('x') RETURNING id",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "tables": ["public.logs"]
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: INSERT … RETURNING → parses (writes denies)"
+    },
+    {
+      "sql": "UPDATE logs SET msg='y' WHERE id=1 RETURNING id, msg",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "tables": ["public.logs"]
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: UPDATE … RETURNING → parses (writes denies)"
+    },
+    {
+      "sql": "INSERT INTO t (x) VALUES (1) ON CONFLICT (x) DO NOTHING",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "tables": ["public.t"]
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: ON CONFLICT DO NOTHING → parses (writes denies)"
+    },
+    {
+      "sql": "SELECT data->'x' AS v FROM events WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "output": [
+          {
+            "name": "v",
+            "sources": ["public.events.data"]
+          }
+        ]
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: JSON arrow operator (->) → parses + allow on read-only"
+    },
+    {
+      "sql": "SELECT data->>'name' FROM events",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: JSON arrow-text operator (->>) → parses + allow"
+    },
+    {
+      "sql": "SELECT * FROM events WHERE meta @> '{\"k\":1}'::jsonb",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: JSONB containment (@>) → parses + allow"
+    },
+    {
+      "sql": "SELECT int4range(1, 10)",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: range constructor int4range(1,10) → parses + allow"
+    },
+    {
+      "sql": "SELECT * FROM bookings WHERE during && tsrange('2026-01-01', '2026-01-31')",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: range overlap operator (&&) → parses + allow"
+    },
+    {
+      "sql": "SELECT ARRAY[1, 2, 3]",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: array literal → parses + allow"
+    },
+    {
+      "sql": "SELECT DISTINCT ON (org_id) id, org_id FROM users ORDER BY org_id, id",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: DISTINCT ON → parses + allow"
+    },
+    {
+      "sql": "SELECT id, row_number() OVER (PARTITION BY org_id ORDER BY id) FROM users",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: window function → parses + allow"
+    },
+    {
+      "sql": "SELECT count(*) FILTER (WHERE id > 0) FROM users",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: FILTER aggregate → parses + allow"
+    },
+    {
+      "sql": "SELECT * FROM users u, LATERAL (SELECT 1) AS s",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: LATERAL keyword → parses + allow on read-only"
+    },
+    {
+      "sql": "SELECT * FROM \"my table\"",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.my table"]
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: quoted identifier with space → parses + allow"
+    },
+    {
+      "sql": "SELECT * FROM \"üsers\" WHERE \"id\" = 1",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.üsers"]
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: unicode identifier → parses + allow on read-only"
+    },
+    {
+      "sql": "SELECT * FROM public.users WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.users"]
+      },
+      "origin": "engine/test/adversarial/parse-edges.test.ts: schema-qualified identifier → parses + allow"
+    },
+    {
+      "name": "a unicode-escaped identifier resolves to the same relation",
+      "sql": "SELECT * FROM U&\"\\00fcsers\"",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.üsers"]
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/parse-edges.test.ts: identifier corner cases"
+    },
+    {
+      "name": "a unicode-escaped identifier with a custom UESCAPE character",
+      "sql": "SELECT * FROM U&\"!00fcsers\" UESCAPE '!'",
+      "expect": {
+        "verdict": "allow",
+        "tables": ["public.üsers"]
+      },
+      "origin": "v2 conversion: extra shape for engine/test/adversarial/parse-edges.test.ts: identifier corner cases"
+    },
+    {
+      "name": "the INSERT target is seen and checked: writes to users are denied under the read-only default",
+      "sql": "INSERT INTO users(id) VALUES (1)",
+      "expect": {
+        "verdict": "deny",
+        "rule": "table_access",
+        "tables": ["public.users"]
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: DML statements expose `relation` as a bare RangeVar shape"
+    },
+    {
+      "sql": "WITH cte AS (SELECT 1 AS n) SELECT * FROM cte",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: CTE: `WITH x AS (...) SELECT * FROM x`"
+    },
+    {
+      "name": "WITH RECURSIVE: the CTE t shadows table public.t, so no table is read",
+      "sql": "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM t WHERE n<5) SELECT * FROM t",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow",
+        "tables": []
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: WITH RECURSIVE"
+    },
+    {
+      "sql": "UPDATE users SET n=1 WHERE id=1 RETURNING id",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: RETURNING clause on DML"
+    },
+    {
+      "sql": "INSERT INTO users(id, n) VALUES (1, 1) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: ON CONFLICT (upsert)"
+    },
+    {
+      "sql": "SELECT '1'::int",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: `::` cast operator"
+    },
+    {
+      "sql": "SELECT $tag$one;two$tag$",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: dollar-quoted string body (semicolon-inside-literal)"
+    },
+    {
+      "sql": "SELECT * FROM t1, LATERAL (SELECT * FROM t2 WHERE t2.id = t1.id) t2",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: LATERAL join"
+    },
+    {
+      "sql": "SELECT * FROM users WHERE id = ANY(ARRAY[1,2,3])",
+      "policy": "read_write",
+      "expect": {
+        "verdict": "allow"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: array literal + `ANY` operator"
+    },
+    {
+      "sql": "SELEKT 1",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: syntax error → { ok: false, error } (no throw)"
+    },
+    {
+      "sql": "-- just a comment",
+      "expect": {
+        "verdict": "deny",
+        "rule": "parse_error",
+        "reason_includes": "no statements"
+      },
+      "origin": "engine/test/dialects/postgres/parse.test.ts: comment-only input → { ok: false, error: 'no statements' }"
+    }
+  ]
+}

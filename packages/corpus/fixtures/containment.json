@@ -1,0 +1,344 @@
+{
+  "description": "Containment: reading an untrusted column taints the grant; while tainted, secret tables are closed and writes wait for a person.",
+  "catalog": "app",
+  "policies": {
+    "labeled": {
+      "table_access": {
+        "default": "read",
+        "tables": { "public.logs": "read_write" }
+      },
+      "labels": {
+        "untrusted_columns": {
+          "public.comments": ["body"],
+          "public.events": ["payload"]
+        },
+        "secret_tables": ["public.secrets"]
+      }
+    },
+    "labeled_masked": {
+      "table_access": { "default": "read" },
+      "masks": {
+        "public.comments": {
+          "id": "none",
+          "post_id": "none",
+          "created_at": "none",
+          "body": "full-redact"
+        }
+      },
+      "labels": { "untrusted_columns": { "public.comments": ["body"] } }
+    },
+    "labeled_secret_parent": {
+      "table_access": { "default": "read" },
+      "labels": { "secret_tables": ["public.events"] }
+    },
+    "labeled_secret_view": {
+      "table_access": { "default": "read" },
+      "labels": { "secret_tables": ["public.users"] }
+    },
+    "labeled_secret_partition": {
+      "table_access": { "default": "read" },
+      "labels": { "secret_tables": ["public.events_2024"] }
+    },
+    "labeled_hold": {
+      "table_access": {
+        "default": "read",
+        "tables": { "public.logs": "read_write" }
+      },
+      "writes": { "row_changes": "hold" },
+      "labels": {
+        "untrusted_columns": { "public.comments": ["body"] },
+        "secret_tables": ["public.secrets"]
+      }
+    },
+    "labeled_partial": {
+      "table_access": { "default": "read" },
+      "masks": {
+        "public.comments": {
+          "id": "none",
+          "post_id": "none",
+          "created_at": "none",
+          "body": { "t": "partial", "keepStart": 10 }
+        }
+      },
+      "labels": { "untrusted_columns": { "public.comments": ["body"] } }
+    }
+  },
+  "defaults": { "policy": "labeled" },
+  "cases": [
+    {
+      "name": "returning an untrusted column taints",
+      "sql": "SELECT body FROM comments",
+      "expect": {
+        "verdict": "allow",
+        "taints": true,
+        "taint_sources": ["public.comments.body"],
+        "depends_on_taint": false
+      }
+    },
+    {
+      "name": "a value computed from an untrusted column taints",
+      "sql": "SELECT upper(c.body) || '!' AS shout FROM comments c",
+      "expect": { "verdict": "allow", "taints": true }
+    },
+    {
+      "name": "through a CTE and a UNION",
+      "sql": "WITH x AS (SELECT body AS b FROM comments) SELECT b FROM x UNION SELECT title FROM posts",
+      "expect": { "verdict": "allow", "taints": true }
+    },
+    {
+      "name": "filtering on an untrusted column returns none of it",
+      "sql": "SELECT id FROM comments WHERE body LIKE '%ignore previous%'",
+      "expect": { "verdict": "allow", "taints": false }
+    },
+    {
+      "name": "an error can quote an untrusted column the statement only filters on",
+      "sql": "SELECT id FROM comments WHERE body::int > 0",
+      "expect": { "verdict": "allow", "taints": false, "reads_untrusted": true }
+    },
+    {
+      "name": "a partition of a table with untrusted columns reads them too",
+      "sql": "SELECT id FROM events_2024",
+      "expect": { "verdict": "allow", "taints": false, "reads_untrusted": true }
+    },
+    {
+      "name": "a write whose WHERE reads an untrusted column",
+      "sql": "DELETE FROM logs WHERE msg IN (SELECT body FROM comments)",
+      "expect": { "verdict": "allow", "reads_untrusted": true }
+    },
+    {
+      "name": "a statement on unlabeled tables reads nothing untrusted",
+      "sql": "SELECT id, name FROM users",
+      "expect": { "verdict": "allow", "reads_untrusted": false }
+    },
+    {
+      "name": "a denial reads nothing",
+      "sql": "DELETE FROM comments",
+      "expect": { "verdict": "deny", "reads_untrusted": false }
+    },
+    {
+      "name": "a boolean over an untrusted column carries no content",
+      "sql": "SELECT id, body IS NULL AS empty FROM comments",
+      "expect": { "verdict": "allow", "taints": false }
+    },
+    {
+      "name": "the whole row includes the untrusted column",
+      "sql": "SELECT c FROM comments c",
+      "expect": {
+        "verdict": "allow",
+        "taints": true,
+        "taint_sources": ["public.comments.body"]
+      }
+    },
+    {
+      "name": "a partition inherits its parent's labels",
+      "sql": "SELECT payload FROM events_2024",
+      "expect": {
+        "verdict": "allow",
+        "taints": true,
+        "taint_sources": ["public.events_2024.payload"]
+      }
+    },
+    {
+      "name": "a redacted untrusted column carries no content",
+      "sql": "SELECT body FROM comments",
+      "policy": "labeled_masked",
+      "expect": { "verdict": "allow", "taints": false, "taint_sources": [] }
+    },
+    {
+      "name": "a partially revealed untrusted column still taints",
+      "sql": "SELECT body FROM comments",
+      "policy": "labeled_partial",
+      "expect": { "verdict": "allow", "taints": true }
+    },
+    {
+      "name": "untainted: secrets are readable",
+      "sql": "SELECT value FROM secrets",
+      "expect": {
+        "verdict": "allow",
+        "taints": false,
+        "depends_on_taint": true
+      }
+    },
+    {
+      "name": "tainted: secrets are closed",
+      "sql": "SELECT value FROM secrets",
+      "tainted": true,
+      "expect": { "verdict": "deny", "rule": "containment" }
+    },
+    {
+      "name": "tainted: a secret read hidden in a subquery",
+      "sql": "SELECT id FROM users WHERE name IN (SELECT name FROM secrets)",
+      "tainted": true,
+      "expect": { "verdict": "deny", "rule": "containment" }
+    },
+    {
+      "name": "tainted: ordinary reads still run",
+      "sql": "SELECT id FROM users",
+      "tainted": true,
+      "expect": { "verdict": "allow", "depends_on_taint": false }
+    },
+    {
+      "name": "tainted: an allowed write waits for a person",
+      "sql": "INSERT INTO logs (msg) VALUES ('hi')",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "cause": "taint",
+        "depends_on_taint": true
+      }
+    },
+    {
+      "name": "untainted: the same write runs",
+      "sql": "INSERT INTO logs (msg) VALUES ('hi')",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false,
+        "depends_on_taint": true
+      }
+    },
+    {
+      "name": "copying untrusted content into an unlabeled column taints",
+      "sql": "INSERT INTO logs (msg) SELECT body FROM comments WHERE id = 1",
+      "expect": {
+        "verdict": "allow",
+        "taints": true,
+        "taint_sources": ["public.comments.body"],
+        "depends_on_taint": true
+      }
+    },
+    {
+      "name": "an UPDATE that stores untrusted content taints",
+      "sql": "UPDATE logs SET msg = (SELECT body FROM comments WHERE id = 1) WHERE id = 2",
+      "expect": { "verdict": "allow", "taints": true }
+    },
+    {
+      "name": "a write that only filters on untrusted content doesn't",
+      "sql": "DELETE FROM logs WHERE msg IN (SELECT body FROM comments)",
+      "expect": { "verdict": "allow", "taints": false, "taint_sources": [] }
+    },
+    {
+      "name": "two untrusted sources, each once, in order",
+      "sql": "SELECT c.body, e.payload, c.body AS again FROM comments c, events e",
+      "expect": {
+        "verdict": "allow",
+        "taints": true,
+        "taint_sources": ["public.comments.body", "public.events.payload"]
+      }
+    },
+    {
+      "name": "an ordinary read doesn't depend on taint",
+      "sql": "SELECT id FROM users",
+      "expect": { "verdict": "allow", "depends_on_taint": false }
+    },
+    {
+      "name": "a secret read hidden in a subquery depends on taint",
+      "sql": "SELECT id FROM users WHERE name IN (SELECT name FROM secrets)",
+      "expect": { "verdict": "allow", "depends_on_taint": true }
+    },
+    {
+      "name": "reading a partition of a secret parent depends on taint",
+      "sql": "SELECT id FROM events_2024",
+      "policy": "labeled_secret_parent",
+      "expect": { "verdict": "allow", "depends_on_taint": true }
+    },
+    {
+      "name": "tainted: a partition of a secret parent is closed",
+      "sql": "SELECT id FROM events_2024",
+      "policy": "labeled_secret_parent",
+      "tainted": true,
+      "expect": { "verdict": "deny", "rule": "containment" }
+    },
+    {
+      "name": "reading the parent of a secret partition depends on taint",
+      "sql": "SELECT id FROM events",
+      "policy": "labeled_secret_partition",
+      "expect": { "verdict": "allow", "depends_on_taint": true },
+      "origin": "Value: protects=a parent's rows include a secret partition's, so the gateway asks for taint; fails_when=secretTouched drops its childrenOf check; why_new=only the parent-labeled and view paths had rows; seam=none"
+    },
+    {
+      "name": "tainted: the parent of a secret partition is closed",
+      "sql": "SELECT id FROM events",
+      "policy": "labeled_secret_partition",
+      "tainted": true,
+      "expect": { "verdict": "deny", "rule": "containment" },
+      "origin": "Value: protects=invariant 11, a tainted grant can't read a secret partition through its parent; fails_when=secretTouched drops its childrenOf check; why_new=no row covered it; seam=none"
+    },
+    {
+      "name": "reading a secret table through a view depends on taint",
+      "sql": "SELECT id FROM user_names",
+      "policy": "labeled_secret_view",
+      "expect": { "verdict": "allow", "depends_on_taint": true }
+    },
+    {
+      "name": "tainted: a view over a secret table is closed",
+      "sql": "SELECT id FROM user_names",
+      "policy": "labeled_secret_view",
+      "tainted": true,
+      "expect": { "verdict": "deny", "rule": "containment" }
+    },
+    {
+      "name": "tainted: copying a secret into a table denies rather than waits",
+      "sql": "INSERT INTO logs (msg) SELECT value FROM secrets WHERE id = 1",
+      "tainted": true,
+      "expect": { "verdict": "deny", "rule": "containment" }
+    },
+    {
+      "name": "a held class is the cause, tainted or not",
+      "sql": "INSERT INTO logs (msg) VALUES ('hi')",
+      "policy": "labeled_hold",
+      "tainted": true,
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "cause": "class",
+        "depends_on_taint": false
+      }
+    },
+    {
+      "name": "a held write that reads a secret table depends on taint",
+      "sql": "INSERT INTO logs (msg) SELECT value FROM secrets WHERE id = 1",
+      "policy": "labeled_hold",
+      "expect": {
+        "verdict": "hold",
+        "cause": "class",
+        "depends_on_taint": true
+      },
+      "origin": "Value: protects=a class-held write that reads a secret table still asks for taint, so a tainted grant can't file a copy of secrets; fails_when=decide() returns dependsOnTaint false for every class hold; why_new=only the false case had a row; seam=none"
+    },
+    {
+      "name": "tainted: a held write that reads a secret table is denied, not held",
+      "sql": "INSERT INTO logs (msg) SELECT value FROM secrets WHERE id = 1",
+      "policy": "labeled_hold",
+      "tainted": true,
+      "expect": { "verdict": "deny", "rule": "containment" }
+    },
+    {
+      "name": "a held class without taint",
+      "sql": "INSERT INTO logs (msg) VALUES ('hi')",
+      "policy": "labeled_hold",
+      "expect": { "verdict": "hold", "cause": "class", "taint_sources": [] }
+    },
+    {
+      "name": "a held write that stores untrusted content names its source",
+      "sql": "INSERT INTO logs (msg) SELECT body FROM comments WHERE id = 1",
+      "policy": "labeled_hold",
+      "expect": {
+        "verdict": "hold",
+        "cause": "class",
+        "taints": true,
+        "taint_sources": ["public.comments.body"]
+      }
+    },
+    {
+      "name": "a denial never depends on taint",
+      "sql": "DELETE FROM logs",
+      "expect": {
+        "verdict": "deny",
+        "rule": "where_required",
+        "depends_on_taint": false,
+        "taint_sources": []
+      }
+    }
+  ]
+}

@@ -1,1 +1,0 @@
-ALTER TABLE "write_approvals" ADD COLUMN "claimed_query_id" text;

@@ -1,39 +1,11 @@
-import { fileURLToPath } from "node:url";
-
 import { defineConfig } from "vitest/config";
 
-// Resolve the apps/web "@/*" alias so tests that load route handlers
-// (which import `@/lib/foo` per the Next.js TS path mapping) can find
-// the dependency under vitest. Without this, any test importing a
-// route file that pulls `@/lib/*` ESM-throws "Failed to load url" at
-// collection time. Mirror the apps/web/tsconfig.json paths.
-const webSrc = fileURLToPath(new URL("./apps/web/src/", import.meta.url));
-
 export default defineConfig({
-  resolve: {
-    alias: [
-      { find: /^@\/(.*)$/, replacement: `${webSrc}$1` },
-    ],
-  },
   test: {
     include: [
-      "packages/**/test/**/*.test.ts",
-      "apps/**/test/**/*.test.ts",
-      "infra/**/test/**/*.test.ts",
-      // Repo-level CI guards (scripts/check-*.ts). They gate releases, so the
-      // logic inside them is worth pinning like any other code.
-      "scripts/test/**/*.test.ts",
+      "test/**/*.test.ts",
+      "packages/*/test/**/*.test.ts",
+      "apps/*/test/**/*.test.ts",
     ],
-    // engine/** runs under `bun test` (bun:test API), NOT vitest. The include
-    // globs above already scope to packages|apps|infra, but exclude engine/**
-    // explicitly so a future glob change can't sweep engine bun:test files in.
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.next/**", "engine/**"],
-    environment: "node",
-    reporters: ["default"],
-    coverage: {
-      provider: "v8",
-      reporter: ["text", "html"],
-      include: ["packages/*/src/**", "apps/*/src/**", "infra/*/src/**"],
-    },
   },
 });

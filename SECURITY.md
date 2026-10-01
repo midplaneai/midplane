@@ -1,42 +1,19 @@
-# Security Policy
+# Security
 
-Midplane sits in the query path between AI agents and production databases, so
-we take security reports seriously and respond quickly.
+Midplane is a security product: a statement that gets past a mask or a
+policy, a write that runs without its approval, a record missing from the
+audit log, or anything the gateway sends Midplane Cloud that it shouldn't
+(a row value, a DSN, the salt) is a vulnerability.
 
-## Reporting a vulnerability
+## Reporting
 
-**Please do not open a public GitHub issue for security vulnerabilities.**
+Report it privately through GitHub: **Security → Report a vulnerability** on
+this repository. Please don't open a public issue.
 
-Report privately to **security@midplane.ai**. If you prefer, use GitHub's
-[private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-on this repository.
-
-Include, where possible:
-
-- A description of the issue and its impact.
-- Steps to reproduce (a minimal proof of concept helps).
-- Affected component — the control plane (repo root) or the engine
-  (the [`engine/`](./engine) subtree).
-
-We aim to acknowledge within 3 business days and to keep you updated through
-triage and the fix. Please give us a reasonable window to remediate before any
-public disclosure; we're happy to credit you.
-
-## Scope
-
-This repository is the monorepo: the control plane (dashboard, connection/policy
-management, audit, hosted MCP proxy, auth, billing) at the root, and the MIT
-query-path engine under [`engine/`](./engine) (threat model:
-[`engine/THREAT_MODEL.md`](./engine/THREAT_MODEL.md)) — one reporting path for
-both. Of particular interest:
-
-- Tenant isolation (cross-customer data exposure) — audit reads are guarded by
-  Postgres row-level security; a bypass is high severity.
-- Authentication / session handling, the MCP OAuth flow, and SSO/SAML
-  (Enterprise Edition).
-- Credential storage (encrypted DSNs) and the KMS path.
+Include what you ran (the statement, the policy and the catalog, ideally as a
+case in the shape of `packages/corpus/fixtures`), what you expected and what
+happened. We'll reply and keep you posted until it's fixed.
 
 ## Supported versions
 
-Pre-launch, only the latest `main` is supported. Once we tag releases, this
-section will list supported versions.
+The latest release. Versions below 1.0 change quickly; upgrade to get fixes.
