@@ -1,8 +1,11 @@
-# Local mode
+---
+title: "Local mode"
+description: "The policy in midplane.yaml, tokens from midplane token, no Midplane Cloud."
+---
 
 `midplane local` runs the gateway with no Midplane Cloud: each database's
 policy is in `midplane.yaml`, and tokens are signed with a key you make. Use it
-offline, to try Midplane ([quickstart](../examples/quickstart/README.md)), or
+offline, to try Midplane ([quickstart](https://github.com/midplaneai/midplane/tree/main/examples/quickstart)), or
 when you don't want a hosted control plane.
 
 What it doesn't have: approvals (a held write is refused, with a pointer to

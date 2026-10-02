@@ -120,9 +120,12 @@ docker compose down -v
 ## Next
 
 - Link the gateway to Midplane Cloud to author policy in a dashboard, approve
-  held writes, and see a query log: [linked mode](../../docs/linked-mode.md).
-- Every setting in `midplane.yaml`: [configuration](../../docs/configuration.md).
-- How masking works, and its known limits: [masking](../../docs/masking.md).
+  held writes, and see a query log:
+  [get started](https://midplane.ai/docs/get-started).
+- Every setting in `midplane.yaml`:
+  [configuration](https://midplane.ai/docs/gateway/configuration).
+- How masking works, and its known limits:
+  [masking](https://midplane.ai/docs/policies/masking).
 
 *Tested by* `apps/gateway/test/quickstart.e2e.test.ts` (this folder's seed and
 config, each answer above) and `apps/gateway/scripts/package-smoke.ts` (these

@@ -1,0 +1,54 @@
+---
+title: "Connect Railway"
+sidebarTitle: "Railway"
+description: "Step by step: open a TCP proxy to Railway's Postgres, a read-only role, and a first check."
+---
+
+Railway's Postgres is private to its project: `postgres.railway.internal`
+resolves only for Railway services. This guide opens a TCP proxy so the
+gateway can reach it from your machine or server. You need a Midplane project
+with the database named in it ([get started](/get-started), step 2).
+
+<Steps>
+  <Step title="Turn on public networking">
+    Open the Postgres service's **Settings**, then **Networking**, and add
+    **Public Networking**. Railway creates a TCP proxy and a variable,
+    `DATABASE_PUBLIC_URL`, with its host and port.
+  </Step>
+  <Step title="Create a role for the gateway">
+    Open a SQL shell on the database, such as with `railway connect Postgres`
+    from the Railway CLI. Replace the placeholder and run:
+
+    ```sql
+    CREATE ROLE midplane_gateway LOGIN PASSWORD <a password, in single quotes>;
+    GRANT USAGE ON SCHEMA public TO midplane_gateway;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO midplane_gateway;
+    ```
+
+    The proxy is reachable from the internet, so give the gateway this role,
+    never the `postgres` superuser. This role can only read. To let agents
+    write, see [letting agents write](/prepare-database#letting-agents-write).
+  </Step>
+  <Step title="Write the gateway's connection string">
+    Take the host and port from `DATABASE_PUBLIC_URL`:
+
+    ```text
+    postgres://midplane_gateway:<password>@shortline.proxy.rlwy.net:12345/railway?sslmode=no-verify
+    ```
+
+    Railway's Postgres makes its own certificate, which no CA signs, so the
+    gateway can't check it: `no-verify` encrypts the connection without that
+    check. Save the line as `secrets/<database id>.dsn`, such as
+    `secrets/shop.dsn`.
+  </Step>
+  <Step title="Check that it connects">
+    Start or restart the gateway. **Test connection** on the **Gateways** page
+    shows your database's id with `ok`, such as `shop ok`, and the policy
+    editor lists your tables.
+  </Step>
+</Steps>
+
+<Warning>
+  Without the certificate check, a machine between the gateway and Railway
+  could read the connection. Use this for data where you accept that risk.
+</Warning>

@@ -34,9 +34,10 @@ database, the gateway in local mode with `npx midplane`, and Claude Code.
 
 ## Documentation
 
-[docs/](docs/README.md): install, configuration, local and linked mode,
-secrets, masking, approvals and taint, audit, operations, and verifying a
-release.
+[midplane.ai/docs](https://midplane.ai/docs): getting started with Midplane
+Cloud, preparing your database, deploying and configuring the gateway, local
+and linked mode, masking, approvals and taint, audit, and verifying a release.
+Its source is [docs/](docs/).
 
 ## This repository
 

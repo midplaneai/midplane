@@ -1,4 +1,7 @@
-# Operations
+---
+title: "Operations"
+description: "Health checks, logs worth alerting on, stopping, resources, upgrades and backups."
+---
 
 ## Health
 
@@ -30,10 +33,10 @@ carries MCP in stdio mode). The ones worth alerting on:
 | `audit event sent without its details` | An event couldn't be projected, so it went with no statement text; `seq` names it, and the file keeps all of it |
 | `audit pruning failed` | Retention couldn't delete old events, so the file keeps growing; `error` says why |
 | `audit events recorded while linked never reached Midplane Cloud; local mode doesn't send them` | The file last ran linked, and `events` of its events were still waiting when it was opened in local mode. They stay in the file for the retention window from now (export them to keep them longer) and are never sent, even if it is linked again |
-| `database unreachable` | A database didn't answer: at start, on a retry, or when a statement lost its connection. `database` and `code` say which and why, `error` has the full message. Said again only if it fails differently, and `database reachable` follows once it answers ([linked mode](linked-mode.md#databases-it-cant-reach)) |
+| `database unreachable` | (`0.22.0+`) A database didn't answer: at start, on a retry, or when a statement lost its connection. `database` and `code` say which and why, `error` has the full message. Said again only if it fails differently, and `database reachable` follows once it answers ([linked mode](/gateway/linked-mode#databases-it-cannot-reach)) |
 | `link cut` | The cloud refused the gateway's credentials: it was revoked |
 | `taint check failed; the grant counts as tainted` | The cloud couldn't be asked; the agent was contained |
-| `public URL not registered` | A URL in `public_urls` isn't one of the gateway's yet ([hosted agents](hosted-agents.md)) |
+| `public URL not registered` | A URL in `public_urls` isn't one of the gateway's yet ([hosted agents](/gateway/hosted-agents)) |
 | `view definitions withheld from the cloud` | Some views' definitions couldn't be redacted, so they weren't sent; simulation denies statements through them |
 
 `mcp client` notes each new agent (client, person and MCP protocol version)
@@ -86,7 +89,7 @@ got them, in its export under the old instance: the file keeps every
 instance it was, oldest first, in its `previous_instances` row (`sqlite3
 audit.db "SELECT value FROM meta WHERE key = 'previous_instances'"`).
 `verify --checkpoints` then matches the new instance's hashes
-([audit](audit.md#export-and-verify)).
+([audit](/audit#export-and-verify)).
 
 *Tested by* `apps/gateway/test/link.e2e.test.ts` (readiness, 503 without a
 bundle, halting, SIGTERM, restarts with the cloud down, a database down and

@@ -1,0 +1,46 @@
+---
+title: "Midplane"
+sidebarTitle: "What is Midplane"
+description: "A gateway between AI agents and your Postgres databases. Every statement is checked against your policy and recorded before it runs."
+---
+
+import Architecture from "/snippets/architecture.mdx";
+
+The gateway runs in your network, next to your databases. In Midplane Cloud
+you write the policy, approve held writes and read the query log. Your rows and
+connection strings never leave your network.
+
+<Architecture />
+
+<Columns cols={3}>
+  <Card title="Get started" icon="rocket" href="/get-started">
+    From a new project to your agent's first query.
+  </Card>
+  <Card title="How it works" icon="route" href="/how-it-works">
+    The parts, and what stays in your network.
+  </Card>
+  <Card title="Deploy the gateway" icon="server" href="/gateway/deploy">
+    On your machine, a server, or a platform.
+  </Card>
+</Columns>
+
+## What it enforces
+
+<Columns cols={2}>
+  <Card title="Table access" icon="table">
+    Denied by default. You open tables one by one, or all for reading.
+  </Card>
+  <Card title="Masking" icon="eye-slash">
+    Emails hashed, phones shortened, dates generalized, inside the query.
+  </Card>
+  <Card title="Approvals" icon="user-check">
+    A write can wait for a person to approve the exact statement.
+  </Card>
+  <Card title="Containment" icon="shield-halved">
+    An agent that reads untrusted text loses access to secret tables.
+  </Card>
+</Columns>
+
+Every statement is also recorded in an audit log on the gateway's own disk.
+The gateway is MIT licensed, with its source on
+[GitHub](https://github.com/midplaneai/midplane).

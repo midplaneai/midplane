@@ -1,0 +1,100 @@
+---
+title: "Prepare your database"
+description: "Create a read-only role for the gateway, write its connection string, and check that the gateway connects."
+---
+
+The gateway connects to your database from wherever it runs. Midplane Cloud
+never does, so the database needs no public address. Using Supabase, Neon,
+Amazon RDS or Railway? Follow its guide instead:
+
+<Columns cols={4}>
+  <Card title="Supabase" href="/prepare-database/supabase" />
+  <Card title="Neon" href="/prepare-database/neon" />
+  <Card title="Amazon RDS" href="/prepare-database/rds" />
+  <Card title="Railway" href="/prepare-database/railway" />
+</Columns>
+
+## Create a role for the gateway
+
+Recommended, not required: the gateway works with any role that can log in,
+and Midplane's policy decides what agents may do either way. A role of its own
+is a second lock. Midplane can narrow what a role may do, never widen it, so
+whatever the policy allows, Postgres still refuses what the role can't do.
+
+This role can only read. In `psql`, as an admin, replace the two placeholders
+and run:
+
+```sql
+CREATE ROLE midplane_gateway LOGIN PASSWORD <a password, in single quotes>;
+\connect <your database>
+BEGIN;
+GRANT CONNECT ON DATABASE <your database> TO midplane_gateway;
+GRANT USAGE ON SCHEMA public TO midplane_gateway;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO midplane_gateway;
+COMMIT;
+```
+
+In a web SQL editor, which is already connected to the database, leave out the
+`\connect` line.
+
+<Accordion title="Other schemas, and tables created later">
+  Repeat the `USAGE` and `SELECT` grants for each schema agents should see.
+  The grants cover today's tables only: for later ones, run `ALTER DEFAULT
+  PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO midplane_gateway;` as
+  the role your migrations use.
+</Accordion>
+
+### Letting agents write
+
+A write needs both locks open. In the policy, set the table to **Read + write**
+and **Row changes** to **Allow** or **Hold** (held writes wait for a person's
+approval). Then grant the role the same tables, and the sequences behind
+`serial` ids:
+
+```sql
+GRANT INSERT, UPDATE, DELETE ON public.tickets TO midplane_gateway;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO midplane_gateway;
+```
+
+Without the grant, the policy lets the write through and Postgres refuses it.
+Schema changes (`ALTER`, `DROP`, `CREATE INDEX`) need the role to own the
+table, so most setups leave them off.
+
+## Write the connection string
+
+The gateway reads each database's connection string from a file:
+`secrets/shop.dsn` for the database id `shop`, in the folder the dashboard's
+commands make. Write it on one line, with an editor:
+
+```text
+postgres://midplane_gateway:<password>@<host>:5432/<database>?sslmode=verify-full
+```
+
+- **Host.** Use the address the gateway reaches the database at, from where it
+  runs. In a container, `localhost` is the container itself.
+- **Password.** Percent-encode `@`, `:`, `/`, `?`, `#` and `%` in it (`@` is
+  `%40`).
+
+### TLS
+
+`sslmode=verify-full` encrypts the connection and checks the database's
+certificate. If your provider signs certificates with its own CA, download it
+into the gateway's `secrets/` folder and add its path where the gateway runs:
+`&sslrootcert=/etc/midplane/secrets/ca.pem` in Docker, or the file's full path
+on your machine.
+
+<Accordion title="How the gateway reads sslmode">
+  The gateway reads `sslmode` differently from `psql`: `require`, `prefer` and
+  `verify-ca` check the certificate just like `verify-full`. Without
+  `sslmode`, or with `disable`, it connects without TLS. `sslmode=no-verify`
+  encrypts without checking the certificate, which lets a machine in the middle
+  read the connection: use it only on a network you trust.
+</Accordion>
+
+## Check that it connects
+
+Start the gateway, or restart it if it runs. Once it reads the database, the
+database's line on the project overview shows **Catalog read**, and **Test
+connection** on the **Gateways** page shows its id with `ok`, such as
+`shop ok`. If it shows `failed` and a code, such as `shop failed (28P01)`, look
+up the code in [troubleshooting](/troubleshooting#connecting-to-a-database).

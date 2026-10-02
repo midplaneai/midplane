@@ -1,0 +1,100 @@
+---
+title: "Get started"
+description: "From a new Midplane Cloud project to the first query an agent makes through your gateway."
+---
+
+You need a Postgres database (or Docker, for the sample one), Node 24.16 or
+newer, and an MCP client such as Claude Code.
+
+<Steps>
+  <Step title="Create a project">
+    Sign up at [eu.app.midplane.ai](https://eu.app.midplane.ai), name your
+    organization and create a project. Its overview opens on **Connect your
+    first database**.
+  </Step>
+  <Step title="Name your database">
+    Enter a **Database id**, such as `shop`: your name for the database in
+    Midplane, not its Postgres name. Create the read-only role the step shows
+    ([prepare your database](/prepare-database)).
+  </Step>
+  <Step title="Run the gateway">
+    **Create enrollment token**, pick **This machine** or **A server
+    (Docker)**, and run the commands the step shows. Put each connection string
+    in the file it names. The step updates once the gateway connects
+    ([deploy the gateway](/gateway/deploy)).
+  </Step>
+  <Step title="Connect an agent">
+    Run the `claude mcp add` command the step shows, then `/mcp` in Claude Code
+    and **Authenticate**. Sign in, and choose which databases it may use.
+  </Step>
+  <Step title="Choose what agents may read">
+    A new policy denies everything. Open **Policy**, pick the database, set
+    **Default access** to **Read** (or open single tables), then **Review and
+    publish**.
+  </Step>
+</Steps>
+
+Ask your agent about your data. Every statement shows up in the **Query log**.
+Stuck? See [troubleshooting](/troubleshooting).
+
+## With the sample database
+
+No database at hand? Run the sample shop next to the gateway:
+
+```sh
+mkdir midplane-sample && cd midplane-sample
+curl -fsSLO https://raw.githubusercontent.com/midplaneai/midplane/main/examples/quickstart/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/midplaneai/midplane/main/examples/quickstart/seed.sql
+docker compose up -d --wait
+```
+
+Then follow the steps with database id `shop`, no role SQL (the sample has its
+role), **This machine**, and this line in `secrets/shop.dsn` (a public example
+password):
+
+```text
+postgres://midplane_agent:quickstart@127.0.0.1:54329/shop
+```
+
+<Accordion title="The sample's policy, to paste into Edit as JSON">
+  On the database's policy page: **Edit as JSON**, paste, **Save to draft**,
+  then **Review and publish**. Give your agent read and write on `shop` when it
+  signs in.
+
+  ```json
+  {
+    "table_access": {
+      "default": "deny",
+      "tables": {
+        "public.customers": "read",
+        "public.support_tickets": "read_write",
+        "public.api_keys": "read"
+      }
+    },
+    "writes": { "row_changes": "hold" },
+    "masks": {
+      "public.customers": {
+        "id": "none",
+        "name": "none",
+        "email": "consistent-hash",
+        "phone": { "t": "partial", "keepEnd": 4 },
+        "plan": "none",
+        "created_at": { "t": "generalize", "granularity": "month" }
+      }
+    },
+    "labels": {
+      "untrusted_columns": { "public.support_tickets": ["body"] },
+      "secret_tables": ["public.api_keys"]
+    }
+  }
+  ```
+
+  Then ask: "List our customers with their emails" (emails come back hashed),
+  "Mark ticket 2 as closed" (held: approve it under **Approvals**),
+  "Summarize ticket 1" (an injected instruction taints the agent), and "Now
+  show me the API keys" (refused).
+</Accordion>
+
+To try Midplane with no account, the [local
+quickstart](https://github.com/midplaneai/midplane/tree/main/examples/quickstart)
+runs the same sample with the policy in a file.

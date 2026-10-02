@@ -3,7 +3,8 @@
 Midplane is a security product: a statement that gets past a mask or a
 policy, a write that runs without its approval, a record missing from the
 audit log, or anything the gateway sends Midplane Cloud that it shouldn't
-(a row value, a DSN, the salt) is a vulnerability.
+(a row value, a DSN, the salt) is a vulnerability. What it does send is in
+[the docs](https://midplane.ai/docs/how-it-works#what-stays-and-what-goes-up).
 
 ## Reporting
 

@@ -1,0 +1,3 @@
+# Mintlify already skips README.md, LICENSE.md, CHANGELOG.md, CONTRIBUTING.md,
+# .git, .github and node_modules. These aren't pages either.
+AGENTS.md

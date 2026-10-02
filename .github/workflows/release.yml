@@ -14,7 +14,7 @@ name: release
 #     and sign it keyless with cosign. This job installs and runs no
 #     dependencies.
 #
-# How to verify both: docs/releases.md. Actions are pinned by commit.
+# How to verify both: docs/releases.mdx. Actions are pinned by commit.
 on:
   push:
     tags: ["v*"]

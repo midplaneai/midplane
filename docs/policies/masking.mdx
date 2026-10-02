@@ -1,4 +1,7 @@
-# Masking
+---
+title: "Masking"
+description: "The transforms, unreviewed columns, what else changes once a database has masks, and the known limits."
+---
 
 Masks are applied at the source: the gateway rewrites the statement so each
 masked column is replaced by its mask wherever the table is read, before any
@@ -12,7 +15,7 @@ compares the masked value, so a mask can't be probed through a predicate.
 | `none` | any | The raw value: reviewed and left clear |
 | `full-redact` | any | `***` for text; NULL of the column's own type otherwise |
 | `null-out` | any | NULL of the column's own type |
-| `consistent-hash` | text | `sha256(salt ‖ value)` in hex: the same value, the same token, so joins and counts work ([the salt](secrets.md)) |
+| `consistent-hash` | text | `sha256(salt ‖ value)` in hex: the same value, the same token, so joins and counts work ([the salt](/gateway/secrets)) |
 | `{ t: partial, keepStart, keepEnd, glyph }` | text | The middle replaced by `glyph` (`•`); a value no longer than what's kept is masked whole |
 | `{ t: generalize, granularity: year \| month \| day }` | dates and times | Truncated, keeping the column's type |
 | `{ t: generalize, granularity: <n> }` | numbers | Rounded down to a multiple of `n` |
@@ -59,13 +62,13 @@ To keep masks from being worked around, a database with any mask entry also:
 
 ## The public bypass corpus
 
-`packages/corpus` holds the cases Midplane's engine is tested against: SQL,
+`packages/corpus` holds the cases Midplane's policy core is tested against: SQL,
 a policy and a catalog in, the expected decision out, as JSON fixtures. It
 includes the masking bypasses we know of (aliases, CTEs, set operations,
 subqueries, whole-row functions, casts, predicate oracles, partitions,
 catalog views), and every one is denied or masked. Run it with
 `pnpm vitest run packages/core`; a case that slips through is a security bug
-([SECURITY.md](../SECURITY.md)).
+([SECURITY.md](https://github.com/midplaneai/midplane/blob/main/SECURITY.md)).
 
 *Tested by* the corpus (`packages/corpus/fixtures/masking*.json` through
 `packages/core/test/corpus.test.ts`) and `apps/gateway/test/gateway.e2e.test.ts`

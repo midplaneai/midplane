@@ -1,0 +1,186 @@
+---
+title: "Troubleshooting"
+description: "What each message from the gateway and the dashboard means, and what to do about it."
+---
+
+Each heading is a message the gateway or the dashboard shows. The gateway logs
+to the terminal that runs it, or to `docker logs`. An error at start is its
+last line before it exits.
+
+## The gateway does not connect
+
+The setup step keeps **Waiting for the gateway to connect**. Read the gateway's
+last log line.
+
+### That is not a Midplane enrollment token
+
+`secrets/enrollment-token` holds the placeholder or part of a token. Create a
+token and run the step's commands again.
+
+### This enrollment token is unknown, used, revoked or expired
+
+A token works once, within a day, on the Midplane Cloud that made it. Create a
+new one and run the new commands.
+
+### A gateway at this URL is already enrolled
+
+Each URL belongs to one gateway. Revoke the old one on its project's
+**Gateways** page, or use another URL. On this machine, a new token makes a
+new URL.
+
+### A gateway URL starts with https
+
+`http://` URLs only work for this machine (`localhost`, `127.0.0.1`,
+`*.localhost`). Use `https://` for anything else.
+
+### Cannot reach Midplane Cloud
+
+The gateway couldn't open an HTTPS connection to `link.cloud_url`: check DNS,
+firewalls and proxies from its host.
+
+### The answer is signed with a key the token does not pin
+
+Something between the gateway and Midplane Cloud intercepts TLS. Let the
+gateway reach the cloud without TLS inspection.
+
+### This gateway enrolled with another cloud
+
+`link.cloud_url` changed after enrollment. Put it back, or remove
+`identity.json` and enroll with a new token.
+
+### Cannot read a secret
+
+`databases.shop.dsn: cannot read …`: a file the config names is missing or
+unreadable. In Docker, run the step's `sudo sh -c '…'` line again so the
+image's user owns the secrets.
+
+### The listen host is not loopback, so TLS is required
+
+Add a certificate (`tls`), or keep the gateway on `127.0.0.1` [behind your TLS
+proxy](/gateway/deploy#other-setups).
+
+### Node is too old
+
+The gateway needs Node 24.16 or newer. Upgrade Node, or run the image.
+
+### The localhost URL does not resolve
+
+Some Linux and WSL setups don't resolve `*.localhost`. Add the gateway's name
+to `/etc/hosts`: `127.0.0.1 gw-k3m9x2qa.localhost`.
+
+## Connecting to a database
+
+**Test connection** on the **Gateways** page shows each database's id with
+`failed` and a code, such as `shop failed (28P01)`, and the gateway's log has
+the full message. From `0.22.0` the gateway keeps
+running and retries; earlier versions exit at start.
+
+### Connection refused (ECONNREFUSED)
+
+Nothing listens at that host and port. In a container, `localhost` is the
+container itself.
+
+### Host not found (ENOTFOUND)
+
+The host name doesn't resolve where the gateway runs, often a private name of
+another network. Run the gateway inside that network.
+
+### Name lookup failed for now (EAI_AGAIN)
+
+The DNS server didn't answer. It retries; check the host's DNS if it lasts.
+
+### Connection timed out (ETIMEDOUT)
+
+A firewall or security group drops the connection, or the database is on
+another network.
+
+### No answer in time (TIMEOUT)
+
+Nothing answered within 10 seconds. Same causes as above, or a Neon compute
+waking up.
+
+### Password authentication failed (28P01)
+
+Wrong user or password. Percent-encode special characters (`@` is `%40`). On
+Supabase's pooler, the user is `midplane_gateway.<project-ref>`.
+
+### The server refused this role or host (28000)
+
+No `pg_hba.conf` entry allows this host and role, or the server requires TLS:
+add `sslmode=verify-full`. A role without `LOGIN` is refused the same way.
+
+### Database does not exist (3D000)
+
+The database name at the end of the connection string is wrong. It's the
+Postgres name, not the id in Midplane.
+
+### Permission denied (42501)
+
+The role lacks `CONNECT` or `USAGE`: run [the role
+SQL](/prepare-database#create-a-role-for-the-gateway).
+
+### Postgres is starting up or shutting down (57P03)
+
+The gateway tries again.
+
+### Certificate not trusted (SELF_SIGNED_CERT_IN_CHAIN)
+
+The provider signs with its own CA. Name it with `sslrootcert`
+([TLS](/prepare-database#tls)). A self-signed certificate reports
+`DEPTH_ZERO_SELF_SIGNED_CERT`.
+
+### Certificate is for another host (ERR_TLS_CERT_ALTNAME_INVALID)
+
+Connect by the host name the certificate names, not an IP address or an alias.
+
+## On the dashboard
+
+### No catalog yet
+
+No gateway has sent this database's tables. Check that a gateway lists the id
+under `databases:` exactly, and that it can reach the database. If you added
+the id after the gateway started, restart it or press **Refresh** on the
+policy page.
+
+### Waiting for a policy
+
+The gateway connected but has no policy yet. If it stays, its log says why
+(`sync failed`).
+
+### Halted
+
+The gateway got a policy it can't enforce, and refuses every call. The reason
+shows on the **Gateways** page: add `mask_salt` to its config, or upgrade the
+gateway.
+
+### Refusing calls
+
+The project is paused.
+
+### Not responding
+
+No sync for three minutes, or no answer to **Test connection**. Check that the
+gateway runs, and its log.
+
+### Not registered
+
+A URL added to the config after enrollment works once an owner or admin
+presses **Register** on the **Gateways** page.
+
+### Another gateway answers on it
+
+Another gateway holds that URL. Revoke it, or use another URL.
+
+### It does not send its query log
+
+The gateway is older than 0.21. Upgrade it.
+
+### Its audit log never reached Midplane Cloud
+
+The gateway's file lost events before they were sent. Check the file with
+[export and verify](/audit#export-and-verify).
+
+### Its audit log went backwards, or held two versions of one event
+
+The audit file was restored, copied or rewritten. Nothing is lost:
+[backups](/gateway/operations#backups).

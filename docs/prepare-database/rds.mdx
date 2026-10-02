@@ -1,0 +1,66 @@
+---
+title: "Connect Amazon RDS or Aurora"
+sidebarTitle: "Amazon RDS and Aurora"
+description: "Step by step: run the gateway in the VPC, a read-only role, the RDS certificate, and a first check."
+---
+
+This guide connects the gateway to an RDS or Aurora Postgres database that
+stays private in its VPC. You need a Midplane project with the database named
+in it ([get started](/get-started), step 2).
+
+<Steps>
+  <Step title="Run the gateway inside the VPC">
+    Deploy the gateway on EC2, ECS or EKS, in a subnet that reaches the
+    database ([deploy the gateway](/gateway/deploy#docker)). In the database's
+    security group, allow the gateway's security group on port 5432.
+  </Step>
+  <Step title="Create a role for the gateway">
+    Connect with `psql` as the master user, replace the placeholders, and run:
+
+    ```sql
+    CREATE ROLE midplane_gateway LOGIN PASSWORD <a password, in single quotes>;
+    \connect <your database>
+    BEGIN;
+    GRANT CONNECT ON DATABASE <your database> TO midplane_gateway;
+    GRANT USAGE ON SCHEMA public TO midplane_gateway;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO midplane_gateway;
+    COMMIT;
+    ```
+
+    This role can only read. To let agents write, see [letting agents
+    write](/prepare-database#letting-agents-write).
+    Use a password, not IAM authentication: IAM tokens expire after 15
+    minutes, and the gateway reads its connection string once, at start.
+  </Step>
+  <Step title="Download the RDS certificate bundle">
+    Save the [global RDS bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem)
+    in the gateway's `secrets/` folder as `rds-global-bundle.pem`.
+  </Step>
+  <Step title="Write the gateway's connection string">
+    Use the endpoint from the database's **Connectivity & security** tab. For
+    agents that only read, prefer the Aurora reader endpoint or a read
+    replica: it refuses writes whatever the policy says.
+
+    ```text
+    postgres://midplane_gateway:<password>@mydb.abc123.eu-central-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=/etc/midplane/secrets/rds-global-bundle.pem
+    ```
+
+    `sslrootcert` is the bundle's path where the gateway runs:
+    `/etc/midplane/secrets/rds-global-bundle.pem` in Docker, or the file's
+    full path on your machine. Save the line as `secrets/<database id>.dsn`,
+    such as `secrets/shop.dsn`.
+  </Step>
+  <Step title="Check that it connects">
+    Start or restart the gateway. **Test connection** on the **Gateways** page
+    shows your database's id with `ok`, such as `shop ok`, and the policy
+    editor lists your tables.
+  </Step>
+</Steps>
+
+## If it doesn't work
+
+- **`ETIMEDOUT` or `TIMEOUT`**: the security group doesn't admit the gateway.
+- **`SELF_SIGNED_CERT_IN_CHAIN`**: `sslrootcert` is missing or names the
+  wrong file.
+- **`28000`**: the instance requires TLS (`rds.force_ssl`) and the connection
+  string has no `sslmode`.

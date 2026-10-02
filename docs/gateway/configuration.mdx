@@ -1,4 +1,7 @@
-# Configuration
+---
+title: "Configuration"
+description: "Every key in midplane.yaml, in both modes, and the policy."
+---
 
 One YAML file, `midplane.yaml`, named with `--config`. Relative paths in it
 are relative to the file. Secrets never appear inline: a DSN, the mask salt,
@@ -19,13 +22,13 @@ gateway won't start on a config it can't fully read.
 | --- | --- | --- |
 | `listen.host` | `127.0.0.1` | Interface to listen on. Anything but loopback requires `tls`. `0.0.0.0` or `::` also requires `public_urls` |
 | `listen.port` | `7433` | |
-| `listen.allowed_hosts` | `[]` | More host names the `Host` header may carry, for a proxy that rewrites it. Not token audiences ([hosted agents](hosted-agents.md)) |
+| `listen.allowed_hosts` | `[]` | More host names the `Host` header may carry, for a proxy that rewrites it. Not token audiences ([hosted agents](/gateway/hosted-agents)) |
 | `public_urls` | none | Up to eight base URLs agents reach the gateway at (`https://…`, no credentials, query or fragment). Each `<url>/mcp` is a token audience. Without them, the listener's own URL |
 | `public_url` | none | Shorthand for one; not with `public_urls` |
 | `tls.cert_file`, `tls.key_file` | none | PEM files; HTTPS on the listener |
-| `audit.file` | required | The audit log, a SQLite file ([audit](audit.md)). Local processes may share one; give each linked gateway its own |
+| `audit.file` | required | The audit log, a SQLite file ([audit](/audit)). Local processes may share one; give each linked gateway its own |
 | `audit.retention_days` | `30` | Days to keep each event after Midplane Cloud has it (in local mode, after it is recorded; an event a linked gateway left unsent, after the file is opened in local mode). An event the cloud hasn't acked is kept however old. `0` keeps everything |
-| `mask_salt` | none | A secret source for the salt that keys `consistent-hash` masks: at least 32 characters, the same on every instance ([secrets](secrets.md)). Required once a policy has masks |
+| `mask_salt` | none | A secret source for the salt that keys `consistent-hash` masks: at least 32 characters, the same on every instance ([secrets](/gateway/secrets)). Required once a policy has masks |
 | `limits.max_rows` | `1000` | Rows returned per query, at most 1,000,000. A read stops at the cap and says it was truncated |
 | `limits.max_bytes` | `1048576` | Bytes returned per query, at least 1 KiB |
 | `databases.<id>.dsn` | required | A secret source for the connection string. The id is lowercase, up to 32 characters (`main`, `billing-eu`) |
@@ -45,7 +48,7 @@ gateway won't start on a config it can't fully read.
 | Key | Default | What |
 | --- | --- | --- |
 | `link.cloud_url` | required | Midplane Cloud's URL: https, or http on loopback |
-| `link.identity` | required | Where the gateway's identity lives: `{ file: identity.json }`, written at enrollment, or `{ env: VAR }` holding what `midplane enroll` printed ([linked mode](linked-mode.md)) |
+| `link.identity` | required | Where the gateway's identity lives: `{ file: identity.json }`, written at enrollment, or `{ env: VAR }` holding what `midplane enroll` printed ([linked mode](/gateway/linked-mode)) |
 | `link.enrollment_token` | none | A secret source for the one-time token from the project's Gateways page; read only until the identity exists |
 | `link.bundle_cache` | `bundle.jws` | The newest authentic bundle, enforced again after a restart with the cloud down |
 | `link.name` | none | How the dashboard names this gateway |
@@ -90,9 +93,9 @@ limits:
 | `table_access.tables` | `{}` | `schema.table` → `deny`, `read` or `read_write` |
 | `writes.row_changes` | `allow` | `hold` waits for a person's approval (linked mode); while an agent is tainted, `allow` becomes `hold` |
 | `writes.schema_changes` | `deny` | Only shape changes are ever allowed: owners, row security, triggers and storage options are refused |
-| `masks` | `{}` | `schema.table` → column → rule ([masking](masking.md)). In a table with an entry, a column without one is fully redacted until reviewed |
+| `masks` | `{}` | `schema.table` → column → rule ([masking](/policies/masking)). In a table with an entry, a column without one is fully redacted until reviewed |
 | `labels.untrusted_columns` | `{}` | Columns whose values anyone may have written. Reading one taints the agent's grant |
-| `labels.secret_tables` | `[]` | Tables a tainted grant may not touch ([approvals and taint](approvals-and-taint.md)) |
+| `labels.secret_tables` | `[]` | Tables a tainted grant may not touch ([approvals and taint](/policies/approvals-and-taint)) |
 | `role` | none | Role every statement runs as (`SET LOCAL ROLE`); the gateway's login role must be a member |
 | `limits.statement_timeout_ms` | `30000` | Up to an hour |
 | `limits.lock_timeout_ms` | `5000` | Up to an hour |

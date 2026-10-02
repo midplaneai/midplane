@@ -1,0 +1,62 @@
+---
+title: "Connect Neon"
+sidebarTitle: "Neon"
+description: "Step by step: a read-only role in Neon, the direct connection string, and a first check."
+---
+
+This guide gives the gateway a read-only role in your Neon project and a
+connection string it can use. You need a Midplane project with the database
+named in it ([get started](/get-started), step 2).
+
+<Steps>
+  <Step title="Create a role for the gateway, with SQL">
+    In Neon, open **SQL Editor**, pick the branch and database, replace the
+    placeholder with a strong password, and run:
+
+    ```sql
+    CREATE ROLE midplane_gateway LOGIN PASSWORD <a password, in single quotes>;
+    GRANT USAGE ON SCHEMA public TO midplane_gateway;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO midplane_gateway;
+    ```
+
+    This role can only read. To let agents write, see [letting agents
+    write](/prepare-database#letting-agents-write).
+    Create it here, not under **Roles** in the console: roles made there join
+    `neon_superuser`, which can do far more than read.
+  </Step>
+  <Step title="Copy the direct connection string">
+    Click **Connect** on the project's dashboard, choose the branch and
+    database, and turn **Connection pooling** off. Copy the string; it looks
+    like:
+
+    ```text
+    postgres://neondb_owner:<password>@ep-cool-darkness-123456.eu-central-1.aws.neon.tech/neondb?sslmode=require
+    ```
+
+    The gateway pools its own connections, so it doesn't need Neon's.
+  </Step>
+  <Step title="Write the gateway's connection string">
+    Swap in the role and its password, and make the end `sslmode=verify-full`:
+
+    ```text
+    postgres://midplane_gateway:<password>@ep-cool-darkness-123456.eu-central-1.aws.neon.tech/neondb?sslmode=verify-full
+    ```
+
+    Neon's certificates come from a public CA, so nothing else is needed. Save
+    the line as `secrets/<database id>.dsn`, such as `secrets/shop.dsn`.
+  </Step>
+  <Step title="Check that it connects">
+    Start or restart the gateway. **Test connection** on the **Gateways** page
+    shows your database's id with `ok`, such as `shop ok`, and the policy
+    editor lists your tables.
+  </Step>
+</Steps>
+
+## Good to know
+
+- **Branches.** Point the gateway at a branch instead of `main`: agents get
+  real data, and nothing they change reaches production.
+- **Autosuspend.** A compute that scaled to zero takes a moment to wake. If
+  that takes over 10 seconds, the first attempt fails with `TIMEOUT` and the
+  next one connects.
+- **IP Allow.** If it's on, add the address the gateway connects from.

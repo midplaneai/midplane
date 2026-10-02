@@ -1,0 +1,65 @@
+---
+title: "How it works"
+description: "The gateway, your databases, projects and agents, and what stays in your network."
+---
+
+import Architecture from "/snippets/architecture.mdx";
+
+<Architecture />
+
+The gateway opens every connection. Midplane Cloud never connects to the
+gateway or to your databases.
+
+## The parts
+
+<Columns cols={2}>
+  <Card title="Gateway" icon="server">
+    One process in your network, next to your databases. It holds their
+    connection strings, and agents talk only to it.
+  </Card>
+  <Card title="Databases" icon="database">
+    Each has an id, such as `shop`, and its own policy: which tables agents may
+    use, and what comes back masked.
+  </Card>
+  <Card title="Project" icon="folder">
+    In Midplane Cloud: databases, their policies, their gateways and the agents
+    allowed in. Published policies reach every gateway in seconds.
+  </Card>
+  <Card title="Agents" icon="robot">
+    MCP clients such as Claude Code. Each signs in through the gateway, and you
+    choose which databases it may use.
+  </Card>
+</Columns>
+
+## The path of a statement
+
+<Steps>
+  <Step title="Check">
+    The gateway parses the statement and checks it against the database's
+    policy.
+  </Step>
+  <Step title="Record">
+    It writes the attempt and the decision to its audit log, before anything
+    runs.
+  </Step>
+  <Step title="Run">
+    An allowed statement runs, with masks applied inside the query. A held
+    write waits for a person's approval.
+  </Step>
+</Steps>
+
+## What stays and what goes up
+
+<Columns cols={2}>
+  <Card title="Stays in your network" icon="lock">
+    Rows and results, connection strings, database error messages, the mask
+    salt, and the full audit log.
+  </Card>
+  <Card title="Goes to Midplane Cloud" icon="cloud-arrow-up">
+    Table and column names, statements with their values replaced, gateway and
+    database status, and writes held for approval.
+  </Card>
+</Columns>
+
+Every detail is in the reference: [linked mode](/gateway/linked-mode#what-goes-up)
+and [audit](/audit#what-goes-to-midplane-cloud-linked-mode).

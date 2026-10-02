@@ -1,4 +1,7 @@
-# Linked mode
+---
+title: "Linked mode"
+description: "Enrollment, bundles, databases a gateway can't reach, what goes up, replicas and revoking."
+---
 
 `midplane gateway` enforces what a project in Midplane Cloud publishes:
 policies authored in the dashboard, agents' identities, approvals, taint shared
@@ -40,8 +43,8 @@ can't stand in for the cloud.
   to a file instead.
 
 The identity holds the gateway's private key: treat it like a password
-([secrets](secrets.md)). Enrolling registers every URL in `public_urls` (or
-the listener's) as one of the gateway's URLs ([hosted agents](hosted-agents.md)).
+([secrets](/gateway/secrets)). Enrolling registers every URL in `public_urls` (or
+the listener's) as one of the gateway's URLs ([hosted agents](/gateway/hosted-agents)).
 
 ## Bundles
 
@@ -64,11 +67,11 @@ A published change reaches a running gateway within a second or two: it waits
 on a long poll of up to 50 seconds that the cloud answers as soon as there is
 news.
 
-## Databases it can't reach
+## Databases it cannot reach
 
-A database the gateway can't reach at start (a wrong host or port, a wrong
-password, a database that doesn't exist yet) doesn't stop a linked gateway. It
-enrolls, syncs and serves its other databases, and:
+From `0.22.0`, a database the gateway can't reach at start (a wrong host or
+port, a wrong password, a database that doesn't exist yet) doesn't stop a
+linked gateway. It enrolls, syncs and serves its other databases, and:
 
 - **Refuses every call to it**, before anything else is checked or recorded,
   with `Database "<id>" can't be reached from the gateway right now.`
@@ -101,10 +104,12 @@ it can name roles and hosts; only the code goes up.
 A database the gateway has read once keeps its catalog if it goes down later:
 calls to it fail with the connection's error, and its health shows the code
 after the next one, until a statement gets an answer again. `/readyz` answers
-`503` while any database is down or unread ([operations](operations.md#health)).
+`503` while any database is down or unread ([operations](/gateway/operations#health)).
 
 Local mode still refuses to start without every database, and so does any
-gateway with a config error (an unknown key, a missing secret file).
+gateway with a config error (an unknown key, a missing secret file). Before
+`0.22.0`, a linked gateway did too: it exits at start with the database's
+error, before it enrolls.
 
 ## What goes up
 
@@ -112,7 +117,7 @@ Over the link, a gateway sends its status (bundle version, state, version,
 features, database ids, URLs, each database's health as an error code), each
 database's catalog (table and column names and types, view definitions with
 every literal replaced, never a value), held writes for approval, taint
-records, and its audit log ([audit](audit.md)). It never sends a DSN, the
+records, and its audit log ([audit](/audit)). It never sends a DSN, the
 salt, a Postgres error message, or a row.
 
 The cloud's ack of each audit batch is signed like its other answers, for a

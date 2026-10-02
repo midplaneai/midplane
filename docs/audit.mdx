@@ -1,4 +1,7 @@
-# Audit
+---
+title: "Audit"
+description: "The gateway's audit log, what goes to Midplane Cloud, retention, export and verification."
+---
 
 Every statement an agent sends is recorded on the gateway's own disk before it
 runs. The file is the full record, it stays in your network, and you can
@@ -14,7 +17,7 @@ an event is on disk before the gateway goes on.
 | Event | When | Holds |
 | --- | --- | --- |
 | `ATTEMPTED` | Before the statement is evaluated | Database, person (`sub`), agent (`client_id`), grant, the statement as sent, the intent |
-| `DECIDED` | Before anything runs | Verdict, rule and reason, write class, fingerprint, tables, whether it taints or comes back masked, the policy version |
+| `DECIDED` | Before anything runs | Verdict, rule and reason, the kind of write (row or schema change), fingerprint, tables, whether it taints or comes back masked, the policy version |
 | `APPROVAL` | When a held write is filed, claimed, recounted, or its claim fails | Approval id, step, status, the row count |
 | `EXECUTED` | After it ran | Row count, duration, whether the result was cut at the caps |
 | `FAILED` | After it failed | SQLSTATE and the message |
@@ -38,7 +41,7 @@ an event is on disk before the gateway goes on.
   the cloud answers one of its batches with a conflict, an event it holds
   under another hash: the cloud stores and acks the batch only up to there,
   and the file sends the rest as the new instance (see
-  [operations](operations.md#backups)).
+  [operations](/gateway/operations#backups)).
 
 ## What goes to Midplane Cloud (linked mode)
 
@@ -49,7 +52,7 @@ them; each sync reports how many wait, and the Gateways page shows it.
 
 | Sent | Never sent |
 | --- | --- |
-| Times, query id, database, person, agent, grant; each statement's kind (`InsertStmt`, `CopyStmt`); verdict, rule, write class, the tables the catalog knows, taint, masked, policy version; approval steps and counts; row counts, durations, SQLSTATEs; each event's position in the chain, and its hash keyed with the file's secret | Results; Postgres error messages (they can quote a row); the DSN and the salt; the statement's fingerprint (it covers names, so a guessed name could be confirmed against it); the chain's own hashes, and the key |
+| Times, query id, database, person, agent, grant; each statement's kind (`InsertStmt`, `CopyStmt`); verdict, rule, the kind of write, the tables the catalog knows, taint, masked, policy version; approval steps and counts; row counts, durations, SQLSTATEs; each event's position in the chain, and its hash keyed with the file's secret | Results; Postgres error messages (they can quote a row); the DSN and the salt; the statement's fingerprint (it covers names, so a guessed name could be confirmed against it); the chain's own hashes, and the key |
 | The statement with every literal replaced by `$1, $2…`, every name the database's catalog doesn't have replaced by `_1, _2…`, and comments dropped | The statement as written, the agent's intent and a denial's reason, **unless** the database's switch is on |
 
 - **Redaction is checked twice, and fails closed.** The redacted text must

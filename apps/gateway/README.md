@@ -21,8 +21,8 @@ Node 24.16 or newer.
 - **The audit log** stays on the gateway's disk, hash-chained:
   `midplane audit export` and `midplane audit verify`.
 
-Documentation: <https://github.com/midplaneai/midplane/tree/main/docs>.
+Documentation: <https://midplane.ai/docs>.
 The image: `ghcr.io/midplaneai/midplane`. Both are signed: see
-[verifying a release](https://github.com/midplaneai/midplane/blob/main/docs/releases.md).
+[verifying a release](https://midplane.ai/docs/releases).
 
 MIT licensed.

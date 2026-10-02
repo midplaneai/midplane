@@ -1,0 +1,69 @@
+---
+title: "Connect Supabase"
+sidebarTitle: "Supabase"
+description: "Step by step: a read-only role in Supabase, the session pooler's connection string, Supabase's certificate, and a first check."
+---
+
+This guide gives the gateway a read-only role in your Supabase project and a
+connection string it can use. You need a Midplane project with the database
+named in it ([get started](/get-started), step 2).
+
+<Steps>
+  <Step title="Create a role for the gateway">
+    In Supabase, open **SQL Editor**, start a new query, replace the
+    placeholder with a strong password, and run:
+
+    ```sql
+    CREATE ROLE midplane_gateway LOGIN PASSWORD <a password, in single quotes>;
+    GRANT USAGE ON SCHEMA public TO midplane_gateway;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO midplane_gateway;
+    ```
+
+    This role can only read. To let agents write, see [letting agents
+    write](/prepare-database#letting-agents-write).
+  </Step>
+  <Step title="Copy the session pooler's connection string">
+    Click **Connect** at the top of the project and choose **Session pooler**.
+    It works over IPv4 on every plan, which the direct connection doesn't.
+    Copy the string; it looks like:
+
+    ```text
+    postgres://postgres.abcdefghijklmnop:[YOUR-PASSWORD]@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
+    ```
+
+    The part after `postgres.` is your project ref.
+  </Step>
+  <Step title="Download Supabase's certificate">
+    Open **Project Settings**, then **Database**, and under **SSL
+    Configuration** download the certificate. Save it in the gateway's
+    `secrets/` folder as `supabase-ca.crt`.
+  </Step>
+  <Step title="Write the gateway's connection string">
+    Change the copied string in three places: the user becomes
+    `midplane_gateway.` followed by your project ref, the password becomes the
+    role's, and the end gets the TLS settings:
+
+    ```text
+    postgres://midplane_gateway.abcdefghijklmnop:<password>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=verify-full&sslrootcert=/etc/midplane/secrets/supabase-ca.crt
+    ```
+
+    `sslrootcert` is the certificate's path where the gateway runs:
+    `/etc/midplane/secrets/supabase-ca.crt` in Docker, or the file's full path
+    on your machine. Save the line as `secrets/<database id>.dsn`, such as
+    `secrets/shop.dsn`.
+  </Step>
+  <Step title="Check that it connects">
+    Start or restart the gateway. **Test connection** on the **Gateways** page
+    shows your database's id with `ok`, such as `shop ok`, and the policy
+    editor lists your tables.
+  </Step>
+</Steps>
+
+## If it doesn't work
+
+- **`Tenant or user not found`**: the user lacks `.` and your project ref.
+- **`SELF_SIGNED_CERT_IN_CHAIN`**: `sslrootcert` is missing or names the
+  wrong file.
+- **Tables are empty**: row-level security is on and has no policy for
+  `midplane_gateway`. Add an RLS policy that lets the role read, or `ALTER
+  ROLE midplane_gateway BYPASSRLS;` to let Midplane's policy be the boundary.

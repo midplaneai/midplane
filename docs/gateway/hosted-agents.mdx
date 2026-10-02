@@ -1,4 +1,8 @@
-# Reaching a gateway from hosted agents
+---
+title: "Reaching a gateway from hosted agents"
+sidebarTitle: "Hosted agents"
+description: "claude.ai, ChatGPT and other hosted agents reach the gateway through a vendor tunnel or your own endpoint."
+---
 
 Agents on laptops or in your own cluster (Claude Code, Cursor, VS Code, your own
 agents) connect to the gateway directly. Hosted agents run on their vendor's
@@ -63,10 +67,12 @@ metadata then names its first URL, so list the tunnel's URL first in
 | claude.ai or ChatGPT, with the vendor's tunnel | Run the vendor's tunnel next to the gateway, and register the tunnel URL | The agent vendor, which is the client anyway |
 | Hosted agents without a vendor tunnel | Give the gateway a public URL: your load balancer, allowlisted to the vendor's IP ranges, or a public deployment in your own cloud account | Only you |
 
-> **Tunnels that decrypt can read your data.** Cloudflare Tunnel terminates
-> TLS at Cloudflare's edge, and ngrok does too unless you turn on its
-> end-to-end TLS. Either provider can then read queries, results and tokens.
-> Use them only if you accept that.
+<Warning>
+  **Tunnels that decrypt can read your data.** Cloudflare Tunnel terminates
+  TLS at Cloudflare's edge, and ngrok does too unless you turn on its
+  end-to-end TLS. Either provider can then read queries, results and tokens.
+  Use them only if you accept that.
+</Warning>
 
 In every option, the hosted agent's vendor sees query results, because it is
 the client. Midplane never does.

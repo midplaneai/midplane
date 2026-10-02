@@ -1,0 +1,333 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Midplane",
+  "colors": {
+    "primary": "#1d4eff",
+    "light": "#5a7dff",
+    "dark": "#1d4eff"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/wordmark.svg",
+    "dark": "/logo/wordmark-on-dark.svg"
+  },
+  "seo": {
+    "organization": {
+      "url": "https://midplane.ai",
+      "sameAs": ["https://x.com/midplaneai", "https://github.com/midplaneai"]
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": ["index", "how-it-works", "get-started"]
+          },
+          {
+            "group": "Prepare your database",
+            "pages": [
+              "prepare-database",
+              "prepare-database/supabase",
+              "prepare-database/neon",
+              "prepare-database/rds",
+              "prepare-database/railway"
+            ]
+          },
+          {
+            "group": "Run the gateway",
+            "pages": ["gateway/deploy", "gateway/multiple-gateways"]
+          },
+          {
+            "group": "Help",
+            "pages": ["troubleshooting"]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Gateway",
+            "pages": [
+              "gateway/configuration",
+              "gateway/linked-mode",
+              "gateway/local-mode",
+              "gateway/secrets",
+              "gateway/hosted-agents",
+              "gateway/operations"
+            ]
+          },
+          {
+            "group": "Policies",
+            "pages": ["policies/masking", "policies/approvals-and-taint"]
+          },
+          {
+            "group": "Audit and releases",
+            "pages": ["audit", "releases"]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/midplaneai/midplane",
+          "icon": "github"
+        }
+      ]
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/midplaneai/midplane"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Dashboard",
+      "href": "https://eu.app.midplane.ai"
+    }
+  },
+  "contextual": {
+    "options": ["copy", "view", "chatgpt", "claude", "mcp", "cursor", "vscode"]
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/midplaneai",
+      "github": "https://github.com/midplaneai/midplane"
+    }
+  },
+  "redirects": [
+    {
+      "source": "/quickstart",
+      "destination": "/get-started"
+    },
+    {
+      "source": "/quickstart-cloud",
+      "destination": "/get-started"
+    },
+    {
+      "source": "/quickstart-self-host",
+      "destination": "/get-started"
+    },
+    {
+      "source": "/connect/overview",
+      "destination": "/prepare-database"
+    },
+    {
+      "source": "/connect/supabase",
+      "destination": "/prepare-database/supabase"
+    },
+    {
+      "source": "/connect/neon",
+      "destination": "/prepare-database/neon"
+    },
+    {
+      "source": "/connect/rds",
+      "destination": "/prepare-database/rds"
+    },
+    {
+      "source": "/connect/railway",
+      "destination": "/prepare-database/railway"
+    },
+    {
+      "source": "/self-host/deploy",
+      "destination": "/gateway/deploy"
+    },
+    {
+      "source": "/self-host/configuration",
+      "destination": "/gateway/deploy"
+    },
+    {
+      "source": "/self-host/operations",
+      "destination": "/gateway/operations"
+    },
+    {
+      "source": "/self-host/production-checklist",
+      "destination": "/gateway/operations"
+    },
+    {
+      "source": "/self-host/telemetry",
+      "destination": "/gateway/operations"
+    },
+    {
+      "source": "/self-host/alerting",
+      "destination": "/gateway/operations"
+    },
+    {
+      "source": "/reference/policy-schema",
+      "destination": "/gateway/configuration#the-policy"
+    },
+    {
+      "source": "/resources/troubleshooting",
+      "destination": "/troubleshooting"
+    },
+    {
+      "source": "/resources/faq",
+      "destination": "/troubleshooting"
+    },
+    {
+      "source": "/concepts/masking",
+      "destination": "/policies/masking"
+    },
+    {
+      "source": "/cloud/masking",
+      "destination": "/policies/masking"
+    },
+    {
+      "source": "/concepts/write-approvals",
+      "destination": "/policies/approvals-and-taint"
+    },
+    {
+      "source": "/concepts/audit-trail",
+      "destination": "/audit"
+    },
+    {
+      "source": "/cloud/audit-log",
+      "destination": "/audit"
+    },
+    {
+      "source": "/self-host/audit-log",
+      "destination": "/audit"
+    },
+    {
+      "source": "/agents/overview",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud-vs-self-host",
+      "destination": "/"
+    },
+    {
+      "source": "/open-core",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/overview",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/plans",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/projects",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/security",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/connections",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/editing-policies",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/tokens",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/roles",
+      "destination": "/"
+    },
+    {
+      "source": "/cloud/sso",
+      "destination": "/"
+    },
+    {
+      "source": "/concepts/table-access",
+      "destination": "/"
+    },
+    {
+      "source": "/concepts/what-midplane-blocks",
+      "destination": "/"
+    },
+    {
+      "source": "/policies/overview",
+      "destination": "/"
+    },
+    {
+      "source": "/policies/table-access",
+      "destination": "/"
+    },
+    {
+      "source": "/policies/multiple-databases",
+      "destination": "/"
+    },
+    {
+      "source": "/policies/cookbook",
+      "destination": "/"
+    },
+    {
+      "source": "/policies/policy-cli",
+      "destination": "/"
+    },
+    {
+      "source": "/reference/audit-events",
+      "destination": "/"
+    },
+    {
+      "source": "/reference/cli",
+      "destination": "/"
+    },
+    {
+      "source": "/reference/denial-reasons",
+      "destination": "/"
+    },
+    {
+      "source": "/reference/environment-variables",
+      "destination": "/"
+    },
+    {
+      "source": "/reference/mcp-tools",
+      "destination": "/"
+    },
+    {
+      "source": "/reference/deny-webhook",
+      "destination": "/"
+    },
+    {
+      "source": "/reference/http-endpoints",
+      "destination": "/"
+    },
+    {
+      "source": "/resources/changelog",
+      "destination": "/"
+    },
+    {
+      "source": "/resources/contributing",
+      "destination": "/"
+    },
+    {
+      "source": "/security/adversarial-corpus",
+      "destination": "/policies/masking#the-public-bypass-corpus"
+    },
+    {
+      "source": "/security/threat-model",
+      "destination": "/"
+    },
+    {
+      "source": "/security/trust-posture",
+      "destination": "/"
+    },
+    {
+      "source": "/security/reporting",
+      "destination": "/"
+    },
+    {
+      "source": "/self-host/engine",
+      "destination": "/"
+    }
+  ]
+}
