@@ -109,12 +109,31 @@ async function call(
   };
 }
 
+/**
+ * SIGTERM, then SIGKILL after 10 s, so a gateway that won't stop can't hang
+ * the run. Never throws: a failed check in the caller stays the error, and
+ * `checkStopped` reports the exit after.
+ */
 function stop(child: ChildProcess): Promise<void> {
   return new Promise((done) => {
-    if (child.exitCode !== null) return done();
-    child.once("exit", () => done());
+    if (child.exitCode !== null || child.signalCode !== null) return done();
+    const kill = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    child.once("exit", () => {
+      clearTimeout(kill);
+      done();
+    });
     child.kill("SIGTERM");
   });
+}
+
+/** The gateway closed and exited 0 on SIGTERM, not killed after 10 s. */
+function checkStopped(child: ChildProcess, what: string): void {
+  if (child.exitCode !== 0) {
+    process.stdout.write(
+      `  ${what}: exit code ${child.exitCode}, signal ${child.signalCode}\n`,
+    );
+  }
+  check(child.exitCode === 0, `${what} stops on SIGTERM`);
 }
 
 // ── the package ───────────────────────────────────────────────────────────
@@ -156,6 +175,7 @@ const midplane = (args: string[], o: { cwd?: string; env?: object } = {}) =>
   execFileSync(bin, args, {
     cwd: o.cwd ?? app,
     env: { ...process.env, ...o.env },
+    timeout: 60_000,
   }).toString();
 /** Run it without blocking: the stand-in cloud answers from this process. */
 const midplaneAsync = (
@@ -244,6 +264,7 @@ try {
 } finally {
   await stop(local);
 }
+checkStopped(local, "midplane local");
 const exported = join(qs, "audit.jsonl");
 midplane(["audit", "export", "--config", "midplane.yaml", "--out", exported], {
   cwd: qs,
@@ -337,6 +358,7 @@ try {
   await stop(gateway);
   await cloud.close();
 }
+checkStopped(gateway, "midplane gateway");
 
 // ── 3. the image ──────────────────────────────────────────────────────────
 
@@ -344,7 +366,10 @@ if (values.image) {
   const image = values.image;
   step(`the image ${image}`);
   const docker = (args: string[]) =>
-    execFileSync("docker", args, { stdio: ["ignore", "pipe", "inherit"] })
+    execFileSync("docker", args, {
+      stdio: ["ignore", "pipe", "inherit"],
+      timeout: 60_000,
+    })
       .toString()
       .trim();
   check(

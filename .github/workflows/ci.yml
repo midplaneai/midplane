@@ -14,6 +14,8 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # Each job takes a few minutes; a hang fails here, not after GitHub's six hours.
+    timeout-minutes: 15
     # The gateway's end-to-end tests need a Postgres they can create
     # databases and roles on.
     services:
@@ -44,6 +46,7 @@ jobs:
   # image built from it runs the quickstart too.
   package:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
