@@ -13,6 +13,9 @@
 // refuses a second statement in the same message: a second layer behind the
 // parser. Rows and bytes returned are capped. A claimed write carries the
 // count its approver saw, and rolls back unless the rows it changed match.
+//
+// Every attempt to reach the database (a statement, a catalog read, a probe)
+// is reported to an observer once it completes, for the database's health.
 
 import type { ExecutionPlan } from "@midplane/core";
 import { SEARCH_PATH } from "@midplane/core";
@@ -83,6 +86,9 @@ const BATCH = 200;
 /** The longest a statement waits for a pooled connection. */
 const CONNECT_TIMEOUT_MS = 10_000;
 
+/** The longest a catalog read may run. */
+const CATALOG_TIMEOUT_MS = 30_000;
+
 /** An error's SQLSTATE, if Postgres sent one; Node's socket codes (EPIPE) aren't. */
 function sqlstateOf(err: unknown): string | null {
   return err instanceof pg.DatabaseError &&
@@ -90,6 +96,55 @@ function sqlstateOf(err: unknown): string | null {
     /^[0-9A-Z]{5}$/.test(err.code)
     ? err.code
     : null;
+}
+
+/** pg's own connect timeouts (the client's and the pool's), which carry no code. */
+const CONNECT_TIMEOUTS = new Set([
+  "Connection terminated due to connection timeout",
+  "timeout exceeded when trying to connect",
+]);
+
+/**
+ * An error's SQLSTATE, or Node's code for a socket error (ECONNREFUSED), or
+ * TIMEOUT when nothing answered a connection in time; else null.
+ */
+export function errorCode(err: unknown): string | null {
+  const e = err as { code?: unknown; message?: unknown } | null;
+  if (typeof e?.code === "string") return e.code.slice(0, 32);
+  return typeof e?.message === "string" && CONNECT_TIMEOUTS.has(e.message)
+    ? "TIMEOUT"
+    : null;
+}
+
+/** How a completed attempt to reach a database went; the message is for the local log only. */
+export type Attempt =
+  | { ok: true }
+  | { ok: false; code: string | null; message: string };
+
+/** What reached for the database: a statement, a catalog read, or a probe (`SELECT 1`). */
+export type AttemptKind = "statement" | "catalog" | "probe";
+
+function failure(err: unknown): Attempt {
+  return {
+    ok: false,
+    code: errorCode(err),
+    message: (err as Error)?.message ?? String(err),
+  };
+}
+
+/**
+ * What a failed statement says of its database: down when it got no answer
+ * (a socket error, a dropped connection) or one that ends the connection
+ * (SQLSTATE class 08, or the server shutting down); up on any other answer,
+ * even an error or a cancellation by `statement_timeout`.
+ */
+export function statementAttempt(err: unknown): Attempt {
+  if (err instanceof pg.DatabaseError)
+    return /^(08...|57P0[1-3])$/.test(err.code ?? "")
+      ? failure(err)
+      : { ok: true };
+  // Midplane's own checks (the salt, an approved row count) ran on its answer.
+  return err instanceof ExecutionError ? { ok: true } : failure(err);
 }
 
 // Dates, times and intervals pass through as Postgres prints them. Parsing
@@ -144,8 +199,14 @@ function read(
 
 export class DatabaseExecutor {
   private readonly pool: pg.Pool;
+  private readonly observe: (attempt: Attempt, kind: AttemptKind) => void;
 
-  constructor(dsn: string) {
+  /** `observe` hears how each attempt to reach the database ended. */
+  constructor(
+    dsn: string,
+    observe: (attempt: Attempt, kind: AttemptKind) => void = () => {},
+  ) {
+    this.observe = observe;
     this.pool = new pg.Pool({
       connectionString: dsn,
       max: 10,
@@ -182,6 +243,7 @@ export class DatabaseExecutor {
     try {
       client = await this.pool.connect();
     } catch (err) {
+      this.observe(failure(err), "statement");
       // A refused login carries a SQLSTATE; a timeout or a refused socket doesn't.
       throw new ExecutionError(
         sqlstateOf(err),
@@ -189,6 +251,7 @@ export class DatabaseExecutor {
         null,
       );
     }
+    // Stopped here, nothing reached the database: its health stays as it was.
     const stopped = options.stop?.();
     if (stopped) {
       client.release();
@@ -262,6 +325,7 @@ export class DatabaseExecutor {
         }
       }
       await client.query("COMMIT");
+      this.observe({ ok: true }, "statement");
       return {
         columns: (result?.fields ?? []).map((f) => f.name),
         rows: kept,
@@ -276,6 +340,7 @@ export class DatabaseExecutor {
       } catch {
         broken = true;
       }
+      this.observe(statementAttempt(err), "statement");
       if (err instanceof ExecutionError) throw err;
       const e = err as pg.DatabaseError;
       const detail = options.stripDetail
@@ -291,20 +356,32 @@ export class DatabaseExecutor {
     }
   }
 
-  /** A read-only session pinned like `run`'s, for catalog queries. */
+  /**
+   * A read-only session pinned like `run`'s, for catalog queries, which may
+   * run for CATALOG_TIMEOUT_MS. Any failure counts against the database's
+   * health, even one after connecting: its catalog couldn't be read.
+   */
   async withReadOnly<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
+    let client: pg.PoolClient;
+    try {
+      client = await this.pool.connect();
+    } catch (err) {
+      this.observe(failure(err), "catalog");
+      throw err;
+    }
     try {
       await client.query("BEGIN READ ONLY");
       await client.query({
-        text: "SELECT set_config('search_path', $1, true)",
-        values: [SESSION_SEARCH_PATH],
+        text: "SELECT set_config('search_path', $1, true), set_config('statement_timeout', $2, true)",
+        values: [SESSION_SEARCH_PATH, `${CATALOG_TIMEOUT_MS}ms`],
       });
       const out = await fn(client);
       await client.query("COMMIT");
+      this.observe({ ok: true }, "catalog");
       return out;
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
+      this.observe(failure(err), "catalog");
       throw err;
     } finally {
       client.release();
@@ -332,13 +409,14 @@ export class DatabaseExecutor {
           );
         }),
       ]);
+      this.observe({ ok: true }, "probe");
       return { ok: true, latencyMs: performance.now() - started, code: null };
     } catch (err) {
-      const code = (err as { code?: unknown }).code;
+      this.observe(failure(err), "probe");
       return {
         ok: false,
         latencyMs: performance.now() - started,
-        code: typeof code === "string" ? code.slice(0, 32) : null,
+        code: errorCode(err),
       };
     } finally {
       clearTimeout(timer);

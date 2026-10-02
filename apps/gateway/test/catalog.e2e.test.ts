@@ -2,7 +2,8 @@
 // gateway redacts, hashes and uploads each database's catalog, once per
 // change, re-reads it when stale or on command, and never lets a value, the
 // DSN or the salt leave. That last part is invariant 9's gateway half: every
-// body the gateway sends is scanned for secrets seeded in the database.
+// body the gateway sends is scanned for secrets seeded in the database, and
+// for the DSNs and Postgres messages of databases it can't reach.
 
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,7 +32,13 @@ import {
 import { parseLinkedConfig } from "../src/config.ts";
 import { type RunningGateway, startLinked } from "../src/server.ts";
 import { type FakeCloud, startFakeCloud } from "./fake-cloud.ts";
-import { createDatabase, hasPostgres, type TestDatabase } from "./harness.ts";
+import {
+  checksPasswords,
+  createDatabase,
+  hasPostgres,
+  type TestDatabase,
+  wrongPassword,
+} from "./harness.ts";
 import { CREATE_VIEWS, SEEDED, VIEW_TABLES, WITHHELD } from "./views.ts";
 
 async function freePort(): Promise<number> {
@@ -64,6 +71,8 @@ describe.skipIf(!hasPostgres)("catalog snapshots", { timeout: 30_000 }, () => {
   let stderr: MockInstance;
   const logged: string[] = [];
   const env: NodeJS.ProcessEnv = {};
+  /** Whether `locked`, with a wrong password, is configured: Postgres checks passwords. */
+  let locked = false;
 
   const stored = () => {
     const cat = cloud.catalogs.get("main");
@@ -109,6 +118,12 @@ describe.skipIf(!hasPostgres)("catalog snapshots", { timeout: 30_000 }, () => {
     const port = await freePort();
     env.SALT = randomBytes(32).toString("hex");
     env.DSN_MAIN = db.agentDsn;
+    // The role's DSN, password and all, on a port nothing listens on.
+    const gone = new URL(db.agentDsn);
+    gone.port = "1";
+    env.DSN_GONE = gone.toString();
+    locked = await checksPasswords(db);
+    env.DSN_LOCKED = wrongPassword(db);
     env.ENROLL = cloud.enrollmentToken();
     const text = JSON.stringify({
       listen: { host: "127.0.0.1", port },
@@ -119,7 +134,11 @@ describe.skipIf(!hasPostgres)("catalog snapshots", { timeout: 30_000 }, () => {
         identity: { file: "identity.json" },
         enrollment_token: { env: "ENROLL" },
       },
-      databases: { main: { dsn: { env: "DSN_MAIN" } } },
+      databases: {
+        main: { dsn: { env: "DSN_MAIN" } },
+        gone: { dsn: { env: "DSN_GONE" } },
+        ...(locked ? { locked: { dsn: { env: "DSN_LOCKED" } } } : {}),
+      },
     });
     const path = join(dir, "midplane.yaml");
     writeFileSync(path, text);
@@ -257,11 +276,28 @@ describe.skipIf(!hasPostgres)("catalog snapshots", { timeout: 30_000 }, () => {
     cloud.echoCatalogs(null);
   });
 
-  it("invariant 9: nothing it sends carries a value, the DSN or the salt", async () => {
+  it("reports the databases it can't reach by their codes alone", async () => {
+    await waitFor("a status with database health", () =>
+      Boolean(cloud.statuses.at(-1)?.database_health),
+    );
+    expect(cloud.statuses.at(-1)?.database_health).toEqual({
+      main: { ok: true, code: null, since: expect.any(String) },
+      gone: { ok: false, code: "ECONNREFUSED", since: expect.any(String) },
+      ...(locked
+        ? { locked: { ok: false, code: "28P01", since: expect.any(String) } }
+        : {}),
+    });
+  });
+
+  it("invariant 9: nothing it sends carries a value, the DSN, the salt or a Postgres message", async () => {
     const test = cloud.command("test_connection");
     await waitFor("the connection test's result", () =>
       cloud.results.has(test),
     );
+    expect(cloud.results.get(test)).toMatchObject({
+      ok: true,
+      result: { databases: { gone: { ok: false, code: "ECONNREFUSED" } } },
+    });
     const paths = new Set(cloud.bodies.map((b) => b.path));
     expect(paths).toEqual(
       new Set([
@@ -274,7 +310,20 @@ describe.skipIf(!hasPostgres)("catalog snapshots", { timeout: 30_000 }, () => {
       ]),
     );
     const password = new URL(db.agentDsn).password;
-    const secrets = [...SEEDED, db.agentDsn, password, env.SALT as string];
+    const secrets = [
+      ...SEEDED,
+      db.agentDsn,
+      password,
+      env.SALT as string,
+      // What the unreachable databases' errors say: their DSNs, the role,
+      // the host and port refused, and Postgres' own message.
+      env.DSN_GONE as string,
+      env.DSN_LOCKED as string,
+      "not-the-password",
+      db.role,
+      "ECONNREFUSED 127.0.0.1",
+      "password authentication failed",
+    ];
     for (const { path, body } of cloud.bodies) {
       // A hash can hold any four digits, so numbers are looked for around them.
       const text = body.replace(/[0-9a-f]{64}/g, "");

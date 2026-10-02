@@ -64,13 +64,56 @@ A published change reaches a running gateway within a second or two: it waits
 on a long poll of up to 50 seconds that the cloud answers as soon as there is
 news.
 
+## Databases it can't reach
+
+A database the gateway can't reach at start (a wrong host or port, a wrong
+password, a database that doesn't exist yet) doesn't stop a linked gateway. It
+enrolls, syncs and serves its other databases, and:
+
+- **Refuses every call to it**, before anything else is checked or recorded,
+  with `Database "<id>" can't be reached from the gateway right now.`
+- **Keeps trying it**, after 1 s, 2 s, 4 s and so on, at most every 30 s. Each
+  try waits up to 10 s to connect and 30 s to read the catalog. Once one
+  succeeds the database is served, its catalog goes up at once, and the
+  dashboard hears within seconds.
+- **Reports it** in its status: for each database, whether the most recent
+  attempt to reach it answered, since when, and if not, its SQLSTATE or Node
+  error code. Attempts are catalog reads, statements, the dashboard's
+  connection test and `/readyz` pings. A statement counts only when it can
+  tell: one Postgres answered, even with an error, says the database is up;
+  one that never got an answer, or lost its connection, says it's down; one
+  the gateway refused itself says nothing. Until a database's catalog has
+  been read, only a catalog read can say it's up.
+
+The error's message stays in the gateway's log (`database unreachable`), since
+it can name roles and hosts; only the code goes up.
+
+| Code | Usually means |
+| --- | --- |
+| `ECONNREFUSED` | Nothing listens at the DSN's host and port |
+| `ENOTFOUND`, `EAI_AGAIN` | The host name doesn't resolve from where the gateway runs |
+| `ETIMEDOUT`, `TIMEOUT` | No answer at all: a firewall, or the wrong network |
+| `28P01` | Wrong password |
+| `28000` | No `pg_hba.conf` entry for this host, role or database, or the role can't log in |
+| `3D000` | The database named in the DSN doesn't exist |
+| `57P03` | Postgres is starting up or shutting down |
+
+A database the gateway has read once keeps its catalog if it goes down later:
+calls to it fail with the connection's error, and its health shows the code
+after the next one, until a statement gets an answer again. `/readyz` answers
+`503` while any database is down or unread ([operations](operations.md#health)).
+
+Local mode still refuses to start without every database, and so does any
+gateway with a config error (an unknown key, a missing secret file).
+
 ## What goes up
 
 Over the link, a gateway sends its status (bundle version, state, version,
-features, database ids, URLs), each database's catalog (table and column names
-and types, view definitions with every literal replaced, never a value), held
-writes for approval, taint records, and its audit log ([audit](audit.md)). It
-never sends a DSN, the salt, or a row.
+features, database ids, URLs, each database's health as an error code), each
+database's catalog (table and column names and types, view definitions with
+every literal replaced, never a value), held writes for approval, taint
+records, and its audit log ([audit](audit.md)). It never sends a DSN, the
+salt, a Postgres error message, or a row.
 
 The cloud's ack of each audit batch is signed like its other answers, for a
 nonce the gateway sends, and names the hash of the event it stored at the
@@ -104,5 +147,7 @@ expire, so stop the process as well.
 
 *Tested by* `apps/gateway/test/link.e2e.test.ts` (enrollment and the pin,
 bundles, halting, pausing, restarts with the cloud down, revocation, no
-inbound connection), against a stand-in for the cloud, and CI's `package`
-job (`enroll` and `gateway` from the npm package).
+inbound connection, a database unreachable at start, then served, then
+dropped), against a stand-in for the cloud, `apps/gateway/test/catalog.e2e.test.ts`
+(no DSN or Postgres message in anything sent), and CI's `package` job
+(`enroll` and `gateway` from the npm package).

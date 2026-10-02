@@ -20,6 +20,7 @@ import { DatabaseExecutor, type ExecutionError } from "../src/executor.ts";
 import { Gateway } from "../src/gateway.ts";
 import {
   callTool,
+  checksPasswords,
   createDatabase,
   hasPostgres,
   query,
@@ -27,6 +28,7 @@ import {
   startGateway,
   type TestDatabase,
   type TestGateway,
+  wrongPassword,
 } from "./harness.ts";
 
 const SCHEMA = `
@@ -627,6 +629,36 @@ describe.skipIf(!hasPostgres)("gateway end to end", () => {
       const last = events.slice(-3).map((e) => e.event.event);
       expect(last).toEqual(["ATTEMPTED", "DECIDED", "EXECUTED"]);
       expect(gw.audit.verifyChain()).toBe(true);
+    });
+
+    // Linked mode starts without such a database; local mode fails as it
+    // always has, with the database's own error.
+    it("won't start in local mode with a database it can't reach, whatever the others", async () => {
+      const policy = { table_access: { default: "read" } };
+      await expect(
+        startGateway({
+          main: { dsn: db.agentDsn, policy },
+          gone: { dsn: "postgres://midplane@127.0.0.1:1/none", policy },
+        }),
+      ).rejects.toMatchObject({
+        code: "ECONNREFUSED",
+        message: expect.stringMatching(/ECONNREFUSED 127\.0\.0\.1:1/),
+      });
+    });
+
+    it("won't start in local mode with a wrong password", async (ctx) => {
+      if (!(await checksPasswords(db))) ctx.skip();
+      await expect(
+        startGateway({
+          locked: {
+            dsn: wrongPassword(db),
+            policy: { table_access: { default: "read" } },
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "28P01",
+        message: expect.stringMatching(/password authentication failed/),
+      });
     });
 
     it("refuses to start when the audit file can't be written", async () => {

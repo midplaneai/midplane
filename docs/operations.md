@@ -5,7 +5,7 @@
 | Endpoint | Answers |
 | --- | --- |
 | `GET /healthz` | `200 ok` while the process serves HTTP: for liveness |
-| `GET /readyz` | `200 ready` only while the gateway enforces a policy and every database answers; `503` otherwise (waiting for a first bundle, paused, halted, or a database down): for readiness |
+| `GET /readyz` | `200 ready` only while the gateway enforces a policy and every database answers; `503` otherwise (waiting for a first bundle, paused, halted, a database down, or one whose catalog it hasn't read yet): for readiness |
 
 Both are unauthenticated and say nothing else. A linked gateway with no bundle
 yet answers `/mcp` with a plain `503`, so clients don't loop through sign-in.
@@ -30,6 +30,7 @@ carries MCP in stdio mode). The ones worth alerting on:
 | `audit event sent without its details` | An event couldn't be projected, so it went with no statement text; `seq` names it, and the file keeps all of it |
 | `audit pruning failed` | Retention couldn't delete old events, so the file keeps growing; `error` says why |
 | `audit events recorded while linked never reached Midplane Cloud; local mode doesn't send them` | The file last ran linked, and `events` of its events were still waiting when it was opened in local mode. They stay in the file for the retention window from now (export them to keep them longer) and are never sent, even if it is linked again |
+| `database unreachable` | A database didn't answer: at start, on a retry, or when a statement lost its connection. `database` and `code` say which and why, `error` has the full message. Said again only if it fails differently, and `database reachable` follows once it answers ([linked mode](linked-mode.md#databases-it-cant-reach)) |
 | `link cut` | The cloud refused the gateway's credentials: it was revoked |
 | `taint check failed; the grant counts as tainted` | The cloud couldn't be asked; the agent was contained |
 | `public URL not registered` | A URL in `public_urls` isn't one of the gateway's yet ([hosted agents](hosted-agents.md)) |
@@ -52,7 +53,9 @@ lock timeouts come from the policy.
 
 The catalog (names and types) is re-read at start, after every write, when a
 statement names something unknown (at most every five seconds), and in linked
-mode every five minutes.
+mode every five minutes. A read may take 30 seconds. In linked mode, a
+database whose catalog couldn't be read at start is tried again after 1, 2, 4
+and so on seconds, at most every 30 seconds, until it can be.
 
 ## Upgrades
 
@@ -86,5 +89,8 @@ audit.db "SELECT value FROM meta WHERE key = 'previous_instances'"`).
 ([audit](audit.md#export-and-verify)).
 
 *Tested by* `apps/gateway/test/link.e2e.test.ts` (readiness, 503 without a
-bundle, halting, SIGTERM, restarts with the cloud down) and
-`apps/gateway/test/gateway.e2e.test.ts` (caps, timeouts, the catalog).
+bundle, halting, SIGTERM, restarts with the cloud down, a database down and
+back), `apps/gateway/test/gateway.e2e.test.ts` (caps, timeouts, the catalog,
+local mode refusing to start without a database) and
+`apps/gateway/test/health.test.ts` (the retry schedule, what counts against a
+database's health).

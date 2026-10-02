@@ -82,6 +82,28 @@ export async function createDatabase(
   };
 }
 
+/** The test role's DSN with a wrong password. */
+export function wrongPassword(db: TestDatabase): string {
+  const u = new URL(db.agentDsn);
+  u.password = "not-the-password";
+  return u.toString();
+}
+
+/**
+ * Whether the test Postgres checks passwords (CI's does): one set up with
+ * `trust` lets a wrong password in, so there is no 28P01 to see.
+ */
+export async function checksPasswords(db: TestDatabase): Promise<boolean> {
+  const client = new pg.Client({ connectionString: wrongPassword(db) });
+  try {
+    await client.connect();
+    await client.end();
+    return false;
+  } catch (err) {
+    return (err as { code?: unknown }).code === "28P01";
+  }
+}
+
 export interface TestGateway extends RunningGateway {
   dir: string;
   mcpUrl: string;

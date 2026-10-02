@@ -228,6 +228,19 @@ export const GatewayStateSchema = z.enum([
 ]);
 export type GatewayState = z.infer<typeof GatewayStateSchema>;
 
+/**
+ * Whether a database answered the gateway's most recent connection attempt,
+ * of any kind. Codes only: a Postgres message can carry role and host names.
+ */
+export const DatabaseHealthSchema = z.strictObject({
+  ok: z.boolean(),
+  /** SQLSTATE or Node error code of the last failed attempt. */
+  code: z.string().max(32).nullable(),
+  /** When ok last changed. */
+  since: z.iso.datetime(),
+});
+export type DatabaseHealth = z.infer<typeof DatabaseHealthSchema>;
+
 /** The body of every sync: the gateway's status, which replaces a heartbeat. */
 export const GatewayStatusSchema = z.strictObject({
   /** The newest authentic bundle it holds, enforced or not. */
@@ -261,6 +274,14 @@ export const GatewayStatusSchema = z.strictObject({
   catalogs: CatalogHashesSchema.optional(),
   /** The head of its audit file, and how much the cloud doesn't have yet. */
   audit: AuditHeadSchema.optional(),
+  /**
+   * Each configured database's health. A database whose catalog was never
+   * read isn't served, and the gateway keeps trying it.
+   */
+  database_health: z
+    .record(DatabaseIdSchema, DatabaseHealthSchema)
+    .refine((r) => Object.keys(r).length <= 256, "too many databases")
+    .optional(),
 });
 export type GatewayStatus = z.infer<typeof GatewayStatusSchema>;
 

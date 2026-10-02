@@ -1,6 +1,7 @@
 // Linked mode end to end, against Postgres and a stand-in cloud: enrollment
 // with a pinned key, bundles as full replacements, invariants 7, 8 and 12,
-// pause, commands, and a restart with the cloud down.
+// pause, commands, a restart with the cloud down, and a database that can't
+// be reached at start, then can, then drops.
 
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,9 +9,19 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadParser } from "@midplane/core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { LINK_FEATURES } from "@midplane/protocol";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import { generateSigningKey } from "../src/auth.ts";
 import { parseLinkedConfig } from "../src/config.ts";
+import { unreachableMessage } from "../src/gateway.ts";
 import { MCP_PATH } from "../src/http.ts";
 import { EnrollmentError } from "../src/identity.ts";
 import { type RunningGateway, startLinked } from "../src/server.ts";
@@ -22,6 +33,7 @@ import {
   query,
   type TestDatabase,
 } from "./harness.ts";
+import { startProxy, type TcpProxy } from "./proxy.ts";
 import { localFetch } from "./tunnel.ts";
 
 async function freePort(): Promise<number> {
@@ -554,3 +566,210 @@ describe.skipIf(!hasPostgres)("linked mode", { timeout: 20_000 }, () => {
     ).toBeFalsy();
   });
 });
+
+describe.skipIf(!hasPostgres)(
+  "linked mode, with a database it can't reach",
+  { timeout: 60_000 },
+  () => {
+    let db: TestDatabase;
+    let cloud: FakeCloud;
+    let proxy: TcpProxy;
+    let gw: RunningGateway;
+    let port: number;
+    let stderr: MockInstance;
+    const logged: string[] = [];
+    const env: NodeJS.ProcessEnv = {};
+    const READ = { table_access: { tables: { "public.orders": "read" } } };
+    const COUNT = "SELECT count(*) FROM orders";
+
+    const mcpUrl = () => `http://127.0.0.1:${port}${MCP_PATH}`;
+    const agent = () =>
+      cloud.agentToken({
+        audience: mcpUrl(),
+        databases: { main: "read", far: "read" },
+      });
+    const health = () => gw.link?.status().database_health ?? {};
+    const ready = async () => (await fetch(`${gw.url}/readyz`)).status;
+    const lines = (msg: string) =>
+      logged
+        .filter((l) => l.includes(`"msg":"${msg}"`))
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+    beforeAll(async () => {
+      await loadParser();
+      stderr = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation((chunk: string | Uint8Array) => {
+          logged.push(String(chunk));
+          return true;
+        });
+      db = await createDatabase(
+        "CREATE TABLE orders (id int PRIMARY KEY, total numeric);",
+        (role) => `GRANT SELECT ON orders TO ${role};`,
+      );
+      const target = new URL(db.agentDsn);
+      // `far` is the same database, reached through a proxy that refuses
+      // until a test opens it.
+      proxy = await startProxy({
+        host: target.hostname,
+        port: Number(target.port || 5432),
+      });
+      // As in production, the cloud answers a sync only once it has news:
+      // the gateway's own news goes up quickly only if it cuts the poll.
+      cloud = await startFakeCloud({ waitMs: 20_000 });
+      const dir = mkdtempSync(join(tmpdir(), "midplane-unreachable-"));
+      port = await freePort();
+      env.SALT = randomBytes(32).toString("hex");
+      env.DSN_MAIN = db.agentDsn;
+      env.DSN_FAR = proxy.dsn(db.agentDsn);
+      env.ENROLL = cloud.enrollmentToken();
+      const text = JSON.stringify({
+        listen: { host: "127.0.0.1", port },
+        audit: { file: "audit.db" },
+        mask_salt: { env: "SALT" },
+        link: {
+          cloud_url: cloud.url,
+          identity: { file: "identity.json" },
+          enrollment_token: { env: "ENROLL" },
+        },
+        databases: {
+          main: { dsn: { env: "DSN_MAIN" } },
+          far: { dsn: { env: "DSN_FAR" } },
+        },
+      });
+      const path = join(dir, "midplane.yaml");
+      writeFileSync(path, text);
+      gw = await startLinked(parseLinkedConfig(text, path, env), {
+        retry: { minMs: 50, maxMs: 200, cutMs: 200 },
+      });
+    }, 60_000);
+
+    afterAll(async () => {
+      await gw?.close();
+      await cloud?.close();
+      await proxy?.refuse();
+      await db?.drop();
+      stderr?.mockRestore();
+    });
+
+    it("enrolls and syncs, and reports the database it can't reach by its code", async () => {
+      await waitFor("a status", () => cloud.statuses.length > 0);
+      const status = cloud.statuses.at(-1);
+      expect(status).toMatchObject({
+        state: "waiting",
+        databases: ["main", "far"],
+        features: expect.arrayContaining([LINK_FEATURES.database_health]),
+      });
+      expect(status?.database_health).toEqual({
+        main: { ok: true, code: null, since: expect.any(String) },
+        far: { ok: false, code: "ECONNREFUSED", since: expect.any(String) },
+      });
+      expect(Object.keys(status?.catalogs ?? {})).toEqual(["main"]);
+      expect(lines("database unreachable")).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          database: "far",
+          code: "ECONNREFUSED",
+        }),
+      ]);
+    });
+
+    it("refuses every call to it, recording nothing, and serves the other", async () => {
+      const { version: v } = await cloud.publish({ main: READ, far: READ });
+      await waitFor("the bundle", () => gw.link?.version === v);
+      const token = await agent();
+      const main = await query(mcpUrl(), token, COUNT, "main");
+      expect(main.structuredContent?.rows).toEqual([["0"]]);
+      const head = gw.audit.head().seq;
+      const refused = [
+        await query(mcpUrl(), token, COUNT, "far"),
+        await query(mcpUrl(), token, "DELETE FROM orders", "far"),
+        await callTool(mcpUrl(), token, "list_tables", { database: "far" }),
+        await callTool(mcpUrl(), token, "describe_table", {
+          table: "orders",
+          database: "far",
+        }),
+      ];
+      for (const r of refused) {
+        expect(r.isError).toBe(true);
+        expect(r.content[0]?.text).toBe(unreachableMessage("far"));
+      }
+      expect(unreachableMessage("far")).toBe(
+        `Database "far" can't be reached from the gateway right now.`,
+      );
+      // Refused before anything else, as a paused gateway refuses.
+      expect(gw.audit.head().seq).toBe(head);
+      expect(await ready()).toBe(503);
+    });
+
+    it("serves it within 35 s of it answering, and the cloud has it 5 s later", async () => {
+      await proxy.forward();
+      const opened = Date.now();
+      await waitFor(
+        "far served",
+        () => gw.gateway.catalogs().some((c) => c.id === "far"),
+        36_000,
+      );
+      const served = Date.now();
+      expect(served - opened).toBeLessThanOrEqual(35_000);
+      await waitFor(
+        "the cloud to hold its catalog and its health",
+        () =>
+          cloud.catalogs.has("far") &&
+          cloud.statuses.at(-1)?.database_health?.far?.ok === true,
+        5_000,
+      );
+      expect(Date.now() - served).toBeLessThanOrEqual(5_000);
+      expect(cloud.statuses.at(-1)?.catalogs?.far).toBe(
+        cloud.catalogs.get("far")?.sha256,
+      );
+      const r = await query(mcpUrl(), await agent(), COUNT, "far");
+      expect(r.structuredContent?.rows).toEqual([["0"]]);
+      expect(await ready()).toBe(200);
+      expect(lines("database reachable")).toEqual([
+        expect.objectContaining({ level: "info", database: "far" }),
+      ]);
+    });
+
+    it("reports a dropped connection after the next failing statement, and its return after the next answer", async () => {
+      const token = await agent();
+      expect(await ready()).toBe(200);
+      const up = health().far;
+      expect(up).toMatchObject({ ok: true, code: null });
+
+      await proxy.refuse();
+      // Let the pool notice its connections are gone.
+      await new Promise((r) => setTimeout(r, 200));
+      const failed = await query(mcpUrl(), token, COUNT, "far");
+      expect(failed.isError).toBe(true);
+      expect(health().far).toEqual({
+        ok: false,
+        code: "ECONNREFUSED",
+        since: expect.any(String),
+      });
+      expect(health().far?.since).not.toBe(up?.since);
+      // A statement the gateway refuses never reaches the database, so it
+      // says nothing about it; a served database is never refused as unreachable.
+      const denied = await query(mcpUrl(), token, "DELETE FROM orders", "far");
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0]?.text).not.toBe(unreachableMessage("far"));
+      expect(health().far?.ok).toBe(false);
+      expect(await ready()).toBe(503);
+      // The next sync carries it.
+      const { version: v } = await cloud.publish({ main: READ, far: READ });
+      await waitFor(
+        "the cloud to hear it",
+        () =>
+          cloud.statuses.at(-1)?.bundle_version === v &&
+          cloud.statuses.at(-1)?.database_health?.far?.code === "ECONNREFUSED",
+      );
+
+      await proxy.forward();
+      const back = await query(mcpUrl(), token, COUNT, "far");
+      expect(back.structuredContent?.rows).toEqual([["0"]]);
+      expect(health().far).toMatchObject({ ok: true, code: null });
+      expect(await ready()).toBe(200);
+      expect(health().main).toMatchObject({ ok: true, code: null });
+    });
+  },
+);

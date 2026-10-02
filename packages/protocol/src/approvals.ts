@@ -44,12 +44,15 @@ export const TAINT_JWS_TYPE = "mp-taint";
 /**
  * Link features a gateway reports beyond the core's policy sections:
  * `approvals` (it files held writes), `taint` (it keeps taint in the
- * cloud, shared by every instance) and `audit` (it pushes its audit log).
+ * cloud, shared by every instance), `audit` (it pushes its audit log) and
+ * `database_health` (it starts with a database it can't reach, and its
+ * status says how each database answers).
  */
 export const LINK_FEATURES = {
   approvals: "approvals",
   taint: "taint",
   audit: "audit",
+  database_health: "database_health",
 } as const;
 
 export const approvalsPath = "/approvals";

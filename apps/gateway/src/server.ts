@@ -1,9 +1,11 @@
 // Starting a gateway: open the audit log (refusing to start if it can't be
 // written), read each database's catalog, then serve MCP over HTTP or stdio.
 //
-// Local mode enforces the policies in its config with a local token key.
-// Linked mode enrolls with Midplane Cloud if it has no identity yet, enforces
-// its cached bundle if it has one, and long-polls the cloud for newer ones.
+// Local mode enforces the policies in its config with a local token key, and
+// won't start without every catalog. Linked mode enrolls with Midplane Cloud
+// if it has no identity yet, enforces its cached bundle if it has one, and
+// long-polls the cloud for newer ones; a database it can't read yet isn't
+// served, and is tried again until it can be.
 
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
@@ -15,7 +17,6 @@ import { localTaintStore } from "./approvals.ts";
 import { LocalAuditLog } from "./audit.ts";
 import type { AuditPusherOptions } from "./audit-push.ts";
 import { TokenVerifier } from "./auth.ts";
-import { introspect } from "./catalog.ts";
 import {
   type BaseConfig,
   baseUrlsOf,
@@ -27,6 +28,7 @@ import {
 } from "./config.ts";
 import { DatabaseExecutor } from "./executor.ts";
 import { type DatabaseRuntime, type Enforcement, Gateway } from "./gateway.ts";
+import { HealthBook } from "./health.ts";
 import { buildApp } from "./http.ts";
 import {
   enroll,
@@ -79,6 +81,11 @@ function startPruning(audit: LocalAuditLog, days: number): () => void {
   return () => clearInterval(timer);
 }
 
+/**
+ * Open the audit log and every database, and read each catalog. Local mode
+ * throws the first database's error (in config order) if any can't be
+ * read; linked mode starts without those, as unreachable.
+ */
 async function openRuntime(
   config: BaseConfig,
   databases: Iterable<DatabaseConfig & { policy?: DatabasePolicy }>,
@@ -102,25 +109,24 @@ async function openRuntime(
       events: audit.unsent,
     });
   }
+  // Local mode keeps its log as it was: a database it can't read stops it.
+  const health = new HealthBook({
+    log: mode === "linked" ? log : () => {},
+  });
   const executors = new Map<string, DatabaseExecutor>();
   const runtimes = new Map<string, DatabaseRuntime>();
-  try {
-    for (const db of databases) {
-      const executor = new DatabaseExecutor(db.dsn);
-      executors.set(db.id, executor);
-      const catalog = await executor.withReadOnly(introspect);
-      runtimes.set(db.id, {
-        id: db.id,
-        policy: db.policy ?? null,
-        executor,
-        catalog,
-        refreshedAt: Date.now(),
-      });
-    }
-  } catch (err) {
-    await Promise.all([...executors.values()].map((e) => e.close()));
-    audit.close();
-    throw err;
+  for (const db of databases) {
+    const executor = new DatabaseExecutor(db.dsn, (attempt, kind) =>
+      health.record(db.id, attempt, kind),
+    );
+    executors.set(db.id, executor);
+    runtimes.set(db.id, {
+      id: db.id,
+      policy: db.policy ?? null,
+      executor,
+      catalog: null,
+      refreshedAt: 0,
+    });
   }
   const gateway = new Gateway({
     databases: runtimes,
@@ -131,7 +137,14 @@ async function openRuntime(
     limits: config.limits,
     mode,
     enforcement,
+    health,
   });
+  const failures = await gateway.readCatalogs();
+  if (failures.length > 0 && mode === "local") {
+    await Promise.all([...executors.values()].map((e) => e.close()));
+    audit.close();
+    throw failures[0];
+  }
   const stopPruning = startPruning(audit, config.auditRetentionDays);
   return { gateway, audit, executors, stopPruning };
 }
@@ -313,6 +326,8 @@ export interface LinkedOptions {
 /**
  * Linked mode: enforce bundles from Midplane Cloud. Until the first one
  * arrives (from the cache or the cloud), MCP answers 503 and nothing runs.
+ * A database that can't be read at start doesn't stop it: the gateway
+ * enrolls and syncs, reports it, and keeps trying it.
  */
 export async function startLinked(
   config: LinkedConfig,
@@ -337,9 +352,12 @@ export async function startLinked(
   const urls = publicUrlsOf(config, listener);
   const close = async () => {
     stopPruning();
+    // Retries stop now; one mid-read ends as its pool closes.
+    const retries = gateway.close();
     await link?.close();
     await closeServer(server);
     await Promise.all([...executors.values()].map((e) => e.close()));
+    await retries;
     audit.close();
   };
 
@@ -384,6 +402,7 @@ export async function startLinked(
         log({ level: "info", msg: "mcp client", ...client }),
     });
     link.start();
+    gateway.retryUnread();
     log({
       level: "info",
       msg: "gateway listening",

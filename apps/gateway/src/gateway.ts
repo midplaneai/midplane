@@ -19,8 +19,13 @@
 // A linked gateway serves only while it enforces a bundle: before the first
 // one, while its project is paused, and while it is halted on a bundle it
 // can't enforce, every call is refused before anything is recorded or run.
+//
+// It also starts with a database it can't reach, rather than exiting: until
+// that database's catalog has been read once, every call to it is refused
+// the same way, and the gateway keeps trying it, backing off to every 30 s.
 
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   type Evaluation,
   evaluate,
@@ -30,6 +35,7 @@ import {
 import {
   type CatalogSnapshot,
   type CountPreviewResult,
+  type DatabaseHealth,
   type DatabasePolicy,
   databaseScope,
   type PreviewCount,
@@ -57,20 +63,26 @@ import { introspect } from "./catalog.ts";
 import {
   type DatabaseExecutor,
   ExecutionError,
+  errorCode,
   type Limits,
   type QueryResult,
   RowCountError,
   StoppedError,
 } from "./executor.ts";
+import { HealthBook, retryDelay } from "./health.ts";
 
 export interface DatabaseRuntime {
   id: string;
   /** Null while no enforced bundle covers this database: it isn't served. */
   policy: DatabasePolicy | null;
   executor: Pick<DatabaseExecutor, "run" | "withReadOnly" | "ping">;
-  catalog: CatalogSnapshot;
+  /** Null until it is first read: until then the database isn't served. */
+  catalog: CatalogSnapshot | null;
   refreshedAt: number;
 }
+
+/** A database whose catalog has been read: one a call may use. */
+type ReadDatabase = DatabaseRuntime & { catalog: CatalogSnapshot };
 
 export interface GatewayOptions {
   databases: Map<string, DatabaseRuntime>;
@@ -84,6 +96,8 @@ export interface GatewayOptions {
   limits: Limits;
   mode: "local" | "linked";
   now?: () => Date;
+  /** What each database's executor last found; the status reports it. */
+  health?: HealthBook;
 }
 
 /** Whether the gateway enforces a policy now, and if not, why. */
@@ -135,6 +149,11 @@ const UNKNOWN_TAINT_WRITE =
 /** The longest a held write's count may run or wait for a lock. */
 const COUNT_TIMEOUT_MS = 5_000;
 
+/** Every call to a database whose catalog was never read gets this. */
+export function unreachableMessage(id: string): string {
+  return `Database "${id}" can't be reached from the gateway right now.`;
+}
+
 export class Gateway {
   private readonly o: GatewayOptions;
   private readonly now: () => Date;
@@ -143,18 +162,29 @@ export class Gateway {
   private approvals: Approvals | null = null;
   /** The bundle the enforced policies came from; null in local mode. */
   private policyVersion: number | null = null;
+  private readonly healthBook: HealthBook;
+  /** Told when a database is read for the first time, and so served. */
+  private onFirstRead: ((id: string) => void) | null = null;
+  private readonly stopper = new AbortController();
+  private readonly retries: Promise<void>[] = [];
 
   constructor(options: GatewayOptions & { enforcement?: Enforcement }) {
     this.o = options;
     this.now = options.now ?? (() => new Date());
     this.state = options.enforcement ?? { state: "enforcing" };
     this.taintStore = options.taint ?? UNREACHABLE_TAINT;
+    this.healthBook = options.health ?? new HealthBook({ log: () => {} });
   }
 
   /** Linked mode: keep taint and file held writes through the link. */
   useLink(link: TaintStore & Approvals): void {
     this.taintStore = link;
     this.approvals = link;
+  }
+
+  /** Linked mode: hear of each database as it is first read, and so served. */
+  whenFirstRead(fn: (id: string) => void): void {
+    this.onFirstRead = fn;
   }
 
   get enforcement(): Enforcement {
@@ -217,43 +247,83 @@ export class Gateway {
     }
   }
 
-  /** The database a call names, or the only one when it names none. */
-  database(id: string | undefined): DatabaseRuntime | string {
+  /**
+   * The database a call names, or the only one served when it names none,
+   * else why not. One never read is refused before anything else.
+   */
+  private resolve(
+    id: string | undefined,
+  ):
+    | { db: ReadDatabase }
+    | { refused: "deny" | "unavailable"; message: string } {
     const served = this.databaseIds;
+    let db: DatabaseRuntime | undefined;
     if (id === undefined) {
       const [only] = served;
-      if (served.length === 1 && only)
-        return this.o.databases.get(only) as DatabaseRuntime;
-      if (served.length === 0) return "this gateway serves no databases yet";
-      return `name a database: one of ${served.join(", ")}`;
+      if (served.length === 0)
+        return {
+          refused: "deny",
+          message: "this gateway serves no databases yet",
+        };
+      if (served.length > 1 || !only)
+        return {
+          refused: "deny",
+          message: `name a database: one of ${served.join(", ")}`,
+        };
+      db = this.o.databases.get(only);
+    } else {
+      db = this.o.databases.get(id);
     }
-    const db = this.o.databases.get(id);
+    if (db?.catalog === null)
+      return { refused: "unavailable", message: unreachableMessage(db.id) };
     if (!db || db.policy === null)
-      return `no database named "${id}"; one of ${served.join(", ") || "none"}`;
-    return db;
+      return {
+        refused: "deny",
+        message: `no database named "${id}"; one of ${served.join(", ") || "none"}`,
+      };
+    return { db: db as ReadDatabase };
   }
 
+  /**
+   * Read a database's catalog (at most every five seconds unless forced).
+   * The first read of one that had none serves it from then on.
+   */
   async refreshCatalog(db: DatabaseRuntime, force = false): Promise<void> {
     const at = this.now().getTime();
     if (!force && at - db.refreshedAt < REFRESH_INTERVAL_MS) return;
     db.refreshedAt = at;
+    const first = db.catalog === null;
     db.catalog = await db.executor.withReadOnly(introspect);
+    if (first) this.onFirstRead?.(db.id);
   }
 
-  /** Every configured database's catalog, as last read. */
+  /**
+   * Read every database's catalog, all at once, as the gateway starts; the
+   * error of each one that couldn't be read, in the order configured.
+   */
+  async readCatalogs(): Promise<unknown[]> {
+    const reads = await Promise.allSettled(
+      [...this.o.databases.values()].map((d) => this.refreshCatalog(d, true)),
+    );
+    return reads.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+  }
+
+  /** Every catalog read so far, by database. */
   catalogs(): { id: string; catalog: CatalogSnapshot }[] {
-    return [...this.o.databases.values()].map((d) => ({
-      id: d.id,
-      catalog: d.catalog,
-    }));
+    return [...this.o.databases.values()].flatMap((d) =>
+      d.catalog ? [{ id: d.id, catalog: d.catalog }] : [],
+    );
   }
 
-  /** Re-read the catalogs older than `maxAgeMs`; one that can't be read keeps the last. */
+  /**
+   * Re-read the catalogs older than `maxAgeMs`; one that can't be read keeps
+   * the last. One never read is left to its retries.
+   */
   async refreshStale(maxAgeMs: number): Promise<void> {
     const at = this.now().getTime();
     await Promise.all(
       [...this.o.databases.values()]
-        .filter((d) => at - d.refreshedAt >= maxAgeMs)
+        .filter((d) => d.catalog !== null && at - d.refreshedAt >= maxAgeMs)
         .map((d) => this.refreshCatalog(d, true).catch(() => {})),
     );
   }
@@ -268,18 +338,50 @@ export class Gateway {
     if (!db) return { ok: false, code: null };
     try {
       await this.refreshCatalog(db, true);
-      return { ok: true, catalog: db.catalog };
+      return { ok: true, catalog: db.catalog as CatalogSnapshot };
     } catch (err) {
-      const code = (err as { code?: unknown }).code;
-      return {
-        ok: false,
-        code: typeof code === "string" ? code.slice(0, 32) : null,
-      };
+      return { ok: false, code: errorCode(err) };
     }
   }
 
+  /** Each configured database's health, as its last completed attempt found it. */
+  health(): Record<string, DatabaseHealth> {
+    return Object.fromEntries(
+      this.configuredIds.flatMap((id) => {
+        const h = this.healthBook.get(id);
+        return h ? [[id, h]] : [];
+      }),
+    );
+  }
+
+  /**
+   * Linked mode: keep trying each database never read, after 1 s, 2 s,
+   * 4 s and so on, at most 30 s apart, until its catalog is read.
+   */
+  retryUnread(): void {
+    for (const db of this.o.databases.values()) {
+      if (db.catalog === null) this.retries.push(this.retry(db));
+    }
+  }
+
+  private async retry(db: DatabaseRuntime): Promise<void> {
+    const signal = this.stopper.signal;
+    for (let n = 0; db.catalog === null && !signal.aborted; n++) {
+      await delay(retryDelay(n), undefined, { signal }).catch(() => {});
+      if (signal.aborted || db.catalog !== null) return;
+      // A failure is in the database's health and the log already.
+      await this.refreshCatalog(db, true).catch(() => {});
+    }
+  }
+
+  /** Stop the retries at once; settles once any read in progress has ended. */
+  async close(): Promise<void> {
+    this.stopper.abort();
+    await Promise.all(this.retries);
+  }
+
   private evaluate(
-    db: DatabaseRuntime,
+    db: ReadDatabase,
     policy: DatabasePolicy,
     caller: VerifiedCaller,
     sql: string,
@@ -303,9 +405,12 @@ export class Gateway {
   ): Promise<QueryOutcome> {
     const refusal = this.refusal();
     if (refusal) return { kind: "unavailable", message: refusal };
-    const db = this.database(input.database);
-    if (typeof db === "string")
-      return { kind: "deny", rule: "scope", reason: db };
+    const resolved = this.resolve(input.database);
+    if ("refused" in resolved)
+      return resolved.refused === "deny"
+        ? { kind: "deny", rule: "scope", reason: resolved.message }
+        : { kind: "unavailable", message: resolved.message };
+    const db = resolved.db;
     // The policy this call is decided and executed under, even if a new
     // bundle lands while it runs.
     const policy = db.policy as DatabasePolicy;
@@ -797,6 +902,7 @@ export class Gateway {
     if (this.refusal())
       return { status: "failed", ...none, code: this.state.state };
     if (!db?.policy) return { status: "failed", ...none, code: "no_policy" };
+    if (!db.catalog) return { status: "failed", ...none, code: "unreachable" };
     const policy = db.policy;
     const caller = {
       sub: held.sub,
@@ -921,8 +1027,9 @@ export class Gateway {
   ): VisibleRelation[] | string {
     const refusal = this.refusal();
     if (refusal) return refusal;
-    const db = this.database(database);
-    if (typeof db === "string") return db;
+    const resolved = this.resolve(database);
+    if ("refused" in resolved) return resolved.message;
+    const db = resolved.db;
     const scopes = new Set(caller.caller.scopes);
     if (
       !scopes.has(databaseScope(db.id, "read")) &&
@@ -933,12 +1040,15 @@ export class Gateway {
     return visibleRelations(db.policy as DatabasePolicy, db.catalog);
   }
 
+  /**
+   * Whether it serves every database: a policy enforced, each catalog read,
+   * and each database answering a ping now (which counts for its health).
+   */
   async ready(): Promise<boolean> {
     if (this.refusal()) return false;
-    const checks = await Promise.all(
-      [...this.o.databases.values()].map((d) => d.executor.ping()),
-    );
-    return checks.every(Boolean);
+    const databases = [...this.o.databases.values()];
+    const checks = await Promise.all(databases.map((d) => d.executor.ping()));
+    return checks.every(Boolean) && databases.every((d) => d.catalog !== null);
   }
 }
 

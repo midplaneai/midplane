@@ -18,6 +18,10 @@
 // its own (audit-push.ts), with each sync's status naming the file's head.
 // The cloud's ack is signed too, so only the cloud can make the gateway
 // stop owing an event.
+//
+// The status says how each database answers. When one the gateway couldn't
+// read at start is read at last, its catalog goes up at once, and the long
+// poll is cut short so the cloud hears it is served.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -220,6 +224,10 @@ export class LinkClient implements TaintStore, Approvals {
   private readonly withheld = new Map<string, string>();
   private readonly stopper = new AbortController();
   private loop: Promise<void> | null = null;
+  /** The long poll in flight, which news from this side cuts short. */
+  private poll: AbortController | null = null;
+  /** News since this sync's status was taken: sync again without a pause. */
+  private nudged = false;
   /**
    * Databases whose statements go up as written, from the newest authentic
    * bundle; empty without one, or with one this gateway can't enforce.
@@ -286,6 +294,7 @@ export class LinkClient implements TaintStore, Approvals {
           .map(({ id, catalog }) => [id, this.upload(id, catalog).sha256]),
       ),
       ...this.auditHead(),
+      database_health: this.o.gateway.health(),
     };
   }
 
@@ -536,8 +545,41 @@ export class LinkClient implements TaintStore, Approvals {
 
   /** Start long-polling, and pushing the audit log, in the background. */
   start(): void {
+    this.o.gateway.whenFirstRead((id) => void this.firstRead(id));
     if (!this.loop) this.loop = this.run();
     this.pusher?.start();
+  }
+
+  /** Sync again at once: cut the long poll short, or skip the pause before the next. */
+  private nudge(): void {
+    this.nudged = true;
+    this.poll?.abort();
+  }
+
+  /**
+   * A database read for the first time is served now: upload its catalog
+   * straight away, then sync, so the cloud hears it answers.
+   */
+  private async firstRead(id: string): Promise<void> {
+    try {
+      const catalog = this.o.gateway
+        .catalogs()
+        .find((c) => c.id === id)?.catalog;
+      if (!catalog) return;
+      const u = this.upload(id, catalog);
+      if (this.sent.get(id) !== u.sha256) await this.send(id, u);
+    } catch (err) {
+      // The next sync uploads it, as for any catalog the cloud lacks.
+      if (this.stopper.signal.aborted) return;
+      this.o.log({
+        level: "warn",
+        msg: "catalog upload failed",
+        database: id,
+        error: (err as Error).message,
+      });
+    } finally {
+      this.nudge();
+    }
   }
 
   async close(): Promise<void> {
@@ -580,18 +622,35 @@ export class LinkClient implements TaintStore, Approvals {
     }
   }
 
-  /** One long poll. True when the cloud sent something that took effect. */
+  /**
+   * One long poll. True when the cloud sent something that took effect, or
+   * when this side has news for the cloud (the poll was cut short for it).
+   */
   async syncOnce(): Promise<boolean> {
+    this.nudged = false;
     await this.o.gateway.refreshStale(
       this.o.catalogMaxAgeMs ?? CATALOG_MAX_AGE_MS,
     );
     const nonce = randomBytes(16).toString("base64url");
-    const res = await this.call(
-      "/sync",
-      this.status(nonce),
-      SYNC_WAIT_MS + 20_000,
-    );
-    const body = SyncResponseSchema.safeParse(await res.json());
+    const poll = new AbortController();
+    this.poll = poll;
+    let answer: unknown;
+    try {
+      const res = await this.call(
+        "/sync",
+        this.status(nonce),
+        SYNC_WAIT_MS + 20_000,
+        [],
+        poll.signal,
+      );
+      answer = await res.json();
+    } catch (err) {
+      if (poll.signal.aborted && !this.stopper.signal.aborted) return true;
+      throw err;
+    } finally {
+      this.poll = null;
+    }
+    const body = SyncResponseSchema.safeParse(answer);
     if (!body.success) throw new Error("the cloud's sync answer is malformed");
     let took = false;
     if (body.data.bundle) {
@@ -610,7 +669,7 @@ export class LinkClient implements TaintStore, Approvals {
     await this.sendCatalogs(body.data.catalogs);
     // A bundle refused again, or a command already answered, is no news:
     // don't come straight back for it.
-    return took || worked;
+    return took || worked || this.nudged;
   }
 
   /** POST a link call with a current access token; one retry on a 401. */
@@ -619,8 +678,9 @@ export class LinkClient implements TaintStore, Approvals {
     body: unknown,
     timeoutMs = 30_000,
     also: readonly number[] = [],
+    signal?: AbortSignal,
   ): Promise<Response> {
-    return this.request("POST", path, body, timeoutMs, also);
+    return this.request("POST", path, body, timeoutMs, also, signal);
   }
 
   private async request(
@@ -629,6 +689,7 @@ export class LinkClient implements TaintStore, Approvals {
     body: unknown,
     timeoutMs: number,
     also: readonly number[] = [],
+    signal?: AbortSignal,
   ): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       const token = await this.accessToken();
@@ -646,6 +707,7 @@ export class LinkClient implements TaintStore, Approvals {
         signal: AbortSignal.any([
           this.stopper.signal,
           AbortSignal.timeout(timeoutMs),
+          ...(signal ? [signal] : []),
         ]),
       });
       if (res.status === 401 && attempt === 0) {
