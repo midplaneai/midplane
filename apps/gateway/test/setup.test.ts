@@ -203,7 +203,9 @@ function certificate(dir: string, host: string): { cert: string; key: string } {
 describe("a server's certificate", () => {
   let dir: string;
   let gw: { cert: string; key: string };
-  const now = new Date();
+  let ip: { cert: string; key: string };
+  // Once both exist: openssl starts a certificate at the second it's made.
+  let now: Date;
   const files = (pair: { cert: string; key: string }) => ({
     ...pair,
     certFile: "/tls/tls.crt",
@@ -212,6 +214,8 @@ describe("a server's certificate", () => {
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "midplane-tls-"));
     gw = certificate(dir, "gw.example.com");
+    ip = certificate(dir, "192.0.2.10");
+    now = new Date();
   });
 
   it("must cover the URL's host, by name or address", () => {
@@ -219,17 +223,20 @@ describe("a server's certificate", () => {
     expect(certificateProblem(files(gw), "other.example.com", now)).toBe(
       "the certificate in /tls/tls.crt is for DNS:gw.example.com, not other.example.com",
     );
-    const ip = certificate(dir, "192.0.2.10");
     expect(certificateProblem(files(ip), "192.0.2.10", now)).toBeNull();
     expect(certificateProblem(files(ip), "192.0.2.11", now)).toMatch(
       /not 192\.0\.2\.11$/,
     );
   });
 
-  it("must not have expired", () => {
+  it("must not have expired, nor be valid only later", () => {
     const later = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
     expect(certificateProblem(files(gw), "gw.example.com", later)).toMatch(
       /^the certificate in \/tls\/tls\.crt expired on /,
+    );
+    const earlier = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    expect(certificateProblem(files(gw), "gw.example.com", earlier)).toMatch(
+      /^the certificate in \/tls\/tls\.crt isn't valid until /,
     );
   });
 

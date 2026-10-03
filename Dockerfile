@@ -4,7 +4,7 @@
 #
 #   node apps/gateway/scripts/build.ts
 #   (cd apps/gateway && pnpm pack --pack-destination ../../image)
-#   docker build --build-arg TARBALL=image/midplane-0.21.0.tgz -t midplane .
+#   docker build --build-arg TARBALL=image/midplane-0.22.0.tgz -t midplane .
 #
 # Mount the config at /etc/midplane/midplane.yaml. The working directory,
 # /var/lib/midplane, is the user's: keep the audit file, the bundle cache

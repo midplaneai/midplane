@@ -1,6 +1,6 @@
 {
   "name": "midplane",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "The Midplane gateway: an MCP server between AI agents and Postgres that enforces table access, masks, approvals and containment, and keeps an audit log.",
   "license": "MIT",
   "type": "module",
