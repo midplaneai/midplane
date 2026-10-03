@@ -293,7 +293,7 @@ async function identityFor(
   if (config.link.identity.kind !== "file") {
     throw new ConfigError("no identity"); // readIdentity threw already
   }
-  const identity = await enroll({
+  const { identity } = await enroll({
     cloudUrl: config.link.cloudUrl,
     token: config.link.enrollmentToken(),
     resources,
@@ -438,11 +438,12 @@ export async function enrollOnly(
       "enrolling needs the gateway's URLs: set public_urls or a fixed listen.port",
     );
   }
-  return enroll({
+  const { identity } = await enroll({
     cloudUrl: config.link.cloudUrl,
     token: config.link.enrollmentToken(),
     resources: baseUrlsOf(config).map(resourceOf),
     name: config.link.name,
     ...(fetchImpl ? { fetch: fetchImpl } : {}),
   });
+  return identity;
 }

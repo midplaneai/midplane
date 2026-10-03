@@ -18,6 +18,8 @@ Node 24.16 or newer.
   [quickstart](https://github.com/midplaneai/midplane/tree/main/examples/quickstart).
 - **Linked mode** (`midplane gateway`): policy, identities, approvals and a
   query log come from Midplane Cloud, over a link the gateway opens.
+  `midplane setup` makes one: it asks for each database's connection string,
+  tests it, writes the gateway's folder, enrolls and starts it.
 - **The audit log** stays on the gateway's disk, hash-chained:
   `midplane audit export` and `midplane audit verify`.
 

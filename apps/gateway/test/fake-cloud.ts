@@ -85,6 +85,8 @@ export type AuditAckForgery =
 export interface FakeCloud {
   url: string;
   projectId: string;
+  /** The project's databases: enrollment adds those a gateway names. */
+  databases: Set<string>;
   /** The enrolled gateway's id, once it has enrolled. */
   gatewayId: string | null;
   /**
@@ -208,10 +210,11 @@ const otherNonce = (n: string) =>
   `${n.startsWith("x") ? "y" : "x"}${n.slice(1)}`;
 
 export async function startFakeCloud(
-  options: { waitMs?: number } = {},
+  options: { waitMs?: number; databases?: string[] } = {},
 ): Promise<FakeCloud> {
   const waitMs = options.waitMs ?? 300;
   const projectId = `prj_${randomBytes(6).toString("hex")}`;
+  const projectDatabases = new Set(options.databases ?? []);
   const signing = await generateSigningKey();
   const signingKey = await importJWK(signing.privateJwk, "EdDSA");
   const pin = Buffer.from(
@@ -300,6 +303,10 @@ export async function startFakeCloud(
     client = { id: `gwc_${randomUUID()}`, key: body.data.public_key };
     gatewayId = `gw_${randomUUID()}`;
     registered = [...body.data.resources];
+    const added = (body.data.databases ?? []).filter(
+      (d) => !projectDatabases.has(d),
+    );
+    for (const d of added) projectDatabases.add(d);
     const identity = await sign(
       {
         v: 1,
@@ -314,7 +321,12 @@ export async function startFakeCloud(
       },
       { typ: IDENTITY_JWS_TYPE },
     );
-    return c.json({ signing_key: signing.publicJwk, identity });
+    return c.json({
+      signing_key: signing.publicJwk,
+      identity,
+      project_name: "Test project",
+      databases_added: added,
+    });
   });
 
   app.post("/oauth2/token", async (c) => {
@@ -738,6 +750,7 @@ export async function startFakeCloud(
       return url;
     },
     projectId,
+    databases: projectDatabases,
     get gatewayId() {
       return gatewayId;
     },

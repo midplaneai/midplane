@@ -1,8 +1,14 @@
 // The status's database health: codes only, strict, and optional, so a cloud
-// on this protocol takes a status from a gateway that doesn't send it.
+// on this protocol takes a status from a gateway that doesn't send it. And
+// enrollment's databases, optional both ways for the same reason.
 
 import { describe, expect, it } from "vitest";
-import { GatewayStatusSchema, LINK_FEATURES } from "../src/index.ts";
+import {
+  EnrollRequestSchema,
+  EnrollResponseSchema,
+  GatewayStatusSchema,
+  LINK_FEATURES,
+} from "../src/index.ts";
 
 const status = {
   bundle_version: 1,
@@ -52,5 +58,58 @@ describe("the status's database health", () => {
         JSON.stringify(database_health).slice(0, 80),
       ).toBe(false);
     }
+  });
+});
+
+const enrollment = {
+  token: `mpe1_${"A".repeat(86)}`,
+  public_key: { kty: "OKP", crv: "Ed25519", x: "x".repeat(43) },
+  resources: ["https://gw.example.com/mcp"],
+  version: "0.22.0",
+  features: [],
+};
+
+describe("enrollment's databases", () => {
+  it("are optional, and named by id", () => {
+    expect(EnrollRequestSchema.safeParse(enrollment).success).toBe(true);
+    expect(
+      EnrollRequestSchema.parse({
+        ...enrollment,
+        databases: ["shop", "orders"],
+      }).databases,
+    ).toEqual(["shop", "orders"]);
+  });
+
+  it("are refused when one is listed twice, malformed, or past 256", () => {
+    const bad = [
+      ["shop", "shop"],
+      ["Shop"],
+      [""],
+      Array.from({ length: 257 }, (_, i) => `db${i}`),
+    ];
+    for (const databases of bad) {
+      expect(
+        EnrollRequestSchema.safeParse({ ...enrollment, databases }).success,
+        JSON.stringify(databases).slice(0, 80),
+      ).toBe(false);
+    }
+    expect(
+      EnrollRequestSchema.safeParse({
+        ...enrollment,
+        databases: Array.from({ length: 256 }, (_, i) => `db${i}`),
+      }).success,
+    ).toBe(true);
+  });
+
+  it("an answer may name the project and the databases added, or not", () => {
+    const answer = { signing_key: enrollment.public_key, identity: "a.b.c" };
+    expect(EnrollResponseSchema.parse(answer)).toEqual(answer);
+    expect(
+      EnrollResponseSchema.parse({
+        ...answer,
+        project_name: "Production",
+        databases_added: ["shop"],
+      }),
+    ).toMatchObject({ project_name: "Production", databases_added: ["shop"] });
   });
 });

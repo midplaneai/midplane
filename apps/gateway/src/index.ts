@@ -28,6 +28,7 @@ export {
 export { type Enforcement, Gateway } from "./gateway.ts";
 export { buildApp, MCP_PATH } from "./http.ts";
 export {
+  type Enrollment,
   EnrollmentError,
   enroll,
   enrollmentPin,
@@ -35,9 +36,17 @@ export {
   type GatewayIdentity,
 } from "./identity.ts";
 export { LinkClient } from "./link.ts";
+export { openPrompter, PromptClosed, type Prompter } from "./prompt.ts";
 export {
   enrollOnly,
   type RunningGateway,
   startLinked,
   startLocal,
 } from "./server.ts";
+export {
+  runSetup,
+  SetupError,
+  type SetupFlags,
+  type SetupIO,
+  type SetupResult,
+} from "./setup.ts";

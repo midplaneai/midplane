@@ -7,8 +7,12 @@
 //      asks;
 //   2. enrolls and runs linked mode (`midplane enroll`, `midplane gateway`)
 //      against the tests' stand-in cloud: a bundle, a query, its audit push;
+//      then `midplane setup`, answered on stdin, which tests the connection
+//      string, writes the folder, enrolls and serves;
 //   3. with --image, runs the image's `midplane local --stdio` on the
-//      quickstart's Docker network, as its non-root user.
+//      quickstart's Docker network, as its non-root user; and on Linux,
+//      `setup` and `gateway` in the image with every secret on a volume and
+//      nothing on the host but the TLS folder, served over TLS.
 //
 // Needs the quickstart's database: `docker compose -f
 // examples/quickstart/compose.yaml up -d --wait` (from oss/).
@@ -18,13 +22,16 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -69,28 +76,51 @@ async function waitFor(
   throw new Error(`timed out waiting for ${what}`);
 }
 
+/** A POST's answer, over https with this CA when one is given. */
+async function post(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  ca?: string,
+): Promise<string> {
+  if (!ca) return (await fetch(url, { method: "POST", headers, body })).text();
+  return new Promise((done, fail) => {
+    const req = httpsRequest(url, { method: "POST", headers, ca }, (res) => {
+      let raw = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => {
+        raw += d;
+      });
+      res.on("end", () => done(raw));
+    });
+    req.on("error", fail);
+    req.end(body);
+  });
+}
+
 /** One MCP tools/call over HTTP, the 2025 handshake. */
 async function call(
   url: string,
   token: string,
   sql: string,
+  ca?: string,
 ): Promise<{ isError: boolean; text: string }> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
+  const raw = await post(
+    url,
+    {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       "mcp-protocol-version": "2025-11-25",
       authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({
+    JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
       params: { name: "query", arguments: { sql } },
     }),
-  });
-  const raw = await res.text();
+    ca,
+  );
   const json = raw.startsWith("{")
     ? raw
     : (raw
@@ -360,6 +390,70 @@ try {
 }
 checkStopped(gateway, "midplane gateway");
 
+step("midplane setup: test the connection string, write, enroll and serve");
+const setupCloud = await startFakeCloud();
+const setupDir = join(work, "setup");
+const setupPort = 7435;
+const setup = spawn(
+  bin,
+  [
+    "setup",
+    "--cloud",
+    setupCloud.url,
+    "--token",
+    setupCloud.enrollmentToken(),
+    "--database",
+    "shop",
+    "--dir",
+    setupDir,
+    "--port",
+    String(setupPort),
+  ],
+  { cwd: work, stdio: ["pipe", "pipe", "inherit"] },
+);
+let said = "";
+setup.stdout?.on("data", (d) => {
+  said += String(d);
+});
+// The connection string for `shop`, then no other database.
+setup.stdin?.end(`${SHOP_DSN}\n\n`);
+try {
+  await waitFor("setup's enrollment", () => setupCloud.gatewayId !== null);
+  check(
+    /ok: database shop on 127\.0\.0\.1, \d+ tables/.test(said),
+    "setup tests the connection string",
+  );
+  check(!said.includes(SHOP_DSN), "and never prints it");
+  check(
+    (statSync(join(setupDir, "secrets")).mode & 0o777) === 0o700 &&
+      (statSync(join(setupDir, "secrets", "shop.dsn")).mode & 0o777) === 0o600,
+    "it keeps the connection string in a file only this user reads",
+  );
+  const { version: bundle } = await setupCloud.publish({ shop: policy });
+  await waitFor("the bundle", () =>
+    setupCloud.statuses.some(
+      (s) => s.bundle_version === bundle && s.state === "enforcing",
+    ),
+  );
+  const agent = await setupCloud.agentToken({
+    audience: setupCloud.registered[0] as string,
+    databases: { shop: "read" },
+  });
+  const r = await call(
+    `http://127.0.0.1:${setupPort}/mcp`,
+    agent,
+    "SELECT name FROM customers WHERE id = 1",
+  );
+  check(
+    !r.isError && r.text.includes("Dana Ng"),
+    "the gateway it started serves a query",
+  );
+} finally {
+  await stop(setup);
+  await setupCloud.close();
+}
+checkStopped(setup, "the gateway midplane setup started");
+
 // ── 3. the image ──────────────────────────────────────────────────────────
 
 if (values.image) {
@@ -470,6 +564,166 @@ if (values.image) {
     );
   } finally {
     child.kill("SIGTERM");
+  }
+
+  // Setup in the image, as the dashboard's server commands run it: the
+  // config, the identity and every secret on a volume, and nothing on the
+  // host but the TLS folder. The stand-in cloud is http, which a gateway
+  // takes only on loopback, so both containers share this machine's
+  // network: Docker's host networking, Linux only.
+  if (process.platform !== "linux") {
+    process.stdout.write(
+      "  - setup in the image needs Docker's host networking (Linux); skipped\n",
+    );
+  } else {
+    step(
+      "setup and gateway in the image: secrets on a volume, served over TLS",
+    );
+    const tls = join(work, "tls");
+    mkdirSync(tls);
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "ec",
+        "-pkeyopt",
+        "ec_paramgen_curve:prime256v1",
+        "-nodes",
+        "-keyout",
+        join(tls, "tls.key"),
+        "-out",
+        join(tls, "tls.crt"),
+        "-days",
+        "1",
+        "-subj",
+        "/CN=localhost",
+        "-addext",
+        "subjectAltName=DNS:localhost",
+      ],
+      { stdio: "ignore" },
+    );
+    // The image's user (uid 1000) reads the folder.
+    chmodSync(join(tls, "tls.key"), 0o644);
+    const volume = `midplane-smoke-${randomBytes(4).toString("hex")}`;
+    docker(["volume", "create", volume]);
+    const mounts = [
+      "-v",
+      `${volume}:/var/lib/midplane`,
+      "-v",
+      `${tls}:/etc/midplane/tls:ro`,
+    ];
+    const imageCloud = await startFakeCloud();
+    const tlsPort = 7436;
+    let container = "";
+    try {
+      // Answered on stdin, without blocking: the stand-in cloud answers
+      // from this process.
+      const said = await new Promise<string>((done, fail) => {
+        const run = spawn(
+          "docker",
+          [
+            "run",
+            "-i",
+            "--rm",
+            "--network",
+            "host",
+            ...mounts,
+            image,
+            "setup",
+            "--no-start",
+            "--dir",
+            "/var/lib/midplane",
+            "--cloud",
+            imageCloud.url,
+            "--token",
+            imageCloud.enrollmentToken(),
+            "--url",
+            `https://localhost:${tlsPort}`,
+            "--port",
+            String(tlsPort),
+            "--database",
+            "shop",
+          ],
+          { stdio: ["pipe", "pipe", "inherit"] },
+        );
+        let out = "";
+        run.stdout?.on("data", (d) => {
+          out += String(d);
+        });
+        run.stdin?.end(`${SHOP_DSN}\n\n`);
+        run.on("exit", (code) =>
+          code === 0
+            ? done(out)
+            : fail(new Error(`setup in the image: exit ${code}\n${out}`)),
+        );
+      });
+      check(
+        imageCloud.gatewayId !== null && said.includes("Enrolled gateway"),
+        "setup in the image enrolls",
+      );
+      container = docker([
+        "run",
+        "-d",
+        "--network",
+        "host",
+        ...mounts,
+        image,
+        "gateway",
+        "--config",
+        "/var/lib/midplane/midplane.yaml",
+      ]);
+      const { version: bundle } = await imageCloud.publish({ shop: policy });
+      await waitFor(
+        "the image's gateway to enforce",
+        () =>
+          imageCloud.statuses.some(
+            (s) => s.bundle_version === bundle && s.state === "enforcing",
+          ),
+        60_000,
+      );
+      const agent = await imageCloud.agentToken({
+        audience: `https://localhost:${tlsPort}/mcp`,
+        databases: { shop: "read" },
+      });
+      const r = await call(
+        `https://localhost:${tlsPort}/mcp`,
+        agent,
+        "SELECT name FROM customers WHERE id = 1",
+        readFileSync(join(tls, "tls.crt"), "utf8"),
+      );
+      check(
+        !r.isError && r.text.includes("Dana Ng"),
+        "the gateway serves a query over TLS",
+      );
+      const kept = docker([
+        "run",
+        "--rm",
+        "-v",
+        `${volume}:/var/lib/midplane`,
+        "--entrypoint",
+        "ls",
+        image,
+        "-A",
+        "/var/lib/midplane",
+      ]).split("\n");
+      check(
+        ["midplane.yaml", "identity.json", "secrets"].every((f) =>
+          kept.includes(f),
+        ) && readdirSync(tls).sort().join(" ") === "tls.crt tls.key",
+        "the volume holds the config, the identity and the secrets; the host only the TLS folder",
+      );
+    } catch (err) {
+      if (container) {
+        execFileSync("docker", ["logs", container], { stdio: "inherit" });
+      }
+      throw err;
+    } finally {
+      if (container) docker(["rm", "-f", container]);
+      docker(["volume", "rm", "-f", volume]);
+      await imageCloud.close();
+    }
   }
 }
 

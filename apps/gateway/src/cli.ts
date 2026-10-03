@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // midplane: the gateway command.
 //
+//   midplane setup --cloud <url> --token <mpe1_…> [--database <id>]...
+//                  [--url <https://…>] [--tls-dir <dir>] [--port <n>]
+//                  [--dir <dir>] [--no-start]
+//                                                      ask for, test and enroll each
+//                                                      database, write the folder, serve
 //   midplane gateway --config midplane.yaml            serve, linked to Midplane Cloud
 //   midplane enroll --config midplane.yaml [--out <file>]
 //                                                      enroll once and print the identity
@@ -37,6 +42,7 @@ import {
 } from "./config.ts";
 import { MCP_PATH } from "./http.ts";
 import { writeIdentity } from "./identity.ts";
+import { openPrompter, PromptClosed } from "./prompt.ts";
 import {
   enrollOnly,
   log,
@@ -45,9 +51,11 @@ import {
   startLocal,
   startLocalStdio,
 } from "./server.ts";
+import { runSetup, SetupError, type SetupFlags } from "./setup.ts";
 import { SERVER_VERSION } from "./tools.ts";
 
 const USAGE = `usage:
+  midplane setup --cloud <url> --token <mpe1_…> [--database <id>]... [--url <https://…>] [--tls-dir <dir>] [--port <n>] [--dir <dir>] [--no-start]
   midplane gateway --config <file>
   midplane enroll --config <file> [--out <file>]
   midplane local --config <file> [--stdio]
@@ -65,6 +73,79 @@ function nodeTooOld(version = process.versions.node): boolean {
   return major < MIN_NODE[0] || (major === MIN_NODE[0] && minor < MIN_NODE[1]);
 }
 
+function serveUntilSignal(running: RunningGateway): void {
+  const stop = async () => {
+    await running.close();
+    process.exit(0);
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+}
+
+/**
+ * `midplane setup`: its own flags, questions on the terminal and plain
+ * sentences, not log lines. Ctrl-C, SIGTERM or the end of input stops it,
+ * and it removes whatever it wrote.
+ */
+async function setup(args: string[]): Promise<number> {
+  let flags: SetupFlags;
+  try {
+    flags = parseArgs({
+      args,
+      options: {
+        cloud: { type: "string" },
+        token: { type: "string" },
+        database: { type: "string", multiple: true },
+        url: { type: "string" },
+        "tls-dir": { type: "string" },
+        port: { type: "string" },
+        dir: { type: "string" },
+        "no-start": { type: "boolean" },
+      },
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n${USAGE}\n`);
+    return 2;
+  }
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  const prompter = openPrompter({ signal: abort.signal, onInterrupt: stop });
+  let result: Awaited<ReturnType<typeof runSetup>>;
+  try {
+    result = await runSetup(flags, {
+      prompter,
+      out: (text) => process.stdout.write(text),
+      signal: abort.signal,
+    });
+  } catch (err) {
+    if (err instanceof PromptClosed) {
+      process.stderr.write(
+        `\n${err.interrupted ? "Stopped" : "The input ended"} before setup wrote anything; the token is unused.\n`,
+      );
+      return err.interrupted ? 130 : 1;
+    }
+    if (err instanceof SetupError || err instanceof ConfigError) {
+      process.stderr.write(`${err.message}\n`);
+      // Stopped during enrollment: the request was cut short.
+      return abort.signal.aborted ? 130 : 1;
+    }
+    throw err;
+  } finally {
+    prompter.close();
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+  if (!result.start) return 0;
+  const config = loadLinkedConfig(result.configPath);
+  await loadParser();
+  serveUntilSignal(await startLinked(config));
+  return -1;
+}
+
 async function main(argv: string[]): Promise<number> {
   if (nodeTooOld()) {
     process.stderr.write(
@@ -77,6 +158,7 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(`midplane ${SERVER_VERSION}\n`);
     return 0;
   }
+  if (command === "setup") return setup(args);
   // `midplane audit <export|verify>` takes its subcommand first.
   const sub = command === "audit" ? args[0] : undefined;
   const rest = command === "audit" ? args.slice(1) : args;
@@ -98,15 +180,6 @@ async function main(argv: string[]): Promise<number> {
     },
     strict: true,
   });
-
-  const serveUntilSignal = (running: RunningGateway) => {
-    const stop = async () => {
-      await running.close();
-      process.exit(0);
-    };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
-  };
 
   const auditFile = () =>
     values.audit ?? (values.config ? auditFileOf(values.config) : null);

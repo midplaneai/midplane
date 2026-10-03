@@ -16,7 +16,7 @@ const KINDS: Record<string, Relation["kind"]> = {
 const SYSTEM = new Set(["pg_catalog", "information_schema"]);
 
 export async function introspect(
-  client: pg.PoolClient,
+  client: pg.ClientBase,
 ): Promise<CatalogSnapshot> {
   const rels = await client.query<{
     oid: string;

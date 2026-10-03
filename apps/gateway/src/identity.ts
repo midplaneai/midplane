@@ -68,10 +68,38 @@ export const GatewayIdentitySchema = z.strictObject({
 export type GatewayIdentity = z.infer<typeof GatewayIdentitySchema>;
 
 export class EnrollmentError extends Error {
-  constructor(message: string) {
+  /**
+   * The request may have reached the cloud and enrolled the gateway though
+   * no answer was taken: it timed out, the connection dropped, or the
+   * answer couldn't be believed.
+   */
+  readonly maybeEnrolled: boolean;
+  constructor(message: string, o: { maybeEnrolled?: boolean } = {}) {
     super(message);
     this.name = "EnrollmentError";
+    this.maybeEnrolled = o.maybeEnrolled ?? false;
   }
+}
+
+/** Node's and undici's codes for a connection that was never made. */
+const NOT_CONNECTED = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/** A TLS handshake that failed, as a certificate refused: before any request. */
+const TLS_FAILED =
+  /^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_)/;
+
+/** Whether a failed fetch could have sent its request first. */
+function maybeSent(err: unknown): boolean {
+  const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+  if (typeof code !== "string") return true;
+  return !(NOT_CONNECTED.has(code) || TLS_FAILED.test(code));
 }
 
 /** The pin an enrollment token carries, as a base64url thumbprint. */
@@ -92,11 +120,24 @@ export interface EnrollOptions {
   /** `<public base URL>/mcp` for each URL the gateway answers on. */
   resources: readonly string[];
   name?: string | null;
+  /** Ids this gateway serves; the cloud adds any the project lacks. */
+  databases?: readonly string[];
+  /** Stops waiting for the answer, as a timeout would. */
+  signal?: AbortSignal;
   fetch?: typeof fetch;
 }
 
+export interface Enrollment {
+  /** What to keep. */
+  identity: GatewayIdentity;
+  /** The project's name, when the cloud says. */
+  projectName: string | null;
+  /** The databases the cloud added to the project, when it says. */
+  databasesAdded: string[] | null;
+}
+
 /** Enroll with the cloud and return the identity to keep. */
-export async function enroll(o: EnrollOptions): Promise<GatewayIdentity> {
+export async function enroll(o: EnrollOptions): Promise<Enrollment> {
   const pin = enrollmentPin(o.token);
   const { privateKey, publicKey } = await generateKeyPair("Ed25519", {
     extractable: true,
@@ -118,25 +159,38 @@ export async function enroll(o: EnrollOptions): Promise<GatewayIdentity> {
         ...(o.name ? { name: o.name } : {}),
         version: SERVER_VERSION,
         features: GATEWAY_FEATURES,
+        ...(o.databases ? { databases: o.databases } : {}),
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: o.signal
+        ? AbortSignal.any([o.signal, AbortSignal.timeout(30_000)])
+        : AbortSignal.timeout(30_000),
     });
   } catch (err) {
     throw new EnrollmentError(
       `can't reach Midplane Cloud at ${o.cloudUrl}: ${(err as Error).message}`,
+      { maybeEnrolled: maybeSent(err) },
     );
   }
   const body = (await res.json().catch(() => null)) as unknown;
   if (!res.ok) {
-    const described = (body as { error_description?: unknown } | null)
-      ?.error_description;
+    const refusal = body as { error?: unknown; error_description?: unknown };
+    const described = refusal?.error_description;
     throw new EnrollmentError(
       `enrollment refused (${res.status}): ${typeof described === "string" ? described : "no reason given"}`,
+      // The cloud's own refusal names an error; a proxy's 502 or 504 doesn't.
+      {
+        maybeEnrolled: res.status >= 500 && typeof refusal?.error !== "string",
+      },
     );
   }
+  // From here on the cloud said yes: it enrolled the gateway.
+  const believed = { maybeEnrolled: true };
   const answer = EnrollResponseSchema.safeParse(body);
   if (!answer.success) {
-    throw new EnrollmentError("the cloud's enrollment answer is malformed");
+    throw new EnrollmentError(
+      "the cloud's enrollment answer is malformed",
+      believed,
+    );
   }
 
   // The pin, before anything the answer says is believed.
@@ -148,6 +202,7 @@ export async function enroll(o: EnrollOptions): Promise<GatewayIdentity> {
   if ((await calculateJwkThumbprint(signingKey, "sha256")) !== pin) {
     throw new EnrollmentError(
       "the answer is signed with a key the enrollment token doesn't pin; something between this gateway and Midplane Cloud may be intercepting TLS",
+      believed,
     );
   }
   let verified: Awaited<ReturnType<typeof compactVerify>>;
@@ -160,42 +215,53 @@ export async function enroll(o: EnrollOptions): Promise<GatewayIdentity> {
   } catch {
     throw new EnrollmentError(
       "the identity's signature doesn't verify against the pinned key",
+      believed,
     );
   }
   if (verified.protectedHeader.typ !== IDENTITY_JWS_TYPE) {
-    throw new EnrollmentError("the enrollment answer is not an identity");
+    throw new EnrollmentError(
+      "the enrollment answer is not an identity",
+      believed,
+    );
   }
   const identity = IdentityPayloadSchema.safeParse(
     JSON.parse(new TextDecoder().decode(verified.payload)),
   );
   if (!identity.success) {
-    throw new EnrollmentError("the signed identity is malformed");
+    throw new EnrollmentError("the signed identity is malformed", believed);
   }
   const id = identity.data;
   if (id.iss !== o.cloudUrl) {
-    throw new EnrollmentError(`the identity was issued by ${id.iss}`);
+    throw new EnrollmentError(`the identity was issued by ${id.iss}`, believed);
   }
   if (id.resource !== o.resources[0]) {
-    throw new EnrollmentError(`the identity is for ${id.resource}`);
+    throw new EnrollmentError(`the identity is for ${id.resource}`, believed);
   }
   if (id.key_thumbprint !== (await calculateJwkThumbprint(publicJwk))) {
-    throw new EnrollmentError("the identity is for another gateway's key");
+    throw new EnrollmentError(
+      "the identity is for another gateway's key",
+      believed,
+    );
   }
   return {
-    v: 1,
-    cloud_url: id.iss,
-    project_id: id.project_id,
-    gateway_id: id.gateway_id,
-    client_id: id.client_id,
-    resource: id.resource,
-    bundle_key: signingKey,
-    bundle_floor: id.bundle_version,
-    key: {
-      kty: "OKP",
-      crv: "Ed25519",
-      x: priv.x as string,
-      d: priv.d as string,
+    identity: {
+      v: 1,
+      cloud_url: id.iss,
+      project_id: id.project_id,
+      gateway_id: id.gateway_id,
+      client_id: id.client_id,
+      resource: id.resource,
+      bundle_key: signingKey,
+      bundle_floor: id.bundle_version,
+      key: {
+        kty: "OKP",
+        crv: "Ed25519",
+        x: priv.x as string,
+        d: priv.d as string,
+      },
     },
+    projectName: answer.data.project_name ?? null,
+    databasesAdded: answer.data.databases_added ?? null,
   };
 }
 
@@ -233,10 +299,12 @@ export function readIdentity(source: IdentitySource): GatewayIdentity | null {
   return parseIdentity(text, source.path);
 }
 
+/** An identity as its file holds it. */
+export function identityText(identity: GatewayIdentity): string {
+  return `${JSON.stringify(identity, null, 2)}\n`;
+}
+
 /** Write a new identity, readable by this user only; never overwrites one. */
 export function writeIdentity(path: string, identity: GatewayIdentity): void {
-  writeFileSync(path, `${JSON.stringify(identity, null, 2)}\n`, {
-    mode: 0o600,
-    flag: "wx",
-  });
+  writeFileSync(path, identityText(identity), { mode: 0o600, flag: "wx" });
 }

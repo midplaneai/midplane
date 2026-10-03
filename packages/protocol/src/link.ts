@@ -69,6 +69,12 @@ export const EnrollRequestSchema = z.strictObject({
   name: z.string().trim().min(1).max(80).optional(),
   version: z.string().min(1).max(64),
   features: z.array(z.string().min(1).max(64)).max(64),
+  /** Ids this gateway serves; the cloud adds any the project lacks. */
+  databases: z
+    .array(DatabaseIdSchema)
+    .max(256)
+    .refine((d) => new Set(d).size === d.length, "a database is listed twice")
+    .optional(),
 });
 export type EnrollRequest = z.infer<typeof EnrollRequestSchema>;
 
@@ -77,6 +83,10 @@ export const EnrollResponseSchema = z.object({
   signing_key: Ed25519PublicJwkSchema.loose(),
   /** A compact JWS (`typ: mp-identity`) over IdentityPayload, signed with that key. */
   identity: z.string().min(1),
+  /** The project it enrolled in, by name. Not signed: for display only. */
+  project_name: z.string().optional(),
+  /** The request's databases the project didn't have, which it now has. */
+  databases_added: z.array(DatabaseIdSchema).optional(),
 });
 export type EnrollResponse = z.infer<typeof EnrollResponseSchema>;
 
