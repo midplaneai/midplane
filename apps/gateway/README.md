@@ -5,7 +5,7 @@ Postgres databases. Every statement an agent sends is parsed, checked against
 a policy and recorded before it runs. Agents get table access you grant,
 masked columns, writes held for a person's approval, and containment once
 they read untrusted content. It runs next to your databases; nothing connects
-in to it.
+in to it but agents.
 
 ```sh
 npx midplane --version
