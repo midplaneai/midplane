@@ -111,6 +111,16 @@ npx midplane audit verify --file audit.jsonl
 The export is JSON lines: each statement as the agent sent it, the decision
 and the rule behind it, and how it ended. Results are never recorded.
 
+## With Midplane Cloud
+
+The same sample runs linked to Midplane Cloud, where a held write becomes an
+approval request instead of a refusal and every statement shows in the Query
+log. In a new project, choose **Try with sample data** on the first step of
+its setup. That makes a project named Sample shop, with this database as `shop`
+and this folder's policy published, and shows what to run: this database, and
+a gateway on port 7434, beside this one's 7433. See [get
+started](https://midplane.ai/docs/get-started#with-the-sample-database).
+
 ## Clean up
 
 ```sh

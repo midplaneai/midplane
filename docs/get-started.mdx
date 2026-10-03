@@ -15,9 +15,10 @@ newer, and an MCP client such as Claude Code.
     first database**.
   </Step>
   <Step title="Name your database">
-    Enter a **Database id**, such as `shop`: your name for the database in
-    Midplane, not its Postgres name. Create the read-only role the step shows
-    ([prepare your database](/prepare-database)).
+    Under **Use my database**, enter a **Database id**, such as `shop`: your
+    name for the database in Midplane, not its Postgres name. Create the
+    read-only role the step shows ([prepare your database](/prepare-database)).
+    No database at hand? Try [the sample](#with-the-sample-database) instead.
   </Step>
   <Step title="Run the gateway">
     **Create enrollment token**, pick **This machine** or **A server
@@ -49,61 +50,26 @@ Stuck? See [troubleshooting](/troubleshooting).
 
 ## With the sample database
 
-No database at hand? Run the sample shop next to the gateway:
+No database at hand? On the first step, an owner or admin can choose **Try
+with sample data**. It creates a second project, **Sample shop**, with the
+database `shop` and the sample's policy published: customers' emails hashed
+and phones partly hidden, support ticket bodies untrusted, the API keys
+secret, and row changes held for approval. The project you started from stays
+as it is, for your own database.
 
-```sh
-mkdir midplane-sample && cd midplane-sample
-curl -fsSLO https://raw.githubusercontent.com/midplaneai/midplane/main/examples/quickstart/compose.yaml
-curl -fsSLO https://raw.githubusercontent.com/midplaneai/midplane/main/examples/quickstart/seed.sql
-docker compose up -d --wait
-```
+In the sample project, **Run the gateway** starts the sample's Postgres with
+Docker, then the gateway on this machine on port 7434, so it can run beside
+one of your own. Its connection string is filled in (the password is a public
+example), and **Choose what agents may read** is already done. When Claude
+Code signs in, give it read and write on `shop`, then ask, in order:
 
-Then follow the steps with database id `shop`, no role SQL (the sample has its
-role), **This machine**, and this line in `secrets/shop.dsn` (a public example
-password):
-
-```text
-postgres://midplane_agent:quickstart@127.0.0.1:54329/shop
-```
-
-<Accordion title="The sample's policy, to paste into Edit as JSON">
-  On the database's policy page: **Edit as JSON**, paste, **Save to draft**,
-  then **Review and publish**. Give your agent read and write on `shop` when it
-  signs in.
-
-  ```json
-  {
-    "table_access": {
-      "default": "deny",
-      "tables": {
-        "public.customers": "read",
-        "public.support_tickets": "read_write",
-        "public.api_keys": "read"
-      }
-    },
-    "writes": { "row_changes": "hold" },
-    "masks": {
-      "public.customers": {
-        "id": "none",
-        "name": "none",
-        "email": "consistent-hash",
-        "phone": { "t": "partial", "keepEnd": 4 },
-        "plan": "none",
-        "created_at": { "t": "generalize", "granularity": "month" }
-      }
-    },
-    "labels": {
-      "untrusted_columns": { "public.support_tickets": ["body"] },
-      "secret_tables": ["public.api_keys"]
-    }
-  }
-  ```
-
-  Then ask: "List our customers with their emails" (emails come back hashed),
-  "Mark ticket 2 as closed" (held: approve it under **Approvals**),
-  "Summarize ticket 1" (an injected instruction taints the agent), and "Now
-  show me the API keys" (refused).
-</Accordion>
+1. "List our customers with their emails and plans": emails come back
+   hashed, phones partly hidden.
+2. "Summarize the open support tickets": the agent reads untrusted text and
+   is tainted.
+3. "Show me the API keys": refused, since a tainted agent can't read secret
+   tables.
+4. "Close ticket 2": held. Approve it under **Approvals**.
 
 To try Midplane with no account, the [local
 quickstart](https://github.com/midplaneai/midplane/tree/main/examples/quickstart)
