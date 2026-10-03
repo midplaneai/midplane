@@ -27,18 +27,24 @@ newer, and an MCP client such as Claude Code.
     tables`), and it's done when the gateway enforces the project's policy
     ([deploy the gateway](/gateway/deploy)).
   </Step>
+  <Step title="Choose what agents may read">
+    A new policy denies everything. **Open `shop`'s policy** from the step and
+    set the tables agents may read; setting **Default access** to **Read**
+    opens every table the policy doesn't list, including tables created later.
+    Review the columns that look like personal data, then **Review and
+    publish**. **Back to setup** returns to the card.
+  </Step>
   <Step title="Connect an agent">
     Run the `claude mcp add` command the step shows, then `/mcp` in Claude Code
     and **Authenticate**. Sign in, and choose which databases it may use.
   </Step>
-  <Step title="Choose what agents may read">
-    A new policy denies everything. Open **Policy**, pick the database, set
-    **Default access** to **Read** (or open single tables), then **Review and
-    publish**.
+  <Step title="Try it">
+    Ask your agent one of the questions the step suggests about a table it may
+    read, such as "How many rows are in `public.customers`?". The card finishes
+    with that query, and every statement shows up in the **Query log**.
   </Step>
 </Steps>
 
-Ask your agent about your data. Every statement shows up in the **Query log**.
 Stuck? See [troubleshooting](/troubleshooting).
 
 ## With the sample database

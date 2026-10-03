@@ -15,6 +15,9 @@ const SENTENCES: ReadonlyMap<string, string> = new Map([
   ["57P03", "Postgres is starting up or shutting down"],
 ]);
 
+/** Every code with words, for pages that say more about each. */
+export const CONNECTION_ERROR_CODES: readonly string[] = [...SENTENCES.keys()];
+
 /**
  * A SQLSTATE or Node error code in words; one without words is
  * "failed (code)", and no code at all is "failed".
