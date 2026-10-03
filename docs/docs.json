@@ -42,6 +42,10 @@
             "pages": ["gateway/deploy", "gateway/multiple-gateways"]
           },
           {
+            "group": "Your organization",
+            "pages": ["organization"]
+          },
+          {
             "group": "Help",
             "pages": ["troubleshooting"]
           }

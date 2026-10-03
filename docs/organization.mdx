@@ -1,0 +1,56 @@
+---
+title: "People and roles"
+description: "Invite people into your organization, give them roles, and remove them."
+---
+
+Midplane Cloud is invite-only for now: we invite each organization's first
+owner, and owners and admins invite everyone else. An organization lives in one
+region (EU or US), and a person can belong to several organizations. Switch
+between them in the organization menu at the top left, which also leads to
+**Organization settings**.
+
+## Roles
+
+| Role | What they can do |
+| --- | --- |
+| Owner | Everything, including making and removing owners. An organization always keeps at least one. |
+| Admin | Manage projects, gateways, policy, approvals and people, except owners. |
+| Member | Use the projects: connect agents, make their own personal access tokens, see approval requests and the Query log. They don't change policy or decide on held writes. |
+
+Nobody changes their own role.
+
+## Invite someone
+
+<Steps>
+  <Step title="Send the invitation">
+    In **Organization settings**, under **Invitations**, enter their email
+    address, pick a role and choose **Invite**. Only owners invite owners.
+  </Step>
+  <Step title="They join">
+    The email's link works for seven days, and only for someone signed in with
+    that address, so a forwarded link is useless to anyone else. Someone new
+    chooses **Create an account**, verifies their address from the email we
+    send, then chooses **Join**. Someone with an account signs in and chooses
+    **Join**.
+  </Step>
+  <Step title="Check that it worked">
+    They appear under **Members**, with the role you gave them.
+  </Step>
+</Steps>
+
+If the email doesn't arrive, the dialog after **Invite** shows the link once:
+pass it on another way. **Resend** sends the same link again for another seven
+days; **Revoke** makes it stop working.
+
+## Change roles and remove people
+
+Owners and admins change a member's role or remove them under **Members**.
+Removing someone ends their access at once: agents they connected lose access
+to the organization's projects, and their personal access tokens stop working
+on its gateways after the next sync. Inviting them again doesn't bring either
+back.
+
+## Leave an organization
+
+Anyone can leave from **Organization settings**, with the same effect on their
+agents and tokens. The only owner can't leave: make someone else owner first.
