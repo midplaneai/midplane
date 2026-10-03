@@ -54,6 +54,7 @@ one for a replica. More in [linked mode](/gateway/linked-mode#replicas).
   </Step>
 </Steps>
 
-Do it in this order. A gateway that sends the tables of an id the project
-doesn't have yet is refused, and doesn't send them again until you restart it
-or press **Refresh** on the database's policy page.
+If you change the config first, the gateway still starts: on **Gateways** its
+line reads `billing · in its config, not in this project`. **Add** beside it
+adds the database with its id filled in, and the gateway sends its tables
+within seconds.

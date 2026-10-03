@@ -73,8 +73,10 @@ to `/etc/hosts`: `127.0.0.1 gw-k3m9x2qa.localhost`.
 
 **Test connection** on the **Gateways** page shows each database's id with
 `failed` and a code, such as `shop failed (28P01)`, and the gateway's log has
-the full message. From `0.22.0` the gateway keeps
-running and retries; earlier versions exit at start.
+the full message. From `0.22.0` the gateway keeps running and retries, and the
+**Gateways** page and the setup step say why beside the database: `shop ·
+can't connect: password authentication failed (28P01)`. Earlier versions exit
+at start.
 
 ### Connection refused (ECONNREFUSED)
 
@@ -138,10 +140,38 @@ Connect by the host name the certificate names, not an IP address or an alias.
 
 ### No catalog yet
 
-No gateway has sent this database's tables. Check that a gateway lists the id
-under `databases:` exactly, and that it can reach the database. If you added
-the id after the gateway started, restart it or press **Refresh** on the
-policy page.
+No gateway has sent this database's tables. The line under it says which
+gateways list the id under `databases:`, and whether they reach the database.
+A gateway reads its config at start, so restart it after you change the
+config. If a gateway reaches the database and it still has no catalog, press
+**Refresh** on the policy page.
+
+### No gateway serves it yet
+
+No gateway's config lists this database id. Add it under `databases:` in the
+config of a gateway that can reach the database, and restart that gateway
+([adding databases](/gateway/multiple-gateways#adding-databases)).
+
+### In its config, not in this project
+
+The gateway's config lists a database id the project doesn't have: a database
+to add, or a typo. An owner or admin presses **Add** beside it to add the
+database with that id; the gateway then sends its tables. For a typo, correct
+the id in the config and restart the gateway.
+
+### Not in its config
+
+The setup step's checklist shows this when the project has a database that
+this gateway's config doesn't list. Add it to the config if this gateway should
+serve it. When another gateway serves it, the line says so and there is nothing
+to do.
+
+### Catalog read, differs from the one shown in the policy editor
+
+This gateway read other tables for the id than the policy editor shows, which
+are the last ones any gateway sent. After a schema change it passes once every
+gateway has read the database again, within a few minutes. If it stays, the
+gateways' connection strings for this id point at different databases.
 
 ### Waiting for a policy
 

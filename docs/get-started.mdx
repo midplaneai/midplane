@@ -22,7 +22,9 @@ newer, and an MCP client such as Claude Code.
   <Step title="Run the gateway">
     **Create enrollment token**, pick **This machine** or **A server
     (Docker)**, and run the commands the step shows. Put each connection string
-    in the file it names. The step updates once the gateway connects
+    in the file it names. Once the gateway connects, the step lists each
+    database as the gateway reports it (`shop · reachable · catalog read: 12
+    tables`), and it's done when the gateway enforces the project's policy
     ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Connect an agent">
