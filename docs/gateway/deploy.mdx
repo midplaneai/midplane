@@ -13,8 +13,7 @@ Nothing connects in to it but agents.
 
 <Columns cols={2}>
   <Card title="This machine" icon="laptop" href="#this-machine">
-    To try Midplane, or for a database you reach from your laptop. Only agents
-    on the same machine can use it.
+    To try Midplane. Only agents on this machine can use it.
   </Card>
   <Card title="A server, with Docker" icon="server" href="#docker">
     For a team or production: agents anywhere reach it at an HTTPS URL.
@@ -27,6 +26,13 @@ database, inside the VPC for a private one.
 ## This machine
 
 You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
+
+<Warning>
+  The gateway runs as you, so an agent that runs commands as you, such as
+  Claude Code with its shell, can read `secrets/*.dsn` and connect to the
+  database without Midplane. Use this machine to try Midplane; to hold such an
+  agent to your policy, run the gateway as another user or on another host.
+</Warning>
 
 <Steps>
   <Step title="Create an enrollment token">
@@ -51,7 +57,7 @@ You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
   </Step>
   <Step title="Start it">
     ```sh
-    npx midplane gateway --config midplane.yaml
+    npx -y midplane@latest gateway --config midplane.yaml
     ```
 
     It joins your project and the page shows it connected. It keeps running in
@@ -121,9 +127,9 @@ For production, replace `:latest` in the command with a version you
     secret instead:
 
     1. In the config, set `link.identity: { env: MIDPLANE_IDENTITY }`.
-    2. Run `npx midplane enroll --config midplane.yaml` with the token in
-       place. It prints the identity as one line of JSON. It reads the whole
-       config, so every file and variable it names must exist there.
+    2. Run `npx -y midplane@latest enroll --config midplane.yaml` with the
+       token in place. It prints the identity as one line of JSON. It reads the
+       whole config, so every file and variable it names must exist there.
     3. Store that line in the platform's secrets as `MIDPLANE_IDENTITY`, and
        delete any copy: it holds the gateway's private key.
 
