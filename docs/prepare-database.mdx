@@ -20,6 +20,8 @@ Recommended, not required: the gateway works with any role that can log in,
 and Midplane's policy decides what agents may do either way. A role of its own
 is a second lock. Midplane can narrow what a role may do, never widen it, so
 whatever the policy allows, Postgres still refuses what the role can't do.
+`midplane setup` warns when a connection string's role is a superuser, or owns
+tables or their schema: an owner can drop them whatever its grants.
 
 This role can only read. In `psql`, as an admin, replace the two placeholders
 and run:

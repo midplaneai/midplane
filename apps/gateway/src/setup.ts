@@ -1,9 +1,10 @@
 // `midplane setup`: a linked gateway's folder, from a few questions. It asks
-// for each database's connection string, tests it, suggests a name, writes
-// the config and its secrets, and enrolls, naming every database so the
-// cloud adds those the project lacks. A database added that way has no
-// policy, so nothing in it is readable until someone publishes one. Then the
-// gateway serves, as `midplane gateway --config <dir>/midplane.yaml` would.
+// for each database's connection string, tests it (warning of a role that is
+// a superuser or owns tables), suggests a name, writes the config and its
+// secrets, and enrolls, naming every database so the cloud adds those the
+// project lacks. A database added that way has no policy, so nothing in it
+// is readable until someone publishes one. Then the gateway serves, as
+// `midplane gateway --config <dir>/midplane.yaml` would.
 //
 // The enrollment token is spent last: the flags, the folder, the port and
 // the certificate are checked before the first question, and each
@@ -349,8 +350,18 @@ export function gatewayNameOf(p: PreparedSetup): string {
 
 // ── connection strings ─────────────────────────────────────────────────────
 
+/** Why a role can do more than agents ever should, the worse first. */
+export type RoleWarning = "superuser" | "owns_tables";
+
 export type ConnectionTest =
-  | { ok: true; database: string; host: string; tables: number }
+  | {
+      ok: true;
+      database: string;
+      host: string;
+      tables: number;
+      role: string;
+      warning: RoleWarning | null;
+    }
   | { ok: false; code: string | null };
 
 function looksLikeDsn(text: string): boolean {
@@ -390,30 +401,65 @@ function tableCount(catalog: CatalogSnapshot): number {
     .length;
 }
 
+// A table's owner may alter or drop it whatever its grants, and its schema's
+// owner may drop it (from Postgres 15, `public` belongs to the database's
+// owner). So may any member of either, inheriting or not, as it can SET ROLE;
+// a superuser is a member of every role.
+const ROLE_CHECK = `SELECT r.rolsuper AS superuser,
+  EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+      AND (pg_has_role(current_user, c.relowner, 'MEMBER')
+        OR pg_has_role(current_user, n.nspowner, 'MEMBER'))
+  ) AS owns_tables
+FROM pg_roles r WHERE r.rolname = current_user`;
+
+/** What the role can do beyond what agents should; null if the check fails. */
+async function roleWarning(
+  executor: DatabaseExecutor,
+): Promise<RoleWarning | null> {
+  try {
+    const { rows } = await executor.withReadOnly((client) =>
+      client.query<{ superuser: boolean; owns_tables: boolean }>(ROLE_CHECK),
+    );
+    if (rows[0]?.superuser) return "superuser";
+    return rows[0]?.owns_tables ? "owns_tables" : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Connect as the gateway will, name the database, and read its catalog in
- * the gateway's own read-only session, with its timeouts. A failure is its
- * code alone.
+ * the gateway's own read-only session, with its timeouts; then check the
+ * role, in a session of its own, so that a failed check fails nothing. A
+ * failure is its code alone.
  */
 export async function testConnection(dsn: string): Promise<ConnectionTest> {
   const executor = new DatabaseExecutor(dsn);
   try {
-    const { database, catalog } = await executor.withReadOnly(
-      async (client) => ({
-        database:
-          (
-            await client.query<{ name: string }>(
-              "SELECT current_database() AS name",
-            )
-          ).rows[0]?.name ?? "",
-        catalog: await introspect(client),
-      }),
+    const { database, role, catalog } = await executor.withReadOnly(
+      async (client) => {
+        const who = (
+          await client.query<{ database: string; role: string }>(
+            "SELECT current_database() AS database, current_user AS role",
+          )
+        ).rows[0];
+        return {
+          database: who?.database ?? "",
+          role: who?.role ?? "",
+          catalog: await introspect(client),
+        };
+      },
     );
     return {
       ok: true,
       database,
       host: dsnHost(dsn),
       tables: tableCount(catalog),
+      role,
+      warning: await roleWarning(executor),
     };
   } catch (err) {
     return { ok: false, code: errorCode(err) };
@@ -476,6 +522,19 @@ function abortable<T>(p: Promise<T>, signal: AbortSignal | undefined) {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
+/** The warning for a role that can do more than agents ever should. */
+function roleWarningLine(
+  role: string,
+  database: string,
+  warning: RoleWarning,
+): string {
+  const what =
+    warning === "superuser"
+      ? `${role} is a superuser`
+      : `${role} owns tables in ${database}, or their schema, so Postgres lets it drop them whatever its grants`;
+  return `warning: ${what}. Midplane can only narrow what this role may do: give the gateway a role with only what agents should ever be able to do (https://midplane.ai/docs/prepare-database).`;
+}
+
 /**
  * A connection string, tested, or null to skip. A failed one is asked for
  * again, and `keep` saves it anyway: the gateway then reports the database
@@ -509,6 +568,11 @@ async function askConnection(
       io.out(
         `  ok: database ${test.database} on ${test.host}, ${plural(test.tables, "table")}\n`,
       );
+      if (test.warning) {
+        io.out(
+          `  ${roleWarningLine(test.role, test.database, test.warning)}\n`,
+        );
+      }
       return { dsn: answer, test };
     }
     io.out(`  ${connectionErrorLine(test.code)}\n`);
