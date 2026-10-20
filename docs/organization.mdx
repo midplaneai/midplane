@@ -1,6 +1,6 @@
 ---
 title: "People and roles"
-description: "Invite people into your organization, give them roles, and remove them."
+description: "Invite people into your organization, give them roles, remove them, and delete the organization."
 ---
 
 Midplane Cloud is invite-only for now: we invite each organization's first
@@ -53,4 +53,22 @@ back.
 ## Leave an organization
 
 Anyone can leave from **Organization settings**, with the same effect on their
-agents and tokens. The only owner can't leave: make someone else owner first.
+agents and tokens. The only owner can't leave: make someone else owner first,
+or delete the organization.
+
+## Delete an organization
+
+Only owners can delete an organization, under **Delete** in **Organization
+settings**: type the organization's name to confirm. There's no undo, and it
+takes effect at once:
+
+- Every gateway stops serving at its next sync and refuses every call from
+  then on. Uninstall them afterwards; their local audit files stay yours.
+- Agents lose access, and every personal access token stops working.
+- Everyone in it, you included, loses access, and pending invitations stop
+  working.
+
+Its projects, policies, approvals and Query log are removed for good after 30
+days. A gateway that can't reach Midplane Cloud for that whole time never
+learns of the deletion and keeps enforcing the last policy it had, so uninstall
+every gateway, including any that are offline.
