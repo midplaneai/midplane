@@ -13,10 +13,10 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/midplane"><img alt="npm" src="https://img.shields.io/npm/v/midplane?color=1d4eff&label=npm"></a>
+  <a href="https://www.npmjs.com/package/midplane"><img alt="npm" src="https://img.shields.io/npm/v/midplane?color=0f1f29&label=npm"></a>
   <a href="https://github.com/midplaneai/midplane/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/midplaneai/midplane/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <a href="https://modelcontextprotocol.io"><img alt="MCP: HTTP and stdio" src="https://img.shields.io/badge/MCP-HTTP%20%2B%20stdio-1d4eff"></a>
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-1d4eff"></a>
+  <a href="https://modelcontextprotocol.io"><img alt="MCP: HTTP and stdio" src="https://img.shields.io/badge/MCP-HTTP%20%2B%20stdio-0f1f29"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0f1f29"></a>
 </p>
 
 <p align="center">
@@ -51,14 +51,7 @@ into the query itself.
 The gateway runs in your network, next to your databases, and opens every
 connection itself.
 
-```mermaid
-flowchart LR
-  agent["Agent"] -->|"MCP"| gateway
-  subgraph network ["Your network"]
-    gateway["Gateway"] -->|"SQL, as its own role"| postgres[("Postgres")]
-  end
-  gateway -->|"outbound only"| cloud["Midplane Cloud"]
-```
+![An AI agent connects over MCP to the Midplane gateway, which runs in your network. The gateway checks, records and runs each statement, writes the audit log, and queries Postgres as its own role. Its only other connection is outbound, to Midplane Cloud (policy, approvals, query log), which holds no credentials and sees no rows.](docs/images/architecture.png)
 
 ## Get started
 

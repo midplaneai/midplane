@@ -3,9 +3,9 @@
   "theme": "mint",
   "name": "Midplane",
   "colors": {
-    "primary": "#1d4eff",
-    "light": "#5a7dff",
-    "dark": "#1d4eff"
+    "primary": "#0F1F29",
+    "light": "#E6ECE8",
+    "dark": "#0F1F29"
   },
   "favicon": "/favicon.svg",
   "logo": {

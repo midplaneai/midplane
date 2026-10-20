@@ -1,8 +1,1 @@
-```mermaid
-flowchart LR
-  agent["Agent"] -->|"MCP"| gateway
-  subgraph network ["Your network"]
-    gateway["Gateway"] -->|"SQL, as its own role"| postgres[("Postgres")]
-  end
-  gateway -->|"outbound only"| cloud["Midplane Cloud"]
-```
+![An AI agent connects over MCP to the Midplane gateway, which runs in your network. The gateway checks, records and runs each statement, writes the audit log, and queries Postgres as its own role. Its only other connection is outbound, to Midplane Cloud (policy, approvals, query log), which holds no credentials and sees no rows.](/images/architecture.png)
