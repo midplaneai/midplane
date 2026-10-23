@@ -66,6 +66,15 @@
             ]
           },
           {
+            "group": "Agents",
+            "pages": [
+              "agents/claude-code",
+              "agents/cursor",
+              "agents/vs-code",
+              "agents/claude-ai"
+            ]
+          },
+          {
             "group": "Policies",
             "pages": ["policies/masking", "policies/approvals-and-taint"]
           },
@@ -203,7 +212,7 @@
     },
     {
       "source": "/agents/overview",
-      "destination": "/"
+      "destination": "/agents/claude-code"
     },
     {
       "source": "/cloud-vs-self-host",

@@ -1,0 +1,65 @@
+---
+title: "Connect VS Code to Postgres over MCP"
+sidebarTitle: "VS Code"
+description: "Add the gateway to VS Code so GitHub Copilot can query Postgres: sign in, then choose which databases it may read or write."
+---
+
+[Midplane](/) is a gateway between AI agents and your Postgres databases.
+GitHub Copilot in VS Code queries your data through it, never holds a
+connection string, and every statement it sends is checked against your policy
+before it runs.
+
+You need a running gateway ([get started](/get-started)).
+
+<Steps>
+  <Step title="Add the gateway">
+    On the project's **Agents** page, under **Connect an agent**, pick **VS
+    Code** and click **Add to VS Code**. VS Code opens and asks to install
+    `midplane`, in your user profile.
+
+    <Accordion title="Or add it by hand, for one workspace">
+      In `.vscode/mcp.json`, with the gateway's URL from that card:
+
+      ```json
+      {
+        "servers": {
+          "midplane": {
+            "type": "http",
+            "url": "<gateway URL>"
+          }
+        }
+      }
+      ```
+    </Accordion>
+  </Step>
+  <Step title="Sign in">
+    Start `midplane`, and allow the sign-in.
+  </Step>
+  <Step title="Choose what it may reach">
+    Set each database to **None**, **Read** or **Read + write**, and **Allow**.
+  </Step>
+  <Step title="Try it">
+    Ask Copilot, in agent mode, which tables it can see. Its statement shows
+    up in the project's **Query log**.
+  </Step>
+</Steps>
+
+<Check>
+  You're set: Copilot can answer questions from your data, and only what your
+  policy allows runs. Masked columns stay masked, writes that need approval
+  wait for a person, and every statement is in the audit log.
+</Check>
+
+To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
+It has to sign in again within 15 minutes.
+
+## If it doesn't work
+
+- **The consent page says it wants access, with no databases**: you aren't a
+  member of the gateway's project, or the gateway isn't registered. Ask an
+  owner of the organization.
+- **The `localhost` URL does not resolve**: see
+  [troubleshooting](/troubleshooting#the-localhost-url-does-not-resolve).
+
+*Tested by* `apps/gateway/test/auth.test.ts` for the gateway's side; the
+client's steps by hand.

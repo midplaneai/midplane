@@ -1,0 +1,59 @@
+---
+title: "Connect claude.ai to Postgres over MCP"
+sidebarTitle: "claude.ai"
+description: "Give the gateway a public URL, add it as a connector in claude.ai, sign in, and choose which Postgres databases Claude may read or write."
+---
+
+[Midplane](/) is a gateway between AI agents and your Postgres databases.
+Claude queries your data through it, never holds a connection string, and
+every statement it sends is checked against your policy before it runs.
+
+You need a running gateway ([get started](/get-started)). claude.ai runs on
+Anthropic's servers, so it reaches the gateway only at a public HTTPS URL.
+
+<Steps>
+  <Step title="Give the gateway a public URL">
+    Use Anthropic's MCP tunnel (in research preview; for claude.ai it needs
+    the Enterprise plan) or your own ingress, such as a load balancer
+    allowlisted to Anthropic's IP ranges. [Hosted
+    agents](/gateway/hosted-agents) sets up either.
+  </Step>
+  <Step title="Register the URL">
+    Add it to the gateway's `public_urls`. If the gateway enrolled before you
+    added it, press **Register** on the project's **Gateways** page.
+  </Step>
+  <Step title="Add the connector">
+    In claude.ai, add a connector with the gateway's public URL followed by
+    `/mcp`, such as `https://midplane.<tunnel domain>/mcp`. The **Agents**
+    page shows it under **Connect an agent**.
+  </Step>
+  <Step title="Sign in and choose what it may reach">
+    Set each database to **None**, **Read** or **Read + write**, and **Allow**.
+  </Step>
+  <Step title="Try it">
+    Ask Claude which tables it can see. Its statement shows up in the
+    project's **Query log**.
+  </Step>
+</Steps>
+
+<Check>
+  You're set: Claude can answer questions from your data, and only what your
+  policy allows runs. Masked columns stay masked, writes that need approval
+  wait for a person, and every statement is in the audit log. Results go from
+  your gateway to Anthropic, never through Midplane Cloud.
+</Check>
+
+To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
+It has to sign in again within 15 minutes.
+
+## If it doesn't work
+
+- **The consent page says it wants access, with no databases**: you aren't a
+  member of the gateway's project, or the URL isn't registered. Ask an owner
+  of the organization.
+- **The Gateways page shows the URL as not registered**: see
+  [troubleshooting](/troubleshooting#not-registered).
+
+*Tested by* `apps/gateway/test/urls.e2e.test.ts` (several URLs, and a tunnel
+that rewrites Host) and `apps/gateway/test/auth.test.ts` for the gateway's
+side; the client's steps by hand.

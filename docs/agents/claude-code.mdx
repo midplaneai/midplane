@@ -1,0 +1,68 @@
+---
+title: "Connect Claude Code to Postgres over MCP"
+sidebarTitle: "Claude Code"
+description: "Add the gateway to Claude Code, sign in, and choose which Postgres databases it may read or write."
+---
+
+[Midplane](/) is a gateway between AI agents and your Postgres databases.
+Claude Code queries your data through it, never holds a connection string, and
+every statement it sends is checked against your policy before it runs.
+
+You need a running gateway ([get started](/get-started)). Its URL is on the
+project's **Agents** page, under **Connect an agent**.
+
+<Steps>
+  <Step title="Add the gateway">
+    ```sh
+    claude mcp add --transport http midplane <gateway URL>
+    ```
+  </Step>
+  <Step title="Sign in">
+    Start `claude`, run `/mcp`, pick `midplane` and choose **Authenticate**.
+  </Step>
+  <Step title="Choose what it may reach">
+    Set each database to **None**, **Read** or **Read + write**, and **Allow**.
+  </Step>
+  <Step title="Try it">
+    Ask Claude Code which tables it can see. Its statement shows up in the
+    project's **Query log**.
+  </Step>
+</Steps>
+
+<Check>
+  You're set: Claude Code can answer questions from your data, and only what your
+  policy allows runs. Masked columns stay masked, writes that need approval
+  wait for a person, and every statement is in the audit log.
+</Check>
+
+<Warning>
+  Claude Code runs commands as you. If the gateway runs as you too, Claude Code
+  can read its connection strings and reach the database without it. Run the
+  gateway as another user or on another host ([deploy the
+  gateway](/gateway/deploy)).
+</Warning>
+
+To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
+It has to sign in again within 15 minutes.
+
+<Accordion title="Use a token instead of signing in">
+  For scripts, or a gateway in [local mode](/gateway/local-mode), send a token
+  from **Tokens for scripts** on the **Agents** page, or from `midplane token`
+  in local mode:
+
+  ```sh
+  claude mcp add --transport http midplane <gateway URL> \
+    --header "Authorization: Bearer $(cat token.txt)"
+  ```
+</Accordion>
+
+## If it doesn't work
+
+- **The consent page says it wants access, with no databases**: you aren't a
+  member of the gateway's project, or the gateway isn't registered. Ask an
+  owner of the organization.
+- **The `localhost` URL does not resolve**: see
+  [troubleshooting](/troubleshooting#the-localhost-url-does-not-resolve).
+
+*Tested by* `apps/gateway/test/auth.test.ts` for the gateway's side; the
+client's steps by hand.

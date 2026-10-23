@@ -33,6 +33,14 @@ The site has two tabs. Put each page in one of them:
 - **Reference** is complete and exact: every config key, log line, limit and
   guarantee. Long is fine there.
 
+One exception to "never copies them": **Agents** (in Reference) has a page per
+MCP client, so that someone searching for "Cursor Postgres MCP" finds one.
+Each is numbered steps to a first query: the client's config with a
+`<gateway URL>` placeholder, the sign-in, the access, a check, and only what
+is specific to that client. Keep them in step with the dashboard's
+**Connect an agent** card (`cloud/app/src/components/project/connect-guide.tsx`),
+and add a client only once it has been tested end to end against a gateway.
+
 Prefer `<Steps>`, `<Columns>` of `<Card>`s, tables and diagrams to paragraphs.
 The architecture diagram lives once, in `snippets/architecture.mdx`; import it
 rather than drawing another. No dashboard screenshots while the setup flow is
