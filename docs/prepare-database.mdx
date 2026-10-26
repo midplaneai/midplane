@@ -64,9 +64,9 @@ table, so most setups leave them off.
 
 ## Write the connection string
 
-The gateway reads each database's connection string from a file:
-`secrets/shop.dsn` for the database id `shop`, in the folder the dashboard's
-commands make. Write it on one line, with an editor:
+`midplane setup` asks for each database's connection string, tests it, and
+saves it in the gateway's folder: `secrets/shop.dsn` for the database id
+`shop`. It's one line:
 
 ```text
 postgres://midplane_gateway:<password>@<host>:5432/<database>?sslmode=verify-full
@@ -81,9 +81,10 @@ postgres://midplane_gateway:<password>@<host>:5432/<database>?sslmode=verify-ful
 
 `sslmode=verify-full` encrypts the connection and checks the database's
 certificate. If your provider signs certificates with its own CA, download it
-into the gateway's `secrets/` folder and add its path where the gateway runs:
-`&sslrootcert=/etc/midplane/secrets/ca.pem` in Docker, or the file's full path
-on your machine.
+to where the gateway runs, and add its path. In Docker, put it in
+`/etc/midplane/tls` on the server, which the commands mount at the same path:
+`&sslrootcert=/etc/midplane/tls/ca.pem`. On your machine, use the file's full
+path.
 
 <Accordion title="How the gateway reads sslmode">
   The gateway reads `sslmode` differently from `psql`: `require`, `prefer` and
@@ -95,8 +96,10 @@ on your machine.
 
 ## Check that it connects
 
-Start the gateway, or restart it if it runs. Once it reads the database, the
-database's line on the project overview shows **Catalog read**, and **Test
-connection** on the **Gateways** page shows its id with `ok`, such as
-`shop ok`. If it shows `failed` and a code, such as `shop failed (28P01)`, look
-up the code in [troubleshooting](/troubleshooting#connecting-to-a-database).
+Setup tests each connection string as you give it. It says `ok` with the
+database and its number of tables, or why not, such as `password
+authentication failed (28P01)`: look up the code in
+[troubleshooting](/troubleshooting#connecting-to-a-database). Once the gateway
+runs, the database's line on the project overview shows **Catalog read**, and
+**Test connection** on the **Gateways** page shows its id with `ok`, such as
+`shop ok`.

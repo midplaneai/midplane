@@ -36,38 +36,37 @@ You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
 
 <Steps>
   <Step title="Create an enrollment token">
-    In your project, open step 2 of the setup (or **Gateways**, then **Set up
+    In your project, open step 1 of the setup (or **Gateways**, then **Set up
     a gateway**), and click **Create enrollment token**. The gateway uses it
-    once, to join your project. Keep the page open: the commands below it now
-    hold the token.
+    once, to join your project. Keep the page open: the command below it now
+    holds the token.
   </Step>
-  <Step title="Make the gateway's folder">
-    Choose **This machine** and run the first block in a terminal. It makes a
-    folder named after the gateway, such as `gw-k3m9x2qa`, with a `secrets/`
-    folder inside, and moves into it.
+  <Step title="Run setup">
+    Choose **This machine** and run the command in a terminal. It runs
+    `midplane setup`, which asks for each database's connection string
+    ([prepare your database](/prepare-database)). What you paste isn't shown,
+    and stays in the gateway's folder: it never reaches Midplane Cloud.
   </Step>
-  <Step title="Save the config">
-    Copy the config the page shows into that folder as `midplane.yaml`. It's
-    generated for your project, with every database listed.
-  </Step>
-  <Step title="Add the connection strings">
-    For each database, write its connection string to the file the page names,
-    such as `secrets/shop.dsn`, with an editor
-    ([prepare your database](/prepare-database)).
+  <Step title="Check each database">
+    Setup connects as the gateway will and says what it found, such as `ok:
+    database app on db.internal, 12 tables`. If it fails, it says why: paste
+    a corrected string, or type `keep` to save it anyway. It suggests a name
+    for each database new to the project, such as `shop`, which you can
+    change.
   </Step>
   <Step title="Start it">
-    ```sh
-    npx -y midplane@latest gateway --config midplane.yaml
-    ```
-
-    It joins your project and the page shows it connected. It keeps running in
-    that terminal; `Ctrl-C` stops it, and the same command starts it again.
+    Setup joins your project, writes the gateway's folder where you ran it,
+    such as `gw-k3m9x2qa`, and starts the gateway. The page shows it
+    connected. It keeps running in that terminal; `Ctrl-C` stops it, and
+    `npx -y midplane@latest gateway --config gw-k3m9x2qa/midplane.yaml` starts
+    it again.
   </Step>
 </Steps>
 
-Agents on this machine reach it at the `http://gw-….localhost:7433` URL in its
-config. A second gateway on the same machine needs another port: change it on
-the page before you copy the commands.
+Agents on this machine reach it at the `http://gw-….localhost` URL setup
+prints. Setup takes the first port from 7433 to 7442 that is free when it
+runs, so a gateway that was stopped then may have its port taken: give the
+new one another with `--port`.
 
 ## Docker
 
@@ -76,32 +75,37 @@ You need a server with Docker, a URL for the gateway, such as
 serves HTTPS itself whenever it's reachable from other machines.
 
 <Steps>
+  <Step title="Put the certificate in place">
+    On the server, save the certificate and its key as
+    `/etc/midplane/tls/tls.crt` and `/etc/midplane/tls/tls.key`. The image
+    runs as uid 1000, which must be able to read both, such as after `sudo
+    chown 1000 /etc/midplane/tls/tls.key`. Setup checks that the certificate
+    is for the URL, current, and matches its key.
+  </Step>
   <Step title="Create an enrollment token">
-    In your project, open step 2 of the setup (or **Gateways**, then **Set up
+    In your project, open step 1 of the setup (or **Gateways**, then **Set up
     a gateway**), and click **Create enrollment token**.
   </Step>
   <Step title="Enter the gateway's URL">
     Choose **A server (Docker)** and enter the URL agents will use. The page
-    generates the config and commands for it.
+    shows two commands for it.
   </Step>
-  <Step title="Make the gateway's folder">
-    On the server, run the first block. It makes the gateway's folder with a
-    `secrets/` folder inside.
-  </Step>
-  <Step title="Save the config, connection strings and certificate">
-    Save the config as `midplane.yaml`. Write each connection string to the
-    file the page names, such as `secrets/shop.dsn`; inside the container,
-    `localhost` is the container, so use the database's real host. Put the
-    certificate and its key in `secrets/tls.crt` and `secrets/tls.key`.
+  <Step title="Run setup in the image">
+    Run the first command on the server. Setup asks for each connection
+    string and tests it from inside the container, where `localhost` is the
+    container: use the database's host as the server's network knows it.
+    It writes the config, the connection strings and the gateway's identity
+    to a Docker volume named after the gateway, such as
+    `midplane-gw-k3m9x2qa`, and joins your project.
   </Step>
   <Step title="Start it">
-    Run the last block. It gives the secrets to the container's user and
-    starts the container, which restarts with the server. The page shows the
-    gateway connected; `docker logs -f midplane-gw-…` shows what it says.
+    Run the second command. It starts the gateway from that volume, and again
+    whenever the server restarts. The page shows it connected; `docker logs
+    -f midplane-gw-…` shows what it says.
   </Step>
 </Steps>
 
-For production, replace `:latest` in the command with a version you
+For production, replace `:latest` in both commands with a version you
 [verified](/releases).
 
 ## Other setups
@@ -110,23 +114,28 @@ For production, replace `:latest` in the command with a version you
   <Accordion title="Behind your TLS proxy">
     If a proxy or load balancer on the same host already serves TLS for the
     URL, keep the gateway on loopback and have the proxy forward the URL to
-    `http://127.0.0.1:7433`, keeping the `Host` header. Change the config
-    before the gateway's first start, since it registers its URL then:
+    it, keeping the `Host` header.
 
-    - **With `npx`:** follow [this machine](#this-machine), and in its config
-      replace the `public_urls` line with
-      `public_urls: [https://midplane.example.com]`.
-    - **With Docker:** follow [Docker](#docker), and in its config replace the
-      `listen` line with `listen: { host: 127.0.0.1, port: 7433 }` and delete
-      the `tls` line. In the last block, run the container with
-      `--network host` in place of `-p …` (Linux only).
+    - **With `npx`:** follow [this machine](#this-machine). Then add the URL
+      to `public_urls` in the gateway's `midplane.yaml`, such as
+      `public_urls: [http://gw-k3m9x2qa.localhost:7433,
+      https://midplane.example.com]`, and restart it. A URL added after the
+      gateway joined waits on the project's **Gateways** page until an owner
+      or admin presses **Register**. Point the proxy at
+      `http://127.0.0.1:7433`, or the port setup chose.
+    - **With Docker:** [write the config yourself](#write-the-config-yourself),
+      with `listen: { host: 127.0.0.1, port: 7433 }`, your URL in
+      `public_urls` and no `tls`, and run the container with `--network host`
+      (Linux only). The gateway registers the URLs in its config when it
+      first starts.
   </Accordion>
   <Accordion title="A platform without a disk">
     Some platforms keep no files across restarts, so the gateway can't keep the
     identity it gets when it joins. Enroll it once and store the identity as a
     secret instead:
 
-    1. In the config, set `link.identity: { env: MIDPLANE_IDENTITY }`.
+    1. [Write the config yourself](#write-the-config-yourself), with
+       `link.identity: { env: MIDPLANE_IDENTITY }`.
     2. Run `npx -y midplane@latest enroll --config midplane.yaml` with the
        token in place. It prints the identity as one line of JSON. It reads the
        whole config, so every file and variable it names must exist there.
@@ -138,6 +147,43 @@ For production, replace `:latest` in the command with a version you
     [hosted agents](/gateway/hosted-agents). Mount a volume for the audit log
     if you want to keep it.
   </Accordion>
+  <Accordion title="Write the config yourself">
+    For what setup doesn't cover, such as a proxy in front, a secret manager
+    or Kubernetes, write the config by hand. The gateway joins the project
+    the first time it starts, with the token from the file the config names.
+
+    1. Make the gateway's folder, with a `secrets/` folder closed to other
+       users: `mkdir -p gw/secrets && cd gw && chmod 700 secrets`.
+    2. Make the mask salt: `openssl rand -hex 32 > secrets/mask-salt`.
+    3. With an editor, write each connection string to
+       `secrets/<database id>.dsn`, and the token to
+       `secrets/enrollment-token`. The token is the `--token` value in the
+       command the page shows after **Create enrollment token**.
+    4. Save the config as `midplane.yaml`, with a line per database:
+
+       ```yaml
+       listen: { port: 7433 }
+       public_urls: [http://gw-k3m9x2qa.localhost:7433]
+       audit: { file: audit.db }
+       mask_salt: { file: secrets/mask-salt }
+       link:
+         cloud_url: https://eu.app.midplane.ai
+         identity: { file: identity.json }
+         enrollment_token: { file: secrets/enrollment-token }
+       databases:
+         shop: { dsn: { file: secrets/shop.dsn } }
+       ```
+
+    5. Start it: `npx -y midplane@latest gateway --config midplane.yaml`.
+
+    A database the config names that the project lacks shows on **Gateways**
+    as `in its config, not in this project`, with **Add** beside it. In
+    Docker, mount the folder read-only at `/etc/midplane`, where the image
+    reads `midplane.yaml`, and let uid 1000 read the secrets (`sudo chown -R
+    1000:1000 secrets`). Put what the gateway writes (`audit.file`,
+    `link.identity` and `link.bundle_cache`) under `/var/lib/midplane/`, on a
+    volume. Every key is in [configuration](/gateway/configuration).
+  </Accordion>
   <Accordion title="What the gateway's folder holds">
     ```text
     gw-k3m9x2qa/
@@ -145,16 +191,20 @@ For production, replace `:latest` in the command with a version you
       secrets/               closed to other users
         shop.dsn             a connection string per database
         mask-salt            the key for hashing masked values
-        enrollment-token     used once, to join the project
       identity.json          the gateway's key, written when it joins
       audit.db               the audit log
+      bundle.jws             the newest policy, for a restart with the cloud down
     ```
 
-    Running the commands again from the same place is safe: the salt and the
-    identity are kept. In Docker, everything the gateway writes is in the
-    container's volume instead.
+    In Docker, the same files are in the gateway's volume, such as
+    `midplane-gw-k3m9x2qa`. Keep the folder or the volume: a new one is a new
+    gateway, with a new mask salt.
   </Accordion>
 </AccordionGroup>
 
 Every setting is in [configuration](/gateway/configuration). If the gateway
 doesn't connect, see [troubleshooting](/troubleshooting).
+
+*Tested by* `apps/gateway/scripts/package-smoke.ts` (setup with the packed
+npm package, and setup then the gateway in the image on one volume, in CI's
+`package` job).

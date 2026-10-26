@@ -9,24 +9,74 @@ last line before it exits.
 
 ## The gateway does not connect
 
-The setup step keeps **Waiting for the gateway to connect**. Read the gateway's
-last log line.
+The setup step keeps **Waiting for the gateway to connect**. If `midplane
+setup` stopped, its last line says why; otherwise read the gateway's last log
+line.
 
 ### That is not a Midplane enrollment token
 
-`secrets/enrollment-token` holds the placeholder or part of a token. Create a
-token and run the step's commands again.
+The command holds the placeholder or part of a token (in a config you wrote,
+`secrets/enrollment-token` does). Create a token and run the step's command
+again.
 
 ### This enrollment token is unknown, used, revoked or expired
 
 A token works once, within a day, on the Midplane Cloud that made it. Create a
-new one and run the new commands.
+new one and run the new command.
 
 ### A gateway at this URL is already enrolled
 
 Each URL belongs to one gateway. Revoke the old one on its project's
-**Gateways** page, or use another URL. On this machine, a new token makes a
+**Gateways** page, or use another URL. On this machine, each setup makes a
 new URL.
+
+### The cloud may have enrolled this gateway
+
+Setup lost Midplane Cloud's answer while joining, and removed the files it
+wrote. If the **Gateways** page lists the gateway, revoke it. Then create a
+new token and run setup again.
+
+### Already set up
+
+The folder, or in Docker the volume, holds a gateway already. Start it
+instead: on this machine, `npx -y midplane@latest gateway --config
+<folder>/midplane.yaml`; in Docker, the step's second command. On this
+machine each run of setup makes a new folder; in Docker, a new token gives
+the commands a new volume.
+
+### The port is taken
+
+Another program, or another gateway, listens on it. On this machine, setup
+takes the first free port from 7433 to 7442 unless the command names one with
+`--port`: stop the other program, or change the port. In Docker, `docker run`
+says the port is already allocated: change **Port** on the page, which
+changes `-p` in the second command.
+
+### Cannot read the certificate
+
+`can't read /etc/midplane/tls/tls.crt (ENOENT)`: put the certificate and its
+key in `/etc/midplane/tls` on the server, as `tls.crt` and `tls.key`. With
+`EACCES`, the image's user (uid 1000) can't read them: `sudo chown 1000
+/etc/midplane/tls/tls.key`. A file that isn't PEM is refused too.
+
+### The gateway certificate is for another name
+
+The certificate in `tls.crt` doesn't cover the URL's host. Use one issued for
+that name, or enter the URL it was issued for.
+
+### The gateway certificate expired or is not valid yet
+
+Renew it, and check the server's clock.
+
+### The key does not match the certificate
+
+Put the certificate's own key in `tls.key`, as PEM and without a passphrase.
+
+### Inside the container, localhost is the container
+
+Setup in Docker connects to each database from inside its container, so
+`localhost` and `127.0.0.1` in a connection string are the container itself.
+Use the database's host as the server's network knows it.
 
 ### A gateway URL starts with https
 
@@ -51,8 +101,8 @@ gateway reach the cloud without TLS inspection.
 ### Cannot read a secret
 
 `databases.shop.dsn: cannot read …`: a file the config names is missing or
-unreadable. In Docker, run the step's `sudo sh -c '…'` line again so the
-image's user owns the secrets.
+unreadable. In Docker with a config you wrote, let the image's user read the
+secrets: `sudo chown -R 1000:1000 secrets`.
 
 ### The listen host is not loopback, so TLS is required
 

@@ -6,8 +6,8 @@ description: "Step by step: open a TCP proxy to Railway's Postgres, a read-only 
 
 Railway's Postgres is private to its project: `postgres.railway.internal`
 resolves only for Railway services. This guide opens a TCP proxy so the
-gateway can reach it from your machine or server. You need a Midplane project
-with the database named in it ([get started](/get-started), step 2).
+gateway can reach it from your machine or server. You need a Midplane
+project ([get started](/get-started)).
 
 <Steps>
   <Step title="Turn on public networking">
@@ -29,7 +29,7 @@ with the database named in it ([get started](/get-started), step 2).
     never the `postgres` superuser. This role can only read. To let agents
     write, see [letting agents write](/prepare-database#letting-agents-write).
   </Step>
-  <Step title="Write the gateway's connection string">
+  <Step title="Give setup the connection string">
     Take the host and port from `DATABASE_PUBLIC_URL`:
 
     ```text
@@ -38,13 +38,14 @@ with the database named in it ([get started](/get-started), step 2).
 
     Railway's Postgres makes its own certificate, which no CA signs, so the
     gateway can't check it: `no-verify` encrypts the connection without that
-    check. Save the line as `secrets/<database id>.dsn`, such as
-    `secrets/shop.dsn`.
+    check. Paste the line when `midplane setup` asks for the connection string
+    ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
-    Start or restart the gateway. **Test connection** on the **Gateways** page
-    shows your database's id with `ok`, such as `shop ok`, and the policy
-    editor lists your tables.
+    Setup says `ok` with the database and its number of tables. Once the
+    gateway runs, **Test connection** on the **Gateways** page shows your
+    database's id with `ok`, such as `shop ok`, and the policy editor lists
+    your tables.
   </Step>
 </Steps>
 

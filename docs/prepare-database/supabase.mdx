@@ -5,8 +5,8 @@ description: "Step by step: a read-only role in Supabase, the session pooler's c
 ---
 
 This guide gives the gateway a read-only role in your Supabase project and a
-connection string it can use. You need a Midplane project with the database
-named in it ([get started](/get-started), step 2).
+connection string it can use. You need a Midplane project ([get
+started](/get-started)).
 
 <Steps>
   <Step title="Create a role for the gateway">
@@ -35,27 +35,29 @@ named in it ([get started](/get-started), step 2).
   </Step>
   <Step title="Download Supabase's certificate">
     Open **Project Settings**, then **Database**, and under **SSL
-    Configuration** download the certificate. Save it in the gateway's
-    `secrets/` folder as `supabase-ca.crt`.
+    Configuration** download the certificate. Save it as `supabase-ca.crt`
+    where the gateway runs: in Docker, in `/etc/midplane/tls` on the server,
+    which the commands mount at the same path.
   </Step>
-  <Step title="Write the gateway's connection string">
+  <Step title="Give setup the connection string">
     Change the copied string in three places: the user becomes
     `midplane_gateway.` followed by your project ref, the password becomes the
     role's, and the end gets the TLS settings:
 
     ```text
-    postgres://midplane_gateway.abcdefghijklmnop:<password>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=verify-full&sslrootcert=/etc/midplane/secrets/supabase-ca.crt
+    postgres://midplane_gateway.abcdefghijklmnop:<password>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=verify-full&sslrootcert=/etc/midplane/tls/supabase-ca.crt
     ```
 
     `sslrootcert` is the certificate's path where the gateway runs:
-    `/etc/midplane/secrets/supabase-ca.crt` in Docker, or the file's full path
-    on your machine. Save the line as `secrets/<database id>.dsn`, such as
-    `secrets/shop.dsn`.
+    `/etc/midplane/tls/supabase-ca.crt` in Docker, or the file's full path on
+    your machine. Paste the line when `midplane setup` asks for the connection
+    string ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
-    Start or restart the gateway. **Test connection** on the **Gateways** page
-    shows your database's id with `ok`, such as `shop ok`, and the policy
-    editor lists your tables.
+    Setup says `ok` with the database and its number of tables. Once the
+    gateway runs, **Test connection** on the **Gateways** page shows your
+    database's id with `ok`, such as `shop ok`, and the policy editor lists
+    your tables.
   </Step>
 </Steps>
 

@@ -5,8 +5,8 @@ description: "Step by step: a read-only role in Neon, the direct connection stri
 ---
 
 This guide gives the gateway a read-only role in your Neon project and a
-connection string it can use. You need a Midplane project with the database
-named in it ([get started](/get-started), step 2).
+connection string it can use. You need a Midplane project ([get
+started](/get-started)).
 
 <Steps>
   <Step title="Create a role for the gateway, with SQL">
@@ -35,20 +35,22 @@ named in it ([get started](/get-started), step 2).
 
     The gateway pools its own connections, so it doesn't need Neon's.
   </Step>
-  <Step title="Write the gateway's connection string">
+  <Step title="Give setup the connection string">
     Swap in the role and its password, and make the end `sslmode=verify-full`:
 
     ```text
     postgres://midplane_gateway:<password>@ep-cool-darkness-123456.eu-central-1.aws.neon.tech/neondb?sslmode=verify-full
     ```
 
-    Neon's certificates come from a public CA, so nothing else is needed. Save
-    the line as `secrets/<database id>.dsn`, such as `secrets/shop.dsn`.
+    Neon's certificates come from a public CA, so nothing else is needed.
+    Paste the line when `midplane setup` asks for the connection string
+    ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
-    Start or restart the gateway. **Test connection** on the **Gateways** page
-    shows your database's id with `ok`, such as `shop ok`, and the policy
-    editor lists your tables.
+    Setup says `ok` with the database and its number of tables. Once the
+    gateway runs, **Test connection** on the **Gateways** page shows your
+    database's id with `ok`, such as `shop ok`, and the policy editor lists
+    your tables.
   </Step>
 </Steps>
 

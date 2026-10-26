@@ -82,9 +82,9 @@ Never use v1's terms: "the engine", "control plane", "self-host",
   commands, config keys, ids and error codes.
 - **Never put a secret's value on a command line**: no DSN, password or salt
   after `-e`, in `export`, or in `printf`. Secrets go in files the config
-  names (`dsn: { file: secrets/shop.dsn }`), written with an editor or from a
-  secret manager. The enrollment token is the one exception the dashboard
-  makes: it works once, within a day.
+  names (`dsn: { file: secrets/shop.dsn }`), written by `midplane setup`,
+  with an editor or from a secret manager. The enrollment token is the one
+  exception the dashboard makes: it works once, within a day.
 - Version-gate features a released gateway doesn't have yet, inline:
   "(`0.22.0+`)".
 - `/troubleshooting` has one heading per message the dashboard or the gateway

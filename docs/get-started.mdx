@@ -3,8 +3,8 @@ title: "Get started"
 description: "From a new Midplane Cloud project to the first query an agent makes through your gateway."
 ---
 
-You need a Postgres database (or Docker, for the sample one), Node 24.16 or
-newer, and an MCP client such as Claude Code.
+You need a Postgres database and its connection string (or Docker, for the
+sample one), Node 24.16 or newer, and an MCP client such as Claude Code.
 
 <Steps>
   <Step title="Create a project">
@@ -14,19 +14,20 @@ newer, and an MCP client such as Claude Code.
     name your organization and create a project. Its overview opens on **Connect your
     first database**.
   </Step>
-  <Step title="Name your database">
-    Under **Use my database**, enter a **Database id**, such as `shop`: your
-    name for the database in Midplane, not its Postgres name. Create the
-    read-only role the step shows ([prepare your database](/prepare-database)).
-    No database at hand? Try [the sample](#with-the-sample-database) instead.
-  </Step>
   <Step title="Run the gateway">
+    Have a connection string at hand for a role the gateway logs in as.
+    **Before you start**, in the step, has the SQL for a read-only one
+    ([prepare your database](/prepare-database)). No database at hand? Try
+    [the sample](#with-the-sample-database) instead.
+
     **Create enrollment token**, pick **This machine** or **A server
-    (Docker)**, and run the commands the step shows. Put each connection string
-    in the file it names. Once the gateway connects, the step lists each
-    database as the gateway reports it (`shop · reachable · catalog read: 12
-    tables`), and it's done when the gateway enforces the project's policy
-    ([deploy the gateway](/gateway/deploy)).
+    (Docker)**, and run the command the step shows. `midplane setup` asks for
+    each database's connection string, tests it, and names it in Midplane,
+    such as `shop`: your name for the database, not its Postgres name. Then it
+    joins your project and starts the gateway. The step lists each database
+    as the gateway reports it (`shop · reachable · catalog read: 12 tables`),
+    and it's done when the gateway enforces the project's policy ([deploy the
+    gateway](/gateway/deploy)).
   </Step>
   <Step title="Choose what agents may read">
     A new policy denies everything. **Open `shop`'s policy** from the step and
@@ -52,18 +53,19 @@ Stuck? See [troubleshooting](/troubleshooting).
 
 ## With the sample database
 
-No database at hand? On the first step, an owner or admin can choose **Try
-with sample data**. It creates a second project, **Sample shop**, with the
-database `shop` and the sample's policy published: customers' emails hashed
-and phones partly hidden, support ticket bodies untrusted, the API keys
+No database at hand? On **Run the gateway**, an owner or admin can choose the
+**Try with sample data** tab. It creates a second project, **Sample shop**,
+with the database `shop` and the sample's policy published: customers' emails
+hashed and phones partly hidden, support ticket bodies untrusted, the API keys
 secret, and row changes held for approval. The project you started from stays
 as it is, for your own database.
 
 In the sample project, **Run the gateway** starts the sample's Postgres with
-Docker, then the gateway on this machine on port 7434, so it can run beside
-one of your own. Its connection string is filled in (the password is a public
-example), and **Choose what agents may read** is already done. When Claude
-Code signs in, give it read and write on `shop`, then ask, in order:
+Docker, then setup on this machine, which runs the gateway on port 7434 so it
+can run beside one of your own. When setup asks for `shop`'s connection
+string, paste the one the step shows (the password is a public example).
+**Choose what agents may read** is already done. When Claude Code signs in,
+give it read and write on `shop`, then ask, in order:
 
 1. "List our customers with their emails and plans": emails come back
    hashed, phones partly hidden.

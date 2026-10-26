@@ -13,9 +13,11 @@ When a database lives where your first gateway can't reach it, run a second
 gateway there: **Gateways**, **Set up another gateway**, and run its commands
 in that network.
 
-- Its config lists every database of the project. Delete the ones it can't
-  reach before you start it.
-- A database can be served by more than one gateway. List it in each config.
+- Its command names every database of the project, and setup asks for each
+  one's connection string. Press Enter to skip one it can't reach, or add one
+  the project doesn't have yet.
+- A database can be served by more than one gateway. Give its connection
+  string to each gateway's setup.
 - An agent connects to one gateway. For databases behind two, add each gateway
   to the agent as its own MCP server and sign in to each.
 
@@ -43,9 +45,13 @@ one for a replica. More in [linked mode](/gateway/linked-mode#replicas).
       billing: { dsn: { file: secrets/billing.dsn } }
     ```
 
-    In Docker, the paths start with `/etc/midplane/secrets/`, and `secrets/`
-    belongs to the container's user: write the file with `sudo`, then run the
-    `sudo sh -c '…'` line from the start block again.
+    In Docker, the config and the secrets are in the gateway's volume. Write
+    from standard input, so the connection string stays off the command line:
+    run `docker exec -i midplane-gw-… sh -c 'umask 077 && cat >
+    secrets/billing.dsn'`, paste the string, and press `Ctrl-D`. Then run
+    `docker exec -i midplane-gw-… sh -c 'cat >> midplane.yaml'`, paste the
+    new line, and press `Ctrl-D`: the config setup writes ends with its
+    `databases:` list, so the line joins it.
   </Step>
   <Step title="Restart the gateway">
     On your machine, stop it with `Ctrl-C` and start it again; in Docker, run

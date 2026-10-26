@@ -5,8 +5,8 @@ description: "Step by step: run the gateway in the VPC, a read-only role, the RD
 ---
 
 This guide connects the gateway to an RDS or Aurora Postgres database that
-stays private in its VPC. You need a Midplane project with the database named
-in it ([get started](/get-started), step 2).
+stays private in its VPC. You need a Midplane project ([get
+started](/get-started)).
 
 <Steps>
   <Step title="Run the gateway inside the VPC">
@@ -34,26 +34,29 @@ in it ([get started](/get-started), step 2).
   </Step>
   <Step title="Download the RDS certificate bundle">
     Save the [global RDS bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem)
-    in the gateway's `secrets/` folder as `rds-global-bundle.pem`.
+    as `rds-global-bundle.pem` where the gateway runs: in Docker, in
+    `/etc/midplane/tls` on the server, which the commands mount at the same
+    path.
   </Step>
-  <Step title="Write the gateway's connection string">
+  <Step title="Give setup the connection string">
     Use the endpoint from the database's **Connectivity & security** tab. For
     agents that only read, prefer the Aurora reader endpoint or a read
     replica: it refuses writes whatever the policy says.
 
     ```text
-    postgres://midplane_gateway:<password>@mydb.abc123.eu-central-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=/etc/midplane/secrets/rds-global-bundle.pem
+    postgres://midplane_gateway:<password>@mydb.abc123.eu-central-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=/etc/midplane/tls/rds-global-bundle.pem
     ```
 
     `sslrootcert` is the bundle's path where the gateway runs:
-    `/etc/midplane/secrets/rds-global-bundle.pem` in Docker, or the file's
-    full path on your machine. Save the line as `secrets/<database id>.dsn`,
-    such as `secrets/shop.dsn`.
+    `/etc/midplane/tls/rds-global-bundle.pem` in Docker, or the file's full
+    path on your machine. Paste the line when `midplane setup` asks for the
+    connection string ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
-    Start or restart the gateway. **Test connection** on the **Gateways** page
-    shows your database's id with `ok`, such as `shop ok`, and the policy
-    editor lists your tables.
+    Setup says `ok` with the database and its number of tables. Once the
+    gateway runs, **Test connection** on the **Gateways** page shows your
+    database's id with `ok`, such as `shop ok`, and the policy editor lists
+    your tables.
   </Step>
 </Steps>
 
