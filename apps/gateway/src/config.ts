@@ -12,6 +12,11 @@
 //
 // Off loopback a gateway serves TLS, with a certificate from files or one
 // it gets itself from an ACME authority (acme.ts, certificates.ts).
+//
+// A linked gateway may be reached through Midplane's relay instead (relay.ts):
+// at one Midplane URL, `https://gw-<slug>.<domain>`, with a certificate it
+// gets through the relay, while it listens on loopback only, for health
+// checks.
 
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
@@ -21,6 +26,8 @@ import {
   DatabaseIdSchema,
   type DatabasePolicy,
   MAX_GATEWAY_URLS,
+  RELAY_CONTROL_LABEL,
+  relaySlugOf,
 } from "@midplane/protocol";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -73,8 +80,11 @@ const common = {
       key_file: z.string().min(1).optional(),
       acme: z
         .strictObject({
-          /** Where the challenge listener binds; port 80 forwards to it. */
-          http_port: z.number().int().min(1).max(65535).default(ACME_HTTP_PORT),
+          /**
+           * Where the challenge listener binds (7480); port 80 forwards to
+           * it. A relayed gateway binds none.
+           */
+          http_port: z.number().int().min(1).max(65535).optional(),
           directory_url: z.url().default(LETS_ENCRYPT),
         })
         .optional(),
@@ -132,6 +142,13 @@ const LocalConfigSchema = z.strictObject({
 
 const LinkedConfigSchema = z.strictObject({
   ...common,
+  /** Agents reach this gateway through Midplane's relay. */
+  relay: z
+    .strictObject({
+      /** The relay's own name, `relay.<domain>`: where work connections go. */
+      control: z.string().min(1),
+    })
+    .optional(),
   link: z.strictObject({
     /** Midplane Cloud's URL; its origin issues bundles and agent tokens. */
     cloud_url: z.url(),
@@ -175,7 +192,8 @@ export type TlsConfig =
       kind: "acme";
       /** The host names to certify: the https public URL's host. */
       names: string[];
-      httpPort: number;
+      /** The challenge listener's port; null when challenges come through the relay. */
+      httpPort: number | null;
       directoryUrl: string;
       /** Where the account key, the certificate and its key are kept. */
       dir: string;
@@ -206,7 +224,17 @@ export type IdentitySource =
   | { kind: "file"; path: string }
   | { kind: "env"; name: string; value: string | null };
 
+/** Where a relayed gateway opens its work connections. */
+export interface RelayConfig {
+  /** The relay's own name, `relay.<domain>`. */
+  control: string;
+  /** Gateway host names are `<slug>.<domain>`. */
+  domain: string;
+}
+
 export interface LinkedConfig extends BaseConfig {
+  /** Set when agents reach this gateway through the relay. */
+  relay: RelayConfig | null;
   link: {
     /** The cloud's origin. */
     cloudUrl: string;
@@ -266,8 +294,8 @@ function isUnspecified(host: string): boolean {
   return host === "0.0.0.0" || host === "::" || host === "[::]";
 }
 
-function parseDocument<T extends z.ZodType>(schema: T, text: string) {
-  const parsed = schema.safeParse(parseYaml(text));
+function parseDocument<T extends z.ZodType>(schema: T, document: unknown) {
+  const parsed = schema.safeParse(document);
   if (!parsed.success) {
     throw new ConfigError(
       parsed.error.issues
@@ -286,7 +314,9 @@ type CommonDocument = {
     | {
         cert_file?: string | undefined;
         key_file?: string | undefined;
-        acme?: { http_port: number; directory_url: string } | undefined;
+        acme?:
+          | { http_port?: number | undefined; directory_url: string }
+          | undefined;
       }
     | undefined;
   audit: { file: string; retention_days: number };
@@ -310,6 +340,7 @@ function tlsConfig(
   listenPort: number,
   file: (p: string) => string,
   base: string,
+  relayed: boolean,
 ): TlsConfig {
   if (!tls.acme) {
     const certFile = file(tls.cert_file as string);
@@ -348,13 +379,15 @@ function tlsConfig(
       "tls.acme.directory_url must use https (http only on this machine)",
     );
   }
-  if (tls.acme.http_port === listenPort) {
+  // Through the relay, challenges arrive on work connections: no port.
+  const httpPort = relayed ? null : (tls.acme.http_port ?? ACME_HTTP_PORT);
+  if (httpPort === listenPort) {
     throw new ConfigError("tls.acme.http_port must differ from listen.port");
   }
   return {
     kind: "acme",
     names: hosts,
-    httpPort: tls.acme.http_port,
+    httpPort,
     directoryUrl: directory.href,
     dir: join(base, "acme"),
   };
@@ -364,6 +397,7 @@ function baseConfig(
   c: CommonDocument,
   base: string,
   env: NodeJS.ProcessEnv,
+  relayed = false,
 ): BaseConfig {
   const file = (p: string) => (isAbsolute(p) ? p : resolve(base, p));
   // Every request is authenticated, so any interface is allowed, but off
@@ -404,12 +438,76 @@ function baseConfig(
     listen: { host: c.listen.host, port: c.listen.port },
     publicUrls,
     allowedHosts: c.listen.allowed_hosts,
-    tls: c.tls ? tlsConfig(c.tls, publicUrls, c.listen.port, file, base) : null,
+    tls: c.tls
+      ? tlsConfig(c.tls, publicUrls, c.listen.port, file, base, relayed)
+      : null,
     auditFile: file(c.audit.file),
     auditRetentionDays: c.audit.retention_days,
     maskSalt,
     limits: { maxRows: c.limits.max_rows, maxBytes: c.limits.max_bytes },
   };
+}
+
+/** A host name of two labels or more, lowercase, as a relay domain is. */
+const HOST_NAME =
+  /^(?=.{1,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * A relayed gateway's rules, each refusal naming its key: the control name
+ * is `relay.<domain>`; the one public URL is the gateway's relay URL,
+ * `https://gw-<slug>.<domain>`; the certificate comes from ACME through the
+ * relay, which binds no port; and the listener is on loopback, for health
+ * checks, since agents come through the relay.
+ */
+function relayConfig(
+  c: CommonDocument & { relay: { control: string } },
+): RelayConfig {
+  const control = c.relay.control.trim().toLowerCase();
+  const prefix = `${RELAY_CONTROL_LABEL}.`;
+  const domain = control.slice(prefix.length);
+  if (!control.startsWith(prefix) || !HOST_NAME.test(domain)) {
+    throw new ConfigError(
+      `relay.control must be the relay's name, ${prefix}<domain> such as relay.eu.midplane.app, not ${JSON.stringify(c.relay.control)}`,
+    );
+  }
+  const relayUrl = `https://gw-<8 characters>.${domain}`;
+  const urls = [
+    ...(c.public_urls ?? []),
+    ...(c.public_url ? [c.public_url] : []),
+  ];
+  const key = c.public_urls ? "public_urls" : "public_url";
+  if (urls.length !== 1) {
+    throw new ConfigError(
+      `${key}: a gateway reached through the relay has one public URL, its relay URL ${relayUrl}`,
+    );
+  }
+  const url = new URL(urls[0] as string);
+  if (
+    url.protocol !== "https:" ||
+    url.port !== "" ||
+    url.pathname.replace(/\/+$/, "") !== "" ||
+    !relaySlugOf(url.hostname, domain)
+  ) {
+    throw new ConfigError(
+      `${key} must be this gateway's relay URL, ${relayUrl}, not ${urls[0]}`,
+    );
+  }
+  if (!c.tls?.acme || c.tls.cert_file || c.tls.key_file) {
+    throw new ConfigError(
+      "tls: a gateway reached through the relay gets its certificate through it: set tls: { acme: {} }",
+    );
+  }
+  if (c.tls.acme.http_port !== undefined) {
+    throw new ConfigError(
+      "tls.acme.http_port: a gateway reached through the relay answers its challenges there, so it binds no port",
+    );
+  }
+  if (!isLoopback(c.listen.host)) {
+    throw new ConfigError(
+      `listen.host ${c.listen.host}: a gateway reached through the relay listens on loopback only (127.0.0.1), for health checks`,
+    );
+  }
+  return { control, domain };
 }
 
 /** Parse and validate a local-mode config; `path` anchors relative file paths. */
@@ -419,7 +517,17 @@ export function parseConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): LocalConfig {
   const base = dirname(path);
-  const c = parseDocument(LocalConfigSchema, text);
+  const document: unknown = parseYaml(text);
+  if (
+    typeof document === "object" &&
+    document !== null &&
+    "relay" in document
+  ) {
+    throw new ConfigError(
+      "relay: only a linked gateway (midplane gateway) is reached through the relay",
+    );
+  }
+  const c = parseDocument(LocalConfigSchema, document);
   const common = baseConfig(c, base, env);
 
   const databases = new Map<string, LocalDatabaseConfig>();
@@ -475,8 +583,9 @@ export function parseLinkedConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): LinkedConfig {
   const base = dirname(path);
-  const c = parseDocument(LinkedConfigSchema, text);
-  const common = baseConfig(c, base, env);
+  const c = parseDocument(LinkedConfigSchema, parseYaml(text));
+  const relay = c.relay ? relayConfig({ ...c, relay: c.relay }) : null;
+  const common = baseConfig(c, base, env, relay !== null);
 
   const cloud = new URL(c.link.cloud_url);
   if (cloud.protocol !== "https:" && !isLoopback(cloud.hostname)) {
@@ -510,6 +619,7 @@ export function parseLinkedConfig(
 
   return {
     ...common,
+    relay,
     link: {
       cloudUrl: cloud.origin,
       identity,

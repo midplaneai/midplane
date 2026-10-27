@@ -151,7 +151,8 @@ describe("midplane start, from the environment", { timeout: 30_000 }, () => {
     });
     const config = loadLinkedConfig(path, env);
     // A volume set up before answers the challenge where its config says.
-    if (config.tls?.kind === "acme") acme.challengePort = config.tls.httpPort;
+    if (config.tls?.kind === "acme")
+      acme.challengePort = config.tls.httpPort ?? 0;
     return startLinked(config, {
       certificates: { timing: { polling: POLLING } },
     });

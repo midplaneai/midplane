@@ -22,6 +22,9 @@
 // The status says how each database answers. When one the gateway couldn't
 // read at start is read at last, its catalog goes up at once, and the long
 // poll is cut short so the cloud hears it is served.
+//
+// A gateway reached through the relay opens its work connections with this
+// link's access token, and the status says whether they are up.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -60,6 +63,7 @@ import {
   LINK_SCOPE,
   linkResource,
   type RefreshCatalogResult,
+  type RelayStatus,
   SYNC_WAIT_MS,
   SyncResponseSchema,
   TaintAnswerSchema,
@@ -152,6 +156,8 @@ export interface LinkClientOptions {
   audit?: LocalAuditLog;
   /** For tests: the audit push's delays. */
   auditTiming?: AuditPusherOptions["timing"];
+  /** A gateway reached through the relay: its work connections now. */
+  relay?: () => RelayStatus;
 }
 
 const CATALOG_MAX_AGE_MS = 5 * 60 * 1000;
@@ -295,6 +301,7 @@ export class LinkClient implements TaintStore, Approvals {
       ),
       ...this.auditHead(),
       database_health: this.o.gateway.health(),
+      ...(this.o.relay ? { relay: this.o.relay() } : {}),
     };
   }
 
@@ -551,7 +558,7 @@ export class LinkClient implements TaintStore, Approvals {
   }
 
   /** Sync again at once: cut the long poll short, or skip the pause before the next. */
-  private nudge(): void {
+  nudge(): void {
     this.nudged = true;
     this.poll?.abort();
   }
@@ -746,6 +753,15 @@ export class LinkClient implements TaintStore, Approvals {
     }
     this.tokenEndpoint = { url: meta.token_endpoint, issuer: meta.issuer };
     return this.tokenEndpoint;
+  }
+
+  /**
+   * The link access token, for the relay's work connections; `fresh` once
+   * the relay refused the one held.
+   */
+  relayToken(fresh: boolean): Promise<string> {
+    if (fresh && !this.minting) this.token = null;
+    return this.accessToken();
   }
 
   /** A link access token: client_credentials, authenticated by private_key_jwt. */

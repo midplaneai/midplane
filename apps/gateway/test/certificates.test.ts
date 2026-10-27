@@ -335,13 +335,13 @@ describe("a certificate from ACME", () => {
         timing: { polling: POLLING },
       }),
     ).rejects.toMatchObject({
-      message: `port 80 on gw.test isn't reachable from the internet: open it, forwarded to port ${tls.kind === "acme" ? tls.httpPort : 0} here`,
+      message: `port 80 on gw.test isn't reachable from the internet: open it, forwarded to port ${tls.kind === "acme" ? (tls.httpPort ?? 0) : 0} here`,
       problem: {
         type: "urn:ietf:params:acme:error:connection",
         detail: "Timeout during connect (likely firewall problem)",
       },
     });
-    const port = tls.kind === "acme" ? tls.httpPort : 0;
+    const port = tls.kind === "acme" ? (tls.httpPort ?? 0) : 0;
     await new Promise<void>((done, fail) => {
       const s = createServer();
       s.once("error", fail);

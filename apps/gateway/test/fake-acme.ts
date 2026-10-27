@@ -18,6 +18,7 @@ import {
 } from "node:crypto";
 import {
   createServer,
+  request as httpRequest,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
@@ -361,10 +362,33 @@ export async function startFakeAcme(
     }
     const path = `/.well-known/acme-challenge/${a.token}`;
     try {
-      const res = await fetch(`http://127.0.0.1:${fake.challengePort}${path}`, {
-        headers: { host: a.name },
-      });
-      const body = await res.text();
+      // Not fetch, which sends its own Host: a relay routes by this one.
+      const res = await new Promise<{ status: number; body: string }>(
+        (resolve, reject) => {
+          const req = httpRequest(
+            {
+              host: "127.0.0.1",
+              port: fake.challengePort,
+              path,
+              headers: { host: a.name },
+            },
+            (r) => {
+              let text = "";
+              r.setEncoding("utf8");
+              r.on("data", (d: string) => {
+                text += d;
+              });
+              r.on("end", () =>
+                resolve({ status: r.statusCode ?? 0, body: text }),
+              );
+              r.on("error", reject);
+            },
+          );
+          req.on("error", reject);
+          req.end();
+        },
+      );
+      const body = res.body;
       fake.fetches.push({ path, status: res.status, body });
       if (res.status === 200 && body === `${a.token}.${a.thumbprint}`) {
         a.status = "valid";

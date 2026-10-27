@@ -1,6 +1,13 @@
 // midplane: the gateway. An MCP server, an OAuth resource server and a guarded
 // Postgres client that enforces @midplane/core verdicts next to the database.
 
+export {
+  AcmeError,
+  type ChallengeHandler,
+  ChallengeTokens,
+  challengeHandler,
+  obtainCertificate,
+} from "./acme.ts";
 export { AuditFileReader, LocalAuditLog } from "./audit.ts";
 export {
   exportAudit,

@@ -24,7 +24,8 @@
     "node": ">=24.16.0"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./test/fake-acme": "./test/fake-acme.ts"
   },
   "files": [
     "bundle",

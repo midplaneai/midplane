@@ -10,6 +10,13 @@
 // Over TLS, the certificate comes first (certificates.ts): one from ACME is
 // obtained before the listener starts, and a renewed or replaced one is
 // served to new connections without a restart.
+//
+// A gateway reached through the relay (relay.ts) starts in another order:
+// its identity (enrolling first if need be), then its work connections,
+// which need the link token, then its certificate, whose challenge comes
+// through them, then serving. It listens on loopback only, for health
+// checks; agents' streams arrive on work connections and go to the same
+// HTTPS server, or, on port 80, to the challenge handler, and nowhere else.
 
 import {
   createServer as createHttpsServer,
@@ -17,9 +24,10 @@ import {
 } from "node:https";
 import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
-import type { DatabasePolicy } from "@midplane/protocol";
+import type { DatabasePolicy, ProxyHeader } from "@midplane/protocol";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { Hono } from "hono";
+import { ChallengeTokens, challengeHandler } from "./acme.ts";
 import { localTaintStore } from "./approvals.ts";
 import { LocalAuditLog } from "./audit.ts";
 import type { AuditPusherOptions } from "./audit-push.ts";
@@ -37,6 +45,7 @@ import {
   isLoopback,
   type LinkedConfig,
   type LocalConfig,
+  listenerUrlOf,
 } from "./config.ts";
 import { DatabaseExecutor } from "./executor.ts";
 import { type DatabaseRuntime, type Enforcement, Gateway } from "./gateway.ts";
@@ -50,6 +59,13 @@ import {
 } from "./identity.ts";
 import { LinkClient } from "./link.ts";
 import { log } from "./log.ts";
+import {
+  dialRelay,
+  presentAs,
+  type RelayAddress,
+  routeStream,
+  WorkConnections,
+} from "./relay.ts";
 import { createServerFactory } from "./tools.ts";
 import { baseOf, PublicUrls, resourceOf } from "./urls.ts";
 
@@ -66,6 +82,8 @@ export interface RunningGateway {
   audit: LocalAuditLog;
   /** Linked mode only. */
   link?: LinkClient;
+  /** Reached through the relay: its work connections. */
+  relay?: WorkConnections;
   /** Accepted TCP connections, e.g. to prove none come from the cloud. */
   server: { on(event: "connection", fn: (socket: unknown) => void): void };
   /** Over TLS: the certificate served, renewed or reloaded on a timer. */
@@ -163,6 +181,12 @@ async function openRuntime(
   return { gateway, audit, executors, stopPruning };
 }
 
+interface Listening {
+  server: ReturnType<typeof serve>;
+  listener: string;
+  certificates: Certificates | null;
+}
+
 /**
  * Listen with a handler that can be swapped in once the URLs are known;
  * over TLS, once there is a certificate to serve.
@@ -174,11 +198,7 @@ async function listen(
     onServer?: ((server: RunningGateway["server"]) => void) | undefined;
     certificates?: CertificateOptions | undefined;
   } = {},
-): Promise<{
-  server: ReturnType<typeof serve>;
-  listener: string;
-  certificates: Certificates | null;
-}> {
+): Promise<Listening> {
   const certificates = config.tls
     ? await startCertificates(
         config.tls,
@@ -259,7 +279,7 @@ export async function startLocal(
     { state: "enforcing" },
   );
   let app: Hono | null = null;
-  let started: Awaited<ReturnType<typeof listen>>;
+  let started: Listening;
   try {
     started = await listen(config, () => app, {
       certificates: options.certificates,
@@ -380,12 +400,19 @@ export interface LinkedOptions {
   retry?: { minMs: number; maxMs: number; cutMs: number };
   /** For tests: how old a catalog may get before a sync re-reads it. */
   catalogMaxAgeMs?: number;
-  /** Called once listening, before enrollment or any link traffic. */
+  /**
+   * Called once listening: before enrollment or any link traffic, unless
+   * the gateway is reached through the relay, which enrolls first.
+   */
   onServer?: (server: RunningGateway["server"]) => void;
   /** For tests: the audit push's delays. */
   auditTiming?: AuditPusherOptions["timing"];
   /** For tests: the certificate's clock and timers. */
   certificates?: CertificateOptions;
+  /** For tests: where the relay listens and the CA it's trusted by, and the waits. */
+  relay?: Omit<RelayAddress, "control"> & {
+    backoff?: { minMs: number; maxMs: number };
+  };
 }
 
 /**
@@ -409,33 +436,36 @@ export async function startLinked(
   );
   let app: Hono | null = null;
   let link: LinkClient | null = null;
-  let started: Awaited<ReturnType<typeof listen>>;
-  try {
-    started = await listen(config, () => app, {
-      onServer: options.onServer,
-      certificates: options.certificates,
-    });
-  } catch (err) {
-    stopPruning();
-    const retries = gateway.close();
-    await Promise.all([...executors.values()].map((e) => e.close()));
-    await retries;
-    audit.close();
-    throw err;
-  }
-  const { server, listener, certificates } = started;
-  const urls = publicUrlsOf(config, listener);
+  let relayed: Relayed | null = null;
+  let started: Listening | null = null;
   const close = async () => {
     stopPruning();
     // Retries stop now; one mid-read ends as its pool closes.
     const retries = gateway.close();
+    relayed?.stop();
     await link?.close();
-    await certificates?.close();
-    await closeServer(server);
+    if (started) {
+      await started.certificates?.close();
+      await closeServer(started.server);
+    }
     await Promise.all([...executors.values()].map((e) => e.close()));
     await retries;
     audit.close();
   };
+  // A direct gateway listens first. Through the relay, its certificate
+  // waits for the work connections, and they for the link token.
+  if (!config.relay) {
+    try {
+      started = await listen(config, () => app, {
+        onServer: options.onServer,
+        certificates: options.certificates,
+      });
+    } catch (err) {
+      await close();
+      throw err;
+    }
+  }
+  const urls = publicUrlsOf(config, started?.listener ?? listenerUrlOf(config));
 
   try {
     const identity = await identityFor(config, urls.configured, options.fetch);
@@ -460,6 +490,12 @@ export async function startLinked(
       cachePath: config.link.bundleCache,
       audit,
       log,
+      ...(config.relay
+        ? {
+            relay: () =>
+              relayed?.connections.status() ?? { idle: 0, refused: null },
+          }
+        : {}),
       ...(options.auditTiming ? { auditTiming: options.auditTiming } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.retry ? { retry: options.retry } : {}),
@@ -468,6 +504,14 @@ export async function startLinked(
         : {}),
     });
     gateway.useLink(link);
+    if (config.relay) {
+      // Syncing already, so the dashboard hears the relay's refusals while
+      // the certificate waits for a work connection.
+      link.start();
+      gateway.retryUnread();
+      relayed = openRelay({ ...config, relay: config.relay }, link, options);
+      started = await relayed.serve(config, () => app, options);
+    }
     app = buildApp({
       gateway,
       verifier,
@@ -477,8 +521,10 @@ export async function startLinked(
       onClient: (client) =>
         log({ level: "info", msg: "mcp client", ...client }),
     });
-    link.start();
-    gateway.retryUnread();
+    if (!config.relay) {
+      link.start();
+      gateway.retryUnread();
+    }
     log({
       level: "info",
       msg: "gateway listening",
@@ -486,22 +532,109 @@ export async function startLinked(
       mode: "linked",
       project: identity.project_id,
       bundle: link.version,
+      ...(config.relay ? { relay: config.relay.control } : {}),
     });
   } catch (err) {
     await close();
     throw err;
   }
+  const running = started as Listening;
 
   return {
     url: baseOf(urls.configured[0] as string),
-    listener,
+    listener: running.listener,
     urls,
     gateway,
     audit,
     link,
-    server,
-    certificates,
+    ...(relayed ? { relay: relayed.connections } : {}),
+    server: running.server,
+    certificates: running.certificates,
     close,
+  };
+}
+
+/** A gateway reached through the relay: its work connections, open. */
+interface Relayed {
+  connections: WorkConnections;
+  /** Get the certificate through them, then listen on loopback. */
+  serve(
+    config: BaseConfig,
+    handler: () => Hono | null,
+    options: LinkedOptions,
+  ): Promise<Listening>;
+  /** Close the work connections and every stream on them. */
+  stop(): void;
+}
+
+/**
+ * Through the relay: open the work connections now; `serve` gets the
+ * certificate through them, then listens. Each stream goes where its
+ * PROXY line's destination port says: 443 to the HTTPS server once it has
+ * a certificate, 80 to the challenge handler.
+ */
+function openRelay(
+  config: LinkedConfig & { relay: NonNullable<LinkedConfig["relay"]> },
+  link: LinkClient,
+  options: LinkedOptions,
+): Relayed {
+  const address: RelayAddress = {
+    control: config.relay.control,
+    ...(options.relay?.connect ? { connect: options.relay.connect } : {}),
+    ...(options.relay?.ca ? { ca: options.relay.ca } : {}),
+  };
+  const tokens = new ChallengeTokens();
+  const challenges = challengeHandler(tokens);
+  let https: HttpsServer | null = null;
+  /** Each relayed stream's PROXY header, for the TLS socket over it. */
+  const headers = new WeakMap<object, ProxyHeader>();
+  const connections = new WorkConnections({
+    dial: (token, signal) => dialRelay(address, token, signal),
+    token: (fresh) => link.relayToken(fresh),
+    control: config.relay.control,
+    log,
+    onChange: () => link.nudge(),
+    ...(options.relay?.backoff ? { backoff: options.relay.backoff } : {}),
+    onStream: (socket, first) =>
+      void routeStream(socket, first, {
+        tls(stream, header) {
+          // Nothing to serve before the certificate: closed.
+          if (!https) return stream.destroy();
+          headers.set(stream, header);
+          https.emit("connection", stream);
+        },
+        challenge(stream, header) {
+          presentAs(stream, header);
+          // One request, answered at once; never held open.
+          const timer = setTimeout(() => stream.destroy(), 10_000);
+          stream.once("close", () => clearTimeout(timer));
+          challenges.serve(stream);
+        },
+      }),
+  });
+  connections.start();
+  return {
+    connections,
+    async serve(base, handler, o) {
+      const started = await listen(base, handler, {
+        onServer: o.onServer,
+        certificates: {
+          ...o.certificates,
+          relayed: { tokens, ready: (signal) => connections.ready(signal) },
+        },
+      });
+      https = started.server as unknown as HttpsServer;
+      // The TLS socket over a relayed stream is the agent's, as its line says.
+      https.on("secureConnection", (tls: { _parent?: object }) => {
+        const header = tls._parent && headers.get(tls._parent);
+        if (header) presentAs(tls, header);
+      });
+      return started;
+    },
+    stop() {
+      connections.close();
+      challenges.close();
+    },
   };
 }
 

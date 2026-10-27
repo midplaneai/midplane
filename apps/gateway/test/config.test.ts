@@ -322,4 +322,83 @@ describe("linked config", () => {
       "http://localhost:3900",
     );
   });
+
+  // protects=a relayed gateway's config: one https relay URL under the control name's domain, a certificate from ACME through the relay with no port bound, and a loopback listener; each other shape is refused naming its key, and local mode refuses `relay`;
+  // fails_when=a vanity, foreign, http, ported or pathed URL, a second URL, certificate files, an http_port, an off-loopback listener or a control name not `relay.<domain>` is accepted, or a relayed config gets a challenge port;
+  // no_claim=that the relay accepts this gateway, or that the cloud registered its URL (both at run time)
+  it("takes relay with one relay URL, a certificate through it and a loopback listener", () => {
+    const relayed = (over: Record<string, unknown> = {}) =>
+      parseLinkedConfig(
+        JSON.stringify({
+          listen: { host: "127.0.0.1", port: 7433 },
+          relay: { control: "relay.eu.midplane.app" },
+          public_url: "https://gw-k3m9x2qa.eu.midplane.app",
+          tls: { acme: {} },
+          audit: { file: "audit.db" },
+          link: {
+            cloud_url: "https://cloud.example.com",
+            identity: { file: "identity.json" },
+          },
+          databases: { main: { dsn: { env: "DSN" } } },
+          ...over,
+        }),
+        join(dir, "gw.yaml"),
+        env,
+      );
+    const c = relayed();
+    expect(c.relay).toEqual({
+      control: "relay.eu.midplane.app",
+      domain: "eu.midplane.app",
+    });
+    expect(c.publicUrls).toEqual(["https://gw-k3m9x2qa.eu.midplane.app"]);
+    expect(c.tls).toMatchObject({
+      kind: "acme",
+      names: ["gw-k3m9x2qa.eu.midplane.app"],
+      httpPort: null,
+    });
+    // A direct gateway's ACME still binds its challenge port.
+    expect(linked().relay).toBeNull();
+
+    const refusals: [Record<string, unknown>, RegExp][] = [
+      [{ relay: { control: "eu.midplane.app" } }, /^relay\.control /],
+      [{ relay: { control: "relay." } }, /^relay\.control /],
+      [{ public_url: "https://db.example.com" }, /^public_url must/],
+      [{ public_url: "https://mcp.eu.midplane.app" }, /^public_url must/],
+      [{ public_url: "https://gw-k3m9x2qa.us.midplane.app" }, /^public_url/],
+      [{ public_url: "http://gw-k3m9x2qa.eu.midplane.app" }, /^public_url/],
+      [
+        { public_url: "https://gw-k3m9x2qa.eu.midplane.app:8443" },
+        /^public_url/,
+      ],
+      [{ public_url: "https://gw-k3m9x2qa.eu.midplane.app/x" }, /^public_url/],
+      [{ public_url: "https://gw-k3m9x2qa.eu.midplane.app." }, /^public_url/],
+      [{ public_url: "https://relay.eu.midplane.app" }, /^public_url/],
+      [
+        {
+          public_url: undefined,
+          public_urls: [
+            "https://gw-k3m9x2qa.eu.midplane.app",
+            "https://db.example.com",
+          ],
+        },
+        /^public_urls: .*one public URL/,
+      ],
+      [{ public_url: undefined }, /^public_url: .*one public URL/],
+      [{ tls: undefined }, /^tls: /],
+      [{ tls: { cert_file: "a.pem", key_file: "b.pem" } }, /^tls: /],
+      [{ tls: { acme: { http_port: 7480 } } }, /^tls\.acme\.http_port: /],
+      [
+        { listen: { host: "0.0.0.0", port: 7433 } },
+        /^listen\.host 0\.0\.0\.0: /,
+      ],
+    ];
+    for (const [over, message] of refusals) {
+      expect(() => relayed(over), JSON.stringify(over)).toThrow(ConfigError);
+      expect(() => relayed(over), JSON.stringify(over)).toThrow(message);
+    }
+
+    expect(() =>
+      config({ relay: { control: "relay.eu.midplane.app" } }),
+    ).toThrow(/^relay: only a linked gateway/);
+  });
 });

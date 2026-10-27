@@ -15,6 +15,10 @@
 //
 // Either way a new certificate reaches new connections only; open ones keep
 // the one they started with.
+//
+// A gateway reached through the relay binds no challenge listener: the relay
+// hands it each challenge request (relay.ts), so each order waits until its
+// work connections are up.
 
 import { createPrivateKey, type KeyObject, X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -162,6 +166,15 @@ export interface CertificateOptions {
   now?: () => Date;
   /** For tests: how often each kind is checked, and ACME's polling. */
   timing?: { acmeCheckMs?: number; fileCheckMs?: number; polling?: Polling };
+  /**
+   * Challenges answered through the relay (`tls.acme` without a port):
+   * the tokens its challenge handler answers, and a wait, before each
+   * order, until the relay can reach this gateway.
+   */
+  relayed?: {
+    tokens: ChallengeTokens;
+    ready(signal: AbortSignal): Promise<void>;
+  };
 }
 
 /**
@@ -190,23 +203,31 @@ export async function startCertificates(
   };
 
   if (tls.kind === "acme") {
-    const tokens = new ChallengeTokens();
-    try {
-      challenges = await listenForChallenges(tls.httpPort, tokens);
-    } catch (err) {
-      throw new ConfigError((err as Error).message);
+    const relayed = tls.httpPort === null ? o.relayed : undefined;
+    if (tls.httpPort === null && !relayed) {
+      throw new Error("challenges through the relay need its handler");
     }
-    const listener = challenges;
-    const obtain = () =>
-      obtainCertificate({
+    const tokens = relayed?.tokens ?? new ChallengeTokens();
+    if (tls.httpPort !== null) {
+      try {
+        challenges = await listenForChallenges(tls.httpPort, tokens);
+      } catch (err) {
+        throw new ConfigError((err as Error).message);
+      }
+    }
+    const httpPort = challenges?.port ?? null;
+    const obtain = async () => {
+      await relayed?.ready(stopping.signal);
+      return obtainCertificate({
         directoryUrl: tls.directoryUrl,
         names: tls.names,
         dir: tls.dir,
         challenges: tokens,
-        httpPort: listener.port,
+        httpPort,
         signal: stopping.signal,
         ...(o.timing?.polling ? { polling: o.timing.polling } : {}),
       });
+    };
     let stored: StoredCertificate | null;
     try {
       stored = readStoredCertificate(tls.dir);
@@ -233,7 +254,7 @@ export async function startCertificates(
         }
       }
     } catch (err) {
-      await listener.close();
+      await challenges?.close();
       throw err;
     }
     current = stored;

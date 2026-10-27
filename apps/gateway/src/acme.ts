@@ -8,6 +8,8 @@
 // now, and 404 with an empty body to everything else. It never reads an
 // Authorization header and never reaches the MCP handler, so no token ever
 // crosses it in the clear: TLS off loopback still guards everything else.
+// A gateway reached through the relay binds no port for it: the relay hands
+// it each challenge request on a work connection (relay.ts).
 //
 // The account key, the certificate and its key live in one folder (the
 // config's `acme/`), each file written whole or not at all.
@@ -27,8 +29,14 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer, type Server } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { join } from "node:path";
+import type { Duplex } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   calculateJwkThumbprint,
@@ -178,7 +186,8 @@ interface Context {
   ca: string;
   /** The names asked for, the first named in sentences. */
   host: string;
-  httpPort: number;
+  /** The challenge listener's port; null when challenges come through the relay. */
+  httpPort: number | null;
 }
 
 /**
@@ -192,7 +201,11 @@ function failure(
 ): AcmeError {
   const kind = problem.type.replace(/^urn:ietf:params:acme:error:/, "");
   let sentence = `${c.ca} refused a certificate for ${c.host}`;
-  if (
+  if (fromChallenge && c.httpPort === null) {
+    // The relay's DNS and port 80 are Midplane's: what is wrong is the way
+    // through it, to this gateway's work connections.
+    sentence = `${c.ca} couldn't fetch the challenge for ${c.host} through the relay (${kind})`;
+  } else if (
     fromChallenge &&
     (kind === "dns" || kind === "unauthorized" || kind === "incorrectResponse")
   ) {
@@ -242,6 +255,60 @@ export interface ChallengeListener {
   close(): Promise<void>;
 }
 
+/** The answer to one request: the method and path read, never a header or a body. */
+function answerChallenge(
+  tokens: ChallengeTokens,
+  req: IncomingMessage,
+  res: ServerResponse,
+): void {
+  const body = tokens.answer(req.method, req.url);
+  if (body === null) {
+    res.writeHead(404, { "content-length": "0" });
+    res.end();
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "text/plain",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+/** The challenge handler with no port bound, for connections handed to it. */
+export interface ChallengeHandler {
+  /**
+   * Serve one connection: plain HTTP, paused, with any bytes already read
+   * given back to it (`unshift`).
+   */
+  serve(socket: Duplex): void;
+  /** Close every connection it serves now. */
+  close(): void;
+}
+
+/**
+ * Answer challenges on connections something else accepted: the relay's
+ * port 80, carried on a work connection. Nothing listens.
+ */
+export function challengeHandler(tokens: ChallengeTokens): ChallengeHandler {
+  const server: Server = createServer((req, res) =>
+    answerChallenge(tokens, req, res),
+  );
+  const open = new Set<Duplex>();
+  return {
+    serve(socket) {
+      open.add(socket);
+      socket.once("close", () => open.delete(socket));
+      server.emit("connection", socket);
+      // Its reader is attached now; a paused socket wouldn't flow to it,
+      // and the bytes given back would wait there unread.
+      socket.resume();
+    },
+    close() {
+      for (const socket of open) socket.destroy();
+    },
+  };
+}
+
 /**
  * Plain HTTP on every interface, for the authority's fetch. It reads the
  * method and path, never a header or a body.
@@ -251,19 +318,9 @@ export function listenForChallenges(
   tokens: ChallengeTokens,
   host = "0.0.0.0",
 ): Promise<ChallengeListener> {
-  const server: Server = createServer((req, res) => {
-    const body = tokens.answer(req.method, req.url);
-    if (body === null) {
-      res.writeHead(404, { "content-length": "0" });
-      res.end();
-      return;
-    }
-    res.writeHead(200, {
-      "content-type": "text/plain",
-      "content-length": Buffer.byteLength(body),
-    });
-    res.end(body);
-  });
+  const server: Server = createServer((req, res) =>
+    answerChallenge(tokens, req, res),
+  );
   return new Promise((done, fail) => {
     server.once("error", (err: NodeJS.ErrnoException) => {
       const why =
@@ -557,8 +614,11 @@ export interface AcmeOptions {
   dir: string;
   /** Where the challenge listener finds what to answer. */
   challenges: ChallengeTokens;
-  /** The challenge listener's port, for the sentence when port 80 fails. */
-  httpPort: number;
+  /**
+   * The challenge listener's port, for the sentence when port 80 fails;
+   * null when challenges come through the relay.
+   */
+  httpPort: number | null;
   signal?: AbortSignal;
   polling?: Polling;
 }

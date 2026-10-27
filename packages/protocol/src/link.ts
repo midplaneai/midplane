@@ -251,6 +251,24 @@ export const DatabaseHealthSchema = z.strictObject({
 });
 export type DatabaseHealth = z.infer<typeof DatabaseHealthSchema>;
 
+/**
+ * A relayed gateway's work connections (relay.ts): how many are idle now,
+ * and why the relay last refused one, until it next accepts one.
+ */
+export const RelayStatusSchema = z.strictObject({
+  idle: z.number().int().min(0).max(64),
+  refused: z
+    .strictObject({
+      /** The relay's answer (401, 403, 429…), or 0 when none came. */
+      status: z.number().int().min(0).max(599),
+      /** Why none came, as an error code: `ECONNREFUSED`, `CERT_HAS_EXPIRED`. */
+      code: z.string().max(64).nullable(),
+      at: z.iso.datetime(),
+    })
+    .nullable(),
+});
+export type RelayStatus = z.infer<typeof RelayStatusSchema>;
+
 /** The body of every sync: the gateway's status, which replaces a heartbeat. */
 export const GatewayStatusSchema = z.strictObject({
   /** The newest authentic bundle it holds, enforced or not. */
@@ -292,6 +310,8 @@ export const GatewayStatusSchema = z.strictObject({
     .record(DatabaseIdSchema, DatabaseHealthSchema)
     .refine((r) => Object.keys(r).length <= 256, "too many databases")
     .optional(),
+  /** Only from a gateway agents reach through the relay. */
+  relay: RelayStatusSchema.optional(),
 });
 export type GatewayStatus = z.infer<typeof GatewayStatusSchema>;
 
