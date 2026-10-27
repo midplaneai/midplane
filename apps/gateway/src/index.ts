@@ -57,3 +57,4 @@ export {
   type SetupIO,
   type SetupResult,
 } from "./setup.ts";
+export { startConfig } from "./start.ts";

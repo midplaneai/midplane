@@ -47,7 +47,7 @@ variables](/gateway/configuration#setup-from-environment-variables).
 
 ### A setup variable is not set
 
-`MIDPLANE_URL is not set`, or another variable: setup from environment
+`MIDPLANE_CLOUD_URL is not set`, or another variable: setup from environment
 variables needs it. Add it to the env file or the platform's secrets. Docker
 reads an env file only when it creates the container: remove the container
 and run it again. Nothing was written, and the token is unused.
@@ -56,9 +56,9 @@ and run it again. Nothing was written, and the token is unused.
 
 The folder, or in Docker the volume, holds a gateway already. Start it
 instead: on this machine, `npx -y midplane@latest gateway --config
-<folder>/midplane.yaml`; in Docker, the step's second command. On this
-machine each run of setup makes a new folder; in Docker, a new token gives
-the commands a new volume.
+<folder>/midplane.yaml`; in Docker, the step's `docker run -d` command. On
+this machine each run of setup makes a new folder; in Docker, a new token
+gives the commands a new volume.
 
 ### The port is taken
 
@@ -190,6 +190,80 @@ image is for servers: on a laptop it needs a TLS certificate.
 
 Some Linux and WSL setups don't resolve `*.localhost`. Add the gateway's name
 to `/etc/hosts`: `127.0.0.1 gw-k3m9x2qa.localhost`.
+
+## Cannot reach the relay
+
+A gateway [behind the relay](/gateway/deploy#docker) connects out
+to the relay of its region, such as `relay.eu.midplane.app`, on port 443. The
+setup step and the **Gateways** page say how that goes: **Relay · connected**,
+**connecting**, or the relay's refusal, below. Until it first connects, the
+gateway can't get its certificate, so agents can't reach it; it keeps
+trying, waiting up to a minute between tries, and logs `relay connection
+failed` each time with the `status` or `code`. A gateway that connected
+before keeps enforcing your policies meanwhile
+([when the relay is down](/security#when-the-relay-is-down)).
+
+### Midplane Cloud has no relay
+
+`Midplane Cloud at https://… has no relay: set the gateway up at a URL of
+your own, with --url` (or `MIDPLANE_URL`), from setup. The cloud you set up
+with has no relay in its region, so a gateway there needs [your own
+URL](/gateway/deploy#your-own-url). Nothing was written, and the token is
+unused.
+
+### Midplane Cloud did not say where its relay is
+
+`Midplane Cloud at https://… didn't say where its relay is (503): try again
+later`, from setup: the cloud's answer had no relay in it, as when it is
+being deployed. Run setup again, or start the container again, in a few
+minutes. Nothing was written, and the token is unused.
+
+### The relay cannot be reached
+
+**Relay: can't reach it**, with why, such as `connection timed out
+(ETIMEDOUT)`. The gateway couldn't open a connection to the relay on port
+443. Check that its host may connect out on port 443 to the relay's name,
+and that the name resolves there (`getent hosts relay.eu.midplane.app`). A
+proxy that inspects TLS breaks the connection: let the gateway reach the
+relay without it.
+
+### The relay refused its link token
+
+**Relay: refused its link token** (401). The relay didn't accept the token
+the gateway got from Midplane Cloud, even a fresh one, as when the gateway
+has just been revoked. Check the **Gateways** page: a revoked gateway can't
+be reached at its Midplane URL again, so set up a new one with a new token.
+
+### Midplane holds no relay URL for this gateway
+
+**Relay: refused: Midplane holds no relay URL for this gateway** (403). The
+gateway's config has `relay`, but it didn't get a Midplane URL when it
+joined the project, or a project manager removed it on the **Gateways**
+page. Only joining gives a gateway one: set up a new gateway behind the relay
+with a new token.
+
+### Too many idle connections
+
+**Relay: refused: too many idle connections, from replicas of this gateway**
+(429). The relay holds at most 8 idle connections per gateway, and each
+copy of a gateway keeps 4. Run at most two copies of one gateway behind the
+relay.
+
+### No link token for the relay
+
+**Relay: not tried: the gateway couldn't get a link token from Midplane
+Cloud**. The gateway asks Midplane Cloud for the token it opens its
+connections with, and that failed: see [cannot reach Midplane
+Cloud](#cannot-reach-midplane-cloud).
+
+### The certificate cannot be fetched through the relay
+
+`Let's Encrypt couldn't fetch the challenge for gw-….eu.midplane.app through
+the relay`, as the gateway's last log line at its first start, with what
+Let's Encrypt said. Its check of the gateway's name didn't reach the
+gateway, as when the gateway lost its connections to the relay meanwhile.
+The gateway tries again at its next start, which Docker makes on its own
+under `--restart unless-stopped`, with no new token.
 
 ## Connecting to a database
 

@@ -79,8 +79,8 @@
             "pages": ["policies/masking", "policies/approvals-and-taint"]
           },
           {
-            "group": "Audit and releases",
-            "pages": ["audit", "releases"]
+            "group": "Security, audit and releases",
+            "pages": ["security", "audit", "releases"]
           }
         ]
       }
@@ -236,7 +236,7 @@
     },
     {
       "source": "/cloud/security",
-      "destination": "/"
+      "destination": "/security"
     },
     {
       "source": "/cloud/connections",
@@ -328,15 +328,15 @@
     },
     {
       "source": "/security/threat-model",
-      "destination": "/"
+      "destination": "/security"
     },
     {
       "source": "/security/trust-posture",
-      "destination": "/"
+      "destination": "/security"
     },
     {
       "source": "/security/reporting",
-      "destination": "/"
+      "destination": "/security#reporting-a-vulnerability"
     },
     {
       "source": "/self-host/engine",

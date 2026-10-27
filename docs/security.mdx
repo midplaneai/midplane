@@ -1,0 +1,97 @@
+---
+title: "Security"
+description: "What Midplane Cloud and Midplane's relay can and can't see, the relay's DNS caveat, how to watch Certificate Transparency logs for your gateway, and how to report a vulnerability."
+---
+
+The gateway runs in your network and holds your connection strings. Rows,
+results and connection strings stay there: [how it
+works](/how-it-works#what-stays-and-what-goes-up) lists what goes up to
+Midplane Cloud, and [linked mode](/gateway/linked-mode#what-goes-up) has
+every detail. Agents reach the gateway at your own URL, or at a Midplane URL
+through the relay, below.
+
+## The relay
+
+A gateway [behind the relay](/gateway/deploy#docker) connects out
+to the relay of its region, `relay.eu.midplane.app` in the EU, and keeps a
+few connections open there, which it authenticates with the token it uses
+with Midplane Cloud. An agent connects to
+the gateway's Midplane URL, such as `gw-7hq2m4xd.eu.midplane.app`, which points
+at the relay. The relay reads only the name the agent asks for in its TLS
+handshake, then passes the still-encrypted bytes, unread, over one of that
+gateway's connections. TLS ends at the gateway, with a certificate it got from
+Let's Encrypt for a key that never leaves its volume. Each connection serves
+only its own gateway's name.
+
+### What the relay sees
+
+- **Host names:** the gateway's Midplane URL, as each agent asks for it.
+- **Addresses:** each agent's IP address and port, and the gateway's.
+- **Timing and byte counts:** when each connection opens and closes, and
+  how many bytes cross it each way.
+- **The gateway's token**, which it checks as Midplane Cloud itself does.
+- **Let's Encrypt's checks** of the gateway's name on port 80: a request for
+  a token whose answer is public by design. Nothing else on port 80 reaches
+  the gateway.
+
+The relay logs these, never a byte of a connection, and passes each agent's
+address to the gateway ahead of its bytes, so the gateway sees the agent as
+the client rather than the relay.
+
+### What the relay cannot see
+
+Anything inside TLS: the agent's requests and its access token, your SQL and
+its results, and every response the gateway sends. The relay doesn't hold a
+key or a certificate for any gateway's name, and has no way to decrypt the
+traffic it passes. "Midplane Cloud never sees a row" holds for a gateway behind
+the relay as for one at your own URL.
+
+### Who could get a certificate for your gateway
+
+Midplane controls the DNS of `midplane.app`, where Midplane URLs are. So
+Midplane could get a certificate for your gateway's name from a public
+certificate authority, point the name at a server of its own, and read what
+agents send there. Nothing in the protocol prevents that. Every publicly
+trusted certificate is published in Certificate Transparency logs, so such a
+certificate would be visible, but only after it was issued. To have no
+Midplane component that could do this, give the gateway [your own
+URL](/gateway/deploy#your-own-url).
+
+### Watch Certificate Transparency logs
+
+Look your gateway's name up on [crt.sh](https://crt.sh), such as
+`https://crt.sh/?q=gw-7hq2m4xd.eu.midplane.app`. It lists every certificate
+logged for the name, usually twice each (a precertificate and the
+certificate). Each should be one your gateway got: its log says `certificate
+obtained`, or `certificate renewed` about 60 days later, with `valid_until`,
+the certificate's **Not After**. To check the one it serves now:
+
+```sh
+docker exec midplane-gw-k3m9x2qa node -e "const c = new (require('node:crypto').X509Certificate)(require('node:fs').readFileSync('acme/cert.pem')); console.log(c.serialNumber, c.validTo)"
+```
+
+A certificate for the name that your gateway didn't log is one it didn't
+request. To be told rather than look, check crt.sh's JSON
+(`https://crt.sh/?q=gw-7hq2m4xd.eu.midplane.app&output=json`, with each
+certificate's `serial_number`, `not_before` and `not_after`) from a scheduled
+job, or add the name to a Certificate Transparency monitor.
+
+### When the relay is down
+
+Agents can't reach a gateway behind the relay, and nothing else reaches it:
+there is no other way in. The gateway keeps enforcing your policies, keeps
+its link to Midplane Cloud, which doesn't go through the relay, and tries to
+reconnect, waiting from 1 second up to a minute between tries. Once the relay
+is back, agents' next requests succeed with the tokens they have. The gateway
+renews its certificate through the relay, from 30 days before it expires, so
+an outage shorter than that costs no certificate. A gateway at [your own
+URL](/gateway/deploy#your-own-url) doesn't depend on the relay.
+
+## Reporting a vulnerability
+
+See [SECURITY.md](https://github.com/midplaneai/midplane/blob/main/SECURITY.md)
+on GitHub.
+
+*Tested by* the cloud's relay tests: marker strings seeded in a query and in
+its result never appear in anything the relay holds or logs, and the relay
+creates no TLS server for any name but its own.

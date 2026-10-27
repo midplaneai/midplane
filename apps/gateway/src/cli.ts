@@ -2,9 +2,9 @@
 // midplane: the gateway command.
 //
 //   midplane setup --cloud <url> --token <mpe1_…> [--database <id>]...
-//                  [--url <https://…> [--tls-dir <dir> | --acme
-//                  [--acme-directory <url>]]] [--port <n>]
-//                  [--dir <dir>] [--no-start]
+//                  [--relay [--acme-directory <url>] | --url <https://…>
+//                  [--tls-dir <dir> | --acme [--acme-directory <url>]]]
+//                  [--port <n>] [--dir <dir>] [--no-start]
 //                                                      ask for, test and enroll each
 //                                                      database, write the folder, serve
 //   midplane start [--config <file>] [--dir <dir>]     the image's command: serve the
@@ -62,7 +62,7 @@ import { IMAGE_CONFIG, IMAGE_DATA, startConfig } from "./start.ts";
 import { SERVER_VERSION } from "./tools.ts";
 
 const USAGE = `usage:
-  midplane setup --cloud <url> --token <mpe1_…> [--database <id>]... [--url <https://…> [--tls-dir <dir> | --acme [--acme-directory <url>]]] [--port <n>] [--dir <dir>] [--no-start]
+  midplane setup --cloud <url> --token <mpe1_…> [--database <id>]... [--relay [--acme-directory <url>] | --url <https://…> [--tls-dir <dir> | --acme [--acme-directory <url>]]] [--port <n>] [--dir <dir>] [--no-start]
   midplane start [--config <file>] [--dir <dir>]
   midplane gateway --config <file>
   midplane enroll --config <file> [--out <file>]
@@ -108,6 +108,7 @@ async function setup(args: string[]): Promise<number> {
         "tls-dir": { type: "string" },
         acme: { type: "boolean" },
         "acme-directory": { type: "string" },
+        relay: { type: "boolean" },
         port: { type: "string" },
         dir: { type: "string" },
         "no-start": { type: "boolean" },

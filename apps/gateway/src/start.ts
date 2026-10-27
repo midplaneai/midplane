@@ -6,13 +6,19 @@
 // detached `docker run --env-file …`, or a platform's secrets, is the whole
 // setup, and the same container restarted serves what it wrote.
 //
-// The environment names the cloud, the token, the gateway's URL (whose
-// certificate the gateway gets itself, with ACME, as it first starts, so a
-// token the cloud refuses orders none) and a connection string per
-// database, `MIDPLANE_DSN_<ID>`. The config names each one's variable,
+// The environment names the cloud, the token, a connection string per
+// database, `MIDPLANE_DSN_<ID>`, and the gateway's URL, if it has one of its
+// own. Without one, agents reach it through Midplane's relay, at the URL the
+// cloud's relay domain gives it, as `midplane setup --relay` sets up: then
+// the server needs outbound HTTPS only. Either way the gateway gets its
+// certificate itself, with ACME, as it first starts, so a token the cloud
+// refuses orders none. The config names each connection string's variable,
 // so the connection string stays in the environment: it is never written to
 // the volume, logged or sent to the cloud. Setup says what it does in JSON
 // log lines, as the gateway does, and an error is the last one.
+//
+// A start that fails exits at once, its error the last line: a restart
+// policy's own backoff paces the next try (DECISIONS.md, #68).
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -29,6 +35,8 @@ import {
   placeOf,
   planSetup,
   prepareSetup,
+  projectNameOf,
+  relayedLine,
   SetupError,
   type SetupFlags,
   testConnection,
@@ -101,14 +109,13 @@ export interface EnvDatabase {
 const WHAT: Record<string, string> = {
   [ENV.cloud]: "Midplane Cloud's URL, such as https://eu.app.midplane.ai",
   [ENV.token]: "the enrollment token from your project's setup page",
-  [ENV.url]:
-    "the URL agents reach the gateway at, such as https://midplane.example.com",
 };
 
 /**
  * Setup's flags and databases from the environment, checked before anything
  * is written: every variable it needs, and a connection string per
  * database. A refusal names each variable, never a connection string.
+ * Without `MIDPLANE_URL`, the gateway is set up behind the relay.
  */
 export function readSetupEnv(
   env: NodeJS.ProcessEnv,
@@ -116,7 +123,7 @@ export function readSetupEnv(
 ): { flags: SetupFlags; databases: EnvDatabase[] } {
   const value = (name: string) => env[name]?.trim() || undefined;
   const problems: string[] = [];
-  for (const name of [ENV.cloud, ENV.token, ENV.url]) {
+  for (const name of [ENV.cloud, ENV.token]) {
     if (!value(name)) problems.push(`${name} is not set: ${WHAT[name]}`);
   }
   const databases: EnvDatabase[] = [];
@@ -157,14 +164,14 @@ export function readSetupEnv(
       `${problems.join("; ")}. Nothing was written, and the token is unused.`,
     );
   }
+  const url = value(ENV.url);
   const port = value(ENV.port);
   const directory = value(ENV.acmeDirectory);
   return {
     flags: {
       cloud: value(ENV.cloud),
       token: value(ENV.token),
-      url: value(ENV.url),
-      acme: true,
+      ...(url ? { url, acme: true } : { relay: true }),
       ...(directory ? { "acme-directory": directory } : {}),
       ...(port ? { port } : {}),
       dir,
@@ -191,11 +198,11 @@ export interface EnvSetupOptions {
 
 /**
  * Set the gateway up from the environment into `dir`, as setup does: check
- * every variable and the folder, test each connection string (one that
- * fails is kept, and the gateway reports it unreachable), write and enroll.
- * The gateway gets its certificate as it starts: a certificate it can't get
- * then is tried again at each start, without a new token. Returns the
- * config's path.
+ * every variable and the folder (and without a URL, ask the cloud where its
+ * relay is), test each connection string (one that fails is kept, and the
+ * gateway reports it unreachable), write and enroll. The gateway gets its
+ * certificate as it starts: a certificate it can't get then is tried again
+ * at each start, without a new token. Returns the config's path.
  */
 export async function setupFromEnv(
   env: NodeJS.ProcessEnv,
@@ -207,12 +214,15 @@ export async function setupFromEnv(
     ...(o.acme?.httpPort !== undefined
       ? { acmeHttpPort: o.acme.httpPort }
       : {}),
+    ...(o.fetch ? { fetch: o.fetch } : {}),
+    ...(o.signal ? { signal: o.signal } : {}),
   });
   const name = gatewayNameOf(p);
   o.log({
     level: "info",
     msg: `setting up gateway ${name} from the environment, in ${p.dir}: each connection string stays in its variable`,
     url: baseUrlOfSetup(p),
+    ...(p.relayed ? { relay: p.relayed.control } : {}),
     databases: databases.map((d) => d.id),
   });
 
@@ -239,9 +249,9 @@ export async function setupFromEnv(
     ...(o.fetch ? { fetch: o.fetch } : {}),
   });
 
-  const project =
-    enrollment.projectName?.replace(/\p{Cc}/gu, "") || "the project";
+  const project = projectNameOf(enrollment);
   const added = enrollment.databasesAdded;
+  const mcp = resourceOf(baseUrlOfSetup(p));
   o.log({
     level: "info",
     msg: `enrolled gateway ${name} in ${project}${
@@ -249,9 +259,12 @@ export async function setupFromEnv(
         ? `; added ${added.join(", ")}, where nothing is readable until a policy is published`
         : ""
     }`,
-    mcp_url: resourceOf(baseUrlOfSetup(p)),
+    mcp_url: mcp,
     config: configPath,
   });
+  // Through the relay, the URL is the cloud's to give: setup's last line
+  // says it, as interactive setup's does.
+  if (p.relayed) o.log({ level: "info", msg: relayedLine(mcp), mcp_url: mcp });
   return configPath;
 }
 

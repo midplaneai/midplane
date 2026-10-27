@@ -16,12 +16,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { LETS_ENCRYPT } from "../src/acme.ts";
 import { certificateProblem } from "../src/certificates.ts";
 import { parseLinkedConfig } from "../src/config.ts";
+import { PromptClosed } from "../src/prompt.ts";
 import {
+  baseUrlOfSetup,
   choosePort,
   dsnDatabase,
   dsnHost,
+  gatewayNameOf,
   type PreparedSetup,
   placeOf,
   planSetup,
@@ -152,6 +156,176 @@ describe("the flags", () => {
     expect(refusal({ url: "https://gw.example.com/#x" })).toMatch(/fragment/);
     expect(refusal({ url: "https://gw.example.com/db" })).toMatch(/host only/);
     expect(refusal({ url: "gw.example.com" })).toMatch(/full URL/);
+  });
+});
+
+describe("--relay", () => {
+  const DOMAIN = "eu.relay.test";
+  /** A cloud's answer to where its relay is, and the URLs setup asked. */
+  const cloudSays = (status: number, body: unknown = null) => {
+    const asked: string[] = [];
+    const answer = (async (input: string | URL | Request) => {
+      asked.push(String(input));
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    return { fetch: answer, asked };
+  };
+  const RELAY = { domain: DOMAIN, control: `relay.${DOMAIN}` };
+  let base: string;
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), "midplane-setup-relay-"));
+  });
+
+  // protects=--relay plans a gateway at the URL the cloud's relay domain gives its slug, on loopback, with a certificate through the relay and the cloud's relay as its control name, and the config setup writes for it is one the gateway loads as relayed;
+  // fails_when=the URL isn't https://<slug>.<relay domain>, the listener leaves loopback, a challenge port is bound or checked, the certificate comes from files, --acme-directory is dropped, or the written config doesn't load as the relay's;
+  // no_claim=that the relay answers (the in-process tests run a stand-in relay; the cloud's, the real one)
+  it("plan a gateway at the cloud's relay domain, on loopback, with its certificate through the relay", async () => {
+    expect(planSetup(flags({ relay: true }), "gw-k3m9x2qa")).toMatchObject({
+      server: null,
+      relay: { directoryUrl: "https://acme-v02.api.letsencrypt.org/directory" },
+    });
+    const plan = planSetup(
+      flags({
+        relay: true,
+        "acme-directory": "https://localhost:14000/dir",
+        dir: join(base, "gw"),
+        database: ["shop"],
+      }),
+      "gw-k3m9x2qa",
+    );
+    const cloud = cloudSays(200, RELAY);
+    const p = await prepareSetup(plan, { place: "installed", ...cloud });
+    expect(cloud.asked).toEqual(["https://eu.app.midplane.ai/link/v1/relay"]);
+    expect(p).toMatchObject({
+      relayed: {
+        control: "relay.eu.relay.test",
+        url: "https://gw-k3m9x2qa.eu.relay.test",
+      },
+      tls: { kind: "relayed", directoryUrl: "https://localhost:14000/dir" },
+    });
+    // On loopback, as on this machine: the first free port from 7433.
+    expect(p.port).toBeGreaterThanOrEqual(7433);
+    expect(baseUrlOfSetup(p)).toBe("https://gw-k3m9x2qa.eu.relay.test");
+    expect(gatewayNameOf(p)).toBe("gw-k3m9x2qa.eu.relay.test");
+
+    mkdirSync(join(base, "yaml", "secrets"), { recursive: true });
+    writeFileSync(join(base, "yaml", "secrets", "mask-salt"), "s".repeat(64));
+    writeFileSync(join(base, "yaml", "secrets", "shop.dsn"), "postgres://h/s");
+    const text = setupYaml({
+      cloudUrl: p.cloudUrl,
+      name: gatewayNameOf(p),
+      baseUrl: baseUrlOfSetup(p),
+      port: p.port,
+      tls: p.tls,
+      relay: p.relayed?.control ?? null,
+      databases: ["shop"],
+    });
+    expect(parseYaml(text)).toMatchObject({
+      listen: { host: "127.0.0.1", port: p.port },
+      relay: { control: "relay.eu.relay.test" },
+      public_urls: ["https://gw-k3m9x2qa.eu.relay.test"],
+      tls: { acme: { directory_url: "https://localhost:14000/dir" } },
+    });
+    const config = parseLinkedConfig(text, join(base, "yaml", "midplane.yaml"));
+    expect(config.relay).toEqual({
+      control: "relay.eu.relay.test",
+      domain: DOMAIN,
+    });
+    expect(config.listen.host).toBe("127.0.0.1");
+    expect(config.tls).toMatchObject({
+      kind: "acme",
+      names: ["gw-k3m9x2qa.eu.relay.test"],
+      httpPort: null,
+    });
+    // Let's Encrypt, the default, is left out.
+    expect(
+      setupYaml({
+        cloudUrl: p.cloudUrl,
+        name: "gw-k3m9x2qa.eu.relay.test",
+        baseUrl: "https://gw-k3m9x2qa.eu.relay.test",
+        port: 7433,
+        tls: { kind: "relayed", directoryUrl: LETS_ENCRYPT },
+        relay: "relay.eu.relay.test",
+        databases: ["shop"],
+      }),
+    ).toContain("\ntls: { acme: {} }\n");
+  });
+
+  // protects=--relay with --url, --acme or --tls-dir, and a cloud without a relay, are refused before any question, the latter naming --url instead; a cloud that can't be reached or says no relay it can use is refused too, and a stop while it answers is a stop, with nothing written;
+  // fails_when=a combination gets through, a cloud without a relay is set up at a guessed domain, the refusal doesn't name --url, or the folder is written;
+  // no_claim=the environment's own refusal (start.test.ts names MIDPLANE_URL)
+  it("refuse --url, --acme or --tls-dir with it, and a cloud without a relay, naming --url", async () => {
+    const sentence =
+      "--relay doesn't take --url, --acme or --tls-dir: the gateway gets a Midplane URL, and a certificate for it through the relay";
+    for (const more of [
+      { url: "https://gw.example.com" },
+      { url: "https://gw.example.com", acme: true },
+      { "tls-dir": "/tls" },
+    ]) {
+      expect(refusal({ relay: true, ...more })).toBe(sentence);
+    }
+    expect(refusal({ relay: true, "acme-directory": "http://x.example" })).toBe(
+      "--acme-directory must use https (http only on this machine)",
+    );
+
+    const dir = join(base, "refused");
+    const prepare = (fetchImpl: typeof fetch) =>
+      prepareSetup(planSetup(flags({ relay: true, dir }), "gw-k3m9x2qa"), {
+        place: "installed",
+        fetch: fetchImpl,
+      });
+    await expect(
+      prepare(cloudSays(404, { error: "not_found" }).fetch),
+    ).rejects.toThrow(
+      new SetupError(
+        "Midplane Cloud at https://eu.app.midplane.ai has no relay: set the gateway up at a URL of your own, with --url. Nothing was written, and the token is unused.",
+      ),
+    );
+    for (const [status, body] of [
+      [503, null],
+      [200, { domain: DOMAIN, control: "relay.elsewhere.test" }],
+      [200, { domain: "" }],
+    ] as const) {
+      await expect(prepare(cloudSays(status, body).fetch)).rejects.toThrow(
+        `Midplane Cloud at https://eu.app.midplane.ai didn't say where its relay is (${status}): try again later.`,
+      );
+    }
+    await expect(
+      prepare(
+        cloudSays(200, { domain: "Bad Domain", control: "relay.Bad Domain" })
+          .fetch,
+      ),
+    ).rejects.toThrow(/named a relay domain no gateway URL can be on/);
+    await expect(
+      prepare((async () => {
+        throw new TypeError("fetch failed");
+      }) as typeof fetch),
+    ).rejects.toThrow(
+      "can't reach Midplane Cloud at https://eu.app.midplane.ai: fetch failed. Nothing was written, and the token is unused.",
+    );
+    // Stopped while the answer is still arriving: as a stop, not the cloud's fault.
+    const stop = new AbortController();
+    const stalled = (async (_input: unknown, init?: RequestInit) =>
+      new Response(
+        new ReadableStream({
+          start(body) {
+            init?.signal?.addEventListener("abort", () =>
+              body.error(new DOMException("stopped", "AbortError")),
+            );
+          },
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+    const stopped = prepareSetup(
+      planSetup(flags({ relay: true, dir }), "gw-k3m9x2qa"),
+      { place: "installed", fetch: stalled, signal: stop.signal },
+    );
+    setTimeout(() => stop.abort(), 20);
+    await expect(stopped).rejects.toThrow(PromptClosed);
+    expect(readdirSync(base)).not.toContain("refused");
   });
 });
 
@@ -443,6 +617,7 @@ describe("a server's certificate from ACME", () => {
         directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
         httpPort: 7480,
       },
+      relayed: null,
     };
     let fetched = false;
     await expect(

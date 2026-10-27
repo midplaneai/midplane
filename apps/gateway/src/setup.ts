@@ -10,6 +10,14 @@
 // `--acme` one it gets from Let's Encrypt itself, which setup obtains, after
 // the questions and before enrolling, and the gateway then renews.
 //
+// With `--relay`, agents reach the gateway through Midplane's relay instead,
+// at `https://<slug>.<relay domain>`, and it needs no host name, DNS record
+// or open port. Setup asks the cloud for its relay before the first
+// question; a cloud without one is refused. The gateway listens on loopback,
+// for health checks, and gets its certificate as it first starts, through
+// the relay, whose challenges reach it over the work connections its link
+// token opens: so only once it has enrolled.
+//
 // The enrollment token is spent last: the flags, the folder, the port and
 // the certificate (or the challenge's port) are checked before the first
 // question, and each connection string is tested as it is given. A failure
@@ -40,6 +48,11 @@ import {
   DatabaseIdSchema,
   EnrollmentTokenSchema,
   GATEWAY_SLUG_ALPHABET,
+  LINK_API_PREFIX,
+  type RelayInfo,
+  RelayInfoSchema,
+  relayControlName,
+  relaySlugOf,
 } from "@midplane/protocol";
 import {
   ACME_FILES,
@@ -123,6 +136,7 @@ export interface SetupFlags {
   "tls-dir"?: string | undefined;
   acme?: boolean | undefined;
   "acme-directory"?: string | undefined;
+  relay?: boolean | undefined;
   port?: string | undefined;
   dir?: string | undefined;
   "no-start"?: boolean | undefined;
@@ -144,6 +158,11 @@ export interface SetupPlan {
       | { kind: "files"; dir: string }
       | { kind: "acme"; directoryUrl: string };
   } | null;
+  /**
+   * Through Midplane's relay, at a URL the cloud's relay domain gives, with
+   * a certificate from this ACME directory, got through the relay.
+   */
+  relay: { directoryUrl: string } | null;
   /** The port asked for, if any. */
   port: number | null;
   /** Where to write, as given. */
@@ -231,6 +250,14 @@ export function planSetup(
       `${names.cloud} must use https (http only on this machine)`,
     );
   }
+  if (
+    flags.relay &&
+    (flags.url !== undefined || flags.acme || flags["tls-dir"] !== undefined)
+  ) {
+    throw new SetupError(
+      "--relay doesn't take --url, --acme or --tls-dir: the gateway gets a Midplane URL, and a certificate for it through the relay",
+    );
+  }
   if (flags.url === undefined && flags["tls-dir"] !== undefined) {
     throw new SetupError("--tls-dir goes with --url");
   }
@@ -242,9 +269,17 @@ export function planSetup(
       "--acme gets the gateway a certificate, so it doesn't take --tls-dir",
     );
   }
-  if (!flags.acme && flags["acme-directory"] !== undefined) {
+  if (!flags.acme && !flags.relay && flags["acme-directory"] !== undefined) {
     throw new SetupError("--acme-directory goes with --acme");
   }
+  const relay: SetupPlan["relay"] = flags.relay
+    ? {
+        directoryUrl: acmeDirectory(
+          flags["acme-directory"],
+          names.acmeDirectory,
+        ),
+      }
+    : null;
   let server: SetupPlan["server"] = null;
   if (flags.url !== undefined) {
     const url = serverOrigin(flags.url, names.url);
@@ -295,6 +330,7 @@ export function planSetup(
     token: flags.token,
     databases,
     server,
+    relay,
     port,
     dir: flags.dir ?? slug,
     slug,
@@ -305,16 +341,22 @@ export function planSetup(
 
 // ── the folder, the port and the certificate ──────────────────────────────
 
-/** A server's certificate: its files, absolute, or where to get one. */
+/**
+ * A server's certificate: its files, absolute, or where to get one, with
+ * the challenge answered on `httpPort` or, relayed, through the relay.
+ */
 export type SetupTls =
   | { kind: "files"; certFile: string; keyFile: string }
-  | { kind: "acme"; directoryUrl: string; httpPort: number };
+  | { kind: "acme"; directoryUrl: string; httpPort: number }
+  | { kind: "relayed"; directoryUrl: string };
 
 export interface PreparedSetup extends SetupPlan {
   /** The folder, absolute. */
   path: string;
   port: number;
   tls: SetupTls | null;
+  /** Through the relay: its control name, and the gateway's URL on its domain. */
+  relayed: { control: string; url: string } | null;
 }
 
 /**
@@ -331,9 +373,21 @@ export function placeOf(
   return (o.npx ?? process.env.npm_command === "exec") ? "npx" : "installed";
 }
 
-/** How to start the gateway in `dir` again, runnable where setup ran. */
-export function startHint(dir: string, place: SetupPlace): string {
-  if (place === "container") return "the second command on the setup page";
+/**
+ * How to start the gateway in `dir` again, runnable where setup ran. In a
+ * container, the setup page's `docker run -d` serves the volume's config:
+ * its second command, or a relayed gateway's only one.
+ */
+export function startHint(
+  dir: string,
+  place: SetupPlace,
+  relayed = false,
+): string {
+  if (place === "container") {
+    return relayed
+      ? "the `docker run -d` command on the setup page"
+      : "the second command on the setup page";
+  }
   const config = join(dir, "midplane.yaml");
   return place === "npx"
     ? `npx -y midplane@latest gateway --config ${config}`
@@ -341,7 +395,12 @@ export function startHint(dir: string, place: SetupPlace): string {
 }
 
 /** The folder must not exist, or be empty (a container's volume). */
-function checkFolder(shown: string, path: string, place: SetupPlace): void {
+function checkFolder(
+  shown: string,
+  path: string,
+  place: SetupPlace,
+  relayed: boolean,
+): void {
   let entries: string[];
   try {
     entries = readdirSync(path);
@@ -356,7 +415,7 @@ function checkFolder(shown: string, path: string, place: SetupPlace): void {
   if (entries.includes("midplane.yaml")) {
     throw new SetupError(
       place === "container"
-        ? `Already set up: start the gateway with ${startHint(shown, place)}`
+        ? `Already set up: start the gateway with ${startHint(shown, place, relayed)}`
         : `Already set up: start it with \`${startHint(shown, place)}\``,
     );
   }
@@ -409,15 +468,101 @@ function readTlsFile(file: string): string {
   }
 }
 
+/** Nothing written yet, nothing spent: what a refusal before the questions adds. */
+const UNSPENT = "Nothing was written, and the token is unused.";
+
+/**
+ * Where the cloud's relay is, as its region's cloud says: refused for a
+ * cloud without one (404), naming the flag or variable that sets up at a
+ * URL of the operator's own instead.
+ */
+export async function askRelay(
+  cloudUrl: string,
+  names: InputNames,
+  o: { fetch?: typeof fetch; signal?: AbortSignal } = {},
+): Promise<RelayInfo> {
+  const timeout = AbortSignal.timeout(30_000);
+  let res: Response;
+  try {
+    res = await (o.fetch ?? fetch)(`${cloudUrl}${LINK_API_PREFIX}/relay`, {
+      signal: o.signal ? AbortSignal.any([o.signal, timeout]) : timeout,
+    });
+  } catch (err) {
+    if (o.signal?.aborted) throw new PromptClosed(true);
+    throw new SetupError(
+      `can't reach Midplane Cloud at ${cloudUrl}: ${(err as Error).message}. ${UNSPENT}`,
+    );
+  }
+  const body = (await res.json().catch(() => null)) as unknown;
+  // Stopped, or out of time, while the answer was still arriving.
+  if (o.signal?.aborted) throw new PromptClosed(true);
+  if (timeout.aborted) {
+    throw new SetupError(
+      `can't reach Midplane Cloud at ${cloudUrl}: no answer within 30 s. ${UNSPENT}`,
+    );
+  }
+  if (res.status === 404) {
+    throw new SetupError(
+      `Midplane Cloud at ${cloudUrl} has no relay: set the gateway up at a URL of your own, with ${names.url}. ${UNSPENT}`,
+    );
+  }
+  const info = RelayInfoSchema.safeParse(body);
+  if (
+    !res.ok ||
+    !info.success ||
+    info.data.control !== relayControlName(info.data.domain)
+  ) {
+    throw new SetupError(
+      `Midplane Cloud at ${cloudUrl} didn't say where its relay is (${res.status}): try again later. ${UNSPENT}`,
+    );
+  }
+  return info.data;
+}
+
 /** Everything checked before the first question. */
 export async function prepareSetup(
   plan: SetupPlan,
-  o: { now?: Date; place?: SetupPlace; acmeHttpPort?: number } = {},
+  o: {
+    now?: Date;
+    place?: SetupPlace;
+    acmeHttpPort?: number;
+    /** For the relay's whereabouts: how to ask the cloud, and a stop. */
+    fetch?: typeof fetch;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<PreparedSetup> {
   const path = resolve(plan.dir);
-  checkFolder(plan.dir, path, o.place ?? placeOf());
+  checkFolder(plan.dir, path, o.place ?? placeOf(), plan.relay !== null);
+  if (plan.relay) {
+    // On loopback, as on this machine: agents come through the relay.
+    const port = await choosePort(plan.port);
+    const relay = await askRelay(plan.cloudUrl, plan.names, o);
+    const url = `https://${plan.slug}.${relay.domain}`;
+    let host: string | null = null;
+    try {
+      host = new URL(url).hostname;
+    } catch {}
+    if (host === null || relaySlugOf(host, relay.domain) !== plan.slug) {
+      throw new SetupError(
+        `Midplane Cloud at ${plan.cloudUrl} named a relay domain no gateway URL can be on (${relay.domain}). ${UNSPENT}`,
+      );
+    }
+    return {
+      ...plan,
+      path,
+      port,
+      tls: { kind: "relayed", directoryUrl: plan.relay.directoryUrl },
+      relayed: { control: relay.control, url },
+    };
+  }
   if (!plan.server) {
-    return { ...plan, path, port: await choosePort(plan.port), tls: null };
+    return {
+      ...plan,
+      path,
+      port: await choosePort(plan.port),
+      tls: null,
+      relayed: null,
+    };
   }
   const port = plan.port ?? SETUP_PORT;
   const certificate = plan.server.certificate;
@@ -439,6 +584,7 @@ export async function prepareSetup(
       path,
       port,
       tls: { kind: "acme", directoryUrl: certificate.directoryUrl, httpPort },
+      relayed: null,
     };
   }
   const dir = resolve(certificate.dir);
@@ -453,17 +599,22 @@ export async function prepareSetup(
     o.now ?? new Date(),
   );
   if (problem) throw new SetupError(problem);
-  return { ...plan, path, port, tls };
+  return { ...plan, path, port, tls, relayed: null };
 }
 
 /** The URL agents reach the gateway at, as `public_urls` lists it. */
 export function baseUrlOfSetup(p: PreparedSetup): string {
-  return p.server ? p.server.url : `http://${p.slug}.localhost:${p.port}`;
+  const server = p.relayed ?? p.server;
+  return server ? server.url : `http://${p.slug}.localhost:${p.port}`;
 }
 
-/** How the dashboard names the gateway: its slug, or a server's host (80 characters at most). */
+/**
+ * How the dashboard names the gateway: its slug, or the host agents reach
+ * it at, a server's or its relay host (80 characters at most).
+ */
 export function gatewayNameOf(p: PreparedSetup): string {
-  return p.server ? new URL(p.server.url).host.slice(0, 80) : p.slug;
+  const server = p.relayed ?? p.server;
+  return server ? new URL(server.url).host.slice(0, 80) : p.slug;
 }
 
 // ── connection strings ─────────────────────────────────────────────────────
@@ -830,13 +981,18 @@ const yamlValue = (v: string) =>
 const yamlKey = (id: string) =>
   /^(null|true|false)$/.test(id) ? JSON.stringify(id) : id;
 
-/** The `tls` line: files, absolute, or ACME, with only what isn't a default. */
+/**
+ * The `tls` line: files, absolute, or ACME, with only what isn't a default;
+ * through the relay, nothing binds a challenge port.
+ */
 function tlsYaml(tls: SetupTls): string {
   if (tls.kind === "files") {
     return `tls: { cert_file: ${yamlValue(tls.certFile)}, key_file: ${yamlValue(tls.keyFile)} }`;
   }
   const acme = [
-    ...(tls.httpPort !== ACME_HTTP_PORT ? [`http_port: ${tls.httpPort}`] : []),
+    ...(tls.kind === "acme" && tls.httpPort !== ACME_HTTP_PORT
+      ? [`http_port: ${tls.httpPort}`]
+      : []),
     ...(tls.directoryUrl !== LETS_ENCRYPT
       ? [`directory_url: ${yamlValue(tls.directoryUrl)}`]
       : []),
@@ -847,7 +1003,8 @@ function tlsYaml(tls: SetupTls): string {
 /**
  * The gateway's `midplane.yaml`, every path in it relative to it but TLS's.
  * A connection string is a file in `secrets/`, or the variable `dsnEnv`
- * names for its database.
+ * names for its database. A relayed gateway (`relay`, the control name)
+ * listens on loopback, with its certificate from ACME through the relay.
  */
 export function setupYaml(o: {
   cloudUrl: string;
@@ -855,6 +1012,7 @@ export function setupYaml(o: {
   baseUrl: string;
   port: number;
   tls: SetupTls | null;
+  relay?: string | null;
   databases: readonly string[];
   dsnEnv?: Readonly<Record<string, string>>;
   /** What wrote it, for its first line. */
@@ -866,9 +1024,12 @@ export function setupYaml(o: {
   };
   return [
     `# midplane.yaml, written by ${o.by ?? "`midplane setup`"}`,
-    o.tls
-      ? `listen: { host: 0.0.0.0, port: ${o.port} }`
-      : `listen: { port: ${o.port} }`,
+    o.relay
+      ? `listen: { host: 127.0.0.1, port: ${o.port} }`
+      : o.tls
+        ? `listen: { host: 0.0.0.0, port: ${o.port} }`
+        : `listen: { port: ${o.port} }`,
+    ...(o.relay ? [`relay: { control: ${yamlValue(o.relay)} }`] : []),
     `public_urls: [${yamlValue(o.baseUrl)}]`,
     ...(o.tls ? [tlsYaml(o.tls)] : []),
     "audit: { file: audit.db }",
@@ -942,7 +1103,9 @@ async function getCertificate(
  * connection string is in a variable gets no file; `env` holds those
  * variables, to check that the gateway starts from the config. With
  * `certificateAtStart`, the gateway gets the ACME certificate as it first
- * starts, after enrolling, so a token the cloud refuses orders none.
+ * starts, after enrolling, so a token the cloud refuses orders none. A
+ * relayed gateway always does: its challenge comes through the work
+ * connections its identity opens.
  */
 export async function writeAndEnroll(
   p: PreparedSetup,
@@ -986,6 +1149,7 @@ export async function writeAndEnroll(
     baseUrl: baseUrlOfSetup(p),
     port: p.port,
     tls: p.tls,
+    relay: p.relayed?.control ?? null,
     databases: chosen.map((d) => d.id),
     dsnEnv: Object.fromEntries(
       chosen.flatMap((d) => (d.env ? [[d.id, d.env]] : [])),
@@ -1088,16 +1252,27 @@ export async function writeAndEnroll(
   return { configPath, enrollment };
 }
 
-/** What setup did, the line that adds the gateway to Claude Code, and how to start it. */
+/** The project's name as the cloud says it, without control characters. */
+export function projectNameOf(enrollment: Enrollment): string {
+  return enrollment.projectName?.replace(/\p{Cc}/gu, "") || "the project";
+}
+
+/** Where agents reach a relayed gateway, once it has its certificate: setup's last line. */
+export function relayedLine(mcp: string): string {
+  return `Agents reach it at ${mcp}, through Midplane's relay, once the gateway has its certificate.`;
+}
+
+/**
+ * What setup did, the line that adds the gateway to Claude Code, and how to
+ * start it; for a relayed gateway, then where agents reach it.
+ */
 export function setupSummary(
   p: PreparedSetup,
   chosen: readonly ChosenDatabase[],
   enrollment: Enrollment,
   place: SetupPlace = "installed",
 ): string {
-  // The project's name as the cloud says it, without control characters.
-  const project =
-    enrollment.projectName?.replace(/\p{Cc}/gu, "") || "the project";
+  const project = projectNameOf(enrollment);
   const ids = chosen.map((d) => d.id);
   const added = enrollment.databasesAdded;
   const lines = ["", `Enrolled gateway ${gatewayNameOf(p)} in ${project}.`];
@@ -1115,16 +1290,18 @@ export function setupSummary(
     }
   }
   const mcp = resourceOf(baseUrlOfSetup(p));
+  const relayed = Boolean(p.relayed);
   lines.push(
-    `  Agents reach it at ${mcp}`,
+    ...(relayed ? [] : [`  Agents reach it at ${mcp}`]),
     "",
     "Add it to Claude Code:",
     `  claude mcp add --transport http midplane ${mcp}`,
     "",
     ...(place === "container"
-      ? [`Start the gateway with ${startHint(p.dir, place)}.`]
+      ? [`Start the gateway with ${startHint(p.dir, place, relayed)}.`]
       : ["Start it again with:", `  ${startHint(p.dir, place)}`]),
     "",
+    ...(relayed ? [relayedLine(mcp), ""] : []),
   );
   return lines.join("\n");
 }
@@ -1148,10 +1325,12 @@ export async function runSetup(
     ...(io.acme?.httpPort !== undefined
       ? { acmeHttpPort: io.acme.httpPort }
       : {}),
+    ...(io.fetch ? { fetch: io.fetch } : {}),
+    ...(io.signal ? { signal: io.signal } : {}),
   });
   io.out(
     [
-      `Setting up gateway ${gatewayNameOf(p)} in ${p.dir}, at ${baseUrlOfSetup(p)}.`,
+      `Setting up gateway ${gatewayNameOf(p)} in ${p.dir}, at ${baseUrlOfSetup(p)}${p.relayed ? `, through Midplane's relay (${p.relayed.control})` : ""}.`,
       `Connection strings are tested here and saved only in ${join(p.dir, "secrets")}: they never reach Midplane Cloud.`,
       "",
     ].join("\n"),

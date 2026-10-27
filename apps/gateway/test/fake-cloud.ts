@@ -1,5 +1,6 @@
 // A stand-in for Midplane Cloud's side of the link, so the gateway's linked
-// mode is tested within oss/ alone: enrollment with a pinned signing key,
+// mode is tested within oss/ alone: where its relay is (if it has one),
+// enrollment with a pinned signing key,
 // client_credentials with private_key_jwt, the long poll, signed bundles,
 // commands, catalog uploads, held writes, taint and the audit push. It
 // never opens a connection to the gateway, and it keeps every body the
@@ -32,6 +33,8 @@ import {
   IDENTITY_JWS_TYPE,
   LINK_API_PREFIX,
   NonceSchema,
+  type RelayInfo,
+  relayControlName,
   TAINT_JWS_TYPE,
   TaintReportSchema,
 } from "@midplane/protocol";
@@ -210,7 +213,12 @@ const otherNonce = (n: string) =>
   `${n.startsWith("x") ? "y" : "x"}${n.slice(1)}`;
 
 export async function startFakeCloud(
-  options: { waitMs?: number; databases?: string[] } = {},
+  options: {
+    waitMs?: number;
+    databases?: string[];
+    /** The region's relay domain, as `GET /link/v1/relay` says it; none answers 404. */
+    relayDomain?: string;
+  } = {},
 ): Promise<FakeCloud> {
   const waitMs = options.waitMs ?? 300;
   const projectId = `prj_${randomBytes(6).toString("hex")}`;
@@ -289,6 +297,18 @@ export async function startFakeCloud(
   app.get("/.well-known/oauth-authorization-server", (c) =>
     c.json({ issuer: url, token_endpoint: `${url}/oauth2/token` }),
   );
+
+  app.get(`${LINK_API_PREFIX}/relay`, (c) => {
+    const domain = options.relayDomain;
+    if (!domain) {
+      return c.json(
+        { error: "not_found", error_description: "this region has no relay" },
+        404,
+      );
+    }
+    const info: RelayInfo = { domain, control: relayControlName(domain) };
+    return c.json(info);
+  });
 
   app.post(`${LINK_API_PREFIX}/enroll`, async (c) => {
     const body = EnrollRequestSchema.safeParse(await c.req.json());

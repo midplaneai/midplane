@@ -71,6 +71,38 @@ agreement](https://letsencrypt.org/repository/). Setup with `--acme` (`midplane
 setup --url https://… --acme`) writes `tls: { acme: {} }` and gets the first
 certificate before it joins the project.
 
+## Behind the relay
+
+With `relay`, agents reach a linked gateway through Midplane's relay, at its
+Midplane URL, and the gateway only connects out.
+`midplane setup --relay`, or setup from environment variables without
+`MIDPLANE_URL`, asks Midplane Cloud for its relay and writes:
+
+```yaml
+listen: { host: 127.0.0.1, port: 7433 }
+relay: { control: relay.eu.midplane.app }
+public_urls: [https://gw-7hq2m4xd.eu.midplane.app]
+tls: { acme: {} }
+```
+
+- **`relay.control`** is the relay's name, `relay.` and the relay domain.
+  The gateway keeps 4 connections open to it on port 443, authenticated with
+  its link token, and takes agents' connections over them.
+- **`public_urls`** holds one URL, the gateway's Midplane URL:
+  `https://gw-` and 8 characters, on the relay domain, with no port or path.
+  It gets one only when it joins a project, and it is never given to another
+  gateway, even after this one is revoked.
+- **`tls.acme`** is required, without `http_port`: the gateway gets its
+  certificate from Let's Encrypt through the relay, which forwards the check
+  of port 80 to it, so it binds no port for it. `directory_url` may name
+  another ACME directory.
+- **`listen.host`** must be loopback: the listener is for health checks, and
+  agents come through the relay.
+
+Each of these is checked at start, and a config that breaks one is refused
+by its key. A config with `relay` in local mode is refused too. What the
+relay sees, and what it can't, is in [security](/security#the-relay).
+
 ## Local mode only (`midplane local`)
 
 | Key | Default | What |
@@ -90,6 +122,7 @@ certificate before it joins the project.
 | `link.enrollment_token` | none | A secret source for the one-time token from the project's Gateways page; read only until the identity exists |
 | `link.bundle_cache` | `bundle.jws` | The newest authentic bundle, enforced again after a restart with the cloud down |
 | `link.name` | none | How the dashboard names this gateway |
+| `relay.control` | none | The relay's name, `relay.<domain>`, such as `relay.eu.midplane.app`: agents reach the gateway through it ([behind the relay](#behind-the-relay)) |
 
 Linked databases have no `policy`: policies come in signed bundles from
 Midplane Cloud.
@@ -102,9 +135,11 @@ of these that exists:
 1. `/etc/midplane/midplane.yaml`, a config you mounted.
 2. `/var/lib/midplane/midplane.yaml`, the config of a volume set up before.
 3. With `MIDPLANE_ENROLLMENT_TOKEN` set, a gateway it sets up in
-   `/var/lib/midplane` from the variables below, as `midplane setup --acme`
-   would from its answers, then serves. It joins the project first and gets
-   the certificate as it starts, so a token the project refuses gets none.
+   `/var/lib/midplane` from the variables below, then serves: behind the
+   relay, as `midplane setup --relay` would from its answers, or with
+   `MIDPLANE_URL` at that URL, as `midplane setup --acme` would. It joins the
+   project first and gets the certificate as it starts, so a token the
+   project refuses gets none.
 
 Without any of them, it exits with `no config`. Each variable is read on the
 first start only, but for the connection strings:
@@ -113,9 +148,9 @@ first start only, but for the connection strings:
 | --- | --- | --- |
 | `MIDPLANE_CLOUD_URL` | yes | Midplane Cloud's URL, such as `https://eu.app.midplane.ai` (`--cloud`) |
 | `MIDPLANE_ENROLLMENT_TOKEN` | yes, until it has joined | The token from the project's setup page (`--token`) |
-| `MIDPLANE_URL` | yes | The `https://` URL agents reach the gateway at (`--url`). Its host must be a name: the certificate is automatic (`--acme`) |
-| `MIDPLANE_DSN_<ID>` | at least one | A database's connection string. The id is `<ID>` lowercased: `MIDPLANE_DSN_SHOP` is `shop`. An id with `-` can't be named this way; use `_`. Kept in the environment: the config names the variable (`dsn: { env: MIDPLANE_DSN_SHOP }`), and the gateway reads it at every start |
-| `MIDPLANE_PORT` | no | The port the gateway listens on in the container, `7433` by default (`--port`) |
+| `MIDPLANE_URL` | no | The `https://` URL agents reach the gateway at (`--url`). Its host must be a name: the certificate is automatic (`--acme`). Without it, the gateway is set up [behind the relay](#behind-the-relay) (`--relay`), and a cloud without a relay refuses it |
+| `MIDPLANE_DSN_<ID>` | at least one | A database's connection string. The id is `<ID>` lowercased: `MIDPLANE_DSN_SHOP` is `shop`. An id with `-` can't be named this way, as Docker drops such a variable: use an id with `_`. Kept in the environment: the config names the variable (`dsn: { env: MIDPLANE_DSN_SHOP }`), and the gateway reads it at every start |
+| `MIDPLANE_PORT` | no | The port the gateway listens on in the container, `7433` by default (`--port`). Behind the relay, on loopback, for health checks |
 | `MIDPLANE_ACME_DIRECTORY` | no | Another ACME directory, such as Let's Encrypt's staging (`--acme-directory`) |
 
 Setup's messages are log lines. It checks the variables before it writes
@@ -123,7 +158,8 @@ anything: it names at once every one that is missing and every
 `MIDPLANE_DSN_*` that is wrong, then the first other value that is wrong,
 and never a connection string's value. A failure before the gateway joins
 the project removes what it wrote and leaves the token unused. A certificate
-it can't get is tried again at each start.
+it can't get is tried again at each start. A start that fails exits at once,
+its error the last log line, and a restart policy starts it again.
 
 ## The policy
 

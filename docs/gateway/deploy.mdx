@@ -16,7 +16,8 @@ Nothing connects in to it but agents.
     To try Midplane. Only agents on this machine can use it.
   </Card>
   <Card title="A server, with Docker" icon="server" href="#docker">
-    For a team or production: agents anywhere reach it at an HTTPS URL.
+    For a team or production: agents anywhere reach it at an HTTPS URL, even
+    in a private network.
   </Card>
 </Columns>
 
@@ -70,10 +71,84 @@ new one another with `--port`.
 
 ## Docker
 
+You need a server with Docker that can reach your databases and
+connect out to the internet on port 443. Agents reach the gateway at a
+Midplane URL, such as `https://gw-7hq2m4xd.eu.midplane.app/mcp`, through
+Midplane's relay: no host name, DNS record or open port, and it runs in a
+private network. The relay passes agents' encrypted traffic to the gateway
+without reading it, and TLS ends at the gateway, with a certificate it gets
+from Let's Encrypt and a key that never leaves its volume ([what the relay
+sees](/security#the-relay)). To keep Midplane out of that path, use [your own
+URL](#your-own-url).
+
+<Steps>
+  <Step title="Create an enrollment token">
+    In your project, open step 1 of the setup (or **Gateways**, then **Set up
+    a gateway**), choose **A server (Docker)** and keep **Midplane URL**.
+    Click **Create enrollment token**. The page shows an env file and a
+    command, with the token in them.
+  </Step>
+  <Step title="Save the env file">
+    On the server, save the file the page shows as `midplane.env` with an
+    editor, and close it to other users (`chmod 600 midplane.env`). It has a
+    line per database of the project, such as `MIDPLANE_DSN_SHOP=<shop's
+    connection string>`: put each database's connection string after its `=`
+    ([prepare your database](/prepare-database)). The gateway connects from
+    inside its container, where `localhost` is the container: use the
+    database's host as the server's network knows it.
+  </Step>
+  <Step title="Run the gateway">
+    In the folder that holds the file, run the command. It starts the
+    gateway, detached and again whenever the server restarts. At its first
+    start it asks Midplane Cloud for the relay, tests each connection string,
+    joins your project and writes its config to the Docker volume the
+    command names, such as `midplane-gw-k3m9x2qa`. Then it connects out to
+    the relay and gets its certificate through it. `docker logs -f
+    midplane-gw-…` shows what it says; setup's last line is the URL agents
+    reach it at. The gateway picks the name in that URL itself, so it isn't
+    the container's.
+  </Step>
+  <Step title="Check it on the page">
+    Once the gateway connects, the page shows its URL for agents, and the
+    setup step says **Relay · connected**. If it says why the relay refused
+    it, see [cannot reach the relay](/troubleshooting#cannot-reach-the-relay).
+  </Step>
+</Steps>
+
+- **A variable per database.** `MIDPLANE_DSN_SHOP` is the database `shop`:
+  the name after `MIDPLANE_DSN_`, lowercased. A database not in the project
+  yet is added, with nothing readable until you publish its policy.
+- **Each connection string is tested** as setup tests it: `docker logs` says
+  what it found, such as `ok: database shop on db.internal, 12 tables`, or
+  why it failed, but never the string. One that fails is kept, and the
+  gateway reports it unreachable until it answers.
+- **The connection strings stay in the env file.** The config on the volume
+  names each one's variable (`dsn: { env: MIDPLANE_DSN_SHOP }`), so keep the
+  file: the gateway reads them each time it starts, and never sends them to
+  Midplane Cloud.
+- **The rest is read once.** Restarted, the container serves what the volume
+  holds, without joining the project again, and no longer needs the token.
+- **If setup fails** before the gateway joins the project, the log's last
+  line says why ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)).
+  Setup removed what it wrote and left the token unused, but the container
+  keeps restarting and trying, about once a minute: Docker reads the env file
+  only when it creates the container. Remove it (`docker rm -f
+  midplane-gw-…`), fix the file, and run the command again.
+- **If the relay is down,** the gateway keeps enforcing your policies, but
+  agents can't reach it until the relay is back. It reconnects on its own
+  ([when the relay is down](/security#when-the-relay-is-down)).
+
+For production, replace `:latest` with a version you [verified](/releases).
+Every variable is in
+[configuration](/gateway/configuration#setup-from-environment-variables).
+
+### Your own URL
+
 You need a server with Docker and a URL for the gateway, such as
 `https://midplane.example.com`. The gateway serves HTTPS itself whenever it's
 reachable from other machines, with a certificate it gets from Let's Encrypt
-and renews, or with your own.
+and renews, or with your own. Nothing of Midplane's is between agents and
+the gateway.
 
 <Steps>
   <Step title="Point the URL at the server">
@@ -107,7 +182,8 @@ and renews, or with your own.
     a gateway**), and click **Create enrollment token**.
   </Step>
   <Step title="Enter the gateway's URL">
-    Choose **A server (Docker)** and enter the gateway's URL: `https://` and
+    Choose **A server (Docker)**, then **Your own URL** if the page offers a
+    **Midplane URL**, and enter the gateway's URL: `https://` and
     the name you pointed at the server, such as
     `https://midplane.example.com`. Agents reach the gateway at it. Under
     **Certificate**, keep **Automatic (Let's Encrypt)** or choose **My own**.
@@ -143,13 +219,16 @@ For production, replace `:latest` in both commands with a version you
 ## Other setups
 
 <AccordionGroup>
-  <Accordion title="One command, from environment variables">
-    (`0.24.0+`) The image can set itself up from environment variables when
-    it first starts, then serve: one `docker run`, or a platform's secrets,
-    with no terminal. Point the URL at the server and open ports 80 and 443,
-    as for an [automatic certificate](#docker), and create an enrollment
-    token. Then, on the server, write an env file such as `midplane.env` with
-    an editor, and close it to other users (`chmod 600 midplane.env`):
+  <Accordion title="Your own URL, with one command">
+    With your own URL, the image can also set itself up from
+    environment variables when it first starts, then serve: one `docker
+    run`, or a platform's secrets, with no terminal. Point the URL at the
+    server and open ports 80 and 443, as for an [automatic
+    certificate](#your-own-url), and create an enrollment token. Then, on the
+    server, write an env file such as `midplane.env` with an editor, and
+    close it to other users (`chmod 600 midplane.env`). Its `MIDPLANE_URL`
+    is what makes it your own URL; without it, the gateway is set up behind
+    the relay, as [above](#docker):
 
     ```sh midplane.env
     MIDPLANE_CLOUD_URL=https://eu.app.midplane.ai
@@ -166,25 +245,11 @@ For production, replace `:latest` in both commands with a version you
       -p 443:7433 -p 80:7480 ghcr.io/midplaneai/midplane:latest
     ```
 
-    - **A variable per database.** `MIDPLANE_DSN_SHOP` is the database
-      `shop`: the name after `MIDPLANE_DSN_`, lowercased. Use `_` where an id
-      would have `-`.
-    - **Each connection string is tested** as setup tests it: `docker logs
-      midplane` says what it found, such as `ok: database shop on
-      db.internal, 12 tables`, or why it failed, but never the string. One
-      that fails is kept, and the gateway reports it unreachable until it
-      answers.
-    - **The connection strings stay in the env file.** The config setup
-      writes to the volume names each one's variable (`dsn: { env:
-      MIDPLANE_DSN_SHOP }`), so keep the file: the gateway reads them each
-      time it starts.
-    - **The rest is read once.** Restarted, the container serves what the
-      volume holds, without joining the project or getting a certificate
-      again, and no longer needs the token.
-    - **If setup fails** before the gateway joins the project, the log's
-      last line says why. Setup removed what it wrote and left the token
-      unused, but the container keeps restarting and trying: remove it
-      (`docker rm -f midplane`), fix the env file, and run the command again.
+    The variables per database, the connection tests, what stays in the
+    file and what happens when setup fails are as [above](#docker), with
+    `midplane` for the container's name. Restarted, the container doesn't
+    get a certificate again either.
+
     - **The certificate comes after joining**, as the gateway starts, so a
       token the project refuses gets none. If Let's Encrypt refuses, the
       log's last line says why ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)):
@@ -298,4 +363,6 @@ doesn't connect, see [troubleshooting](/troubleshooting).
 npm package; setup then the gateway in the image on one volume, with your own
 certificate and with an automatic one from Pebble, Let's Encrypt's test CA;
 one `docker run --env-file` that sets itself up against Pebble, then restarts,
-in CI's `package` job).
+in CI's `package` job), and `apps/gateway/test/setup-relay.test.ts` (setup
+behind a stand-in relay, from flags and from the environment, then the
+gateway serving through it).

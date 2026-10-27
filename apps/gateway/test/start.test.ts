@@ -97,10 +97,10 @@ describe("the environment", () => {
     expect(config.databases.get("billing_eu")?.dsn).toBe(BILLING);
   });
 
-  // protects=every variable setup needs is named when missing, before anything is written; an empty one counts as missing;
-  // fails_when=a missing variable is found only later (after writing, or at enrollment), goes unnamed, or an empty value passes;
+  // protects=every variable setup needs is named when missing, before anything is written; an empty one counts as missing; MIDPLANE_URL isn't one (without it, the relay);
+  // fails_when=a missing variable is found only later (after writing, or at enrollment), goes unnamed, an empty value passes, or MIDPLANE_URL is still required;
   // no_claim=that the values are valid (the next test, and planSetup's own tests)
-  it("needs the cloud, the token, the URL and a connection string, and names each missing", () => {
+  it("needs the cloud, the token and a connection string, and names each missing", () => {
     const { MIDPLANE_DSN_SHOP: _, ...noDsn } = complete();
     expect(refusal(noDsn)).toBe(
       "MIDPLANE_DSN_<ID> is not set: one per database, its connection string, such as MIDPLANE_DSN_SHOP for shop. Nothing was written, and the token is unused.",
@@ -110,7 +110,6 @@ describe("the environment", () => {
     ).toBe(
       [
         "MIDPLANE_CLOUD_URL is not set: Midplane Cloud's URL, such as https://eu.app.midplane.ai",
-        "MIDPLANE_URL is not set: the URL agents reach the gateway at, such as https://midplane.example.com",
         "MIDPLANE_DSN_<ID> is not set: one per database, its connection string, such as MIDPLANE_DSN_SHOP for shop. Nothing was written, and the token is unused.",
       ].join("; "),
     );
@@ -176,6 +175,90 @@ describe("the environment", () => {
     ).rejects.toThrow(
       "MIDPLANE_CLOUD_URL must use https (http only on this machine)",
     );
+    expect(existsSync(dir)).toBe(false);
+  });
+});
+
+describe("the environment without MIDPLANE_URL", () => {
+  // protects=without MIDPLANE_URL (or with it empty) setup is the relay's, as `setup --relay`, keeping the port and ACME directory; it asks the cloud for its relay before anything is written, enrolls the gateway at its relay URL, and a cloud without a relay is refused naming MIDPLANE_URL, with nothing written and no enrollment;
+  // fails_when=a missing URL is still refused, an empty one counts as a URL, the relay's flags carry --acme or a URL, enrollment comes before the relay's answer or names another URL, or a cloud without a relay is enrolled;
+  // no_claim=that the gateway then serves through the relay (setup-relay.test.ts runs it against a stand-in relay)
+  it("sets up behind the relay, and names MIDPLANE_URL when the cloud has none", async () => {
+    for (const url of [undefined, ""]) {
+      const { MIDPLANE_URL: _, ...env } = complete({
+        MIDPLANE_PORT: "7444",
+        MIDPLANE_ACME_DIRECTORY: "https://localhost:14000/dir",
+      });
+      expect(
+        readSetupEnv(
+          url === undefined ? env : { ...env, MIDPLANE_URL: url },
+          "/v",
+        ).flags,
+      ).toEqual({
+        cloud: "https://eu.app.midplane.ai",
+        token: TOKEN,
+        relay: true,
+        "acme-directory": "https://localhost:14000/dir",
+        port: "7444",
+        dir: "/v",
+      });
+    }
+
+    const { MIDPLANE_URL: _, ...env } = complete();
+    const dir = join(mkdtempSync(join(tmpdir(), "midplane-start-relay-")), "v");
+    const asked: { path: string; body?: string }[] = [];
+    const cloud =
+      (relay: boolean): typeof fetch =>
+      async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        asked.push({
+          path,
+          ...(init?.body ? { body: String(init.body) } : {}),
+        });
+        if (path === "/link/v1/relay") {
+          return relay
+            ? Response.json({
+                domain: "eu.relay.test",
+                control: "relay.eu.relay.test",
+              })
+            : Response.json({ error: "not_found" }, { status: 404 });
+        }
+        return Response.json(
+          { error: "invalid_token", error_description: "unknown token" },
+          { status: 401 },
+        );
+      };
+    const setUp = (relay: boolean) =>
+      setupFromEnv(env, {
+        dir,
+        log: () => {},
+        inContainer: false,
+        slug: "gw-k3m9x2qa",
+        fetch: cloud(relay),
+      });
+
+    await expect(setUp(false)).rejects.toThrow(
+      new SetupError(
+        "Midplane Cloud at https://eu.app.midplane.ai has no relay: set the gateway up at a URL of your own, with MIDPLANE_URL. Nothing was written, and the token is unused.",
+      ),
+    );
+    expect(asked.map((a) => a.path)).toEqual(["/link/v1/relay"]);
+    expect(existsSync(dir)).toBe(false);
+
+    // With a relay: enrolled at its URL (refused here, so nothing stays).
+    asked.length = 0;
+    await expect(setUp(true)).rejects.toThrow(
+      "enrollment refused (401): unknown token",
+    );
+    expect(asked.map((a) => a.path)).toEqual([
+      "/link/v1/relay",
+      "/link/v1/enroll",
+    ]);
+    expect(JSON.parse(asked[1]?.body ?? "{}")).toMatchObject({
+      resources: ["https://gw-k3m9x2qa.eu.relay.test/mcp"],
+      name: "gw-k3m9x2qa.eu.relay.test",
+      databases: ["shop"],
+    });
     expect(existsSync(dir)).toBe(false);
   });
 });
