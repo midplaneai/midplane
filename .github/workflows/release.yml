@@ -12,7 +12,11 @@ name: release
 #     token), push the image ghcr.io/midplaneai/midplane:X.Y.Z (and :latest)
 #     for amd64 and arm64 built from it, with an SBOM and build provenance,
 #     and sign it keyless with cosign. This job installs and runs no
-#     dependencies.
+#     dependencies;
+#   - github-release (contents: write): once both are published, the tag's
+#     GitHub release, listing the feat, fix and perf commits since the last
+#     tag that change the shipped code, and both artifacts. Edit it on
+#     GitHub to add prose.
 #
 # How to verify both: docs/releases.mdx. Actions are pinned by commit.
 on:
@@ -106,6 +110,8 @@ jobs:
       id-token: write
       # The image, to GHCR.
       packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/midplane
       VERSION: ${{ needs.build.outputs.version }}
@@ -155,3 +161,50 @@ jobs:
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
+
+  # The tag's GitHub release, so the repository's latest release is the
+  # version npm and GHCR serve. Only after both are published; nothing from
+  # the checkout is installed or run, it's read for the commit log.
+  github-release:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.build.outputs.version }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/midplane
+      DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Create the release
+        run: |
+          # A rerun after the release exists changes nothing.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$TAG already has a release"
+            exit 0
+          fi
+          {
+            # engine-v* tags are the older product's and don't match.
+            if prev=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2> /dev/null); then
+              # The commits that change what ships. Monorepo issue numbers
+              # mean nothing in this repository.
+              changes=$(git log --reverse --format=%s "$prev..$TAG" -- apps/gateway packages/core packages/protocol \
+                | grep -E '^(feat|fix|perf)[(!:]' | sed -E 's/ \(#[0-9]+\)//g; s/^/- /' || true)
+              if [ -n "$changes" ]; then
+                printf '## Changes\n\n%s\n\n' "$changes"
+              fi
+              printf '[All changes](%s/%s/compare/%s...%s)\n\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$prev" "$TAG"
+            fi
+            printf '## Artifacts\n\n'
+            printf -- '- npm: [`midplane@%s`](https://www.npmjs.com/package/midplane/v/%s), with provenance\n' "$VERSION" "$VERSION"
+            printf -- '- Image: `%s:%s` (amd64, arm64), with an SBOM and build provenance, signed keyless with cosign  \n  `%s`\n\n' "$IMAGE" "$VERSION" "$DIGEST"
+            printf '[Verify a release](https://midplane.ai/docs/releases)\n'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
