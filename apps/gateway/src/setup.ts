@@ -16,7 +16,9 @@
 // up to and including enrollment removes everything setup wrote, and every
 // file is created exclusively, so setup never follows or overwrites one. A
 // connection string goes nowhere but its own file: not to the terminal, an
-// error or the cloud.
+// error or the cloud. `midplane start` sets up from the environment with the
+// same steps (start.ts); there each connection string stays in its variable,
+// which the config names.
 
 import { randomBytes, X509Certificate } from "node:crypto";
 import {
@@ -91,6 +93,29 @@ export function newGatewaySlug(): string {
 
 // ── the flags ──────────────────────────────────────────────────────────────
 
+/**
+ * What setup calls each input in what it says: a flag, or for `midplane
+ * start` an environment variable. `acme` is what asks for an automatic
+ * certificate, null where one always is.
+ */
+export interface InputNames {
+  cloud: string;
+  token: string;
+  url: string;
+  acme: string | null;
+  acmeDirectory: string;
+  port: string;
+}
+
+export const FLAG_NAMES: InputNames = {
+  cloud: "--cloud",
+  token: "--token",
+  url: "--url",
+  acme: "--acme",
+  acmeDirectory: "--acme-directory",
+  port: "--port",
+};
+
 /** The command line, as `parseArgs` reads it. */
 export interface SetupFlags {
   cloud?: string | undefined;
@@ -127,51 +152,51 @@ export interface SetupPlan {
   dir: string;
   slug: string;
   start: boolean;
+  /** What its messages call each input. */
+  names: InputNames;
 }
 
 /** A server's URL as `public_urls` lists it: the origin, if it can be one. */
-function serverOrigin(text: string): string {
+function serverOrigin(text: string, name: string): string {
   let url: URL;
   try {
     url = new URL(text.trim());
   } catch {
-    throw new SetupError("--url: enter the full URL, starting with https://");
+    throw new SetupError(`${name}: enter the full URL, starting with https://`);
   }
   if (url.protocol !== "https:") {
     throw new SetupError(
-      "--url must start with https://: off this machine the gateway needs TLS",
+      `${name} must start with https://: off this machine the gateway needs TLS`,
     );
   }
   if (url.username || url.password) {
-    throw new SetupError("--url can't carry credentials");
+    throw new SetupError(`${name} can't carry credentials`);
   }
   if (url.search || url.hash) {
-    throw new SetupError("--url can't have a query or fragment");
+    throw new SetupError(`${name} can't have a query or fragment`);
   }
   if (!/^\/(mcp\/?)?$/.test(url.pathname)) {
     throw new SetupError(
-      "--url names the host only: the gateway answers at its root",
+      `${name} names the host only: the gateway answers at its root`,
     );
   }
   return url.origin;
 }
 
 /** An ACME directory's URL: https, or http on this machine (a test's). */
-function acmeDirectory(text: string | undefined): string {
+function acmeDirectory(text: string | undefined, name: string): string {
   if (text === undefined) return LETS_ENCRYPT;
   let url: URL;
   try {
     url = new URL(text);
   } catch {
-    throw new SetupError("--acme-directory must be an ACME directory's URL");
+    throw new SetupError(`${name} must be an ACME directory's URL`);
   }
   if (
     url.protocol !== "https:" &&
     !(url.protocol === "http:" && isLoopback(url.hostname))
   ) {
-    throw new SetupError(
-      "--acme-directory must use https (http only on this machine)",
-    );
+    throw new SetupError(`${name} must use https (http only on this machine)`);
   }
   return url.href;
 }
@@ -180,6 +205,7 @@ function acmeDirectory(text: string | undefined): string {
 export function planSetup(
   flags: SetupFlags,
   slug = newGatewaySlug(),
+  names: InputNames = FLAG_NAMES,
 ): SetupPlan {
   if (!flags.cloud || !flags.token) {
     throw new SetupError(
@@ -187,21 +213,25 @@ export function planSetup(
     );
   }
   if (!EnrollmentTokenSchema.safeParse(flags.token).success) {
-    throw new SetupError("--token is not a Midplane enrollment token (mpe1_…)");
+    throw new SetupError(
+      `${names.token} is not a Midplane enrollment token (mpe1_…)`,
+    );
   }
   let cloud: URL;
   try {
     cloud = new URL(flags.cloud);
   } catch {
     throw new SetupError(
-      "--cloud must be Midplane Cloud's URL, e.g. https://eu.app.midplane.ai",
+      `${names.cloud} must be Midplane Cloud's URL, e.g. https://eu.app.midplane.ai`,
     );
   }
   if (
     cloud.protocol !== "https:" &&
     !(cloud.protocol === "http:" && isLoopback(cloud.hostname))
   ) {
-    throw new SetupError("--cloud must use https (http only on this machine)");
+    throw new SetupError(
+      `${names.cloud} must use https (http only on this machine)`,
+    );
   }
   if (flags.url === undefined && flags["tls-dir"] !== undefined) {
     throw new SetupError("--tls-dir goes with --url");
@@ -219,7 +249,7 @@ export function planSetup(
   }
   let server: SetupPlan["server"] = null;
   if (flags.url !== undefined) {
-    const url = serverOrigin(flags.url);
+    const url = serverOrigin(flags.url, names.url);
     if (!flags.acme) {
       server = {
         url,
@@ -231,14 +261,17 @@ export function planSetup(
     } else {
       if (isIP(new URL(url).hostname.replace(/^\[(.*)\]$/, "$1"))) {
         throw new SetupError(
-          "--acme: an automatic certificate needs a host name, and --url names an IP address",
+          `${names.acme ? `${names.acme}: ` : ""}an automatic certificate needs a host name, and ${names.url} names an IP address`,
         );
       }
       server = {
         url,
         certificate: {
           kind: "acme",
-          directoryUrl: acmeDirectory(flags["acme-directory"]),
+          directoryUrl: acmeDirectory(
+            flags["acme-directory"],
+            names.acmeDirectory,
+          ),
         },
       };
     }
@@ -256,7 +289,7 @@ export function planSetup(
   if (flags.port !== undefined) {
     port = /^\d{1,5}$/.test(flags.port) ? Number(flags.port) : 0;
     if (port < 1 || port > 65535) {
-      throw new SetupError("--port must be a port number, 1 to 65535");
+      throw new SetupError(`${names.port} must be a port number, 1 to 65535`);
     }
   }
   return {
@@ -268,6 +301,7 @@ export function planSetup(
     dir: flags.dir ?? slug,
     slug,
     start: !flags["no-start"],
+    names,
   };
 }
 
@@ -394,7 +428,7 @@ export async function prepareSetup(
     const httpPort = o.acmeHttpPort ?? ACME_HTTP_PORT;
     if (port === httpPort) {
       throw new SetupError(
-        `--port ${port} is where the certificate's challenge is answered: choose another`,
+        `${plan.names.port} ${port} is where the certificate's challenge is answered: choose another`,
       );
     }
     if (!(await portFree(httpPort, "0.0.0.0"))) {
@@ -450,7 +484,7 @@ export type ConnectionTest =
     }
   | { ok: false; code: string | null };
 
-function looksLikeDsn(text: string): boolean {
+export function looksLikeDsn(text: string): boolean {
   if (!/^postgres(ql)?:\/\//i.test(text)) return false;
   try {
     new URL(text);
@@ -571,6 +605,8 @@ export function suggestDatabaseId(name: string | null): string | null {
 export interface ChosenDatabase {
   id: string;
   dsn: string;
+  /** The variable it is in, which the config names instead of writing a file. */
+  env?: string;
 }
 
 export interface SetupIO {
@@ -591,7 +627,7 @@ export interface SetupIO {
 }
 
 /** A test that ends at once when setup is stopped. */
-function abortable<T>(p: Promise<T>, signal: AbortSignal | undefined) {
+export function abortable<T>(p: Promise<T>, signal: AbortSignal | undefined) {
   if (!signal) return p;
   return new Promise<T>((done, fail) => {
     const stop = () => fail(new PromptClosed(true));
@@ -626,6 +662,44 @@ function roleWarningLine(
 }
 
 /**
+ * What a connection test says, a line each: what it found and any warning
+ * about the role, or why it failed. Never the connection string.
+ */
+export function connectionTestLines(
+  test: ConnectionTest,
+  dsn: string,
+  inContainer: boolean,
+): { warn: boolean; text: string }[] {
+  if (test.ok) {
+    return [
+      {
+        warn: false,
+        text: `ok: database ${test.database} on ${test.host}, ${plural(test.tables, "table")}`,
+      },
+      ...(test.warning
+        ? [
+            {
+              warn: true,
+              text: roleWarningLine(test.role, test.database, test.warning),
+            },
+          ]
+        : []),
+    ];
+  }
+  return [
+    { warn: true, text: connectionErrorLine(test.code) },
+    ...(inContainer && test.code === "ECONNREFUSED" && isLoopback(dsnHost(dsn))
+      ? [
+          {
+            warn: true,
+            text: "Inside the container, localhost is the container: use the database's host on your network.",
+          },
+        ]
+      : []),
+  ];
+}
+
+/**
  * A connection string, tested, or null to skip. A failed one is asked for
  * again, and `keep` saves it anyway: the gateway then reports the database
  * unreachable until it answers.
@@ -654,27 +728,10 @@ async function askConnection(
       continue;
     }
     const test = await abortable(testConnection(answer), io.signal);
-    if (test.ok) {
-      io.out(
-        `  ok: database ${test.database} on ${test.host}, ${plural(test.tables, "table")}\n`,
-      );
-      if (test.warning) {
-        io.out(
-          `  ${roleWarningLine(test.role, test.database, test.warning)}\n`,
-        );
-      }
-      return { dsn: answer, test };
+    for (const line of connectionTestLines(test, answer, inContainer)) {
+      io.out(`  ${line.text}\n`);
     }
-    io.out(`  ${connectionErrorLine(test.code)}\n`);
-    if (
-      inContainer &&
-      test.code === "ECONNREFUSED" &&
-      isLoopback(dsnHost(answer))
-    ) {
-      io.out(
-        "  Inside the container, localhost is the container: use the database's host on your network.\n",
-      );
-    }
+    if (test.ok) return { dsn: answer, test };
     failed = { dsn: answer, test };
   }
 }
@@ -789,7 +846,11 @@ function tlsYaml(tls: SetupTls): string {
   return `tls: { acme: {${acme.length > 0 ? ` ${acme.join(", ")} ` : ""}} }`;
 }
 
-/** The gateway's `midplane.yaml`, every path in it relative to it but TLS's. */
+/**
+ * The gateway's `midplane.yaml`, every path in it relative to it but TLS's.
+ * A connection string is a file in `secrets/`, or the variable `dsnEnv`
+ * names for its database.
+ */
 export function setupYaml(o: {
   cloudUrl: string;
   name: string;
@@ -797,9 +858,16 @@ export function setupYaml(o: {
   port: number;
   tls: SetupTls | null;
   databases: readonly string[];
+  dsnEnv?: Readonly<Record<string, string>>;
+  /** What wrote it, for its first line. */
+  by?: string;
 }): string {
+  const dsn = (id: string) => {
+    const env = o.dsnEnv?.[id];
+    return env ? `{ env: ${yamlValue(env)} }` : `{ file: secrets/${id}.dsn }`;
+  };
   return [
-    "# midplane.yaml, written by `midplane setup`",
+    `# midplane.yaml, written by ${o.by ?? "`midplane setup`"}`,
     o.tls
       ? `listen: { host: 0.0.0.0, port: ${o.port} }`
       : `listen: { port: ${o.port} }`,
@@ -812,9 +880,7 @@ export function setupYaml(o: {
     `  name: ${yamlValue(o.name)}`,
     "  identity: { file: identity.json }",
     "databases:",
-    ...o.databases.map(
-      (id) => `  ${yamlKey(id)}: { dsn: { file: secrets/${id}.dsn } }`,
-    ),
+    ...o.databases.map((id) => `  ${yamlKey(id)}: { dsn: ${dsn(id)} }`),
     "",
   ].join("\n");
 }
@@ -871,14 +937,23 @@ async function getCertificate(
 }
 
 /**
- * Write the folder (made 0700, `secrets/` 0700, each secret 0600, the config 0644),
- * get a server's ACME certificate, enroll naming every database, and write
- * the identity (0600). Anything it wrote is removed if any of it fails.
+ * Write the folder (made 0700, `secrets/` 0700, each secret 0600), get a
+ * server's ACME certificate, enroll naming every database, and write the
+ * identity (0600) and then the config (0644): a folder with a config is set
+ * up. Anything it wrote is removed if any of it fails. A database whose
+ * connection string is in a variable gets no file; `env` holds those
+ * variables, to check that the gateway starts from the config. With
+ * `certificateAtStart`, the gateway gets the ACME certificate as it first
+ * starts, after enrolling, so a token the cloud refuses orders none.
  */
 export async function writeAndEnroll(
   p: PreparedSetup,
   chosen: readonly ChosenDatabase[],
-  io: Partial<Pick<SetupIO, "fetch" | "signal" | "out" | "acme">> = {},
+  io: Partial<Pick<SetupIO, "fetch" | "signal" | "out" | "acme">> & {
+    env?: NodeJS.ProcessEnv;
+    by?: string;
+    certificateAtStart?: boolean;
+  } = {},
 ): Promise<{ configPath: string; enrollment: Enrollment }> {
   const files: string[] = [];
   /** Folders setup made, deepest first. */
@@ -914,6 +989,10 @@ export async function writeAndEnroll(
     port: p.port,
     tls: p.tls,
     databases: chosen.map((d) => d.id),
+    dsnEnv: Object.fromEntries(
+      chosen.flatMap((d) => (d.env ? [[d.id, d.env]] : [])),
+    ),
+    ...(io.by ? { by: io.by } : {}),
   });
 
   try {
@@ -930,9 +1009,8 @@ export async function writeAndEnroll(
     folders.unshift(secrets);
     write(join(secrets, "mask-salt"), randomBytes(32).toString("hex"), 0o600);
     for (const db of chosen) {
-      write(join(secrets, `${db.id}.dsn`), db.dsn, 0o600);
+      if (!db.env) write(join(secrets, `${db.id}.dsn`), db.dsn, 0o600);
     }
-    write(configPath, config, 0o644);
   } catch (err) {
     undo();
     throw new SetupError(
@@ -946,7 +1024,7 @@ export async function writeAndEnroll(
   // The gateway must start from what setup wrote, before any token or
   // certificate is spent on it.
   try {
-    parseLinkedConfig(config, configPath, {});
+    parseLinkedConfig(config, configPath, io.env ?? {});
   } catch (err) {
     undo();
     if (!(err instanceof ConfigError)) throw err;
@@ -955,7 +1033,7 @@ export async function writeAndEnroll(
     );
   }
 
-  if (p.tls?.kind === "acme") {
+  if (p.tls?.kind === "acme" && !io.certificateAtStart) {
     // Its own folder, closed like `secrets/`; whatever ACME kept in it goes too.
     const acme = join(p.path, "acme");
     try {
@@ -1002,10 +1080,11 @@ export async function writeAndEnroll(
       identityText(enrollment.identity),
       0o600,
     );
+    write(configPath, config, 0o644);
   } catch {
     undo();
     throw new SetupError(
-      `Enrolled as \`${name}\`, but identity.json couldn't be written: revoke it on the Gateways page and run setup again with a new token.`,
+      `Enrolled as \`${name}\`, but identity.json or midplane.yaml couldn't be written: revoke it on the Gateways page and run setup again with a new token.`,
     );
   }
   return { configPath, enrollment };

@@ -6,11 +6,14 @@
 #   (cd apps/gateway && pnpm pack --pack-destination ../../image)
 #   docker build --build-arg TARBALL=image/midplane-0.23.0.tgz -t midplane .
 #
-# Mount the config at /etc/midplane/midplane.yaml. The working directory,
-# /var/lib/midplane, is the user's: keep the audit file, the bundle cache
-# and the identity there, on a volume. The gateway listens on 7433; with
-# `tls.acme` it answers the certificate's challenge on 7480, which the
-# server's port 80 forwards to (`-p 80:7480`).
+# The default command, `midplane start`, serves the config mounted at
+# /etc/midplane/midplane.yaml; else the one in the working directory,
+# /var/lib/midplane, which is the user's, on a volume; else, with
+# MIDPLANE_ENROLLMENT_TOKEN and the rest of the setup in the environment
+# (`docker run --env-file`), it sets the gateway up in that directory first.
+# Keep the audit file, the bundle cache and the identity there. The gateway
+# listens on 7433; with `tls.acme` it answers the certificate's challenge on
+# 7480, which the server's port 80 forwards to (`-p 80:7480`).
 
 # node:24-slim, pinned by digest (the gateway needs Node 24.16+).
 FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
@@ -34,4 +37,4 @@ USER node
 WORKDIR /var/lib/midplane
 EXPOSE 7433
 ENTRYPOINT ["midplane"]
-CMD ["gateway", "--config", "/etc/midplane/midplane.yaml"]
+CMD ["start"]

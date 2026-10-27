@@ -7,6 +7,10 @@
 //                  [--dir <dir>] [--no-start]
 //                                                      ask for, test and enroll each
 //                                                      database, write the folder, serve
+//   midplane start [--config <file>] [--dir <dir>]     the image's command: serve the
+//                                                      mounted config, else the volume's,
+//                                                      else set up from the environment
+//                                                      into the volume, then serve
 //   midplane gateway --config midplane.yaml            serve, linked to Midplane Cloud
 //   midplane enroll --config midplane.yaml [--out <file>]
 //                                                      enroll once and print the identity
@@ -54,10 +58,12 @@ import {
   startLocalStdio,
 } from "./server.ts";
 import { runSetup, SetupError, type SetupFlags } from "./setup.ts";
+import { IMAGE_CONFIG, IMAGE_DATA, startConfig } from "./start.ts";
 import { SERVER_VERSION } from "./tools.ts";
 
 const USAGE = `usage:
   midplane setup --cloud <url> --token <mpe1_…> [--database <id>]... [--url <https://…> [--tls-dir <dir> | --acme [--acme-directory <url>]]] [--port <n>] [--dir <dir>] [--no-start]
+  midplane start [--config <file>] [--dir <dir>]
   midplane gateway --config <file>
   midplane enroll --config <file> [--out <file>]
   midplane local --config <file> [--stdio]
@@ -150,6 +156,61 @@ async function setup(args: string[]): Promise<number> {
   return -1;
 }
 
+/**
+ * `midplane start`, the image's command: what it starts from, set up from
+ * the environment if need be, then served. Its messages are log lines, and
+ * a failure is the last one. Stopped during setup, it removes what it wrote.
+ */
+async function start(args: string[]): Promise<number> {
+  let flags: { config?: string | undefined; dir?: string | undefined };
+  try {
+    flags = parseArgs({
+      args,
+      options: { config: { type: "string" }, dir: { type: "string" } },
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n${USAGE}\n`);
+    return 2;
+  }
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  let configPath: string;
+  try {
+    configPath = await startConfig({
+      config: flags.config ?? IMAGE_CONFIG,
+      dir: flags.dir ?? IMAGE_DATA,
+      env: process.env,
+      log,
+      signal: abort.signal,
+    });
+  } catch (err) {
+    if (err instanceof PromptClosed) {
+      log({
+        level: "error",
+        msg: "stopped during setup: it removed what it wrote, and the token is unused",
+      });
+      return 130;
+    }
+    if (err instanceof SetupError || err instanceof ConfigError) {
+      log({ level: "error", msg: err.message });
+      return abort.signal.aborted ? 130 : 1;
+    }
+    throw err;
+  } finally {
+    // Setup is over; the gateway handles signals once it serves.
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+  const config = loadLinkedConfig(configPath);
+  await loadParser();
+  serveUntilSignal(await startLinked(config));
+  return -1;
+}
+
 async function main(argv: string[]): Promise<number> {
   if (nodeTooOld()) {
     process.stderr.write(
@@ -163,6 +224,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (command === "setup") return setup(args);
+  if (command === "start") return start(args);
   // `midplane audit <export|verify>` takes its subcommand first.
   const sub = command === "audit" ? args[0] : undefined;
   const rest = command === "audit" ? args.slice(1) : args;

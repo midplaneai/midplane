@@ -34,7 +34,23 @@ new URL.
 
 Setup lost Midplane Cloud's answer while joining, and removed the files it
 wrote. If the **Gateways** page lists the gateway, revoke it. Then create a
-new token and run setup again.
+new token and run setup again. Set up from environment variables, put the
+new token in the env file, then remove the container and run it again.
+
+### No config
+
+`no config: mount one at /etc/midplane/midplane.yaml, or set
+MIDPLANE_ENROLLMENT_TOKEN from your project's setup page`: the image found no
+config to serve and no token to set one up with. Mount your config, start it with the volume it was set up
+on, or give it the variables of a [setup from environment
+variables](/gateway/configuration#setup-from-environment-variables).
+
+### A setup variable is not set
+
+`MIDPLANE_URL is not set`, or another variable: setup from environment
+variables needs it. Add it to the env file or the platform's secrets. Docker
+reads an env file only when it creates the container: remove the container
+and run it again. Nothing was written, and the token is unused.
 
 ### Already set up
 

@@ -10,18 +10,29 @@
 //      then `midplane setup`, answered on stdin, which tests the connection
 //      string, writes the folder, enrolls and serves;
 //   3. with --image, runs the image's `midplane local --stdio` on the
-//      quickstart's Docker network, as its non-root user; and on Linux,
-//      `setup` and `gateway` in the image with every secret on a volume and
-//      nothing on the host but the TLS folder, served over TLS; then
-//      `setup --acme` against Pebble (Let's Encrypt's test CA), whose
-//      certificate the gateway then serves MCP with, nothing on the host.
+//      quickstart's Docker network, as its non-root user, and its default
+//      command with nothing to start from, and with a config mounted; and
+//      on Linux, `setup` and `gateway` in the image with every secret on a
+//      volume and nothing on the host but the TLS folder, served over TLS;
+//      then `setup --acme` against Pebble (Let's Encrypt's test CA), whose
+//      certificate the gateway then serves MCP with, nothing on the host;
+//      then one detached `docker run --env-file`, the default command,
+//      which sets itself up from the environment, enrolls, gets its
+//      certificate from Pebble as it starts and serves, and restarted
+//      serves again without enrolling or ordering, no connection string on
+//      the volume, in its logs or sent.
 //
 // Needs the quickstart's database: `docker compose -f
 // examples/quickstart/compose.yaml up -d --wait` (from oss/).
 //
 //   node apps/gateway/scripts/package-smoke.ts [--tarball <file>] [--image <tag>]
 
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import {
+  type ChildProcess,
+  execFileSync,
+  spawn,
+  spawnSync,
+} from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -527,6 +538,60 @@ if (values.image) {
     docker(["run", "--rm", "--entrypoint", "id", image, "-u"]) !== "0",
     "it runs as a non-root user",
   );
+  /** The default command's exit status and its last log line. */
+  const startInImage = (args: string[]) => {
+    const r = spawnSync("docker", ["run", "--rm", ...args, image], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const last = r.stderr.trim().split("\n").at(-1) ?? "";
+    try {
+      return {
+        status: r.status,
+        msg: (JSON.parse(last) as { msg?: string }).msg,
+      };
+    } catch {
+      return { status: r.status, msg: last };
+    }
+  };
+  // protects=the image's default command says how to give it something to start from, and exits 1, when it has nothing;
+  // fails_when=it exits 0, serves nothing silently, or the sentence isn't its last line;
+  // no_claim=nothing about setup (the env file step below, on Linux)
+  const none = startInImage([]);
+  check(
+    none.status === 1 &&
+      none.msg ===
+        "no config: mount one at /etc/midplane/midplane.yaml, or set MIDPLANE_ENROLLMENT_TOKEN from your project's setup page",
+    "with nothing to start from, the default command exits 1 saying how to give it a config",
+  );
+  // protects=a config mounted at /etc/midplane/midplane.yaml is what the default command loads, even with a token in the environment;
+  // fails_when=the token sets the gateway up instead, or the mounted config is ignored;
+  // no_claim=serving it (the same startLinked as `gateway --config`; this config stops at its missing variable)
+  const mounted = join(work, "mounted");
+  mkdirSync(mounted);
+  writeFileSync(
+    join(mounted, "midplane.yaml"),
+    JSON.stringify({
+      audit: { file: "/var/lib/midplane/audit.db" },
+      link: {
+        cloud_url: "https://eu.app.midplane.ai",
+        identity: { file: "/var/lib/midplane/identity.json" },
+      },
+      databases: { shop: { dsn: { env: "SHOP_DSN" } } },
+    }),
+  );
+  const fromMount = startInImage([
+    "-v",
+    `${mounted}:/etc/midplane:ro`,
+    "-e",
+    `MIDPLANE_ENROLLMENT_TOKEN=mpe1_${"A".repeat(86)}`,
+  ]);
+  check(
+    fromMount.status === 1 &&
+      fromMount.msg ===
+        "databases.shop.dsn: environment variable SHOP_DSN is not set",
+    "with a config mounted, the default command loads it, not the token",
+  );
   // The quickstart's config, with its audit file in the image's working
   // directory, which the non-root user owns.
   const conf = join(work, "docker");
@@ -817,6 +882,9 @@ if (values.image) {
     const acmeCloud = await startFakeCloud();
     const helpers: string[] = [];
     let acmeContainer = "";
+    const startVolume = `midplane-smoke-start-${randomBytes(4).toString("hex")}`;
+    let startCloud: Awaited<ReturnType<typeof startFakeCloud>> | null = null;
+    let startContainer = "";
     try {
       helpers.push(
         docker([
@@ -974,17 +1042,160 @@ if (values.image) {
         ) && readdirSync(caDir).join(" ") === "minica.pem",
         "the certificate and its key live on the volume; the host holds none",
       );
+      // Its challenge listener holds 7480, which the next gateway needs.
+      docker(["rm", "-f", acmeContainer]);
+      acmeContainer = "";
+
+      // protects=one detached `docker run --env-file` with the default command enrolls, then gets its certificate from Pebble as it starts, and serves a query; restarted, it serves again with no enrollment and no new certificate; no connection string on the volume, in its logs or in anything sent to the cloud;
+      // fails_when=it needs a terminal or a second command, enrolls or orders again on restart, or a connection string reaches the volume, `docker logs` or the cloud;
+      // no_claim=Let's Encrypt itself, or a platform's secret store (only Docker's env file)
+      step(
+        "one docker run with an env file: set up from the environment, a certificate from Pebble, a query; then a restart",
+      );
+      const startHost = "start.midplane.test";
+      const startPort = 7438;
+      const startUrl = `https://${startHost}:${startPort}`;
+      startCloud = await startFakeCloud();
+      const envFile = join(work, "start.env");
+      writeFileSync(
+        envFile,
+        [
+          `MIDPLANE_CLOUD_URL=${startCloud.url}`,
+          `MIDPLANE_ENROLLMENT_TOKEN=${startCloud.enrollmentToken()}`,
+          `MIDPLANE_URL=${startUrl}`,
+          `MIDPLANE_PORT=${startPort}`,
+          "MIDPLANE_ACME_DIRECTORY=https://localhost:14000/dir",
+          `MIDPLANE_DSN_SHOP=${SHOP_DSN}`,
+          "",
+        ].join("\n"),
+        { mode: 0o600 },
+      );
+      startContainer = docker([
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--env-file",
+        envFile,
+        "-v",
+        `${startVolume}:/var/lib/midplane`,
+        ...trust,
+        image,
+      ]);
+      const enrolled = () =>
+        startCloud?.bodies.filter((b) => b.path === "/link/v1/enroll").length;
+      await waitFor(
+        "the container's enrollment",
+        () => startCloud?.gatewayId != null,
+        60_000,
+      );
+      const { version: startBundle } = await startCloud.publish({
+        shop: policy,
+      });
+      const enforcing = () =>
+        startCloud?.statuses.some(
+          (s) => s.bundle_version === startBundle && s.state === "enforcing",
+        ) === true;
+      await waitFor("the container's gateway to enforce", enforcing, 60_000);
+      const startAgent = await startCloud.agentToken({
+        audience: `${startUrl}/mcp`,
+        databases: { shop: "read" },
+      });
+      const query = () =>
+        call(
+          `${startUrl}/mcp`,
+          startAgent,
+          "SELECT name FROM customers WHERE id = 1",
+          { ca: root, address: "127.0.0.1" },
+        );
+      const first = await query();
+      check(
+        !first.isError && first.text.includes("Dana Ng"),
+        "it enrolls, gets a certificate from Pebble and serves a query",
+      );
+      const certHash = () =>
+        docker([
+          "run",
+          "--rm",
+          "-v",
+          `${startVolume}:/var/lib/midplane`,
+          "--entrypoint",
+          "sha256sum",
+          image,
+          "/var/lib/midplane/acme/cert.pem",
+        ]);
+      const cert = certHash();
+
+      docker(["restart", startContainer]);
+      await waitFor(
+        "the restarted gateway to serve",
+        async () => {
+          const r = await query();
+          return !r.isError && r.text.includes("Dana Ng");
+        },
+        60_000,
+      );
+      const logs = spawnSync("docker", ["logs", startContainer], {
+        encoding: "utf8",
+      });
+      const logged = `${logs.stdout}${logs.stderr}`;
+      const count = (text: string) => logged.split(text).length - 1;
+      check(
+        enrolled() === 1 &&
+          count("certificate obtained") === 1 &&
+          count("starting from the config") === 1 &&
+          certHash() === cert,
+        "restarted, it serves again without enrolling or a new certificate",
+      );
+      // The volume, every file in one tar stream, as the image's user reads it.
+      const volumeBytes = execFileSync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "-v",
+          `${startVolume}:/var/lib/midplane`,
+          "--entrypoint",
+          "tar",
+          image,
+          "-C",
+          "/var/lib/midplane",
+          "-cf",
+          "-",
+          ".",
+        ],
+        { maxBuffer: 256 * 1024 * 1024, timeout: 60_000 },
+      ).toString("latin1");
+      const leaks = [SHOP_DSN, "midplane_agent:quickstart@"];
+      const places = [
+        { where: "the volume", text: volumeBytes },
+        { where: "docker logs", text: logged },
+        ...startCloud.bodies.map((b) => ({ where: b.path, text: b.body })),
+      ];
+      const leaked = places.filter((p) =>
+        leaks.some((l) => p.text.includes(l)),
+      );
+      check(
+        volumeBytes.includes("MIDPLANE_DSN_SHOP") && leaked.length === 0,
+        `no connection string on the volume, in its logs or sent to the cloud${leaked.length > 0 ? ` (found in ${leaked.map((p) => p.where).join(", ")})` : ""}`,
+      );
     } catch (err) {
-      for (const c of [acmeContainer, ...helpers].filter(Boolean)) {
+      for (const c of [acmeContainer, startContainer, ...helpers].filter(
+        Boolean,
+      )) {
         execFileSync("docker", ["logs", c], { stdio: "inherit" });
       }
       throw err;
     } finally {
-      for (const c of [acmeContainer, ...helpers].filter(Boolean)) {
+      for (const c of [acmeContainer, startContainer, ...helpers].filter(
+        Boolean,
+      )) {
         docker(["rm", "-f", c]);
       }
       docker(["volume", "rm", "-f", acmeVolume]);
+      docker(["volume", "rm", "-f", startVolume]);
       await acmeCloud.close();
+      await startCloud?.close();
     }
   }
 }

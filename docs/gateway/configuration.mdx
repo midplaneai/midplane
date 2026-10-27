@@ -94,6 +94,37 @@ certificate before it joins the project.
 Linked databases have no `policy`: policies come in signed bundles from
 Midplane Cloud.
 
+## Setup from environment variables
+
+(`0.24.0+`) `midplane start`, the image's default command, serves the first
+of these that exists:
+
+1. `/etc/midplane/midplane.yaml`, a config you mounted.
+2. `/var/lib/midplane/midplane.yaml`, the config of a volume set up before.
+3. With `MIDPLANE_ENROLLMENT_TOKEN` set, a gateway it sets up in
+   `/var/lib/midplane` from the variables below, as `midplane setup --acme`
+   would from its answers, then serves. It joins the project first and gets
+   the certificate as it starts, so a token the project refuses gets none.
+
+Without any of them, it exits with `no config`. Each variable is read on the
+first start only, but for the connection strings:
+
+| Variable | Required | What |
+| --- | --- | --- |
+| `MIDPLANE_CLOUD_URL` | yes | Midplane Cloud's URL, such as `https://eu.app.midplane.ai` (`--cloud`) |
+| `MIDPLANE_ENROLLMENT_TOKEN` | yes, until it has joined | The token from the project's setup page (`--token`) |
+| `MIDPLANE_URL` | yes | The `https://` URL agents reach the gateway at (`--url`). Its host must be a name: the certificate is automatic (`--acme`) |
+| `MIDPLANE_DSN_<ID>` | at least one | A database's connection string. The id is `<ID>` lowercased: `MIDPLANE_DSN_SHOP` is `shop`. An id with `-` can't be named this way; use `_`. Kept in the environment: the config names the variable (`dsn: { env: MIDPLANE_DSN_SHOP }`), and the gateway reads it at every start |
+| `MIDPLANE_PORT` | no | The port the gateway listens on in the container, `7433` by default (`--port`) |
+| `MIDPLANE_ACME_DIRECTORY` | no | Another ACME directory, such as Let's Encrypt's staging (`--acme-directory`) |
+
+Setup's messages are log lines. It checks the variables before it writes
+anything: it names at once every one that is missing and every
+`MIDPLANE_DSN_*` that is wrong, then the first other value that is wrong,
+and never a connection string's value. A failure before the gateway joins
+the project removes what it wrote and leaves the token unused. A certificate
+it can't get is tried again at each start.
+
 ## The policy
 
 A database's policy, in local mode under `databases.<id>.policy`, in linked
