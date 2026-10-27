@@ -3,7 +3,7 @@
   "name": "ai.midplane/midplane",
   "title": "Midplane",
   "description": "A gateway between AI agents and Postgres: table access, masking at the source, approvals and audit.",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "websiteUrl": "https://midplane.ai/docs",
   "repository": {
     "url": "https://github.com/midplaneai/midplane",
@@ -14,7 +14,7 @@
     {
       "registryType": "npm",
       "identifier": "midplane",
-      "version": "0.22.0",
+      "version": "0.23.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

@@ -75,7 +75,8 @@ Put the certificate's own key in `tls.key`, as PEM and without a passphrase.
 ### The DNS for the URL does not point at this server
 
 `the DNS for gw.example.com doesn't point at this server`, from setup or as
-the gateway's last log line, with an automatic certificate. Let's Encrypt
+the gateway's last log line, with an automatic certificate (`0.23.0+`, as are
+the headings down to "An automatic certificate needs a host name"). Let's Encrypt
 found no address for the host, or fetched its challenge from a server that
 isn't this gateway: what it said follows (`acme_detail` in the log). Point
 the host's `A` record, and `AAAA` if it has one, at this server (`dig +short
@@ -98,7 +99,7 @@ certificate.
 later`. Let's Encrypt issues at most five certificates for the same host a
 week, and allows five failed checks an hour; what it said follows, with when
 to try again. A setup that stops after getting the certificate spends one, so
-while you try things out, add `--acme-directory
+while you try things out, add (`0.23.0+`) `--acme-directory
 https://acme-staging-v02.api.letsencrypt.org/directory` to setup: its
 certificates are for tests, and agents don't trust them.
 
