@@ -2,7 +2,8 @@
 // midplane: the gateway command.
 //
 //   midplane setup --cloud <url> --token <mpe1_…> [--database <id>]...
-//                  [--url <https://…>] [--tls-dir <dir>] [--port <n>]
+//                  [--url <https://…> [--tls-dir <dir> | --acme
+//                  [--acme-directory <url>]]] [--port <n>]
 //                  [--dir <dir>] [--no-start]
 //                                                      ask for, test and enroll each
 //                                                      database, write the folder, serve
@@ -25,6 +26,7 @@ import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { parseArgs } from "node:util";
 import { loadParser } from "@midplane/core";
+import { AcmeError } from "./acme.ts";
 import {
   describeVerify,
   exportAudit,
@@ -55,7 +57,7 @@ import { runSetup, SetupError, type SetupFlags } from "./setup.ts";
 import { SERVER_VERSION } from "./tools.ts";
 
 const USAGE = `usage:
-  midplane setup --cloud <url> --token <mpe1_…> [--database <id>]... [--url <https://…>] [--tls-dir <dir>] [--port <n>] [--dir <dir>] [--no-start]
+  midplane setup --cloud <url> --token <mpe1_…> [--database <id>]... [--url <https://…> [--tls-dir <dir> | --acme [--acme-directory <url>]]] [--port <n>] [--dir <dir>] [--no-start]
   midplane gateway --config <file>
   midplane enroll --config <file> [--out <file>]
   midplane local --config <file> [--stdio]
@@ -98,6 +100,8 @@ async function setup(args: string[]): Promise<number> {
         database: { type: "string", multiple: true },
         url: { type: "string" },
         "tls-dir": { type: "string" },
+        acme: { type: "boolean" },
+        "acme-directory": { type: "string" },
         port: { type: "string" },
         dir: { type: "string" },
         "no-start": { type: "boolean" },
@@ -322,7 +326,14 @@ main(process.argv.slice(2)).then(
   (err) => {
     log({
       level: "error",
-      msg: err instanceof ConfigError ? err.message : String(err),
+      msg:
+        err instanceof ConfigError || err instanceof AcmeError
+          ? err.message
+          : String(err),
+      // What the certificate authority said, when it said why.
+      ...(err instanceof AcmeError && err.problem
+        ? { acme_type: err.problem.type, acme_detail: err.problem.detail }
+        : {}),
     });
     process.exit(1);
   },

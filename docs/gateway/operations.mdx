@@ -34,13 +34,16 @@ carries MCP in stdio mode). The ones worth alerting on:
 | `audit pruning failed` | Retention couldn't delete old events, so the file keeps growing; `error` says why |
 | `audit events recorded while linked never reached Midplane Cloud; local mode doesn't send them` | The file last ran linked, and `events` of its events were still waiting when it was opened in local mode. They stay in the file for the retention window from now (export them to keep them longer) and are never sent, even if it is linked again |
 | `database unreachable` | (`0.22.0+`) A database didn't answer: at start, on a retry, or when a statement lost its connection. `database` and `code` say which and why, `error` has the full message. Said again only if it fails differently, and `database reachable` follows once it answers ([linked mode](/gateway/linked-mode#databases-it-cannot-reach)) |
+| `certificate renewal failed` | (`0.23.0+`) Let's Encrypt didn't renew the gateway's automatic certificate; `error` says what to fix, `acme_type` and `acme_detail` what Let's Encrypt said ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)). The current certificate is served meanwhile, and the renewal is tried again in 12 hours |
+| `certificate not reloaded` | (`0.23.0+`) The certificate files changed, but the new pair can't be served: `error` names the file and the problem. The old certificate stays; said once per replacement |
 | `link cut` | The cloud refused the gateway's credentials: it was revoked |
 | `taint check failed; the grant counts as tainted` | The cloud couldn't be asked; the agent was contained |
 | `public URL not registered` | A URL in `public_urls` isn't one of the gateway's yet ([hosted agents](/gateway/hosted-agents)) |
 | `view definitions withheld from the cloud` | Some views' definitions couldn't be redacted, so they weren't sent; simulation denies statements through them |
 
 `mcp client` notes each new agent (client, person and MCP protocol version)
-once.
+once. `certificate obtained`, `certificate renewed` and `certificate reloaded`
+note a new certificate and its `valid_until`.
 
 ## Stopping
 

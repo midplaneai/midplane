@@ -82,9 +82,10 @@ postgres://midplane_gateway:<password>@<host>:5432/<database>?sslmode=verify-ful
 `sslmode=verify-full` encrypts the connection and checks the database's
 certificate. If your provider signs certificates with its own CA, download it
 to where the gateway runs, and add its path. In Docker, put it in
-`/etc/midplane/tls` on the server, which the commands mount at the same path:
-`&sslrootcert=/etc/midplane/tls/ca.pem`. On your machine, use the file's full
-path.
+`/etc/midplane/tls` on the server: `&sslrootcert=/etc/midplane/tls/ca.pem`.
+The commands for **My own** certificate mount that folder at the same path;
+with an **Automatic** one, add `-v /etc/midplane/tls:/etc/midplane/tls:ro`
+after `docker run` in both. On your machine, use the file's full path.
 
 <Accordion title="How the gateway reads sslmode">
   The gateway reads `sslmode` differently from `psql`: `require`, `prefer` and

@@ -35,8 +35,10 @@ started](/get-started)).
   <Step title="Download the RDS certificate bundle">
     Save the [global RDS bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem)
     as `rds-global-bundle.pem` where the gateway runs: in Docker, in
-    `/etc/midplane/tls` on the server, which the commands mount at the same
-    path.
+    `/etc/midplane/tls` on the server. The commands for **My own**
+    certificate mount that folder at the same path; with an **Automatic**
+    one, add `-v /etc/midplane/tls:/etc/midplane/tls:ro` after `docker run`
+    in both.
   </Step>
   <Step title="Give setup the connection string">
     Use the endpoint from the database's **Connectivity & security** tab. For

@@ -72,6 +72,61 @@ Renew it, and check the server's clock.
 
 Put the certificate's own key in `tls.key`, as PEM and without a passphrase.
 
+### The DNS for the URL does not point at this server
+
+`the DNS for gw.example.com doesn't point at this server`, from setup or as
+the gateway's last log line, with an automatic certificate. Let's Encrypt
+found no address for the host, or fetched its challenge from a server that
+isn't this gateway: what it said follows (`acme_detail` in the log). Point
+the host's `A` record, and `AAAA` if it has one, at this server (`dig +short
+gw.example.com` prints the address), and check that no web server on it
+takes port 80 first. Then run setup again: the token is unused.
+
+### Port 80 is not reachable from the internet
+
+`port 80 on gw.example.com isn't reachable from the internet: open it,
+forwarded to port 7480 here`. Let's Encrypt couldn't connect to the host on
+port 80. Open it in the server's firewall and in your cloud's network rules
+or security group; in Docker, both commands map it with `-p 80:7480`. Without
+Docker, forward port 80 to 7480, or set `tls.acme.http_port: 80` where the
+gateway may bind it. A server that port 80 can't reach takes your own
+certificate.
+
+### Certificates for this host are rate limited
+
+`Let's Encrypt is rate limiting certificates for gw.example.com: try again
+later`. Let's Encrypt issues at most five certificates for the same host a
+week, and allows five failed checks an hour; what it said follows, with when
+to try again. A setup that stops after getting the certificate spends one, so
+while you try things out, add `--acme-directory
+https://acme-staging-v02.api.letsencrypt.org/directory` to setup: its
+certificates are for tests, and agents don't trust them.
+
+### The CAA records forbid the certificate authority
+
+`the CAA records for gw.example.com forbid Let's Encrypt`. The domain's CAA
+records name the certificate authorities that may issue for it, and Let's
+Encrypt isn't one. Add `0 issue "letsencrypt.org"` to them, or use your own
+certificate.
+
+### The certificate authority refused a certificate
+
+`Let's Encrypt refused a certificate for gw.example.com`, for another reason
+than the ones above: what it said follows. Fix that, or use your own
+certificate.
+
+### The challenge port is taken
+
+`port 7480 is taken`: another program, such as a second gateway with an
+automatic certificate on this host, listens where the challenge is answered.
+Stop it, or give this gateway another port with `tls.acme.http_port` and
+forward port 80 there.
+
+### An automatic certificate needs a host name
+
+Let's Encrypt certifies names, not IP addresses. Give the server a DNS name
+and use it in the URL, or choose **My own** under **Certificate**.
+
 ### Inside the container, localhost is the container
 
 Setup in Docker connects to each database from inside its container, so

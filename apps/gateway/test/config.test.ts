@@ -108,6 +108,111 @@ describe("local config", () => {
     ).toEqual(["https://db.example.com"]);
   });
 
+  // protects=`tls: { acme: {} }` gets Let's Encrypt, port 7480 and the config's acme/ folder, for the one https host;
+  // fails_when=a default changes, the names aren't the URL's host, or the folder isn't beside the config;
+  // no_claim=that Let's Encrypt can reach the host (the gateway finds out at start)
+  it("takes tls.acme with defaults, certifying the public URL's host", () => {
+    const c = config({
+      listen: { host: "0.0.0.0" },
+      public_urls: ["https://GW.example.com:8443"],
+      tls: { acme: {} },
+    });
+    expect(c.tls).toEqual({
+      kind: "acme",
+      names: ["gw.example.com"],
+      httpPort: 7480,
+      directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+      dir: join(dir, "acme"),
+    });
+    expect(
+      config({
+        public_urls: ["https://gw.example.com", "https://gw.example.com/b"],
+        tls: {
+          acme: {
+            http_port: 8080,
+            directory_url: "http://127.0.0.1:14000/dir",
+          },
+        },
+      }).tls,
+    ).toMatchObject({
+      names: ["gw.example.com"],
+      httpPort: 8080,
+      directoryUrl: "http://127.0.0.1:14000/dir",
+    });
+  });
+
+  // protects=a certificate comes from files or from ACME, never a mix of the two;
+  // fails_when=acme with cert_file or key_file, or a lone cert_file, is accepted;
+  // no_claim=nothing about the files' contents
+  it("refuses tls.acme with certificate files, and half a pair of files", () => {
+    const url = { public_url: "https://gw.example.com" };
+    for (const tls of [
+      { acme: {}, cert_file: "verify.json" },
+      { acme: {}, key_file: "verify.json" },
+      { cert_file: "verify.json" },
+      {},
+      { acme: { http_port: 7480, extra: 1 } },
+    ]) {
+      expect(() => config({ ...url, tls }), JSON.stringify(tls)).toThrow(
+        ConfigError,
+      );
+    }
+    expect(() =>
+      config({ ...url, tls: { acme: {}, cert_file: "verify.json" } }),
+    ).toThrow("tls takes cert_file and key_file, or acme, not both");
+    for (const tls of [{ cert_file: "verify.json" }, {}]) {
+      expect(() => config({ ...url, tls }), JSON.stringify(tls)).toThrow(
+        "tls needs cert_file and key_file, or acme",
+      );
+    }
+  });
+
+  // protects=ACME certifies one host name, the gateway's own, which Let's Encrypt can reach on port 80;
+  // fails_when=an IP address, no https URL, two hosts, an http directory off this machine or a clash with listen.port is accepted;
+  // no_claim=that DNS for the name points here
+  it("needs tls.acme to certify one host name", () => {
+    const acme = (more: Record<string, unknown>) => () =>
+      config({ tls: { acme: {} }, ...more });
+    expect(acme({ public_url: "https://192.0.2.10" })).toThrow(
+      "tls.acme: an automatic certificate needs a host name, not an IP address",
+    );
+    expect(acme({ public_url: "https://[2001:db8::1]" })).toThrow(
+      /needs a host name/,
+    );
+    expect(acme({})).toThrow(
+      "tls.acme needs public_urls to name one https host to certify",
+    );
+    expect(acme({ public_url: "http://gw.example.com" })).toThrow(
+      /one https host/,
+    );
+    expect(
+      acme({ public_urls: ["https://a.example.com", "https://b.example.com"] }),
+    ).toThrow(
+      "tls.acme needs public_urls to name one https host to certify, not 2",
+    );
+    expect(() =>
+      config({
+        public_url: "https://gw.example.com",
+        tls: { acme: { directory_url: "http://acme.example.com/dir" } },
+      }),
+    ).toThrow(/directory_url must use https/);
+    expect(() =>
+      config({
+        public_url: "https://gw.example.com",
+        listen: { port: 7480 },
+        tls: { acme: {} },
+      }),
+    ).toThrow(/http_port must differ from listen.port/);
+  });
+
+  it("names a certificate file it can't read", () => {
+    expect(() =>
+      config({ tls: { cert_file: "missing.crt", key_file: "verify.json" } }),
+    ).toThrow(
+      `tls.cert_file: cannot read ${join(dir, "missing.crt")} (ENOENT)`,
+    );
+  });
+
   it("requires a salt of at least 32 characters when a database has masks", () => {
     const masked = {
       databases: {

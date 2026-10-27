@@ -36,8 +36,10 @@ started](/get-started)).
   <Step title="Download Supabase's certificate">
     Open **Project Settings**, then **Database**, and under **SSL
     Configuration** download the certificate. Save it as `supabase-ca.crt`
-    where the gateway runs: in Docker, in `/etc/midplane/tls` on the server,
-    which the commands mount at the same path.
+    where the gateway runs: in Docker, in `/etc/midplane/tls` on the server.
+    The commands for **My own** certificate mount that folder at the same
+    path; with an **Automatic** one, add `-v
+    /etc/midplane/tls:/etc/midplane/tls:ro` after `docker run` in both.
   </Step>
   <Step title="Give setup the connection string">
     Change the copied string in three places: the user becomes

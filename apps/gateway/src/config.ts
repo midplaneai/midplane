@@ -9,9 +9,13 @@
 //
 // A gateway may answer on several public URLs: its direct URL and any
 // tunnel or ingress URL in front of it (urls.ts).
+//
+// Off loopback a gateway serves TLS, with a certificate from files or one
+// it gets itself from an ACME authority (acme.ts, certificates.ts).
 
 import { readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { isIP } from "node:net";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { validatePolicy } from "@midplane/core";
 import {
   DatabaseIdSchema,
@@ -20,6 +24,7 @@ import {
 } from "@midplane/protocol";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { ACME_HTTP_PORT, LETS_ENCRYPT } from "./acme.ts";
 
 const SecretSourceSchema = z.union([
   z.strictObject({ env: z.string().min(1) }),
@@ -61,8 +66,27 @@ const common = {
   public_urls: z.array(PublicUrlSchema).min(1).max(MAX_GATEWAY_URLS).optional(),
   /** Shorthand for a single public URL. */
   public_url: PublicUrlSchema.optional(),
+  /** Certificate files, or `acme` for one the gateway gets and renews itself. */
   tls: z
-    .strictObject({ cert_file: z.string().min(1), key_file: z.string().min(1) })
+    .strictObject({
+      cert_file: z.string().min(1).optional(),
+      key_file: z.string().min(1).optional(),
+      acme: z
+        .strictObject({
+          /** Where the challenge listener binds; port 80 forwards to it. */
+          http_port: z.number().int().min(1).max(65535).default(ACME_HTTP_PORT),
+          directory_url: z.url().default(LETS_ENCRYPT),
+        })
+        .optional(),
+    })
+    .refine(
+      (t) => !(t.acme && (t.cert_file || t.key_file)),
+      "tls takes cert_file and key_file, or acme, not both",
+    )
+    .refine(
+      (t) => t.acme || (t.cert_file && t.key_file),
+      "tls needs cert_file and key_file, or acme",
+    )
     .optional(),
   audit: z.strictObject({
     file: z.string().min(1),
@@ -137,6 +161,26 @@ export interface LocalDatabaseConfig extends DatabaseConfig {
   policy: DatabasePolicy;
 }
 
+/** Where a TLS listener's certificate comes from. */
+export type TlsConfig =
+  | {
+      kind: "files";
+      certFile: string;
+      keyFile: string;
+      /** As read at start. */
+      cert: string;
+      key: string;
+    }
+  | {
+      kind: "acme";
+      /** The host names to certify: the https public URL's host. */
+      names: string[];
+      httpPort: number;
+      directoryUrl: string;
+      /** Where the account key, the certificate and its key are kept. */
+      dir: string;
+    };
+
 /** What both modes share. */
 export interface BaseConfig {
   listen: { host: string; port: number };
@@ -144,7 +188,7 @@ export interface BaseConfig {
   publicUrls: string[];
   /** More host names the Host header may name, for a proxy that rewrites it. */
   allowedHosts: string[];
-  tls: { cert: string; key: string } | null;
+  tls: TlsConfig | null;
   auditFile: string;
   /** Days events are kept once owed to no one; 0 keeps everything. */
   auditRetentionDays: number;
@@ -238,11 +282,83 @@ type CommonDocument = {
   listen: { host: string; port: number; allowed_hosts: string[] };
   public_urls?: string[] | undefined;
   public_url?: string | undefined;
-  tls?: { cert_file: string; key_file: string } | undefined;
+  tls?:
+    | {
+        cert_file?: string | undefined;
+        key_file?: string | undefined;
+        acme?: { http_port: number; directory_url: string } | undefined;
+      }
+    | undefined;
   audit: { file: string; retention_days: number };
   mask_salt?: SecretSource | undefined;
   limits: { max_rows: number; max_bytes: number };
 };
+
+function readTlsFile(path: string, what: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (err) {
+    throw new ConfigError(
+      `${what}: cannot read ${path} (${(err as NodeJS.ErrnoException).code ?? "error"})`,
+    );
+  }
+}
+
+function tlsConfig(
+  tls: NonNullable<CommonDocument["tls"]>,
+  publicUrls: readonly string[],
+  listenPort: number,
+  file: (p: string) => string,
+  base: string,
+): TlsConfig {
+  if (!tls.acme) {
+    const certFile = file(tls.cert_file as string);
+    const keyFile = file(tls.key_file as string);
+    return {
+      kind: "files",
+      certFile,
+      keyFile,
+      cert: readTlsFile(certFile, "tls.cert_file"),
+      key: readTlsFile(keyFile, "tls.key_file"),
+    };
+  }
+  // Each name must lead the authority here, on port 80: one host, the
+  // gateway's own, not a tunnel's or an ingress's.
+  const hosts = [
+    ...new Set(
+      publicUrls
+        .map((u) => new URL(u))
+        .filter((u) => u.protocol === "https:")
+        .map((u) => u.hostname),
+    ),
+  ];
+  if (hosts.length !== 1) {
+    throw new ConfigError(
+      `tls.acme needs public_urls to name one https host to certify${hosts.length > 1 ? `, not ${hosts.length}` : ""}`,
+    );
+  }
+  if (hosts.some((h) => isIP(h.replace(/^\[(.*)\]$/, "$1")))) {
+    throw new ConfigError(
+      "tls.acme: an automatic certificate needs a host name, not an IP address",
+    );
+  }
+  const directory = new URL(tls.acme.directory_url);
+  if (directory.protocol !== "https:" && !isLoopback(directory.hostname)) {
+    throw new ConfigError(
+      "tls.acme.directory_url must use https (http only on this machine)",
+    );
+  }
+  if (tls.acme.http_port === listenPort) {
+    throw new ConfigError("tls.acme.http_port must differ from listen.port");
+  }
+  return {
+    kind: "acme",
+    names: hosts,
+    httpPort: tls.acme.http_port,
+    directoryUrl: directory.href,
+    dir: join(base, "acme"),
+  };
+}
 
 function baseConfig(
   c: CommonDocument,
@@ -288,12 +404,7 @@ function baseConfig(
     listen: { host: c.listen.host, port: c.listen.port },
     publicUrls,
     allowedHosts: c.listen.allowed_hosts,
-    tls: c.tls
-      ? {
-          cert: readFileSync(file(c.tls.cert_file), "utf8"),
-          key: readFileSync(file(c.tls.key_file), "utf8"),
-        }
-      : null,
+    tls: c.tls ? tlsConfig(c.tls, publicUrls, c.listen.port, file, base) : null,
     auditFile: file(c.audit.file),
     auditRetentionDays: c.audit.retention_days,
     maskSalt,

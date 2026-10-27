@@ -70,38 +70,70 @@ new one another with `--port`.
 
 ## Docker
 
-You need a server with Docker, a URL for the gateway, such as
-`https://midplane.example.com`, and a TLS certificate for it: the gateway
-serves HTTPS itself whenever it's reachable from other machines.
+You need a server with Docker and a URL for the gateway, such as
+`https://midplane.example.com`. The gateway serves HTTPS itself whenever it's
+reachable from other machines, with a certificate it gets from Let's Encrypt
+and renews, or with your own.
 
 <Steps>
-  <Step title="Put the certificate in place">
-    On the server, save the certificate and its key as
-    `/etc/midplane/tls/tls.crt` and `/etc/midplane/tls/tls.key`. The image
-    runs as uid 1000, which must be able to read both, such as after `sudo
-    chown 1000 /etc/midplane/tls/tls.key`. Setup checks that the certificate
-    is for the URL, current, and matches its key.
+  <Step title="Point the URL at the server">
+    Point the URL's DNS at the server: an `A` record, and `AAAA` if it has
+    IPv6. Then, for the certificate:
+
+    <Tabs>
+      <Tab title="Automatic certificate">
+        Open ports 80 and 443 to the internet, or the port agents will use
+        instead of 443. Let's Encrypt checks port 80 before it issues the
+        certificate, and again each time the gateway renews it: there it
+        reaches a listener that answers its challenge and nothing else.
+        Getting the certificate agrees to Let's Encrypt's [subscriber
+        agreement](https://letsencrypt.org/repository/).
+      </Tab>
+      <Tab title="My own certificate">
+        Open port 443 to the agents that will use the gateway, or the port
+        they use instead. On the server, save the certificate and its key as
+        `/etc/midplane/tls/tls.crt` and `/etc/midplane/tls/tls.key`. The image
+        runs as uid 1000, which must be able to read both, such as after `sudo
+        chown 1000 /etc/midplane/tls/tls.key`. Setup checks that the
+        certificate is for the URL, current, and matches its key. The gateway
+        reads them again every 10 minutes, so a renewed certificate is served
+        without a restart. Use your own for an IP address, which Let's Encrypt
+        doesn't certify, or a server port 80 can't reach.
+      </Tab>
+    </Tabs>
   </Step>
   <Step title="Create an enrollment token">
     In your project, open step 1 of the setup (or **Gateways**, then **Set up
     a gateway**), and click **Create enrollment token**.
   </Step>
   <Step title="Enter the gateway's URL">
-    Choose **A server (Docker)** and enter the URL agents will use. The page
-    shows two commands for it.
+    Choose **A server (Docker)** and enter the gateway's URL: `https://` and
+    the name you pointed at the server, such as
+    `https://midplane.example.com`. Agents reach the gateway at it. Under
+    **Certificate**, keep **Automatic (Let's Encrypt)** or choose **My own**.
+    With an automatic certificate, the page lists what must be true before
+    you run the commands, and looks up where the name points now, such as
+    `midplane.example.com points at 203.0.113.7`. If it says the name
+    doesn't resolve yet, wait a few minutes for the record and press **Check
+    again**. The page then shows two commands, with the token in them.
   </Step>
   <Step title="Run setup in the image">
     Run the first command on the server. Setup asks for each connection
     string and tests it from inside the container, where `localhost` is the
     container: use the database's host as the server's network knows it.
-    It writes the config, the connection strings and the gateway's identity
-    to a Docker volume named after the gateway, such as
-    `midplane-gw-k3m9x2qa`, and joins your project.
+    With an automatic certificate it then gets one for the URL, saying `ok:
+    valid until` and its date; if Let's Encrypt can't reach the server, it
+    says why ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)),
+    removes what it wrote and leaves the token unused. It writes the config,
+    the connection strings, the certificate and the gateway's identity to a
+    Docker volume named after the gateway, such as `midplane-gw-k3m9x2qa`,
+    and joins your project.
   </Step>
   <Step title="Start it">
     Run the second command. It starts the gateway from that volume, and again
     whenever the server restarts. The page shows it connected; `docker logs
-    -f midplane-gw-…` shows what it says.
+    -f midplane-gw-…` shows what it says. An automatic certificate is renewed
+    in its last 30 days, without a restart.
   </Step>
 </Steps>
 
@@ -194,6 +226,10 @@ For production, replace `:latest` in both commands with a version you
       identity.json          the gateway's key, written when it joins
       audit.db               the audit log
       bundle.jws             the newest policy, for a restart with the cloud down
+      acme/                  with an automatic certificate, closed to other users
+        cert.pem             the certificate, renewed in its last 30 days
+        key.pem              its key
+        account.key          the Let's Encrypt account's key
     ```
 
     In Docker, the same files are in the gateway's volume, such as
@@ -206,5 +242,6 @@ Every setting is in [configuration](/gateway/configuration). If the gateway
 doesn't connect, see [troubleshooting](/troubleshooting).
 
 *Tested by* `apps/gateway/scripts/package-smoke.ts` (setup with the packed
-npm package, and setup then the gateway in the image on one volume, in CI's
-`package` job).
+npm package; setup then the gateway in the image on one volume, with your own
+certificate and with an automatic one from Pebble, Let's Encrypt's test CA,
+in CI's `package` job).

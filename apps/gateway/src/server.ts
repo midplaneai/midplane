@@ -6,8 +6,15 @@
 // if it has no identity yet, enforces its cached bundle if it has one, and
 // long-polls the cloud for newer ones; a database it can't read yet isn't
 // served, and is tried again until it can be.
+//
+// Over TLS, the certificate comes first (certificates.ts): one from ACME is
+// obtained before the listener starts, and a renewed or replaced one is
+// served to new connections without a restart.
 
-import { createServer as createHttpsServer } from "node:https";
+import {
+  createServer as createHttpsServer,
+  type Server as HttpsServer,
+} from "node:https";
 import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import type { DatabasePolicy } from "@midplane/protocol";
@@ -17,6 +24,11 @@ import { localTaintStore } from "./approvals.ts";
 import { LocalAuditLog } from "./audit.ts";
 import type { AuditPusherOptions } from "./audit-push.ts";
 import { TokenVerifier } from "./auth.ts";
+import {
+  type CertificateOptions,
+  type Certificates,
+  startCertificates,
+} from "./certificates.ts";
 import {
   type BaseConfig,
   baseUrlsOf,
@@ -56,6 +68,8 @@ export interface RunningGateway {
   link?: LinkClient;
   /** Accepted TCP connections, e.g. to prove none come from the cloud. */
   server: { on(event: "connection", fn: (socket: unknown) => void): void };
+  /** Over TLS: the certificate served, renewed or reloaded on a timer. */
+  certificates: Certificates | null;
   close(): Promise<void>;
 }
 
@@ -149,12 +163,30 @@ async function openRuntime(
   return { gateway, audit, executors, stopPruning };
 }
 
-/** Listen with a handler that can be swapped in once the URLs are known. */
+/**
+ * Listen with a handler that can be swapped in once the URLs are known;
+ * over TLS, once there is a certificate to serve.
+ */
 async function listen(
   config: BaseConfig,
   handler: () => Hono | null,
-  onServer?: (server: RunningGateway["server"]) => void,
-): Promise<{ server: ReturnType<typeof serve>; listener: string }> {
+  o: {
+    onServer?: ((server: RunningGateway["server"]) => void) | undefined;
+    certificates?: CertificateOptions | undefined;
+  } = {},
+): Promise<{
+  server: ReturnType<typeof serve>;
+  listener: string;
+  certificates: Certificates | null;
+}> {
+  const certificates = config.tls
+    ? await startCertificates(
+        config.tls,
+        config.publicUrls,
+        log,
+        o.certificates,
+      )
+    : null;
   const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
     const s = serve(
       {
@@ -166,22 +198,32 @@ async function listen(
           }),
         hostname: config.listen.host,
         port: config.listen.port,
-        ...(config.tls
+        ...(certificates
           ? {
               createServer: createHttpsServer,
-              serverOptions: { key: config.tls.key, cert: config.tls.cert },
+              serverOptions: {
+                key: certificates.current.key,
+                cert: certificates.current.cert,
+              },
             }
           : {}),
       },
       () => resolve(s),
     );
   });
-  onServer?.(server);
+  if (certificates) {
+    certificates.attach(server as unknown as HttpsServer);
+  }
+  o.onServer?.(server);
   const address = server.address() as AddressInfo;
   const scheme = config.tls ? "https" : "http";
   const host =
     address.family === "IPv6" ? `[${address.address}]` : address.address;
-  return { server, listener: `${scheme}://${host}:${address.port}` };
+  return {
+    server,
+    listener: `${scheme}://${host}:${address.port}`,
+    certificates,
+  };
 }
 
 /** The URLs a gateway answers on: its public URLs, else its listener. */
@@ -201,7 +243,15 @@ function closeServer(server: ReturnType<typeof serve>): Promise<void> {
   });
 }
 
-export async function startLocal(config: LocalConfig): Promise<RunningGateway> {
+export interface LocalOptions {
+  /** For tests: the certificate's clock and timers. */
+  certificates?: CertificateOptions;
+}
+
+export async function startLocal(
+  config: LocalConfig,
+  options: LocalOptions = {},
+): Promise<RunningGateway> {
   const { gateway, audit, executors, stopPruning } = await openRuntime(
     config,
     config.databases.values(),
@@ -209,7 +259,18 @@ export async function startLocal(config: LocalConfig): Promise<RunningGateway> {
     { state: "enforcing" },
   );
   let app: Hono | null = null;
-  const { server, listener } = await listen(config, () => app);
+  let started: Awaited<ReturnType<typeof listen>>;
+  try {
+    started = await listen(config, () => app, {
+      certificates: options.certificates,
+    });
+  } catch (err) {
+    stopPruning();
+    await Promise.all([...executors.values()].map((e) => e.close()));
+    audit.close();
+    throw err;
+  }
+  const { server, listener, certificates } = started;
   const urls = publicUrlsOf(config, listener);
   const verifier = new TokenVerifier({
     issuer: config.auth.issuer,
@@ -240,8 +301,10 @@ export async function startLocal(config: LocalConfig): Promise<RunningGateway> {
     gateway,
     audit,
     server,
+    certificates,
     async close() {
       stopPruning();
+      await certificates?.close();
       await closeServer(server);
       await Promise.all([...executors.values()].map((e) => e.close()));
       audit.close();
@@ -321,6 +384,8 @@ export interface LinkedOptions {
   onServer?: (server: RunningGateway["server"]) => void;
   /** For tests: the audit push's delays. */
   auditTiming?: AuditPusherOptions["timing"];
+  /** For tests: the certificate's clock and timers. */
+  certificates?: CertificateOptions;
 }
 
 /**
@@ -344,17 +409,28 @@ export async function startLinked(
   );
   let app: Hono | null = null;
   let link: LinkClient | null = null;
-  const { server, listener } = await listen(
-    config,
-    () => app,
-    options.onServer,
-  );
+  let started: Awaited<ReturnType<typeof listen>>;
+  try {
+    started = await listen(config, () => app, {
+      onServer: options.onServer,
+      certificates: options.certificates,
+    });
+  } catch (err) {
+    stopPruning();
+    const retries = gateway.close();
+    await Promise.all([...executors.values()].map((e) => e.close()));
+    await retries;
+    audit.close();
+    throw err;
+  }
+  const { server, listener, certificates } = started;
   const urls = publicUrlsOf(config, listener);
   const close = async () => {
     stopPruning();
     // Retries stop now; one mid-read ends as its pool closes.
     const retries = gateway.close();
     await link?.close();
+    await certificates?.close();
     await closeServer(server);
     await Promise.all([...executors.values()].map((e) => e.close()));
     await retries;
@@ -424,6 +500,7 @@ export async function startLinked(
     audit,
     link,
     server,
+    certificates,
     close,
   };
 }

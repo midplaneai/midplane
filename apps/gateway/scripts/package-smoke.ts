@@ -12,7 +12,9 @@
 //   3. with --image, runs the image's `midplane local --stdio` on the
 //      quickstart's Docker network, as its non-root user; and on Linux,
 //      `setup` and `gateway` in the image with every secret on a volume and
-//      nothing on the host but the TLS folder, served over TLS.
+//      nothing on the host but the TLS folder, served over TLS; then
+//      `setup --acme` against Pebble (Let's Encrypt's test CA), whose
+//      certificate the gateway then serves MCP with, nothing on the host.
 //
 // Needs the quickstart's database: `docker compose -f
 // examples/quickstart/compose.yaml up -d --wait` (from oss/).
@@ -45,6 +47,12 @@ const QUICKSTART = join(OSS, "examples", "quickstart");
 const SHOP_DSN = "postgres://midplane_agent:quickstart@127.0.0.1:54329/shop";
 const SHOP_DSN_IN_DOCKER =
   "postgres://midplane_agent:quickstart@postgres:5432/shop";
+// Let's Encrypt's test CA and the DNS server it resolves names with, 2.10.1,
+// pinned by digest.
+const PEBBLE =
+  "ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199";
+const PEBBLE_CHALLTESTSRV =
+  "ghcr.io/letsencrypt/pebble-challtestsrv:2.10.1@sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b";
 
 const { values } = parseArgs({
   options: { tarball: { type: "string" }, image: { type: "string" } },
@@ -76,26 +84,71 @@ async function waitFor(
   throw new Error(`timed out waiting for ${what}`);
 }
 
-/** A POST's answer, over https with this CA when one is given. */
+/**
+ * Over https, trusting only `ca`, and connecting to `address` when given:
+ * a name only Pebble's DNS knows is still checked against the certificate.
+ */
+interface Tls {
+  ca: string;
+  address?: string;
+}
+
+/** How long one https request may take before it fails. */
+const REQUEST_MS = 10_000;
+
+/** An https request's status and body; it fails rather than hangs. */
+function httpsText(
+  url: string,
+  o: { method?: string; headers?: Record<string, string>; body?: string },
+  tls: Tls,
+): Promise<{ status: number; body: string }> {
+  const target = new URL(url);
+  return new Promise((done, fail) => {
+    const req = httpsRequest(
+      {
+        host: tls.address ?? target.hostname,
+        port: target.port || 443,
+        path: `${target.pathname}${target.search}`,
+        method: o.method ?? "GET",
+        servername: target.hostname,
+        // ACME servers refuse a request without one (RFC 8555, 6.1).
+        headers: {
+          "user-agent": "midplane-package-smoke",
+          ...o.headers,
+          host: target.host,
+        },
+        ca: tls.ca,
+      },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (d) => {
+          raw += d;
+        });
+        res.on("end", () => done({ status: res.statusCode ?? 0, body: raw }));
+        res.on("error", fail);
+        res.on("aborted", () =>
+          fail(new Error(`${url}: the answer was cut off`)),
+        );
+      },
+    );
+    req.setTimeout(REQUEST_MS, () =>
+      req.destroy(new Error(`${url}: no answer in ${REQUEST_MS / 1000} s`)),
+    );
+    req.on("error", fail);
+    req.end(o.body);
+  });
+}
+
+/** A POST's answer, over https as `tls` says when given. */
 async function post(
   url: string,
   headers: Record<string, string>,
   body: string,
-  ca?: string,
+  tls?: Tls,
 ): Promise<string> {
-  if (!ca) return (await fetch(url, { method: "POST", headers, body })).text();
-  return new Promise((done, fail) => {
-    const req = httpsRequest(url, { method: "POST", headers, ca }, (res) => {
-      let raw = "";
-      res.setEncoding("utf8");
-      res.on("data", (d) => {
-        raw += d;
-      });
-      res.on("end", () => done(raw));
-    });
-    req.on("error", fail);
-    req.end(body);
-  });
+  if (!tls) return (await fetch(url, { method: "POST", headers, body })).text();
+  return (await httpsText(url, { method: "POST", headers, body }, tls)).body;
 }
 
 /** One MCP tools/call over HTTP, the 2025 handshake. */
@@ -103,7 +156,7 @@ async function call(
   url: string,
   token: string,
   sql: string,
-  ca?: string,
+  tls?: Tls,
 ): Promise<{ isError: boolean; text: string }> {
   const raw = await post(
     url,
@@ -119,7 +172,7 @@ async function call(
       method: "tools/call",
       params: { name: "query", arguments: { sql } },
     }),
-    ca,
+    tls,
   );
   const json = raw.startsWith("{")
     ? raw
@@ -566,6 +619,45 @@ if (values.image) {
     child.kill("SIGTERM");
   }
 
+  /**
+   * `setup --no-start` in the image on this machine's network, serving
+   * `shop`, answered on stdin without blocking: the stand-in cloud answers
+   * from this process. What it printed.
+   */
+  const setupInImage = (docker: string[], flags: string[]) =>
+    new Promise<string>((done, fail) => {
+      const run = spawn(
+        "docker",
+        [
+          "run",
+          "-i",
+          "--rm",
+          "--network",
+          "host",
+          ...docker,
+          image,
+          "setup",
+          "--no-start",
+          "--dir",
+          "/var/lib/midplane",
+          ...flags,
+          "--database",
+          "shop",
+        ],
+        { stdio: ["pipe", "pipe", "inherit"] },
+      );
+      let out = "";
+      run.stdout?.on("data", (d) => {
+        out += String(d);
+      });
+      run.stdin?.end(`${SHOP_DSN}\n\n`);
+      run.on("exit", (code) =>
+        code === 0
+          ? done(out)
+          : fail(new Error(`setup in the image: exit ${code}\n${out}`)),
+      );
+    });
+
   // Setup in the image, as the dashboard's server commands run it: the
   // config, the identity and every secret on a volume, and nothing on the
   // host but the TLS folder. The stand-in cloud is http, which a gateway
@@ -618,47 +710,16 @@ if (values.image) {
     const tlsPort = 7436;
     let container = "";
     try {
-      // Answered on stdin, without blocking: the stand-in cloud answers
-      // from this process.
-      const said = await new Promise<string>((done, fail) => {
-        const run = spawn(
-          "docker",
-          [
-            "run",
-            "-i",
-            "--rm",
-            "--network",
-            "host",
-            ...mounts,
-            image,
-            "setup",
-            "--no-start",
-            "--dir",
-            "/var/lib/midplane",
-            "--cloud",
-            imageCloud.url,
-            "--token",
-            imageCloud.enrollmentToken(),
-            "--url",
-            `https://localhost:${tlsPort}`,
-            "--port",
-            String(tlsPort),
-            "--database",
-            "shop",
-          ],
-          { stdio: ["pipe", "pipe", "inherit"] },
-        );
-        let out = "";
-        run.stdout?.on("data", (d) => {
-          out += String(d);
-        });
-        run.stdin?.end(`${SHOP_DSN}\n\n`);
-        run.on("exit", (code) =>
-          code === 0
-            ? done(out)
-            : fail(new Error(`setup in the image: exit ${code}\n${out}`)),
-        );
-      });
+      const said = await setupInImage(mounts, [
+        "--cloud",
+        imageCloud.url,
+        "--token",
+        imageCloud.enrollmentToken(),
+        "--url",
+        `https://localhost:${tlsPort}`,
+        "--port",
+        String(tlsPort),
+      ]);
       check(
         imageCloud.gatewayId !== null && said.includes("Enrolled gateway"),
         "setup in the image enrolls",
@@ -691,7 +752,7 @@ if (values.image) {
         `https://localhost:${tlsPort}/mcp`,
         agent,
         "SELECT name FROM customers WHERE id = 1",
-        readFileSync(join(tls, "tls.crt"), "utf8"),
+        { ca: readFileSync(join(tls, "tls.crt"), "utf8") },
       );
       check(
         !r.isError && r.text.includes("Dana Ng"),
@@ -723,6 +784,207 @@ if (values.image) {
       if (container) docker(["rm", "-f", container]);
       docker(["volume", "rm", "-f", volume]);
       await imageCloud.close();
+    }
+
+    // As the dashboard's Automatic certificate runs it, against Pebble, the
+    // test CA Let's Encrypt publishes: setup in the image gets the
+    // certificate (answering Pebble's challenge on 7480, which -p 80:7480
+    // stands for on a server), then the gateway serves MCP with it. Pebble
+    // finds every name at this machine through challtestsrv's DNS, and the
+    // gateway trusts Pebble's API through NODE_EXTRA_CA_CERTS.
+    step("setup --acme in the image against Pebble, then MCP over HTTPS");
+    const acmeHost = "gateway.midplane.test";
+    const acmePort = 7437;
+    const pebbleDir = join(work, "pebble");
+    const caDir = join(pebbleDir, "ca");
+    mkdirSync(caDir, { recursive: true });
+    writeFileSync(
+      join(pebbleDir, "pebble-config.json"),
+      JSON.stringify({
+        pebble: {
+          listenAddress: "127.0.0.1:14000",
+          managementListenAddress: "127.0.0.1:15000",
+          certificate: "/test/certs/localhost/cert.pem",
+          privateKey: "/test/certs/localhost/key.pem",
+          httpPort: 7480,
+          tlsPort: 5001,
+          ocspResponderURL: "",
+          externalAccountBindingRequired: false,
+        },
+      }),
+    );
+    const acmeVolume = `midplane-smoke-acme-${randomBytes(4).toString("hex")}`;
+    const acmeCloud = await startFakeCloud();
+    const helpers: string[] = [];
+    let acmeContainer = "";
+    try {
+      helpers.push(
+        docker([
+          "run",
+          "-d",
+          "--network",
+          "host",
+          PEBBLE_CHALLTESTSRV,
+          "-defaultIPv4",
+          "127.0.0.1",
+          "-defaultIPv6",
+          "",
+          "-http01",
+          "",
+          "-https01",
+          "",
+          "-tlsalpn01",
+          "",
+          "-doh",
+          "",
+        ]),
+      );
+      const pebble = docker([
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "-e",
+        "PEBBLE_VA_NOSLEEP=1",
+        "-e",
+        "PEBBLE_WFE_NONCEREJECT=0",
+        "-v",
+        `${join(pebbleDir, "pebble-config.json")}:/smoke/pebble-config.json:ro`,
+        PEBBLE,
+        "-config",
+        "/smoke/pebble-config.json",
+        "-dnsserver",
+        "127.0.0.1:8053",
+      ]);
+      helpers.push(pebble);
+      docker([
+        "cp",
+        `${pebble}:/test/certs/pebble.minica.pem`,
+        join(caDir, "minica.pem"),
+      ]);
+      chmodSync(join(caDir, "minica.pem"), 0o644);
+      const minica = readFileSync(join(caDir, "minica.pem"), "utf8");
+      // What Pebble last answered, so a refusal reads as itself, not a timeout.
+      let lastPebble = "nothing yet";
+      await waitFor("Pebble", async () => {
+        try {
+          const r = await httpsText(
+            "https://localhost:14000/dir",
+            {},
+            { ca: minica },
+          );
+          lastPebble = `${r.status} ${r.body.slice(0, 200)}`;
+          return r.status === 200;
+        } catch (err) {
+          lastPebble = String(err);
+          throw err;
+        }
+      }).catch((err) => {
+        throw new Error(
+          `${(err as Error).message}; Pebble last said: ${lastPebble}`,
+        );
+      });
+      const trust = [
+        "-v",
+        `${caDir}:/etc/pebble:ro`,
+        "-e",
+        "NODE_EXTRA_CA_CERTS=/etc/pebble/minica.pem",
+      ];
+      const data = ["-v", `${acmeVolume}:/var/lib/midplane`];
+      const said = await setupInImage(
+        [...data, ...trust],
+        [
+          "--cloud",
+          acmeCloud.url,
+          "--token",
+          acmeCloud.enrollmentToken(),
+          "--url",
+          `https://${acmeHost}:${acmePort}`,
+          "--acme",
+          "--acme-directory",
+          "https://localhost:14000/dir",
+          "--port",
+          String(acmePort),
+        ],
+      );
+      check(
+        /Getting a certificate for gateway\.midplane\.test from the ACME server at localhost:14000…\n {2}ok: valid until /.test(
+          said,
+        ) && acmeCloud.gatewayId !== null,
+        "setup --acme in the image gets a certificate from Pebble, then enrolls",
+      );
+      check(
+        said.includes(
+          "Start the gateway with the second command on the setup page.",
+        ),
+        "and says to start the gateway with the dashboard's second command",
+      );
+      acmeContainer = docker([
+        "run",
+        "-d",
+        "--network",
+        "host",
+        ...data,
+        ...trust,
+        image,
+        "gateway",
+        "--config",
+        "/var/lib/midplane/midplane.yaml",
+      ]);
+      const { version: bundle } = await acmeCloud.publish({ shop: policy });
+      await waitFor(
+        "the ACME gateway to enforce",
+        () =>
+          acmeCloud.statuses.some(
+            (s) => s.bundle_version === bundle && s.state === "enforcing",
+          ),
+        60_000,
+      );
+      // Pebble's root for this run: what an agent would trust for Let's Encrypt.
+      const root = (
+        await httpsText("https://localhost:15000/roots/0", {}, { ca: minica })
+      ).body;
+      const agent = await acmeCloud.agentToken({
+        audience: `https://${acmeHost}:${acmePort}/mcp`,
+        databases: { shop: "read" },
+      });
+      const r = await call(
+        `https://${acmeHost}:${acmePort}/mcp`,
+        agent,
+        "SELECT name FROM customers WHERE id = 1",
+        { ca: root, address: "127.0.0.1" },
+      );
+      check(
+        !r.isError && r.text.includes("Dana Ng"),
+        "the gateway serves a query over HTTPS with the certificate Pebble issued",
+      );
+      const acmeFiles = docker([
+        "run",
+        "--rm",
+        ...data,
+        "--entrypoint",
+        "ls",
+        image,
+        "-A",
+        "/var/lib/midplane/acme",
+      ]).split("\n");
+      check(
+        ["account.key", "cert.pem", "key.pem"].every((f) =>
+          acmeFiles.includes(f),
+        ) && readdirSync(caDir).join(" ") === "minica.pem",
+        "the certificate and its key live on the volume; the host holds none",
+      );
+    } catch (err) {
+      for (const c of [acmeContainer, ...helpers].filter(Boolean)) {
+        execFileSync("docker", ["logs", c], { stdio: "inherit" });
+      }
+      throw err;
+    } finally {
+      for (const c of [acmeContainer, ...helpers].filter(Boolean)) {
+        docker(["rm", "-f", c]);
+      }
+      docker(["volume", "rm", "-f", acmeVolume]);
+      await acmeCloud.close();
     }
   }
 }

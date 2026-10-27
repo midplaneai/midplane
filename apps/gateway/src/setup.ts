@@ -6,19 +6,19 @@
 // is readable until someone publishes one. Then the gateway serves, as
 // `midplane gateway --config <dir>/midplane.yaml` would.
 //
+// A server gateway serves TLS: with the certificate in `--tls-dir`, or with
+// `--acme` one it gets from Let's Encrypt itself, which setup obtains, after
+// the questions and before enrolling, and the gateway then renews.
+//
 // The enrollment token is spent last: the flags, the folder, the port and
-// the certificate are checked before the first question, and each
-// connection string is tested as it is given. A failure up to and including
-// enrollment removes everything setup wrote, and every file is created
-// exclusively, so setup never follows or overwrites one. A connection string
-// goes nowhere but its own file: not to the terminal, an error or the cloud.
+// the certificate (or the challenge's port) are checked before the first
+// question, and each connection string is tested as it is given. A failure
+// up to and including enrollment removes everything setup wrote, and every
+// file is created exclusively, so setup never follows or overwrites one. A
+// connection string goes nowhere but its own file: not to the terminal, an
+// error or the cloud.
 
-import {
-  createPrivateKey,
-  type KeyObject,
-  randomBytes,
-  X509Certificate,
-} from "node:crypto";
+import { randomBytes, X509Certificate } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -38,8 +38,21 @@ import {
   DatabaseIdSchema,
   EnrollmentTokenSchema,
 } from "@midplane/protocol";
+import {
+  ACME_FILES,
+  ACME_HTTP_PORT,
+  AcmeError,
+  authorityName,
+  type ChallengeListener,
+  ChallengeTokens,
+  LETS_ENCRYPT,
+  listenForChallenges,
+  obtainCertificate,
+  type Polling,
+} from "./acme.ts";
 import { introspect } from "./catalog.ts";
-import { isLoopback } from "./config.ts";
+import { certificateProblem } from "./certificates.ts";
+import { ConfigError, isLoopback, parseLinkedConfig } from "./config.ts";
 import { DatabaseExecutor, errorCode } from "./executor.ts";
 import {
   type Enrollment,
@@ -85,6 +98,8 @@ export interface SetupFlags {
   database?: string[] | undefined;
   url?: string | undefined;
   "tls-dir"?: string | undefined;
+  acme?: boolean | undefined;
+  "acme-directory"?: string | undefined;
   port?: string | undefined;
   dir?: string | undefined;
   "no-start"?: boolean | undefined;
@@ -96,8 +111,16 @@ export interface SetupPlan {
   token: string;
   /** Ids already in the project, asked for first. */
   databases: string[];
-  /** A server: every interface, with TLS, at this origin. */
-  server: { url: string; tlsDir: string } | null;
+  /**
+   * A server: every interface, with TLS, at this origin; its certificate
+   * from files in a folder, or from an ACME directory.
+   */
+  server: {
+    url: string;
+    certificate:
+      | { kind: "files"; dir: string }
+      | { kind: "acme"; directoryUrl: string };
+  } | null;
   /** The port asked for, if any. */
   port: number | null;
   /** Where to write, as given. */
@@ -133,6 +156,26 @@ function serverOrigin(text: string): string {
   return url.origin;
 }
 
+/** An ACME directory's URL: https, or http on this machine (a test's). */
+function acmeDirectory(text: string | undefined): string {
+  if (text === undefined) return LETS_ENCRYPT;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new SetupError("--acme-directory must be an ACME directory's URL");
+  }
+  if (
+    url.protocol !== "https:" &&
+    !(url.protocol === "http:" && isLoopback(url.hostname))
+  ) {
+    throw new SetupError(
+      "--acme-directory must use https (http only on this machine)",
+    );
+  }
+  return url.href;
+}
+
 /** Check the flags, without touching the disk or the network. */
 export function planSetup(
   flags: SetupFlags,
@@ -163,13 +206,43 @@ export function planSetup(
   if (flags.url === undefined && flags["tls-dir"] !== undefined) {
     throw new SetupError("--tls-dir goes with --url");
   }
-  const server =
-    flags.url === undefined
-      ? null
-      : {
-          url: serverOrigin(flags.url),
-          tlsDir: flags["tls-dir"] ?? DEFAULT_TLS_DIR,
-        };
+  if (flags.url === undefined && flags.acme) {
+    throw new SetupError("--acme goes with --url");
+  }
+  if (flags.acme && flags["tls-dir"] !== undefined) {
+    throw new SetupError(
+      "--acme gets the gateway a certificate, so it doesn't take --tls-dir",
+    );
+  }
+  if (!flags.acme && flags["acme-directory"] !== undefined) {
+    throw new SetupError("--acme-directory goes with --acme");
+  }
+  let server: SetupPlan["server"] = null;
+  if (flags.url !== undefined) {
+    const url = serverOrigin(flags.url);
+    if (!flags.acme) {
+      server = {
+        url,
+        certificate: {
+          kind: "files",
+          dir: flags["tls-dir"] ?? DEFAULT_TLS_DIR,
+        },
+      };
+    } else {
+      if (isIP(new URL(url).hostname.replace(/^\[(.*)\]$/, "$1"))) {
+        throw new SetupError(
+          "--acme: an automatic certificate needs a host name, and --url names an IP address",
+        );
+      }
+      server = {
+        url,
+        certificate: {
+          kind: "acme",
+          directoryUrl: acmeDirectory(flags["acme-directory"]),
+        },
+      };
+    }
+  }
   const databases = flags.database ?? [];
   const seen = new Set<string>();
   for (const id of databases) {
@@ -200,16 +273,43 @@ export function planSetup(
 
 // ── the folder, the port and the certificate ──────────────────────────────
 
+/** A server's certificate: its files, absolute, or where to get one. */
+export type SetupTls =
+  | { kind: "files"; certFile: string; keyFile: string }
+  | { kind: "acme"; directoryUrl: string; httpPort: number };
+
 export interface PreparedSetup extends SetupPlan {
   /** The folder, absolute. */
   path: string;
   port: number;
-  /** A server's certificate and key files, absolute. */
-  tls: { certFile: string; keyFile: string } | null;
+  tls: SetupTls | null;
+}
+
+/**
+ * Where setup runs, which decides how to start the gateway again: in a
+ * container (the dashboard's second command), through npx, or installed.
+ */
+export type SetupPlace = "container" | "npx" | "installed";
+
+/** Where this process runs: `/.dockerenv` is a container, `npm_command=exec` is npx. */
+export function placeOf(
+  o: { inContainer?: boolean; npx?: boolean } = {},
+): SetupPlace {
+  if (o.inContainer ?? existsSync("/.dockerenv")) return "container";
+  return (o.npx ?? process.env.npm_command === "exec") ? "npx" : "installed";
+}
+
+/** How to start the gateway in `dir` again, runnable where setup ran. */
+export function startHint(dir: string, place: SetupPlace): string {
+  if (place === "container") return "the second command on the setup page";
+  const config = join(dir, "midplane.yaml");
+  return place === "npx"
+    ? `npx -y midplane@latest gateway --config ${config}`
+    : `midplane gateway --config ${config}`;
 }
 
 /** The folder must not exist, or be empty (a container's volume). */
-function checkFolder(shown: string, path: string): void {
+function checkFolder(shown: string, path: string, place: SetupPlace): void {
   let entries: string[];
   try {
     entries = readdirSync(path);
@@ -223,7 +323,9 @@ function checkFolder(shown: string, path: string): void {
   }
   if (entries.includes("midplane.yaml")) {
     throw new SetupError(
-      `Already set up: start it with \`midplane gateway --config ${join(shown, "midplane.yaml")}\``,
+      place === "container"
+        ? `Already set up: start the gateway with ${startHint(shown, place)}`
+        : `Already set up: start it with \`${startHint(shown, place)}\``,
     );
   }
   if (entries.length > 0) throw new SetupError(`${shown} isn't empty`);
@@ -265,45 +367,6 @@ export async function choosePort(
   );
 }
 
-/**
- * Why a server can't serve `host` with this certificate and key, or null:
- * which file, and what is wrong with it.
- */
-export function certificateProblem(
-  files: { cert: string; key: string; certFile: string; keyFile: string },
-  host: string,
-  now: Date,
-): string | null {
-  let cert: X509Certificate;
-  try {
-    cert = new X509Certificate(files.cert);
-  } catch {
-    return `${files.certFile} isn't a PEM certificate`;
-  }
-  let key: KeyObject;
-  try {
-    key = createPrivateKey(files.key);
-  } catch {
-    return `${files.keyFile} isn't a PEM private key without a passphrase`;
-  }
-  const name = host.replace(/^\[(.*)\]$/, "$1");
-  const covered = isIP(name) ? cert.checkIP(name) : cert.checkHost(name);
-  if (!covered) {
-    const names = cert.subjectAltName ?? cert.subject.replace(/\n/g, ", ");
-    return `the certificate in ${files.certFile} is for ${names}, not ${name}`;
-  }
-  if (cert.validToDate < now) {
-    return `the certificate in ${files.certFile} expired on ${cert.validToDate.toISOString()}`;
-  }
-  if (cert.validFromDate > now) {
-    return `the certificate in ${files.certFile} isn't valid until ${cert.validFromDate.toISOString()}`;
-  }
-  if (!cert.checkPrivateKey(key)) {
-    return `${files.keyFile} isn't the key of the certificate in ${files.certFile}`;
-  }
-  return null;
-}
-
 function readTlsFile(file: string): string {
   try {
     return readFileSync(file, "utf8");
@@ -317,25 +380,48 @@ function readTlsFile(file: string): string {
 /** Everything checked before the first question. */
 export async function prepareSetup(
   plan: SetupPlan,
-  o: { now?: Date } = {},
+  o: { now?: Date; place?: SetupPlace; acmeHttpPort?: number } = {},
 ): Promise<PreparedSetup> {
   const path = resolve(plan.dir);
-  checkFolder(plan.dir, path);
+  checkFolder(plan.dir, path, o.place ?? placeOf());
   if (!plan.server) {
     return { ...plan, path, port: await choosePort(plan.port), tls: null };
   }
-  const dir = resolve(plan.server.tlsDir);
+  const port = plan.port ?? SETUP_PORT;
+  const certificate = plan.server.certificate;
+  if (certificate.kind === "acme") {
+    // Setup answers the challenge itself, on every interface.
+    const httpPort = o.acmeHttpPort ?? ACME_HTTP_PORT;
+    if (port === httpPort) {
+      throw new SetupError(
+        `--port ${port} is where the certificate's challenge is answered: choose another`,
+      );
+    }
+    if (!(await portFree(httpPort, "0.0.0.0"))) {
+      throw new SetupError(
+        `port ${httpPort} is taken: setup answers the certificate's challenge on it`,
+      );
+    }
+    return {
+      ...plan,
+      path,
+      port,
+      tls: { kind: "acme", directoryUrl: certificate.directoryUrl, httpPort },
+    };
+  }
+  const dir = resolve(certificate.dir);
   const tls = {
+    kind: "files" as const,
     certFile: join(dir, "tls.crt"),
     keyFile: join(dir, "tls.key"),
   };
   const problem = certificateProblem(
     { ...tls, cert: readTlsFile(tls.certFile), key: readTlsFile(tls.keyFile) },
-    new URL(plan.server.url).hostname,
+    [new URL(plan.server.url).hostname],
     o.now ?? new Date(),
   );
   if (problem) throw new SetupError(problem);
-  return { ...plan, path, port: plan.port ?? SETUP_PORT, tls };
+  return { ...plan, path, port, tls };
 }
 
 /** The URL agents reach the gateway at, as `public_urls` lists it. */
@@ -496,8 +582,12 @@ export interface SetupIO {
   fetch?: typeof fetch;
   /** In a container, localhost is the container; by default, from /.dockerenv. */
   inContainer?: boolean;
+  /** Run through npx; by default, from `npm_command`. */
+  npx?: boolean;
   slug?: string;
   now?: Date;
+  /** For tests: where the certificate's challenge listens, and how it polls. */
+  acme?: { httpPort?: number; polling?: Polling };
 }
 
 /** A test that ends at once when setup is stopped. */
@@ -685,13 +775,27 @@ const yamlValue = (v: string) =>
 const yamlKey = (id: string) =>
   /^(null|true|false)$/.test(id) ? JSON.stringify(id) : id;
 
+/** The `tls` line: files, absolute, or ACME, with only what isn't a default. */
+function tlsYaml(tls: SetupTls): string {
+  if (tls.kind === "files") {
+    return `tls: { cert_file: ${yamlValue(tls.certFile)}, key_file: ${yamlValue(tls.keyFile)} }`;
+  }
+  const acme = [
+    ...(tls.httpPort !== ACME_HTTP_PORT ? [`http_port: ${tls.httpPort}`] : []),
+    ...(tls.directoryUrl !== LETS_ENCRYPT
+      ? [`directory_url: ${yamlValue(tls.directoryUrl)}`]
+      : []),
+  ];
+  return `tls: { acme: {${acme.length > 0 ? ` ${acme.join(", ")} ` : ""}} }`;
+}
+
 /** The gateway's `midplane.yaml`, every path in it relative to it but TLS's. */
 export function setupYaml(o: {
   cloudUrl: string;
   name: string;
   baseUrl: string;
   port: number;
-  tls: { certFile: string; keyFile: string } | null;
+  tls: SetupTls | null;
   databases: readonly string[];
 }): string {
   return [
@@ -700,11 +804,7 @@ export function setupYaml(o: {
       ? `listen: { host: 0.0.0.0, port: ${o.port} }`
       : `listen: { port: ${o.port} }`,
     `public_urls: [${yamlValue(o.baseUrl)}]`,
-    ...(o.tls
-      ? [
-          `tls: { cert_file: ${yamlValue(o.tls.certFile)}, key_file: ${yamlValue(o.tls.keyFile)} }`,
-        ]
-      : []),
+    ...(o.tls ? [tlsYaml(o.tls)] : []),
     "audit: { file: audit.db }",
     "mask_salt: { file: secrets/mask-salt }",
     "link:",
@@ -722,15 +822,63 @@ export function setupYaml(o: {
 const MAYBE_ENROLLED = (name: string) =>
   `The cloud may have enrolled this gateway: if the Gateways page lists \`${name}\`, revoke it, then run setup again with a new token.`;
 
+/** An ACME failure as setup says it: the sentence, then what the authority said. */
+function acmeFailureText(err: AcmeError, ca: string): string {
+  const said = err.problem
+    ? `\n  ${ca} said: ${err.problem.detail || "nothing more"} (${err.kind})`
+    : "";
+  return `${err.message}${said}\nSetup removed the files it wrote; the token is unused.`;
+}
+
+/**
+ * Get a server's certificate into `<folder>/acme`, answering the challenge
+ * on every interface meanwhile. Throws what setup says.
+ */
+async function getCertificate(
+  p: PreparedSetup,
+  tls: Extract<SetupTls, { kind: "acme" }>,
+  io: Partial<Pick<SetupIO, "out" | "signal" | "acme">>,
+): Promise<void> {
+  const host = new URL(baseUrlOfSetup(p)).hostname;
+  const ca = authorityName(tls.directoryUrl);
+  io.out?.(`Getting a certificate for ${host} from ${ca}…\n`);
+  const tokens = new ChallengeTokens();
+  let listener: ChallengeListener | null = null;
+  try {
+    listener = await listenForChallenges(tls.httpPort, tokens);
+    const issued = await obtainCertificate({
+      directoryUrl: tls.directoryUrl,
+      names: [host],
+      dir: join(p.path, "acme"),
+      challenges: tokens,
+      httpPort: tls.httpPort,
+      ...(io.signal ? { signal: io.signal } : {}),
+      ...(io.acme?.polling ? { polling: io.acme.polling } : {}),
+    });
+    const until = new X509Certificate(issued.cert).validToDate;
+    io.out?.(`  ok: valid until ${until.toISOString().slice(0, 10)}\n`);
+  } catch (err) {
+    if (io.signal?.aborted) throw new PromptClosed(true);
+    if (err instanceof AcmeError) {
+      throw new SetupError(acmeFailureText(err, ca));
+    }
+    throw new SetupError(
+      `can't get a certificate (${(err as NodeJS.ErrnoException).code ?? (err as Error).message})\nSetup removed the files it wrote; the token is unused.`,
+    );
+  } finally {
+    await listener?.close();
+  }
+}
+
 /**
  * Write the folder (made 0700, `secrets/` 0700, each secret 0600, the config 0644),
- * enroll naming every database, and write the identity (0600). Anything it
- * wrote is removed if any of it fails.
+ * get a server's ACME certificate, enroll naming every database, and write
+ * the identity (0600). Anything it wrote is removed if any of it fails.
  */
 export async function writeAndEnroll(
   p: PreparedSetup,
   chosen: readonly ChosenDatabase[],
-  io: Pick<SetupIO, "fetch" | "signal"> = {},
+  io: Partial<Pick<SetupIO, "fetch" | "signal" | "out" | "acme">> = {},
 ): Promise<{ configPath: string; enrollment: Enrollment }> {
   const files: string[] = [];
   /** Folders setup made, deepest first. */
@@ -759,6 +907,14 @@ export async function writeAndEnroll(
   };
   const name = gatewayNameOf(p);
   const configPath = join(p.path, "midplane.yaml");
+  const config = setupYaml({
+    cloudUrl: p.cloudUrl,
+    name,
+    baseUrl: baseUrlOfSetup(p),
+    port: p.port,
+    tls: p.tls,
+    databases: chosen.map((d) => d.id),
+  });
 
   try {
     // Closed to other users, audit file and all; a volume keeps its own mode.
@@ -776,18 +932,7 @@ export async function writeAndEnroll(
     for (const db of chosen) {
       write(join(secrets, `${db.id}.dsn`), db.dsn, 0o600);
     }
-    write(
-      configPath,
-      setupYaml({
-        cloudUrl: p.cloudUrl,
-        name,
-        baseUrl: baseUrlOfSetup(p),
-        port: p.port,
-        tls: p.tls,
-        databases: chosen.map((d) => d.id),
-      }),
-      0o644,
-    );
+    write(configPath, config, 0o644);
   } catch (err) {
     undo();
     throw new SetupError(
@@ -797,6 +942,40 @@ export async function writeAndEnroll(
   if (io.signal?.aborted) {
     undo();
     throw new PromptClosed(true);
+  }
+  // The gateway must start from what setup wrote, before any token or
+  // certificate is spent on it.
+  try {
+    parseLinkedConfig(config, configPath, {});
+  } catch (err) {
+    undo();
+    if (!(err instanceof ConfigError)) throw err;
+    throw new SetupError(
+      `the gateway wouldn't start from this config (${err.message}); setup removed the files it wrote and the token is unused`,
+    );
+  }
+
+  if (p.tls?.kind === "acme") {
+    // Its own folder, closed like `secrets/`; whatever ACME kept in it goes too.
+    const acme = join(p.path, "acme");
+    try {
+      mkdirSync(acme, { mode: 0o700 });
+    } catch (err) {
+      undo();
+      throw new SetupError(
+        `can't write the gateway's files in ${p.dir} (${(err as NodeJS.ErrnoException).code ?? "error"})`,
+      );
+    }
+    folders.unshift(acme);
+    for (const f of Object.values(ACME_FILES)) {
+      files.push(join(acme, f), join(acme, `${f}.tmp`));
+    }
+    try {
+      await getCertificate(p, p.tls, io);
+    } catch (err) {
+      undo();
+      throw err;
+    }
   }
 
   let enrollment: Enrollment;
@@ -837,6 +1016,7 @@ export function setupSummary(
   p: PreparedSetup,
   chosen: readonly ChosenDatabase[],
   enrollment: Enrollment,
+  place: SetupPlace = "installed",
 ): string {
   // The project's name as the cloud says it, without control characters.
   const project =
@@ -864,8 +1044,9 @@ export function setupSummary(
     "Add it to Claude Code:",
     `  claude mcp add --transport http midplane ${mcp}`,
     "",
-    "Start it again with:",
-    `  midplane gateway --config ${join(p.dir, "midplane.yaml")}`,
+    ...(place === "container"
+      ? [`Start the gateway with ${startHint(p.dir, place)}.`]
+      : ["Start it again with:", `  ${startHint(p.dir, place)}`]),
     "",
   );
   return lines.join("\n");
@@ -883,8 +1064,13 @@ export async function runSetup(
   flags: SetupFlags,
   io: SetupIO,
 ): Promise<SetupResult> {
+  const place = placeOf(io);
   const p = await prepareSetup(planSetup(flags, io.slug), {
+    place,
     ...(io.now ? { now: io.now } : {}),
+    ...(io.acme?.httpPort !== undefined
+      ? { acmeHttpPort: io.acme.httpPort }
+      : {}),
   });
   io.out(
     [
@@ -895,6 +1081,6 @@ export async function runSetup(
   );
   const chosen = await askDatabases(p, io);
   const { configPath, enrollment } = await writeAndEnroll(p, chosen, io);
-  io.out(setupSummary(p, chosen, enrollment));
+  io.out(setupSummary(p, chosen, enrollment, place));
   return { configPath, start: p.start, enrollment };
 }

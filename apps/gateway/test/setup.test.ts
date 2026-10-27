@@ -4,24 +4,35 @@
 
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { certificateProblem } from "../src/certificates.ts";
 import { parseLinkedConfig } from "../src/config.ts";
 import {
-  certificateProblem,
   choosePort,
   dsnDatabase,
   dsnHost,
+  type PreparedSetup,
+  placeOf,
   planSetup,
   prepareSetup,
   SetupError,
   type SetupFlags,
+  setupSummary,
   setupYaml,
+  startHint,
   suggestDatabaseId,
+  writeAndEnroll,
 } from "../src/setup.ts";
 
 const TOKEN = `mpe1_${"A".repeat(86)}`;
@@ -63,7 +74,10 @@ describe("the flags", () => {
     expect(
       planSetup(flags({ url: "https://gw.example.com/mcp", "no-start": true }))
         .server,
-    ).toEqual({ url: "https://gw.example.com", tlsDir: "/etc/midplane/tls" });
+    ).toEqual({
+      url: "https://gw.example.com",
+      certificate: { kind: "files", dir: "/etc/midplane/tls" },
+    });
   });
 
   it("refuse a bad token, an http cloud off this machine, and bad ids or ports", () => {
@@ -81,6 +95,52 @@ describe("the flags", () => {
       expect(refusal({ port })).toMatch(/--port must be a port number/);
     }
     expect(refusal({ "tls-dir": "/tls" })).toMatch(/--tls-dir goes with --url/);
+  });
+
+  // protects=--acme plans a server whose certificate comes from Let's Encrypt, or the directory named;
+  // fails_when=--acme is ignored, keeps a TLS folder, or drops --acme-directory;
+  // no_claim=that the directory answers (setup finds out after the questions)
+  it("take --acme for a server's own certificate, from Let's Encrypt by default", () => {
+    expect(
+      planSetup(flags({ url: "https://gw.example.com", acme: true })).server,
+    ).toEqual({
+      url: "https://gw.example.com",
+      certificate: {
+        kind: "acme",
+        directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+      },
+    });
+    expect(
+      planSetup(
+        flags({
+          url: "https://gw.example.com",
+          acme: true,
+          "acme-directory": "https://localhost:14000/dir",
+        }),
+      ).server?.certificate,
+    ).toEqual({ kind: "acme", directoryUrl: "https://localhost:14000/dir" });
+  });
+
+  // protects=a wrong --acme combination fails before any question, naming the problem, so no token is spent;
+  // fails_when=--acme with --tls-dir or an IP URL, or a stray --acme-directory, gets through;
+  // no_claim=nothing about the dashboard, which shows Automatic only for a host name
+  it("refuse --acme with --tls-dir, without --url, or for an IP address", () => {
+    const url = "https://gw.example.com";
+    expect(refusal({ acme: true })).toBe("--acme goes with --url");
+    expect(refusal({ url, acme: true, "tls-dir": "/tls" })).toBe(
+      "--acme gets the gateway a certificate, so it doesn't take --tls-dir",
+    );
+    for (const ip of ["https://192.0.2.10", "https://[2001:db8::1]:8443"]) {
+      expect(refusal({ url: ip, acme: true }), ip).toBe(
+        "--acme: an automatic certificate needs a host name, and --url names an IP address",
+      );
+    }
+    expect(refusal({ url, "acme-directory": "https://x.example/dir" })).toBe(
+      "--acme-directory goes with --acme",
+    );
+    expect(
+      refusal({ url, acme: true, "acme-directory": "http://x.example/dir" }),
+    ).toBe("--acme-directory must use https (http only on this machine)");
   });
 
   it("take a server's URL as the dashboard does: https, a host and no more", () => {
@@ -110,6 +170,7 @@ describe("the folder", () => {
           "tls-dir": join(base, "no-tls"),
         }),
       ),
+      { place: "installed" },
     );
 
   it("may be missing or empty, a container's volume, but not hold anything", async () => {
@@ -128,6 +189,13 @@ describe("the folder", () => {
     writeFileSync(join(base, "done", "midplane.yaml"), "");
     await expect(prepare("done")).rejects.toThrow(
       `Already set up: start it with \`midplane gateway --config ${join(base, "done", "midplane.yaml")}\``,
+    );
+    const plan = planSetup(flags({ dir: join(base, "done") }));
+    await expect(prepareSetup(plan, { place: "npx" })).rejects.toThrow(
+      `Already set up: start it with \`npx -y midplane@latest gateway --config ${join(base, "done", "midplane.yaml")}\``,
+    );
+    await expect(prepareSetup(plan, { place: "container" })).rejects.toThrow(
+      "Already set up: start the gateway with the second command on the setup page",
     );
   });
 });
@@ -219,23 +287,23 @@ describe("a server's certificate", () => {
   });
 
   it("must cover the URL's host, by name or address", () => {
-    expect(certificateProblem(files(gw), "gw.example.com", now)).toBeNull();
-    expect(certificateProblem(files(gw), "other.example.com", now)).toBe(
+    expect(certificateProblem(files(gw), ["gw.example.com"], now)).toBeNull();
+    expect(certificateProblem(files(gw), ["other.example.com"], now)).toBe(
       "the certificate in /tls/tls.crt is for DNS:gw.example.com, not other.example.com",
     );
-    expect(certificateProblem(files(ip), "192.0.2.10", now)).toBeNull();
-    expect(certificateProblem(files(ip), "192.0.2.11", now)).toMatch(
+    expect(certificateProblem(files(ip), ["192.0.2.10"], now)).toBeNull();
+    expect(certificateProblem(files(ip), ["192.0.2.11"], now)).toMatch(
       /not 192\.0\.2\.11$/,
     );
   });
 
   it("must not have expired, nor be valid only later", () => {
     const later = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-    expect(certificateProblem(files(gw), "gw.example.com", later)).toMatch(
+    expect(certificateProblem(files(gw), ["gw.example.com"], later)).toMatch(
       /^the certificate in \/tls\/tls\.crt expired on /,
     );
     const earlier = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    expect(certificateProblem(files(gw), "gw.example.com", earlier)).toMatch(
+    expect(certificateProblem(files(gw), ["gw.example.com"], earlier)).toMatch(
       /^the certificate in \/tls\/tls\.crt isn't valid until /,
     );
   });
@@ -245,13 +313,21 @@ describe("a server's certificate", () => {
       .privateKey.export({ type: "pkcs8", format: "pem" })
       .toString();
     expect(
-      certificateProblem(files({ ...gw, key: other }), "gw.example.com", now),
+      certificateProblem(files({ ...gw, key: other }), ["gw.example.com"], now),
     ).toBe("/tls/tls.key isn't the key of the certificate in /tls/tls.crt");
     expect(
-      certificateProblem(files({ ...gw, cert: gw.key }), "gw.example.com", now),
+      certificateProblem(
+        files({ ...gw, cert: gw.key }),
+        ["gw.example.com"],
+        now,
+      ),
     ).toBe("/tls/tls.crt isn't a PEM certificate");
     expect(
-      certificateProblem(files({ ...gw, key: gw.cert }), "gw.example.com", now),
+      certificateProblem(
+        files({ ...gw, key: gw.cert }),
+        ["gw.example.com"],
+        now,
+      ),
     ).toMatch(/^\/tls\/tls\.key isn't a PEM private key/);
   });
 
@@ -266,10 +342,184 @@ describe("a server's certificate", () => {
       prepareSetup(plan("https://gw.example.com")),
     ).resolves.toMatchObject({
       port: 7433,
-      tls: { certFile: join(tls, "tls.crt"), keyFile: join(tls, "tls.key") },
+      tls: {
+        kind: "files",
+        certFile: join(tls, "tls.crt"),
+        keyFile: join(tls, "tls.key"),
+      },
     });
     await expect(prepareSetup(plan("https://db.example.com"))).rejects.toThrow(
       /is for DNS:gw\.example\.com, not db\.example\.com/,
+    );
+  });
+});
+
+describe("a server's certificate from ACME", () => {
+  const held: Server[] = [];
+  afterEach(async () => {
+    await Promise.all(
+      held.splice(0).map((s) => new Promise((done) => s.close(done))),
+    );
+  });
+
+  // protects=setup's challenge port is checked before the first question;
+  // fails_when=a taken port is found only after the questions, or the TLS folder is still required;
+  // no_claim=that port 80 forwards to it
+  it("needs the challenge's port free, and no TLS folder", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "midplane-setup-acme-"));
+    // Any free port but the gateway's own, 7433.
+    const httpPort = await new Promise<number>((done) => {
+      const s = createServer();
+      s.listen(0, "0.0.0.0", () => {
+        const { port } = s.address() as { port: number };
+        s.close(() => done(port));
+      });
+    });
+    const plan = planSetup(
+      flags({
+        url: "https://gw.example.com",
+        acme: true,
+        dir: join(dir, "gw"),
+      }),
+    );
+    await expect(
+      prepareSetup(plan, { acmeHttpPort: httpPort }),
+    ).resolves.toMatchObject({
+      port: 7433,
+      tls: {
+        kind: "acme",
+        httpPort,
+        directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+      },
+    });
+    await new Promise<void>((done) => {
+      const s = createServer();
+      s.listen({ port: httpPort, host: "0.0.0.0" }, () => {
+        held.push(s);
+        done();
+      });
+    });
+    await expect(
+      prepareSetup(plan, { acmeHttpPort: httpPort }),
+    ).rejects.toThrow(
+      `port ${httpPort} is taken: setup answers the certificate's challenge on it`,
+    );
+  });
+
+  // protects=a gateway port equal to the challenge port is refused before the first question, not after the token is spent;
+  // fails_when=setup accepts --port 7480 with --acme and writes a config the gateway refuses;
+  // no_claim=nothing about other port conflicts on the host
+  it("refuse the challenge's port as the gateway's", async () => {
+    const plan = planSetup(
+      flags({
+        url: "https://gw.example.com",
+        acme: true,
+        port: "7480",
+        dir: join(mkdtempSync(join(tmpdir(), "midplane-setup-acme-")), "gw"),
+      }),
+    );
+    await expect(prepareSetup(plan)).rejects.toThrow(
+      "--port 7480 is where the certificate's challenge is answered: choose another",
+    );
+  });
+
+  // protects=setup never spends a token on a config the gateway would refuse to start from;
+  // fails_when=a config that fails to load is enrolled, or its files stay behind;
+  // no_claim=nothing about configs prepareSetup lets through (this one is built by hand to get past it)
+  it("check the gateway loads the config before enrolling", async () => {
+    const base = mkdtempSync(join(tmpdir(), "midplane-setup-load-"));
+    const p = {
+      ...planSetup(
+        flags({
+          url: "https://gw.example.com",
+          acme: true,
+          dir: join(base, "gw"),
+        }),
+      ),
+      path: join(base, "gw"),
+      port: 7480,
+      tls: {
+        kind: "acme" as const,
+        directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+        httpPort: 7480,
+      },
+    };
+    let fetched = false;
+    await expect(
+      writeAndEnroll(p, [{ id: "shop", dsn: "postgres://h/shop" }], {
+        fetch: async () => {
+          fetched = true;
+          throw new Error("no fetch expected");
+        },
+      }),
+    ).rejects.toThrow(
+      "the gateway wouldn't start from this config (tls.acme.http_port must differ from listen.port); setup removed the files it wrote and the token is unused",
+    );
+    expect(fetched).toBe(false);
+    expect(readdirSync(base)).toEqual([]);
+  });
+});
+
+describe("how to start the gateway again", () => {
+  // protects=the hint setup prints runs where setup ran: npx form under npx, the dashboard pointer in a container;
+  // fails_when=a container is told a path inside itself, or an npx user a command they don't have;
+  // no_claim=that the second command on the page matches this gateway's volume (the dashboard's tests)
+  it("is the command for where setup ran", () => {
+    expect(startHint("gw-k3m9x2qa", "installed")).toBe(
+      "midplane gateway --config gw-k3m9x2qa/midplane.yaml",
+    );
+    expect(startHint("gw-k3m9x2qa", "npx")).toBe(
+      "npx -y midplane@latest gateway --config gw-k3m9x2qa/midplane.yaml",
+    );
+    expect(startHint("/var/lib/midplane", "container")).toBe(
+      "the second command on the setup page",
+    );
+  });
+
+  // protects=where setup runs is read from /.dockerenv, then npm's npm_command=exec;
+  // fails_when=a container is taken for npx, or npx for an installed command;
+  // no_claim=other container runtimes without /.dockerenv (they get the installed form)
+  it("knows a container, then npx, from the environment", () => {
+    expect(placeOf({ inContainer: true, npx: true })).toBe("container");
+    expect(placeOf({ inContainer: false, npx: true })).toBe("npx");
+    expect(placeOf({ inContainer: false, npx: false })).toBe("installed");
+    const was = process.env.npm_command;
+    try {
+      process.env.npm_command = "exec";
+      expect(placeOf({ inContainer: false })).toBe("npx");
+      process.env.npm_command = "run-script";
+      expect(placeOf({ inContainer: false })).toBe("installed");
+    } finally {
+      if (was === undefined) delete process.env.npm_command;
+      else process.env.npm_command = was;
+    }
+  });
+
+  // protects=the summary's last lines are the hint for where setup ran;
+  // fails_when=the summary still prints `midplane gateway --config` in a container or under npx;
+  // no_claim=nothing about the lines above it
+  it("ends setup's summary", () => {
+    const p = {
+      dir: "gw-k3m9x2qa",
+      slug: "gw-k3m9x2qa",
+      server: null,
+      port: 7433,
+    } as unknown as PreparedSetup;
+    const enrollment = {
+      projectName: "Shop",
+      databasesAdded: null,
+    } as unknown as Parameters<typeof setupSummary>[2];
+    const tail = (place: Parameters<typeof setupSummary>[3]) =>
+      setupSummary(p, [{ id: "shop", dsn: "" }], enrollment, place)
+        .trimEnd()
+        .split("\n")
+        .slice(-2)
+        .join("\n");
+    expect(tail("npx")).toBe(
+      "Start it again with:\n  npx -y midplane@latest gateway --config gw-k3m9x2qa/midplane.yaml",
+    );
+    expect(tail("container")).toMatch(
+      /\nStart the gateway with the second command on the setup page\.$/,
     );
   });
 });
@@ -340,6 +590,47 @@ describe("the config", () => {
     ]);
   });
 
+  // protects=setup --acme writes `tls: { acme: {} }`, which the gateway loads as ACME for the URL's host;
+  // fails_when=it writes file paths, a default it needn't, or something the config loader refuses;
+  // no_claim=nothing about the certificate itself
+  it("for a server with --acme: tls.acme, defaults left out", () => {
+    const yaml = (tls: Parameters<typeof setupYaml>[0]["tls"]) =>
+      setupYaml({
+        cloudUrl: "https://eu.app.midplane.ai",
+        name: "gw.example.com",
+        baseUrl: "https://gw.example.com",
+        port: 7433,
+        tls,
+        databases: ["shop"],
+      });
+    const text = yaml({
+      kind: "acme",
+      directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+      httpPort: 7480,
+    });
+    expect(text).toContain("\ntls: { acme: {} }\n");
+    expect(parseLinkedConfig(text, join(dir, "midplane.yaml"), {}).tls).toEqual(
+      {
+        kind: "acme",
+        names: ["gw.example.com"],
+        httpPort: 7480,
+        directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+        dir: join(dir, "acme"),
+      },
+    );
+    expect(
+      parseYaml(
+        yaml({
+          kind: "acme",
+          directoryUrl: "https://localhost:14000/dir",
+          httpPort: 7481,
+        }),
+      ).tls,
+    ).toEqual({
+      acme: { http_port: 7481, directory_url: "https://localhost:14000/dir" },
+    });
+  });
+
   it("for a server: every interface, TLS from its folder, at its URL", () => {
     const text = setupYaml({
       cloudUrl: "https://eu.app.midplane.ai",
@@ -347,6 +638,7 @@ describe("the config", () => {
       baseUrl: "https://gw.example.com",
       port: 7433,
       tls: {
+        kind: "files",
         certFile: "/etc/midplane/tls/tls.crt",
         keyFile: "/my tls/tls.key",
       },

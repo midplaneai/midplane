@@ -8,7 +8,9 @@
 #
 # Mount the config at /etc/midplane/midplane.yaml. The working directory,
 # /var/lib/midplane, is the user's: keep the audit file, the bundle cache
-# and the identity there, on a volume.
+# and the identity there, on a volume. The gateway listens on 7433; with
+# `tls.acme` it answers the certificate's challenge on 7480, which the
+# server's port 80 forwards to (`-p 80:7480`).
 
 # node:24-slim, pinned by digest (the gateway needs Node 24.16+).
 FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6

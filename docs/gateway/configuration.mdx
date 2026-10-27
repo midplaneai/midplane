@@ -25,13 +25,51 @@ gateway won't start on a config it can't fully read.
 | `listen.allowed_hosts` | `[]` | More host names the `Host` header may carry, for a proxy that rewrites it. Not token audiences ([hosted agents](/gateway/hosted-agents)) |
 | `public_urls` | none | Up to eight base URLs agents reach the gateway at (`https://…`, no credentials, query or fragment). Each `<url>/mcp` is a token audience. Without them, the listener's own URL |
 | `public_url` | none | Shorthand for one; not with `public_urls` |
-| `tls.cert_file`, `tls.key_file` | none | PEM files; HTTPS on the listener |
+| `tls.cert_file`, `tls.key_file` | none | PEM files; HTTPS on the listener. (`0.23.0+`) Read again every 10 minutes: a replacement whose key matches, that is in date and covers the same public URL hosts is served to new connections without a restart |
+| `tls.acme` | none | (`0.23.0+`) A certificate the gateway gets and renews itself, from Let's Encrypt; not with `cert_file` and `key_file` ([automatic certificates](#automatic-certificates)) |
+| `tls.acme.http_port` | `7480` | Where the challenge listener binds, on every interface. The server's port 80 must reach it; not `listen.port` |
+| `tls.acme.directory_url` | Let's Encrypt | Another ACME directory, such as Let's Encrypt's staging (`https://acme-staging-v02.api.letsencrypt.org/directory`), whose certificates agents don't trust |
 | `audit.file` | required | The audit log, a SQLite file ([audit](/audit)). Local processes may share one; give each linked gateway its own |
 | `audit.retention_days` | `30` | Days to keep each event after Midplane Cloud has it (in local mode, after it is recorded; an event a linked gateway left unsent, after the file is opened in local mode). An event the cloud hasn't acked is kept however old. `0` keeps everything |
 | `mask_salt` | none | A secret source for the salt that keys `consistent-hash` masks: at least 32 characters, the same on every instance ([secrets](/gateway/secrets)). Required once a policy has masks |
 | `limits.max_rows` | `1000` | Rows returned per query, at most 1,000,000. A read stops at the cap and says it was truncated |
 | `limits.max_bytes` | `1048576` | Bytes returned per query, at least 1 KiB |
 | `databases.<id>.dsn` | required | A secret source for the connection string. The id is lowercase, up to 32 characters (`main`, `billing-eu`) |
+
+## Automatic certificates
+
+(`0.23.0+`) With `tls.acme`, the gateway gets its certificate from Let's
+Encrypt for the host of its one https public URL, and keeps it current:
+
+```yaml
+listen: { host: 0.0.0.0, port: 7433 }
+public_urls: [https://midplane.example.com]
+tls: { acme: {} }
+```
+
+- **Before it listens**, it uses the certificate it kept, if that covers the
+  host and has more than 30 days left, or gets a new one: it can't serve
+  without one. If Let's Encrypt refuses, the gateway exits, its last log line
+  saying why with `acme_type` and `acme_detail` ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)).
+- **Every 12 hours** it renews a certificate with 30 days or fewer left, and
+  serves the new one to new connections without a restart. A renewal that
+  fails logs `certificate renewal failed` and is tried at the next check; the
+  current certificate is served meanwhile.
+- **Let's Encrypt checks the host** with an HTTP-01 challenge: it fetches a
+  token from port 80 of the host, which must reach `http_port` (in Docker,
+  `-p 80:7480`). The listener there answers a token pending right now and
+  nothing else: every other request, `/mcp` included, gets an empty `404`,
+  so no agent's token is read in the clear.
+- **It keeps** the certificate, its key and the account's key in `acme/`
+  beside the config, closed to other users. Keep the folder: Let's Encrypt
+  issues at most five certificates for the same host a week.
+
+The host must be a name, not an IP address, and must be the only https
+host in `public_urls`: a tunnel's or proxy's URL leads Let's Encrypt
+somewhere else. Getting a certificate agrees to Let's Encrypt's [subscriber
+agreement](https://letsencrypt.org/repository/). Setup with `--acme` (`midplane
+setup --url https://… --acme`) writes `tls: { acme: {} }` and gets the first
+certificate before it joins the project.
 
 ## Local mode only (`midplane local`)
 
@@ -105,5 +143,8 @@ parse and resolve; writes need a `WHERE`; writes hidden inside a `WITH` are
 denied; and reads run in read-only transactions.
 
 *Tested by* `apps/gateway/test/config.test.ts` (secrets and paths, TLS off
-loopback, public URLs, the salt, retention, unknown keys, both modes) and the
-core's corpus (`packages/corpus`) for what a policy means.
+loopback, `tls.acme`, public URLs, the salt, retention, unknown keys, both
+modes), `apps/gateway/test/certificates.test.ts` and
+`apps/gateway/test/acme.e2e.test.ts` (getting, keeping, renewing and
+reloading certificates) and the core's corpus (`packages/corpus`) for what a
+policy means.
