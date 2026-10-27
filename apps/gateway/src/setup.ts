@@ -39,6 +39,7 @@ import {
   connectionErrorLine,
   DatabaseIdSchema,
   EnrollmentTokenSchema,
+  GATEWAY_SLUG_ALPHABET,
 } from "@midplane/protocol";
 import {
   ACME_FILES,
@@ -82,13 +83,10 @@ export const DEFAULT_TLS_DIR = "/etc/midplane/tls";
 const ID_RULE =
   "a name starts with a lowercase letter and has up to 32 lowercase letters, digits, - or _";
 
-// Crockford's base32, lowercase: no i, l, o or u to misread.
-const SLUG_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
-
 /** `gw-` and 8 random base32 characters, as the dashboard makes them. */
 export function newGatewaySlug(): string {
   // 256 is a multiple of 32, so every character is equally likely.
-  return `gw-${Array.from(randomBytes(8), (b) => SLUG_ALPHABET[b & 31]).join("")}`;
+  return `gw-${Array.from(randomBytes(8), (b) => GATEWAY_SLUG_ALPHABET[b & 31]).join("")}`;
 }
 
 // ── the flags ──────────────────────────────────────────────────────────────
