@@ -16,7 +16,10 @@ name: release
 #   - github-release (contents: write): once both are published, the tag's
 #     GitHub release, listing the feat, fix and perf commits since the last
 #     tag that change the shipped code, and both artifacts. Edit it on
-#     GitHub to add prose.
+#     GitHub to add prose;
+#   - registry (the `release` environment): the entry ai.midplane/midplane in
+#     the official MCP registry (apps/gateway/server.json), once npm serves
+#     the version.
 #
 # How to verify both: docs/releases.mdx. Actions are pinned by commit.
 on:
@@ -161,6 +164,63 @@ jobs:
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
+
+  # The MCP registry entry for this version. The registry accepts it only if
+  # npm serves that version with the entry's name as its mcpName, so the job
+  # waits for that. It starts alongside publish, in the same environment, so
+  # one approval releases both; if publish fails before npm, it times out.
+  #
+  # The ai.midplane namespace is ours through DNS: the `release` environment
+  # secret MCP_REGISTRY_DNS_PRIVATE_KEY is an Ed25519 key, in hex, whose
+  # public half, in base64, is a TXT record on the midplane.ai apex:
+  #
+  #   midplane.ai. IN TXT "v=MCPv1; k=ed25519; p=<public key>"
+  #
+  #   openssl genpkey -algorithm Ed25519 -out key.pem   # OpenSSL 3
+  #   openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64   # p=
+  #   openssl pkey -in key.pem -outform DER | tail -c 32 | xxd -p -c 64     # secret
+  registry:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      PUBLISHER: https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+      PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      # server.json; nothing from the checkout is installed or run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Wait until npm serves the version, with its mcpName
+        run: |
+          name=$(jq -r .name apps/gateway/server.json)
+          for _ in $(seq 60); do
+            served=$(curl -fsS "https://registry.npmjs.org/midplane/$VERSION" 2> /dev/null | jq -r .mcpName || true)
+            if [ "$served" = "$name" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "npm doesn't serve midplane@$VERSION with mcpName $name after 10 minutes" >&2
+          exit 1
+
+      - name: Install mcp-publisher, checked against its digest
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/mcp-publisher.tgz" "$PUBLISHER"
+          echo "$PUBLISHER_SHA256  $RUNNER_TEMP/mcp-publisher.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/mcp-publisher.tgz" -C "$RUNNER_TEMP" mcp-publisher
+
+      - name: Publish the entry
+        env:
+          KEY: ${{ secrets.MCP_REGISTRY_DNS_PRIVATE_KEY }}
+        run: |
+          "$RUNNER_TEMP/mcp-publisher" login dns --domain midplane.ai --private-key "$KEY"
+          "$RUNNER_TEMP/mcp-publisher" publish apps/gateway/server.json
 
   # The tag's GitHub release, so the repository's latest release is the
   # version npm and GHCR serve. Only after both are published; nothing from

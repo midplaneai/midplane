@@ -18,9 +18,15 @@ publishes that same tarball:
   workflow's identity. `:latest` moves to each release; deploy a version tag
   or, better, the digest.
 
+Then the tag gets a GitHub release listing the changes and both artifacts.
+From `0.23.0`, the entry `ai.midplane/midplane` in the
+[official MCP registry](https://registry.modelcontextprotocol.io) moves to that
+npm version too, for MCP clients that install from it (local mode over stdio;
+`apps/gateway/server.json`).
+
 Versions stay below 1.0 until the gateway has been used and tested more
 widely; v0.21.0 is the first of this gateway (earlier `midplane` versions on
-npm are an older, unrelated product).
+npm and in the MCP registry are an older, unrelated product).
 
 ## The npm package
 

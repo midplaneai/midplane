@@ -52,6 +52,12 @@ expired token stops working without a restart. Logs go to stderr, since
 stdout carries MCP. Each session starts a gateway of its own; with one
 config they share its audit file, as one chain, and the taint it keeps.
 
+From `0.23.0`, an MCP client that installs from the official MCP registry
+(`ai.midplane/midplane`) runs this same command. It asks for the config's
+absolute path and the token, which stays in its entry, so make the token with
+a `--ttl` as long as the entry should work. Add the environment variables the
+config names, such as a DSN or the mask salt, to the entry yourself.
+
 Stdio keeps an agent out only if it has no shell or file access: the
 gateway's secrets (the DSN, the salt, the token) sit in the agent's MCP
 config, and the gateway runs as the agent's own user. Beyond a demo, serve

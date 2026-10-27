@@ -1,0 +1,51 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.midplane/midplane",
+  "title": "Midplane",
+  "description": "A gateway between AI agents and Postgres: table access, masking at the source, approvals and audit.",
+  "version": "0.22.0",
+  "websiteUrl": "https://midplane.ai/docs",
+  "repository": {
+    "url": "https://github.com/midplaneai/midplane",
+    "source": "github",
+    "subfolder": "apps/gateway"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "midplane",
+      "version": "0.22.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "command",
+          "value": "local"
+        },
+        {
+          "type": "named",
+          "name": "--config",
+          "description": "Absolute path to midplane.yaml in local mode: each database's DSN and policy, and the key tokens are verified with (https://midplane.ai/docs/gateway/local-mode). Add the environment variables it names, such as a DSN or the mask salt, to this server's environment.",
+          "isRequired": true,
+          "format": "filepath"
+        },
+        {
+          "type": "positional",
+          "valueHint": "transport",
+          "value": "--stdio"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "MIDPLANE_TOKEN",
+          "description": "A token from `midplane token`, verified at start and on every call. It stays in this entry, so give it a --ttl (seconds) as long as the entry should work: the default is an hour.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
