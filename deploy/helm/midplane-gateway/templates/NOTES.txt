@@ -1,0 +1,5 @@
+The gateway {{ include "midplane-gateway.name" . }} sets itself up from the Secret {{ .Values.envSecret }}, joins your project and gets its certificate through Midplane's relay.
+
+  kubectl logs -f {{ include "midplane-gateway.name" . }}-0
+
+Setup's last line is the URL agents reach it at; your project's setup page shows it too, once the gateway connects. Its disk, data-{{ include "midplane-gateway.name" . }}-0, holds its identity and audit log: `helm uninstall` keeps it.

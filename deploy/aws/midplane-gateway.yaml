@@ -1,0 +1,277 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  A Midplane gateway (0.24.0) behind Midplane's relay: one EC2 instance in
+  your VPC with nothing inbound. Paste the midplane.env your project's setup
+  page shows into the secret this stack creates (see Outputs).
+
+# The gateway connects out only: to Midplane Cloud and its relay on 443, and
+# to your databases. Its env file (the enrollment token and a connection
+# string per database) is a Secrets Manager secret that only this instance's
+# role may read, fetched at each start into a root-only file in /run; it is
+# never in a parameter, the user data or the logs. Its state (identity, mask
+# salt, certificate, audit log) is a Docker volume on the encrypted root
+# disk, kept across stops, reboots and stack updates that change the
+# version. Deleting the stack deletes it: revoke the gateway on your
+# project's Gateways page first.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Network }
+        Parameters: [VpcId, SubnetId, PublicIp]
+      - Label: { default: Your database }
+        Parameters: [DatabaseSecurityGroupId, DatabasePort]
+      - Label: { default: Instance }
+        Parameters: [InstanceType]
+    ParameterLabels:
+      VpcId: { default: VPC }
+      SubnetId: { default: Subnet }
+      PublicIp: { default: Public IP address }
+      DatabaseSecurityGroupId: { default: "Database's security group (optional)" }
+      DatabasePort: { default: "Database's port" }
+      InstanceType: { default: Instance type }
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The VPC your database is in.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      A subnet of that VPC that reaches the database and the internet on
+      port 443: a private subnet with a NAT gateway, or a public one with a
+      public IP address (below).
+  PublicIp:
+    Type: String
+    AllowedValues: ["no", "yes"]
+    Default: "no"
+    Description: >-
+      yes only for a public subnet without a NAT gateway, such as the default
+      VPC's. The instance still takes no inbound traffic.
+  DatabaseSecurityGroupId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^sg-[0-9a-f]+$"
+    ConstraintDescription: empty, or a security group id such as sg-0123456789abcdef0
+    Description: >-
+      Optional. The stack allows the gateway into this group on the port
+      below. Leave it empty to allow the gateway's group (an output) yourself.
+  DatabasePort:
+    Type: Number
+    Default: 5432
+    MinValue: 1
+    MaxValue: 65535
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.micro, t4g.small, t4g.medium]
+    Description: Graviton (arm64). t4g.small has 2 GB of memory.
+
+Conditions:
+  AllowIntoDatabase: !Not [!Equals [!Ref DatabaseSecurityGroupId, ""]]
+  AssignPublicIp: !Equals [!Ref PublicIp, "yes"]
+
+Resources:
+  # Made empty and filled in by hand: with no value in the template, no
+  # stack update can write over what was pasted.
+  EnvFile:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub >-
+        The env file of the Midplane gateway in stack ${AWS::StackName}: set
+        its value to the midplane.env your project's setup page shows, each
+        connection string after its =.
+
+  GatewayGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Midplane gateway ${AWS::StackName}: nothing inbound"
+      VpcId: !Ref VpcId
+      # No ingress rules. Egress: all, the default.
+      Tags:
+        - { Key: Name, Value: !Sub "midplane-${AWS::StackName}" }
+
+  DatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: AllowIntoDatabase
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      SourceSecurityGroupId: !Ref GatewayGroup
+      IpProtocol: tcp
+      FromPort: !Ref DatabasePort
+      ToPort: !Ref DatabasePort
+      Description: !Sub "Midplane gateway ${AWS::StackName}"
+
+  Logs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "midplane-${AWS::StackName}"
+      RetentionInDays: 30
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      # A shell through Session Manager, with no port open.
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Policies:
+        - PolicyName: midplane-gateway
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref EnvFile
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${Logs.Arn}"
+
+  Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref Role]
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      # cfn-lint doesn't know EC2's own resolve:ssm: form yet.
+      cfn-lint:
+        config:
+          ignore_checks: [E1152]
+    Properties:
+      # EC2 resolves this when it launches the instance, so the template's
+      # value never changes, and a stack update never replaces the instance
+      # (and its disk) for a newer Amazon Linux.
+      ImageId: resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref Profile
+      # IMDSv2 with one hop: the instance's role is the host's, out of the
+      # gateway container's reach.
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref SubnetId
+          GroupSet: [!Ref GatewayGroup]
+          AssociatePublicIpAddress: !If [AssignPublicIp, true, false]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 16
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - { Key: Name, Value: !Sub "midplane-${AWS::StackName}" }
+      # Run at every boot (scripts-user, always), so a stack update to a new
+      # version, which stops and starts the instance, runs the new image.
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            Content-Type: multipart/mixed; boundary="midplane"
+            MIME-Version: 1.0
+
+            --midplane
+            Content-Type: text/cloud-config; charset="us-ascii"
+
+            cloud_final_modules:
+              - [scripts-user, always]
+
+            --midplane
+            Content-Type: text/x-shellscript; charset="us-ascii"
+
+            #!/bin/bash
+            set -euo pipefail
+            # A first boot's network can lag (NAT, the mirrors): try again.
+            for try in 1 2 3 4 5 6 7 8 9 10; do
+              command -v docker > /dev/null && break
+              dnf install -y docker || sleep 15
+            done
+            systemctl enable --now docker
+
+            # RDS's CA bundle, for sslrootcert=/etc/midplane/tls/rds-global-bundle.pem.
+            install -d -m 755 /etc/midplane/tls
+            if curl -fsS --retry 5 -o /etc/midplane/tls/rds.pem.new https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem; then
+              chmod 644 /etc/midplane/tls/rds.pem.new
+              mv /etc/midplane/tls/rds.pem.new /etc/midplane/tls/rds-global-bundle.pem
+            fi
+
+            # The env file, from the secret, at each start: readable by root
+            # only. Until the secret has a value, an empty file, so the
+            # gateway says in the logs what it needs; if the secret can't be
+            # read, the last one read since boot.
+            install -d -m 755 /usr/local/libexec
+            cat > /usr/local/libexec/midplane-env <<'EOF'
+            #!/bin/bash
+            set -uo pipefail
+            umask 077
+            install -d -m 700 /run/midplane
+            env=/run/midplane/midplane.env
+            if aws secretsmanager get-secret-value --region ${AWS::Region} --secret-id ${EnvFile} \
+              --query SecretString --output text > "$env.new"; then
+              tr -d '\r' < "$env.new" > "$env"
+            elif [ ! -f "$env" ]; then
+              echo "# The secret has no value yet." > "$env"
+            fi
+            rm -f "$env.new"
+            EOF
+            chmod 700 /usr/local/libexec/midplane-env
+
+            # Until the secret holds the env file, the gateway says what's
+            # missing in the logs, and tries again every 30 seconds.
+            cat > /etc/systemd/system/midplane.service <<'EOF'
+            [Unit]
+            Description=Midplane gateway
+            Requires=docker.service
+            After=docker.service network-online.target
+            Wants=network-online.target
+            StartLimitIntervalSec=0
+
+            [Service]
+            Restart=always
+            RestartSec=30
+            ExecStartPre=/usr/local/libexec/midplane-env
+            ExecStartPre=-/usr/bin/docker rm -f midplane
+            ExecStart=/usr/bin/docker run --rm --name midplane \
+              --env-file /run/midplane/midplane.env \
+              -v midplane:/var/lib/midplane \
+              -v /etc/midplane/tls:/etc/midplane/tls:ro \
+              --log-driver awslogs --log-opt awslogs-region=${AWS::Region} \
+              --log-opt awslogs-group=${Logs} --log-opt awslogs-stream=gateway \
+              --log-opt mode=non-blocking \
+              ${Image}
+            ExecStop=/usr/bin/docker stop midplane
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            systemctl daemon-reload
+            systemctl enable midplane
+            systemctl restart midplane
+            --midplane--
+          - Image: ghcr.io/midplaneai/midplane:0.24.0
+
+Outputs:
+  EnvFile:
+    Description: >-
+      Open it and set its value (Plaintext) to your midplane.env: the gateway
+      starts within a minute.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/secretsmanager/secret?name=${EnvFile}&region=${AWS::Region}"
+  Logs:
+    Description: What the gateway says, such as the URL agents reach it at.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#logsV2:log-groups/log-group/${Logs}/log-events/gateway"
+  Shell:
+    Description: A shell on the instance, through Session Manager.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/systems-manager/session-manager/${Instance}?region=${AWS::Region}"
+  GatewaySecurityGroup:
+    Description: Allow this group into your database's security group, if the stack didn't.
+    Value: !Ref GatewayGroup
+  Version:
+    Value: "0.24.0"

@@ -394,7 +394,11 @@ export function startHint(
     : `midplane gateway --config ${config}`;
 }
 
-/** The folder must not exist, or be empty (a container's volume). */
+/**
+ * The folder must not exist, or be empty (a container's volume). A disk
+ * mounted there as it comes, such as a Fly volume or a Kubernetes one on
+ * ext4, holds the filesystem's own `lost+found`, which counts as empty.
+ */
 function checkFolder(
   shown: string,
   path: string,
@@ -419,7 +423,9 @@ function checkFolder(
         : `Already set up: start it with \`${startHint(shown, place)}\``,
     );
   }
-  if (entries.length > 0) throw new SetupError(`${shown} isn't empty`);
+  if (entries.some((e) => e !== "lost+found")) {
+    throw new SetupError(`${shown} isn't empty`);
+  }
 }
 
 /** Whether a listener could take `port` on `host` now. */

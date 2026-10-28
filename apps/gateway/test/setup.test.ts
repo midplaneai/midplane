@@ -347,10 +347,13 @@ describe("the folder", () => {
       { place: "installed" },
     );
 
-  it("may be missing or empty, a container's volume, but not hold anything", async () => {
+  it("may be missing or empty, a container's volume or a disk, but not hold anything", async () => {
     mkdirSync(join(base, "empty"));
     await expect(prepare("missing")).rejects.toThrow(/can't read .*tls\.crt/);
     await expect(prepare("empty")).rejects.toThrow(/can't read .*tls\.crt/);
+    // A disk mounted as it comes: its filesystem's lost+found, and nothing else.
+    mkdirSync(join(base, "disk", "lost+found"), { recursive: true });
+    await expect(prepare("disk")).rejects.toThrow(/can't read .*tls\.crt/);
     mkdirSync(join(base, "full"));
     writeFileSync(join(base, "full", "notes.txt"), "");
     await expect(prepare("full")).rejects.toThrow(/full isn't empty/);

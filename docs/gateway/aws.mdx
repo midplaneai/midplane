@@ -1,0 +1,98 @@
+---
+title: "Run the gateway on AWS with CloudFormation"
+sidebarTitle: "AWS"
+description: "One CloudFormation stack puts the gateway in your VPC, next to RDS or Aurora: an EC2 instance with nothing inbound, its env file in Secrets Manager and its logs in CloudWatch."
+---
+
+The template runs the gateway on one EC2 instance in your database's VPC,
+behind Midplane's relay: agents reach it at a Midplane URL, and nothing
+connects in to the instance. It's the way to reach an RDS or Aurora
+database that stays private.
+
+## What the stack makes
+
+| Resource | What it is |
+| --- | --- |
+| EC2 instance | Graviton, `t4g.small` by default (2 GB), Amazon Linux 2023, an encrypted 16 GB disk. The gateway runs in Docker, as a systemd service |
+| Security group | No inbound rules, all outbound. If you name your database's security group, a rule there admits this one on its port |
+| Secrets Manager secret | The env file your project's setup page shows, empty until you set it. Only the instance's role can read it |
+| CloudWatch log group | What the gateway says, kept 30 days |
+| IAM role | Reads that secret, writes those logs, and gives you a shell through Session Manager, with no port open |
+
+The instance connects out to Midplane Cloud and its relay on port 443, and
+to your database. Its subnet must reach both: a private subnet with a NAT
+gateway, or a public subnet with a public IP address.
+
+## Set it up
+
+<Steps>
+  <Step title="Create an enrollment token">
+    In your project, open step 1 of the setup (or **Gateways**, then **Set up
+    a gateway**), choose **A server (Docker)**, keep **Midplane URL**, and
+    under **Runs on** choose **AWS (CloudFormation)**. Click **Create
+    enrollment token**, above the tabs, and keep the page open.
+  </Step>
+  <Step title="Launch the stack">
+    Click **Launch the stack on AWS**. It opens the console in `eu-central-1`:
+    switch it to your database's region first, at the top of the page. Then
+    choose:
+
+    - **VPC**: your database's.
+    - **Subnet**: one that reaches the database, and the internet on port 443.
+    - **Public IP address**: `yes` only for a public subnet without a NAT
+      gateway, such as the default VPC's. The instance still takes no inbound
+      traffic.
+    - **Database's security group**: optional. Name it, and the stack admits
+      the gateway there on the database's port. Leave it empty, and allow the
+      stack's `GatewaySecurityGroup` output there yourself.
+
+    Tick that the stack creates IAM resources, and create it. It takes a few
+    minutes.
+  </Step>
+  <Step title="Set the env file">
+    In the stack's **Outputs**, open **EnvFile**. Set the secret's value, as
+    **Plaintext**, to the env file the page shows, with each database's
+    connection string after its `=` ([prepare your
+    database](/prepare-database)). Use the database's endpoint as the host.
+    For RDS, end the string with
+    `sslmode=verify-full&sslrootcert=/etc/midplane/tls/rds-global-bundle.pem`:
+    the instance downloads that bundle when it starts.
+  </Step>
+  <Step title="Check it on the page">
+    The gateway reads the secret within a minute, joins your project, and
+    gets its certificate through the relay. The page then shows its URL for
+    agents. The **Logs** output shows what it says, such as why it stopped.
+  </Step>
+</Steps>
+
+Until the secret has a value, the logs say `no config` every 30 seconds:
+that's the gateway waiting for it. Each start reads the secret again, so a
+failed start after a fix needs nothing but a minute.
+
+## Run it
+
+- **A connection string changes.** Change it in the secret, then restart
+  the gateway: reboot the instance, or run `sudo systemctl restart midplane`
+  in a shell from the **Shell** output.
+- **A database is added later.** A new `MIDPLANE_DSN_…` line is read only at
+  the first start. Add the database to the config on the gateway's volume
+  too ([setup from environment
+  variables](/gateway/configuration#setup-from-environment-variables)).
+- **Upgrade.** Update the stack with the new version's template, replacing
+  the current one with
+  `https://midplane-gateway-templates.s3.eu-central-1.amazonaws.com/gateway/<version>/aws.yaml`.
+  The instance stops and starts, and runs the new image; its disk, and with
+  it the gateway, stays. Each version's template runs that version only.
+- **Remove it.** Revoke the gateway on your project's **Gateways** page,
+  then delete the stack. That deletes the instance, its disk with the audit
+  log, and the secret.
+
+The template is
+[`deploy/aws/midplane-gateway.yaml`](https://github.com/midplaneai/midplane/blob/main/deploy/aws/midplane-gateway.yaml).
+To keep Midplane's relay out of the path, run the gateway at [your own
+URL](/gateway/deploy#your-own-url) instead.
+
+*Tested by* `apps/gateway/test/deploy-templates.test.ts` (the template's
+version, no inbound rule, no secret in a parameter or the user data, the
+gateway's folder on the encrypted disk, the instance's role out of the
+container's reach).

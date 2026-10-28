@@ -1,0 +1,53 @@
+---
+title: "Run the gateway on Render"
+sidebarTitle: "Render"
+description: "Deploy the gateway as a Render background worker with a disk, from Midplane's Blueprint, behind Midplane's relay: no port or domain."
+---
+
+The gateway runs as a Render background worker with a 1 GB disk, behind
+Midplane's relay: agents reach it at a Midplane URL, and the worker has no
+port or domain, so nothing connects in. It suits a database Render can
+reach over the internet. Background workers need a paid instance type; the
+Blueprint picks Starter, in Frankfurt.
+
+## Set it up
+
+<Steps>
+  <Step title="Create an enrollment token">
+    In your project, open step 1 of the setup (or **Gateways**, then **Set up
+    a gateway**), choose **A server (Docker)**, keep **Midplane URL**, and
+    under **Runs on** choose **Render**. Click **Create enrollment token**,
+    above the tabs, and keep the page open.
+  </Step>
+  <Step title="Deploy the Blueprint">
+    Click **Deploy to Render**, name the Blueprint, and apply it. Render makes
+    the worker and its disk. Its first start says `no config` and stops: it
+    has no env file yet.
+  </Step>
+  <Step title="Add the env file">
+    In the worker's **Environment**, choose **Add from .env**, paste the file
+    the page shows with each database's connection string after its `=`
+    ([prepare your database](/prepare-database)), and save, choosing to
+    deploy.
+  </Step>
+  <Step title="Check it on the page">
+    The gateway sets itself up from the environment, joins your project,
+    and gets its certificate through the relay. The page then shows its URL
+    for agents. The worker's **Logs** show what it says.
+  </Step>
+</Steps>
+
+## Run it
+
+- **A connection string changes.** Change it in **Environment** and deploy.
+- **Upgrade.** In the worker's **Settings**, change the image's tag to the
+  new version, and deploy. The disk, and with it the gateway, stays.
+- **Remove it.** Revoke the gateway on your project's **Gateways** page,
+  then delete the worker, which deletes its disk with the audit log.
+
+The Blueprint is
+[`deploy/render/render.yaml`](https://github.com/midplaneai/midplane/blob/main/deploy/render/render.yaml).
+
+*Tested by* `apps/gateway/test/deploy-templates.test.ts` (one worker, the
+version's image, the gateway's folder on its disk, no variable in the
+Blueprint).

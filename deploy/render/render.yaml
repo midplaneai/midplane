@@ -1,0 +1,23 @@
+# A Midplane gateway behind Midplane's relay, as a Render background worker
+# with a disk: nothing connects in, so it needs no port or domain. Deploy it
+# with the button on https://midplane.ai/docs/gateway/render, then add the
+# midplane.env your project's setup page shows in the worker's Environment
+# (Add from .env): the gateway sets itself up from it the first time it
+# starts, and reads the connection strings each time.
+#
+# One instance: the disk holds the gateway's identity, mask salt,
+# certificate and audit log, and Render stops the old instance before it
+# starts a new one.
+services:
+  - type: worker
+    name: midplane-gateway
+    runtime: image
+    image:
+      url: ghcr.io/midplaneai/midplane:0.24.0
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    disk:
+      name: midplane
+      mountPath: /var/lib/midplane
+      sizeGB: 1

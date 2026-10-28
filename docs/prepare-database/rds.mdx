@@ -10,9 +10,11 @@ started](/get-started)).
 
 <Steps>
   <Step title="Run the gateway inside the VPC">
-    Deploy the gateway on EC2, ECS or EKS, in a subnet that reaches the
-    database ([deploy the gateway](/gateway/deploy#docker)). In the database's
-    security group, allow the gateway's security group on port 5432.
+    The [AWS template](/gateway/aws) runs it on EC2 in a subnet you pick, and
+    can admit it to the database's security group. On ECS or EKS, run it in a
+    subnet that reaches the database ([deploy the
+    gateway](/gateway/deploy#docker), [Kubernetes](/gateway/kubernetes)), and
+    in the database's security group allow the gateway's on port 5432.
   </Step>
   <Step title="Create a role for the gateway">
     Connect with `psql` as the master user, replace the placeholders, and run:
@@ -33,12 +35,13 @@ started](/get-started)).
     minutes, and the gateway reads its connection string once, at start.
   </Step>
   <Step title="Download the RDS certificate bundle">
-    Save the [global RDS bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem)
+    The AWS template downloads it for you. Elsewhere, save the [global RDS
+    bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem)
     as `rds-global-bundle.pem` where the gateway runs: in Docker, in
-    `/etc/midplane/tls` on the server. The commands for **My own**
-    certificate mount that folder at the same path; with an **Automatic**
-    one, add `-v /etc/midplane/tls:/etc/midplane/tls:ro` after `docker run`
-    in both.
+    `/etc/midplane/tls` on the server, mounted at the same path. The
+    commands for **My own** certificate mount that folder already; for the
+    others, add `-v /etc/midplane/tls:/etc/midplane/tls:ro` after `docker
+    run` in each.
   </Step>
   <Step title="Give setup the connection string">
     Use the endpoint from the database's **Connectivity & security** tab. For
@@ -50,9 +53,10 @@ started](/get-started)).
     ```
 
     `sslrootcert` is the bundle's path where the gateway runs:
-    `/etc/midplane/tls/rds-global-bundle.pem` in Docker, or the file's full
-    path on your machine. Paste the line when `midplane setup` asks for the
-    connection string ([deploy the gateway](/gateway/deploy)).
+    `/etc/midplane/tls/rds-global-bundle.pem` in Docker and with the AWS
+    template, or the file's full path on your machine. Put the line after
+    its `MIDPLANE_DSN_…=` in the env file, or paste it when `midplane setup`
+    asks for the connection string ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
     Setup says `ok` with the database and its number of tables. Once the

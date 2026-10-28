@@ -38,8 +38,9 @@ project ([get started](/get-started)).
 
     Railway's Postgres makes its own certificate, which no CA signs, so the
     gateway can't check it: `no-verify` encrypts the connection without that
-    check. Paste the line when `midplane setup` asks for the connection string
-    ([deploy the gateway](/gateway/deploy)).
+    check. Put the line after its `MIDPLANE_DSN_…=` in the env file, or
+    paste it when `midplane setup` asks for the connection string ([deploy
+    the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
     Setup says `ok` with the database and its number of tables. Once the

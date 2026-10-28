@@ -52,8 +52,9 @@ started](/get-started)).
 
     `sslrootcert` is the certificate's path where the gateway runs:
     `/etc/midplane/tls/supabase-ca.crt` in Docker, or the file's full path on
-    your machine. Paste the line when `midplane setup` asks for the connection
-    string ([deploy the gateway](/gateway/deploy)).
+    your machine. Put the line after its `MIDPLANE_DSN_…=` in the env file,
+    or paste it when `midplane setup` asks for the connection string
+    ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
     Setup says `ok` with the database and its number of tables. Once the

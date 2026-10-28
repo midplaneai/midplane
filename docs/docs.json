@@ -39,7 +39,14 @@
           },
           {
             "group": "Run the gateway",
-            "pages": ["gateway/deploy", "gateway/multiple-gateways"]
+            "pages": [
+              "gateway/deploy",
+              "gateway/aws",
+              "gateway/fly",
+              "gateway/render",
+              "gateway/kubernetes",
+              "gateway/multiple-gateways"
+            ]
           },
           {
             "group": "Your organization",

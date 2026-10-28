@@ -13,13 +13,16 @@ Nothing connects in to it but agents.
 
 ## Where to run it
 
-<Columns cols={2}>
+<Columns cols={3}>
   <Card title="This machine" icon="laptop" href="#this-machine">
     To try Midplane. Only agents on this machine can use it.
   </Card>
   <Card title="A server, with Docker" icon="server" href="#docker">
     For a team or production: agents anywhere reach it at an HTTPS URL, even
     in a private network.
+  </Card>
+  <Card title="A cloud platform" icon="cloud" href="#on-a-platform">
+    The same, from a template: AWS, Fly.io, Render or Kubernetes.
   </Card>
 </Columns>
 
@@ -99,9 +102,10 @@ money.
 <Steps>
   <Step title="Create an enrollment token">
     In your project, open step 1 of the setup (or **Gateways**, then **Set up
-    a gateway**), choose **A server (Docker)** and keep **Midplane URL**.
-    Click **Create enrollment token**, above the tabs. Keep the page open: the
-    env file and the command it shows now hold the token.
+    a gateway**), choose **A server (Docker)**, keep **Midplane URL** and,
+    under **Runs on**, **A server with Docker**. Click **Create enrollment
+    token**, above the tabs. Keep the page open: the env file and the command
+    it shows now hold the token.
   </Step>
   <Step title="Save the env file">
     On the server, save the file the page shows as `midplane.env` with an
@@ -241,6 +245,29 @@ the gateway.
 
 For production, replace `:latest` in both commands with a version you
 [verified](/releases).
+
+## On a platform
+
+Behind the relay the gateway needs no port, domain or certificate of yours,
+so it runs anywhere its image keeps a disk and connects out. Each template
+reads the same env file as the Docker steps, and the page shows its steps
+under **Runs on**.
+
+<Columns cols={2}>
+  <Card title="AWS" icon="aws" href="/gateway/aws">
+    A CloudFormation stack in your VPC, next to RDS or Aurora: one EC2
+    instance with nothing inbound.
+  </Card>
+  <Card title="Fly.io" icon="paper-plane" href="/gateway/fly">
+    One machine with a volume, and no IP address.
+  </Card>
+  <Card title="Render" icon="cube" href="/gateway/render">
+    A background worker with a disk, from a Blueprint.
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/gateway/kubernetes">
+    A Helm chart: one pod with its own disk, and no Service.
+  </Card>
+</Columns>
 
 ## Other setups
 

@@ -1,0 +1,38 @@
+# The Secret that holds the env file your project's setup page shows:
+#
+#   kubectl create secret generic midplane-gw --from-env-file=midplane.env
+#
+# MIDPLANE_CLOUD_URL, MIDPLANE_ENROLLMENT_TOKEN, and a MIDPLANE_DSN_<ID>
+# per database. The gateway reads the connection strings each time it
+# starts, and the rest only the first time, when it sets itself up behind
+# the relay. Required.
+envSecret: ""
+
+image:
+  repository: ghcr.io/midplaneai/midplane
+  # Empty: the chart's appVersion, the release it was published with.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The gateway's folder: its config, identity, mask salt, certificate and
+# audit log. A new disk is a new gateway, which needs a new token.
+persistence:
+  size: 1Gi
+  # Empty: the cluster's default storage class.
+  storageClass: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Files to mount read-only at /etc/midplane/tls, such as a database's CA
+# bundle for sslrootcert: the name of a Secret, each key a file.
+tlsSecret: ""
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

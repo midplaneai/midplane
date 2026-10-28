@@ -13,6 +13,9 @@ name: release
 #     for amd64 and arm64 built from it, with an SBOM and build provenance,
 #     and sign it keyless with cosign. This job installs and runs no
 #     dependencies;
+#   - templates (the `release` environment): once the image is published,
+#     the CloudFormation template to S3, through an AWS role GitHub's OIDC
+#     token gets, and the Helm chart to GHCR (deploy/);
 #   - github-release (contents: write): once both are published, the tag's
 #     GitHub release, listing the feat, fix and perf commits since the last
 #     tag that change the shipped code, and both artifacts. Edit it on
@@ -164,6 +167,57 @@ jobs:
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
+
+  # The deploy templates for this version, once its image is published
+  # (deploy/, pinned to it; CI checks the pins): the CloudFormation template
+  # to S3, where the dashboard's Deploy on AWS link reads it, at
+  # gateway/X.Y.Z/ and gateway/latest/, through the role the bucket's stack
+  # made for this environment (AWS_TEMPLATES_ROLE, a repository variable);
+  # and the Helm chart to ghcr.io/midplaneai/charts/midplane-gateway.
+  templates:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+      # The AWS role, through GitHub's OIDC token.
+      id-token: write
+      # The chart, to GHCR.
+      packages: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      BUCKET: midplane-gateway-templates
+      HELM: https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz
+      HELM_SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+    steps:
+      # The templates; nothing from the checkout is installed or run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_TEMPLATES_ROLE }}
+          aws-region: eu-central-1
+      - name: The CloudFormation template, to S3
+        run: |
+          template=deploy/aws/midplane-gateway.yaml
+          aws s3 cp "$template" "s3://$BUCKET/gateway/$VERSION/aws.yaml" --content-type text/yaml
+          aws s3 cp "$template" "s3://$BUCKET/gateway/latest/aws.yaml" --content-type text/yaml \
+            --cache-control "max-age=300"
+      - name: Install Helm, checked against its digest
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/helm.tgz" "$HELM"
+          echo "$HELM_SHA256  $RUNNER_TEMP/helm.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/helm.tgz" -C "$RUNNER_TEMP" --strip-components=1 linux-amd64/helm
+      - name: The Helm chart, to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "$TOKEN" | "$RUNNER_TEMP/helm" registry login ghcr.io --username "$ACTOR" --password-stdin
+          "$RUNNER_TEMP/helm" package deploy/helm/midplane-gateway --destination "$RUNNER_TEMP"
+          "$RUNNER_TEMP/helm" push "$RUNNER_TEMP/midplane-gateway-$VERSION.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
   # The MCP registry entry for this version. The registry accepts it only if
   # npm serves that version with the entry's name as its mcpName, so the job

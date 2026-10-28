@@ -1,0 +1,66 @@
+---
+title: "Run the gateway on Fly.io"
+sidebarTitle: "Fly.io"
+description: "Run the gateway on one Fly.io machine with a volume, behind Midplane's relay: no IP address or service, its connection strings in Fly's secrets."
+---
+
+The gateway runs on one Fly machine with a volume, behind Midplane's relay:
+agents reach it at a Midplane URL, and the app has no IP address or service,
+so nothing connects in. It suits a database Fly can reach over the
+internet, such as [Supabase](/prepare-database/supabase) or
+[Neon](/prepare-database/neon). You need
+[flyctl](https://fly.io/docs/flyctl/install/), signed in, and the gateway
+`0.24.1+`, which sets itself up on a volume that holds the filesystem's
+`lost+found`.
+
+## Set it up
+
+<Steps>
+  <Step title="Create an enrollment token">
+    In your project, open step 1 of the setup (or **Gateways**, then **Set up
+    a gateway**), choose **A server (Docker)**, keep **Midplane URL**, and
+    under **Runs on** choose **Fly.io**. Click **Create enrollment token**,
+    above the tabs, and keep the page open.
+  </Step>
+  <Step title="Save the env file">
+    On your machine, save the file the page shows as `midplane.env` with an
+    editor, with each database's connection string after its `=` ([prepare
+    your database](/prepare-database)).
+  </Step>
+  <Step title="Run the commands">
+    In that folder, run the page's commands, one block at a time:
+
+    1. `fly apps create` makes the app, named after the gateway. It may ask
+       which organization.
+    2. `fly secrets import` stores the env file as the app's secrets, then
+       the file is removed.
+    3. `fly volumes create` and `fly machine run` make a 1 GB volume and
+       one machine with 512 MB on it, restarted whenever it stops.
+
+    Both commands name the region `fra`, beside the relay: use your
+    database's region instead in both.
+  </Step>
+  <Step title="Check it on the page">
+    The gateway sets itself up from the secrets, joins your project, and
+    gets its certificate through the relay. The page then shows its URL for
+    agents. `fly logs -a midplane-gw-…` shows what it says.
+  </Step>
+</Steps>
+
+## Run it
+
+- **A connection string changes.** Import it from a file, as setup did,
+  such as `fly secrets import -a midplane-gw-… < shop.env` with one line:
+  Fly restarts the machine with it.
+- **Upgrade.** `fly machine update <machine id> -a midplane-gw-… --image
+  ghcr.io/midplaneai/midplane:<version>`. `fly machine list -a
+  midplane-gw-…` shows the id. The volume, and with it the gateway, stays.
+- **The volume is on one host.** Fly doesn't copy it: if that host fails,
+  the gateway's identity is gone with it, and a new gateway needs a new
+  token. Fly snapshots volumes daily.
+- **Remove it.** Revoke the gateway on your project's **Gateways** page,
+  then `fly apps destroy midplane-gw-…`, which deletes the volume with the
+  audit log.
+
+For production, replace `:latest` in `fly machine run` with a version you
+[verified](/releases).

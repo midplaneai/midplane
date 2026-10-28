@@ -1,0 +1,70 @@
+---
+title: "Run the gateway on Kubernetes with Helm"
+sidebarTitle: "Kubernetes"
+description: "Install the gateway with Midplane's Helm chart, behind Midplane's relay: one pod with its own disk, its env file in a Secret, and no Service or Ingress."
+---
+
+The chart runs the gateway as one pod with its own disk, behind Midplane's
+relay: agents reach it at a Midplane URL, and the chart makes no Service or
+Ingress, so nothing connects in. Run it in a cluster that reaches your
+databases. You need `kubectl` and `helm` for the cluster, a default
+storage class, or one you name, and the chart `0.24.1+`: an earlier gateway
+refuses a disk that holds the filesystem's `lost+found`, as most do.
+
+## Set it up
+
+<Steps>
+  <Step title="Create an enrollment token">
+    In your project, open step 1 of the setup (or **Gateways**, then **Set up
+    a gateway**), choose **A server (Docker)**, keep **Midplane URL**, and
+    under **Runs on** choose **Kubernetes (Helm)**. Click **Create enrollment
+    token**, above the tabs, and keep the page open.
+  </Step>
+  <Step title="Save the env file">
+    On your machine, save the file the page shows as `midplane.env` with an
+    editor, with each database's connection string after its `=` ([prepare
+    your database](/prepare-database)). Name each database's host as the
+    cluster's pods reach it.
+  </Step>
+  <Step title="Run the commands">
+    In that folder, run the page's two commands. The first makes a Secret
+    from the file, then removes the file; the second installs the chart
+    with that Secret's name.
+  </Step>
+  <Step title="Check it on the page">
+    The gateway sets itself up from the Secret, joins your project, and gets
+    its certificate through the relay. The page then shows its URL for
+    agents. `kubectl logs -f midplane-gw-…-0` shows what it says.
+  </Step>
+</Steps>
+
+## What the chart makes
+
+- **A StatefulSet of one.** A replacement pod starts only once the old one
+  is gone, so two never share the disk. Run one release per gateway.
+- **A 1 Gi disk** (`persistence.size`, `persistence.storageClass`), owned by
+  the image's user, uid 1000. It holds the gateway's identity, mask salt,
+  certificate and audit log. `helm uninstall` keeps it.
+- **A locked-down pod.** It runs as uid 1000 with a read-only root
+  filesystem, no capabilities, and no service account token.
+- **No Service or Ingress.** The gateway only connects out: to Midplane
+  Cloud and its relay on port 443, and to your databases.
+
+To mount files the connection strings name, such as a CA bundle for
+`sslrootcert`, set `tlsSecret` to a Secret: its keys become files in
+`/etc/midplane/tls`. Every value is in the chart's
+[`values.yaml`](https://github.com/midplaneai/midplane/blob/main/deploy/helm/midplane-gateway/values.yaml).
+
+## Run it
+
+- **A connection string changes.** Change it in the Secret, then restart the
+  pod: `kubectl rollout restart statefulset midplane-gw-…`.
+- **Upgrade.** `helm upgrade midplane-gw-…
+  oci://ghcr.io/midplaneai/charts/midplane-gateway --version <version>
+  --reuse-values`. The chart's version is the gateway's.
+- **Remove it.** Revoke the gateway on your project's **Gateways** page,
+  then `helm uninstall midplane-gw-…`, and delete its disk, `kubectl delete
+  pvc data-midplane-gw-…-0`, which holds the audit log.
+
+*Tested by* `apps/gateway/test/deploy-templates.test.ts` (the chart's
+version, one pod, its disk, no Service or Ingress).
