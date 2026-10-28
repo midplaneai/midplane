@@ -8,6 +8,14 @@ release is out, the gateway's row on your project's **Gateways** page says so,
 such as `midplane 0.22.0 · 0.24.0 available`, and **How to upgrade** shows
 the commands for that gateway, with the release's version in them.
 
+## When an upgrade is needed
+
+When a release fixes a security problem, Midplane Cloud makes it the lowest
+version gateways should run. A gateway below it says why on its row, with
+**How to upgrade**; the project's overview shows a banner; and the
+organization's owners and admins get one email for each new lowest version.
+The gateway keeps enforcing your policy meanwhile: the warning never stops it.
+
 ## What carries over
 
 - **Deploy Midplane Cloud before gateways.** A gateway's sync reports what it
