@@ -13,7 +13,7 @@ services:
     name: midplane-gateway
     runtime: image
     image:
-      url: ghcr.io/midplaneai/midplane:0.24.0
+      url: ghcr.io/midplaneai/midplane:0.24.1
     plan: starter
     region: frankfurt
     numInstances: 1

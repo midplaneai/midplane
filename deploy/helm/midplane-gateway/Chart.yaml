@@ -3,8 +3,8 @@ name: midplane-gateway
 description: A Midplane gateway behind Midplane's relay. One pod with its own disk, and nothing that connects in.
 type: application
 # The chart's version is the gateway's: each release publishes both.
-version: 0.24.0
-appVersion: "0.24.0"
+version: 0.24.1
+appVersion: "0.24.1"
 home: https://midplane.ai/docs/gateway/kubernetes
 sources:
   - https://github.com/midplaneai/midplane

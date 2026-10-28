@@ -4,7 +4,7 @@
 #
 #   node apps/gateway/scripts/build.ts
 #   (cd apps/gateway && pnpm pack --pack-destination ../../image)
-#   docker build --build-arg TARBALL=image/midplane-0.24.0.tgz -t midplane .
+#   docker build --build-arg TARBALL=image/midplane-0.24.1.tgz -t midplane .
 #
 # The default command, `midplane start`, serves the config mounted at
 # /etc/midplane/midplane.yaml; else the one in the working directory,
