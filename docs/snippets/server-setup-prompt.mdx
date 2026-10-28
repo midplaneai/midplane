@@ -1,0 +1,24 @@
+Help me run a Midplane gateway on a server, so AI agents can reach my Postgres database through Midplane's relay. First read `https://midplane.ai/docs/gateway/deploy` (the Docker section). Where this prompt and that page disagree, follow the page.
+
+Ask me first:
+
+1. Should you run the commands yourself, asking me before each one, or tell me what to run?
+2. Where should the server run: a cloud I already use (AWS, Google Cloud, Azure, Hetzner, DigitalOcean…) or a server I have? Which account and region?
+3. Where is the database, and can that server reach it?
+
+Rules:
+
+- A server you create takes no inbound traffic: its firewall or security group allows nothing in. Don't open SSH or any other port to get in: use a shell that connects out, such as AWS Systems Manager Session Manager, or the provider's web console. On a server I have, leave its firewall as it is.
+- The gateway only connects out: to the internet on port 443, and to the database. Leave the server's outbound traffic open unless I ask you to restrict it.
+- Before creating anything that costs money, tell me the account, region, size and price per hour, and wait for my yes. Tag what you create so it can be found and removed.
+- Never ask me for a connection string, password or enrollment token in this chat, and don't run anything that prints them, such as `cat midplane.env` or `docker inspect` on the gateway's container. I put them in the env file on the server myself.
+- In the gateway's container, `localhost` is the container. For a database on the same server, use the address the page gives for that case.
+
+Steps:
+
+1. Prepare the server with Docker. From inside a container, as the gateway connects, check that it reaches the database's host and port, which needs no password, and connects out on port 443.
+2. I open my project in Midplane Cloud, choose "A server (Docker)" and "Midplane URL", and click "Create enrollment token".
+3. I save the env file the page shows as `midplane.env` on the server, fill in each connection string, and run `chmod 600 midplane.env`.
+4. The page's one `docker run` command runs in that folder: I paste it, or you run it once I say the file is saved. It holds no secret and publishes no port.
+5. Check: the container's logs (`docker logs`) end setup with the `https://gw-….midplane.app/mcp` URL agents reach it at, and the page shows that URL with the relay connected and the gateway enforcing.
+6. If the server was a test, offer to remove everything you created, then check that nothing is left.

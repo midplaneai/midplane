@@ -25,6 +25,9 @@ const CATEGORY: Record<string, string> = {
   "timestamp(3) without time zone": "D",
   "time without time zone": "D",
   inet: "I",
+  bytea: "U",
+  uuid: "U",
+  boolean: "B",
 };
 
 const column = (name: string, type: string): Column => ({
@@ -35,7 +38,76 @@ const column = (name: string, type: string): Column => ({
 const classify = (name: string, type: string) =>
   classifyColumn(column(name, type));
 
+const CREDENTIALS = [
+  "password",
+  "passwd",
+  "pwd",
+  "password_hash",
+  "passwd_hash",
+  "pw_hash",
+  "secret",
+  "client_secret",
+  "secret_key",
+  "token",
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "auth_token",
+  "session_token",
+  "bearer_token",
+  "jwt",
+  "api_key",
+  "apikey",
+  "private_key",
+  "access_key",
+  "signing_key",
+  "secret_access_key",
+  "encryption_key",
+  "license_key",
+];
+
 describe("classifyColumn: high-confidence categories", () => {
+  // protects=a column named for a password, secret, token or API key, or for its hash, is suggested as a high-confidence credential, fully redacted where it is text and nulled out where it is bytes, whatever the name's case, and a credential named for personal data is still a credential;
+  // fails_when=one of the 25 names (the issue's 22, jwt, encryption_key and license_key), its upper or capitalized form, or its camelCase form matches no rule or another category, or gets another mask; a credential's hash or digest goes unflagged; the credential rule goes after the personal-data rules;
+  // no_claim=names outside the list or the policy page's label; the types are catalog records built here, not read from Postgres
+  it("flags credentials → full-redact on text, null-out on bytea", () => {
+    const capitalized = (n: string) =>
+      n.replace(
+        /(^|_)([a-z])/g,
+        (_, b: string, c: string) => b + c.toUpperCase(),
+      );
+    const camel = (n: string) =>
+      n.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+    for (const n of CREDENTIALS) {
+      for (const name of [n, n.toUpperCase(), capitalized(n), camel(n)]) {
+        expect(classify(name, "text"), name).toEqual({
+          category: "credential",
+          confidence: "high",
+          suggested: "full-redact",
+        });
+        expect(classify(name, "bytea"), name).toEqual({
+          category: "credential",
+          confidence: "high",
+          suggested: "null-out",
+        });
+      }
+    }
+    // A hash of one, as auth libraries store it (Rails' password_digest).
+    for (const n of [
+      "password_digest",
+      "pwd_hash",
+      "secret_hash",
+      "token_hash",
+      "api_key_hash",
+    ]) {
+      expect(classify(n, "text")?.category, n).toBe("credential");
+    }
+    // First in the rules: a token sent to an email or a phone is a secret.
+    for (const n of ["email_verification_token", "phone_auth_token"]) {
+      expect(classify(n, "text")?.category, n).toBe("credential");
+    }
+  });
+
   it("flags email columns → full-redact", () => {
     for (const n of [
       "email",
@@ -149,6 +221,40 @@ describe("classifyColumn: suggestions fit the column's type", () => {
     expect(classify("email", "citext")?.suggested).toBe("full-redact");
     expect(classify("ssn", "character varying")?.suggested).toBe("full-redact");
   });
+
+  // protects=a credential is suggested only on a type that can hold one, a string or bytes (bytea, uuid), so a flag or a count named for one isn't nulled out;
+  // fails_when=a boolean or integer column named for a credential is suggested, or a uuid token isn't;
+  // no_claim=types other than these four; the type categories are this file's table, not read from pg_type
+  it("flags a credential only on string and binary types", () => {
+    expect(classify("has_password", "boolean")).toBeNull();
+    expect(classify("is_secret", "boolean")).toBeNull();
+    expect(classify("api_key", "integer")).toBeNull();
+    expect(classify("session_token", "uuid")).toEqual({
+      category: "credential",
+      confidence: "high",
+      suggested: "null-out",
+    });
+  });
+});
+
+describe("classifyColumn: camelCase names", () => {
+  // protects=a camelCase name is read as its words, so every rule matches it as it matches the snake_case name, whatever the words before the credential or personal data;
+  // fails_when=stripeApiKey, userPassword, githubToken, webhookSecret, an acronym (APIKey, userAPIKey, IPAddress) or userEmail matches no rule or another category;
+  // no_claim=names that join their words with neither `_` nor a capital (stripeapikey), which still read as one word
+  it("reads a camelCase name as its words", () => {
+    for (const n of [
+      "stripeApiKey",
+      "userPassword",
+      "githubToken",
+      "webhookSecret",
+      "APIKey",
+      "userAPIKey",
+    ]) {
+      expect(classify(n, "text")?.category, n).toBe("credential");
+    }
+    expect(classify("userEmail", "text")?.category).toBe("email");
+    expect(classify("IPAddress", "inet")?.category).toBe("ip");
+  });
 });
 
 describe("classifyColumn: what it leaves alone", () => {
@@ -170,6 +276,26 @@ describe("classifyColumn: what it leaves alone", () => {
     }
   });
 
+  // protects=a key, hash or salt that isn't a secret, and a column about a token or password rather than holding one, gets no suggestion;
+  // fails_when=the credential rule matches a bare key, hash or salt, a word that only starts with one (secretary, tokens_used), or a name with a word after the credential's;
+  // no_claim=that every name of that kind is left alone: only these ten are checked, the issue's nine and password_changed_at from the rule's comment
+  it("doesn't flag a bare key, hash or salt, or a name about a credential", () => {
+    for (const n of [
+      "key",
+      "hash",
+      "salt",
+      "cache_key",
+      "commit_hash",
+      "partition_key",
+      "tokens_used",
+      "token_count",
+      "secretary",
+      "password_changed_at",
+    ]) {
+      expect(classify(n, "text"), n).toBeNull();
+    }
+  });
+
   it("never suggests noise, for any category or type", () => {
     const names = [
       "email",
@@ -187,6 +313,7 @@ describe("classifyColumn: what it leaves alone", () => {
       "street_address",
       "zip_code",
       "ip_address",
+      ...CREDENTIALS,
     ];
     for (const n of names) {
       for (const t of Object.keys(CATEGORY)) {
@@ -281,5 +408,60 @@ describe("exposureScan", () => {
         suggested: { t: "partial", keepEnd: 4 },
       },
     });
+  });
+
+  // protects=on the quickstart's tables, before any mask, the scan suggests api_keys.secret as a credential, alongside the customers' name, email and phone it suggested before;
+  // fails_when=the secret goes unsuggested, a column suggested before drops out, or another quickstart column (a ticket's body, a key's service) is suggested;
+  // no_claim=that the catalog matches seed.sql: it is a copy of its tables written here, not introspected from Postgres (the quickstart's e2e test runs the scan on the loaded seed)
+  it("suggests the quickstart's API key secret, with its personal data", () => {
+    const quickstart: CatalogSnapshot = {
+      relations: [
+        {
+          schema: "public",
+          name: "customers",
+          kind: "table",
+          columns: [
+            column("id", "integer"),
+            column("name", "text"),
+            column("email", "text"),
+            column("phone", "text"),
+            column("plan", "text"),
+            column("created_at", "date"),
+          ],
+        },
+        {
+          schema: "public",
+          name: "support_tickets",
+          kind: "table",
+          columns: [
+            column("id", "integer"),
+            column("customer_id", "integer"),
+            column("subject", "text"),
+            column("body", "text"),
+            column("status", "text"),
+          ],
+        },
+        {
+          schema: "public",
+          name: "api_keys",
+          kind: "table",
+          columns: [
+            column("id", "integer"),
+            column("service", "text"),
+            column("secret", "text"),
+          ],
+        },
+      ],
+      routines: [],
+    };
+    const found = exposureScan(DatabasePolicySchema.parse({}), quickstart).map(
+      (s) => [s.table, s.column, s.match.category, s.match.suggested],
+    );
+    expect(found).toEqual([
+      ["public.customers", "name", "name", "full-redact"],
+      ["public.customers", "email", "email", "full-redact"],
+      ["public.customers", "phone", "phone", { t: "partial", keepEnd: 4 }],
+      ["public.api_keys", "secret", "credential", "full-redact"],
+    ]);
   });
 });

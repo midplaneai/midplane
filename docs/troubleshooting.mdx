@@ -150,6 +150,16 @@ Setup in Docker connects to each database from inside its container, so
 `localhost` and `127.0.0.1` in a connection string are the container itself.
 Use the database's host as the server's network knows it.
 
+If the database runs on the same server, the container reaches the server at
+Docker's bridge address, by default `172.17.0.1` on Linux (`ip addr show
+docker0` shows it), so use that as the host. Postgres must listen there and
+admit the container: set `listen_addresses = '*'`, since Postgres can start
+before Docker adds that address, keep port 5432 closed to the outside in the
+server's firewall, and add a `pg_hba.conf` line for the bridge's network, by
+default `172.17.0.0/16`. A Postgres in another container publishes its port
+there: `-p 172.17.0.1:5432:5432`. On Docker Desktop, use
+`host.docker.internal`.
+
 ### A gateway URL starts with https
 
 `http://` URLs only work for this machine (`localhost`, `127.0.0.1`,

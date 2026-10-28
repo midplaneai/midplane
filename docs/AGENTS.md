@@ -44,7 +44,10 @@ and add a client only once it has been tested end to end against a gateway.
 Prefer `<Steps>`, `<Columns>` of `<Card>`s, tables and diagrams to paragraphs.
 The architecture diagram lives once, in `snippets/architecture.mdx`; import it
 rather than drawing another. No dashboard screenshots while the setup flow is
-still changing.
+still changing. The AI-assistant prompt on `/gateway/deploy` is
+`snippets/server-setup-prompt.mdx`, which the `<Prompt>` card copies and an
+accordion shows: when the Docker steps or the dashboard's labels change, change
+it too.
 
 ## Terms
 

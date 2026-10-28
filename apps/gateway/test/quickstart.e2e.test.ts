@@ -2,18 +2,21 @@
 // the gateway against Postgres. Each thing its README tells a person to ask
 // an agent answers as the README says: masked emails and phones, a held
 // write refused in local mode, a write without a WHERE denied, and a secret
-// table that closes once the agent reads an untrusted ticket.
+// table that closes once the agent reads an untrusted ticket. Its policy
+// leaves nothing for the dashboard's exposure scan to suggest.
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadParser } from "@midplane/core";
+import { exposureScan, loadParser } from "@midplane/core";
+import { type DatabasePolicy, DatabasePolicySchema } from "@midplane/protocol";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { generateSigningKey, mintToken } from "../src/auth.ts";
+import { introspect } from "../src/catalog.ts";
 import { parseConfig } from "../src/config.ts";
 import { MCP_PATH } from "../src/http.ts";
 import { type RunningGateway, startLocal } from "../src/server.ts";
@@ -41,6 +44,7 @@ describe.skipIf(!hasPostgres)(
     let gw: RunningGateway;
     let token = "";
     let url = "";
+    let policy: DatabasePolicy;
 
     beforeAll(async () => {
       await loadParser();
@@ -71,6 +75,7 @@ describe.skipIf(!hasPostgres)(
         SHOP_DSN: dsn.toString(),
         MIDPLANE_MASK_SALT: randomBytes(32).toString("hex"),
       });
+      policy = config.databases.get("shop")?.policy as DatabasePolicy;
       gw = await startLocal(config);
       url = `${gw.url}${MCP_PATH}`;
       token = await mintToken({
@@ -148,8 +153,17 @@ describe.skipIf(!hasPostgres)(
     });
 
     it("closes the secret table once the agent reads an untrusted ticket", async () => {
-      const before = await query(url, token, "SELECT service FROM api_keys");
+      const before = await query(
+        url,
+        token,
+        "SELECT service, secret FROM api_keys ORDER BY id",
+      );
       expect(before.isError).toBeFalsy();
+      // Reviewed clear: the README's "Which API keys do we have?" shows them.
+      expect(before.structuredContent?.rows?.[0]).toEqual([
+        "payments",
+        "sk_test_quickstart_not_a_real_key",
+      ]);
       const ticket = await query(
         url,
         token,
@@ -160,6 +174,26 @@ describe.skipIf(!hasPostgres)(
       expect(after.isError).toBe(true);
       expect(textOf(after)).toMatch(/labeled secret/);
       expect(textOf(after)).not.toContain("sk_test_quickstart");
+    });
+
+    // protects=on the seed as Postgres reports it, the scan suggests the customers' name, email and phone and the API keys' secret to a policy with no masks, and nothing to the shipped policy, so the sample project shows no unmasked column;
+    // fails_when=the scan misses api_keys.secret on the real catalog, the seed gains a column the policy hasn't reviewed, or the policy drops a reviewed one;
+    // no_claim=the dashboard's rendering of the suggestions; the cloud's copy of the policy, which sample.test.ts holds equal to this file's
+    it("leaves nothing for the exposure scan to suggest", async () => {
+      const client = new pg.Client({ connectionString: db.adminDsn });
+      await client.connect();
+      const catalog = await introspect(client).finally(() => client.end());
+      const found = (p: DatabasePolicy) =>
+        exposureScan(p, catalog).map(
+          (s) => `${s.table}.${s.column} ${s.match.category}`,
+        );
+      expect(found(DatabasePolicySchema.parse({}))).toEqual([
+        "public.api_keys.secret credential",
+        "public.customers.name name",
+        "public.customers.email email",
+        "public.customers.phone phone",
+      ]);
+      expect(found(policy)).toEqual([]);
     });
 
     it("recorded all of it, checkably, owing nothing to a cloud", () => {

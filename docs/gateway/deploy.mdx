@@ -3,6 +3,8 @@ title: "Deploy the gateway"
 description: "What the gateway is, where to run it, and the steps to get it running on your machine, on a server with Docker, or on a platform."
 ---
 
+import ServerSetupPrompt from "/snippets/server-setup-prompt.mdx";
+
 The gateway is the part of Midplane that runs in your network. It's a small
 program next to your databases: agents connect to it, it checks each statement
 against your policy and records it, and only then runs it. It holds your
@@ -81,6 +83,19 @@ from Let's Encrypt and a key that never leaves its volume ([what the relay
 sees](/security#the-relay)). To keep Midplane out of that path, use [your own
 URL](#your-own-url).
 
+Let an AI assistant (Claude, ChatGPT, Cursor) set the server up with you: copy
+this prompt into it. It asks how you want to work first, never asks for your
+connection strings or token, and asks before creating anything that costs
+money.
+
+<Prompt description="Set up a server gateway behind the relay with your AI assistant" actions={["copy", "cursor"]}>
+<ServerSetupPrompt />
+</Prompt>
+
+<Accordion title="Read the prompt">
+  <ServerSetupPrompt />
+</Accordion>
+
 <Steps>
   <Step title="Create an enrollment token">
     In your project, open step 1 of the setup (or **Gateways**, then **Set up
@@ -96,17 +111,28 @@ URL](#your-own-url).
     ([prepare your database](/prepare-database)). The gateway connects from
     inside its container, where `localhost` is the container: use the
     database's host as the server's network knows it.
+
+    If the database runs on the same server, the container reaches the
+    server at Docker's bridge address, by default `172.17.0.1` on Linux
+    (`ip addr show docker0` shows it), so use that as the host. Postgres
+    must listen there and admit the container: set
+    `listen_addresses = '*'`, since Postgres can start before Docker adds
+    that address, keep port 5432 closed to the outside in the server's
+    firewall, and add a `pg_hba.conf` line for the bridge's network, by
+    default `172.17.0.0/16`. A Postgres in another container publishes its
+    port there: `-p 172.17.0.1:5432:5432`. On Docker Desktop, use
+    `host.docker.internal`.
   </Step>
   <Step title="Run the gateway">
     In the folder that holds the file, run the command. It starts the
-    gateway, detached and again whenever the server restarts. At its first
-    start it asks Midplane Cloud for the relay, tests each connection string,
-    joins your project and writes its config to the Docker volume the
-    command names, such as `midplane-gw-k3m9x2qa`. Then it connects out to
-    the relay and gets its certificate through it. `docker logs -f
-    midplane-gw-…` shows what it says; setup's last line is the URL agents
-    reach it at. The gateway picks the name in that URL itself, so it isn't
-    the container's.
+    gateway, detached and again whenever the server restarts, and publishes
+    no port: nothing connects in. At its first start it asks Midplane Cloud
+    for the relay, tests each connection string, joins your project and
+    writes its config to the Docker volume the command names, such as
+    `midplane-gw-k3m9x2qa`. Then it connects out to the relay and gets its
+    certificate through it. `docker logs -f midplane-gw-…` shows what it
+    says; setup's last line is the URL agents reach it at. The gateway picks
+    the name in that URL itself, so it isn't the container's.
   </Step>
   <Step title="Check it on the page">
     Once the gateway connects, the page shows its URL for agents, and the

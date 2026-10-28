@@ -34,6 +34,12 @@ databases:
           phone: { t: partial, keepEnd: 4 }
           plan: none
           created_at: { t: generalize, granularity: month }
+        # Reviewed and left clear: the secret label below is what guards the
+        # keys, closing the table to an agent that has read a ticket.
+        public.api_keys:
+          id: none
+          service: none
+          secret: none
       labels:
         # Anyone can write a ticket's body: reading it taints the agent.
         untrusted_columns:
