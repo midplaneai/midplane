@@ -1,7 +1,6 @@
 // The four MCP tools. The server is built per request by the SDK's handler,
 // so every tool call sees exactly the caller its request authenticated as.
 
-import { createRequire } from "node:module";
 import type { VisibleRelation } from "@midplane/core";
 import { ApprovalIdSchema } from "@midplane/protocol";
 import {
@@ -13,12 +12,7 @@ import { z } from "zod";
 import { decider } from "./approvals.ts";
 import type { VerifiedCaller } from "./auth.ts";
 import type { Gateway, QueryOutcome } from "./gateway.ts";
-
-export const SERVER_NAME = "midplane";
-/** The package's version: package.json sits one level up from src/ and bundle/ alike. */
-export const SERVER_VERSION: string = (
-  createRequire(import.meta.url)("../package.json") as { version: string }
-).version;
+import { SERVER_NAME, SERVER_VERSION } from "./version.ts";
 
 /** Resolves the caller for one tool call; throws when it has none. */
 export type CallerSource = () => Promise<VerifiedCaller>;

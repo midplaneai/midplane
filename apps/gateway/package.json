@@ -25,6 +25,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./acme": "./src/acme.ts",
+    "./certificates": "./src/certificates.ts",
     "./test/fake-acme": "./test/fake-acme.ts"
   },
   "files": [

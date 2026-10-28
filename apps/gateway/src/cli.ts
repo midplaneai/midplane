@@ -59,7 +59,7 @@ import {
 } from "./server.ts";
 import { runSetup, SetupError, type SetupFlags } from "./setup.ts";
 import { IMAGE_CONFIG, IMAGE_DATA, startConfig } from "./start.ts";
-import { SERVER_VERSION } from "./tools.ts";
+import { SERVER_VERSION } from "./version.ts";
 
 const USAGE = `usage:
   midplane setup --cloud <url> --token <mpe1_…> [--database <id>]... [--relay [--acme-directory <url>] | --url <https://…> [--tls-dir <dir> | --acme [--acme-directory <url>]]] [--port <n>] [--dir <dir>] [--no-start]

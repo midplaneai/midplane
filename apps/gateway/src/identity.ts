@@ -29,7 +29,7 @@ import {
 } from "jose";
 import { z } from "zod";
 import { ConfigError, type IdentitySource } from "./config.ts";
-import { SERVER_VERSION } from "./tools.ts";
+import { SERVER_VERSION } from "./version.ts";
 
 /**
  * Features this gateway reports to the cloud: the core's policy sections,

@@ -46,6 +46,11 @@ key or a certificate for any gateway's name, and has no way to decrypt the
 traffic it passes. "Midplane Cloud never sees a row" holds for a gateway behind
 the relay as for one at your own URL.
 
+The one certificate the relay holds is its own, for `relay.eu.midplane.app`,
+which it gets from Let's Encrypt as a gateway does. It serves it only to
+gateways opening their connections; an agent's connection to a gateway's name
+never ends there.
+
 ### Who could get a certificate for your gateway
 
 Midplane controls the DNS of `midplane.app`, where Midplane URLs are. So
@@ -53,9 +58,13 @@ Midplane could get a certificate for your gateway's name from a public
 certificate authority, point the name at a server of its own, and read what
 agents send there. Nothing in the protocol prevents that. Every publicly
 trusted certificate is published in Certificate Transparency logs, so such a
-certificate would be visible, but only after it was issued. To have no
-Midplane component that could do this, give the gateway [your own
-URL](/gateway/deploy#your-own-url).
+certificate would be visible, but only after it was issued. The CAA records
+of `eu.midplane.app` allow Let's Encrypt only, by its HTTP challenge, and no
+wildcard certificate, so any certificate that covers your gateway's name lists
+that name, and a Certificate Transparency search for it finds the certificate
+(`dig CAA eu.midplane.app` shows the records); Midplane controls those records
+too. To have no Midplane component that could do this, give the
+gateway [your own URL](/gateway/deploy#your-own-url).
 
 ### Watch Certificate Transparency logs
 
@@ -94,4 +103,6 @@ on GitHub.
 
 *Tested by* the cloud's relay tests: marker strings seeded in a query and in
 its result never appear in anything the relay holds or logs, and the relay
-creates no TLS server for any name but its own.
+creates no TLS server for any name but its own. A smoke test runs the relay
+from its image with the gateway's, against Pebble, the test ACME server Let's
+Encrypt publishes, in place of Let's Encrypt itself.

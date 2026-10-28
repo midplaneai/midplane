@@ -110,8 +110,8 @@ import {
   verifyDecision,
   verifyTaint,
 } from "./proofs.ts";
-import { SERVER_VERSION } from "./tools.ts";
 import type { PublicUrls } from "./urls.ts";
+import { SERVER_VERSION } from "./version.ts";
 
 const CLIENT_ASSERTION_TYPE =
   "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";

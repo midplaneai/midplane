@@ -45,7 +45,7 @@ import {
   type JWK,
 } from "jose";
 import { z } from "zod";
-import { SERVER_NAME, SERVER_VERSION } from "./tools.ts";
+import { SERVER_NAME, SERVER_VERSION } from "./version.ts";
 
 export const LETS_ENCRYPT = "https://acme-v02.api.letsencrypt.org/directory";
 /** Where the challenge listener binds by default; the server forwards port 80 to it. */
