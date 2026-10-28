@@ -69,7 +69,8 @@
               "gateway/local-mode",
               "gateway/secrets",
               "gateway/hosted-agents",
-              "gateway/operations"
+              "gateway/operations",
+              "gateway/upgrading"
             ]
           },
           {

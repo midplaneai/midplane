@@ -52,9 +52,9 @@ internet, such as [Supabase](/prepare-database/supabase) or
 - **A connection string changes.** Import it from a file, as setup did,
   such as `fly secrets import -a midplane-gw-… < shop.env` with one line:
   Fly restarts the machine with it.
-- **Upgrade.** `fly machine update <machine id> -a midplane-gw-… --image
-  ghcr.io/midplaneai/midplane:<version>`. `fly machine list -a
-  midplane-gw-…` shows the id. The volume, and with it the gateway, stays.
+- **Upgrade.** `fly machine update` with the new version's image
+  ([upgrading](/gateway/upgrading#fly-io)). The volume, and with it the
+  gateway, stays.
 - **The volume is on one host.** Fly doesn't copy it: if that host fails,
   the gateway's identity is gone with it, and a new gateway needs a new
   token. Fly snapshots volumes daily.
@@ -62,5 +62,5 @@ internet, such as [Supabase](/prepare-database/supabase) or
   then `fly apps destroy midplane-gw-…`, which deletes the volume with the
   audit log.
 
-For production, replace `:latest` in `fly machine run` with a version you
-[verified](/releases).
+`fly machine run` names the newest release's image by its version, which you
+can [verify](/releases).

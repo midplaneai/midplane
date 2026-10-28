@@ -41,7 +41,8 @@ Blueprint picks Starter, in Frankfurt.
 
 - **A connection string changes.** Change it in **Environment** and deploy.
 - **Upgrade.** In the worker's **Settings**, change the image's tag to the
-  new version, and deploy. The disk, and with it the gateway, stays.
+  new version, and deploy ([upgrading](/gateway/upgrading#render)). The
+  disk, and with it the gateway, stays.
 - **Remove it.** Revoke the gateway on your project's **Gateways** page,
   then delete the worker, which deletes its disk with the audit log.
 

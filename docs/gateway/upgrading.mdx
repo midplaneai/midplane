@@ -1,0 +1,134 @@
+---
+title: "Upgrading"
+description: "Move a gateway to a new release: what carries over, and the commands for Docker, this machine and each deploy template."
+---
+
+Midplane never upgrades a gateway: you do, when you choose. When a newer
+release is out, the gateway's row on your project's **Gateways** page says so,
+such as `midplane 0.22.0 · 0.24.0 available`, and **How to upgrade** shows
+the commands for that gateway, with the release's version in them.
+
+## What carries over
+
+- **Deploy Midplane Cloud before gateways.** A gateway's sync reports what it
+  supports, and a newer gateway's calls need a cloud that knows them; an older
+  cloud refuses its status, and the sync fails until the cloud is upgraded.
+- **Gateways halt rather than half-enforce.** A bundle that needs a feature a
+  gateway lacks halts it, and the dashboard warns before publishing one to a
+  gateway that would.
+- **Restarts keep enforcing.** A linked gateway enforces its cached bundle
+  while it reconnects, and resumes pushing its audit log where it stopped.
+- The audit file, the bundle cache and the identity carry over between
+  versions; keep them on a volume.
+
+## Docker
+
+Use a fixed version, such as `ghcr.io/midplaneai/midplane:0.24.0`, not
+`:latest`: Docker doesn't download `:latest` again once the image is on the
+server. Pull the new image first, so the gateway is down only between removing
+its container and starting the new one. Its volume, with its identity, cached
+policy and audit log, stays.
+
+The dashboard names a gateway's container `midplane-gw-` and 8 characters,
+such as `midplane-gw-k3m9x2qa`, and **How to upgrade** names it when Midplane
+Cloud knows it. That's the name the page gave, so check that the server lists
+it before you remove anything: `docker rm -f` of a name that isn't there says
+nothing, and the new container would be a second gateway. Its name starts with
+`midplane-`.
+
+```sh
+docker ps --format '{{.Names}}'
+```
+
+### Behind the relay
+
+In the folder with `midplane.env`, with `<container>` replaced by the
+gateway's container and `<version>` by the release's:
+
+```sh
+docker pull ghcr.io/midplaneai/midplane:<version>
+docker rm -f <container>
+docker run -d --name <container> --restart unless-stopped \
+  -v <container>:/var/lib/midplane --env-file midplane.env \
+  ghcr.io/midplaneai/midplane:<version>
+```
+
+The new container reads the same env file and volume, and starts from the
+config it holds, without joining the project again.
+
+### At your own URL
+
+Have the `docker run -d` command you started it with at hand: it's the one way
+to start it again. Then pull the new image, and remove the container:
+
+```sh
+docker pull ghcr.io/midplaneai/midplane:<version>
+docker rm -f <container>
+```
+
+Then start it again with the `docker run -d` command you started it with,
+with the new version in place of its tag: Midplane Cloud doesn't know the
+port or the certificate you chose.
+
+## This machine
+
+Stop the gateway (`Ctrl-C`), then start it again in the folder you ran setup
+in, such as:
+
+```sh
+npx -y midplane@latest gateway --config gw-k3m9x2qa/midplane.yaml
+```
+
+`midplane@latest` gets the newest release each time it starts. The folder
+has the name in the gateway's URL: `http://gw-k3m9x2qa.localhost:7433` is
+`gw-k3m9x2qa`.
+
+## Deploy templates
+
+Each version's template, chart and Blueprint runs that version's image.
+
+### AWS
+
+Update the stack with the new version's template, replacing the current one
+with
+`https://midplane-gateway-templates.s3.eu-central-1.amazonaws.com/gateway/<version>/aws.yaml`.
+The instance stops and starts, and runs the new image; its disk, and with it
+the gateway, stays.
+
+### Fly.io
+
+```sh
+fly machine update <machine id> -a midplane-gw-… \
+  --image ghcr.io/midplaneai/midplane:<version>
+```
+
+`fly machine list -a midplane-gw-…` shows the id. The volume, and with it the
+gateway, stays.
+
+### Render
+
+In the worker's **Settings**, change the image's tag to the new version, and
+deploy. The disk, and with it the gateway, stays.
+
+### Kubernetes
+
+```sh
+helm upgrade midplane-gw-… oci://ghcr.io/midplaneai/charts/midplane-gateway \
+  --version <version> --reuse-values
+```
+
+The chart's version is the gateway's. The pod is replaced, on the same disk.
+
+## Automatic updates
+
+Midplane never updates a gateway. Midplane Cloud signs policy only: it can't
+change the code that runs beside your databases. A tool of yours can, such as
+Watchtower or a GitOps pipeline that follows new tags. We recommend a fixed
+version, upgraded on purpose after [verifying it](/releases).
+
+## Which version is newest
+
+The **Gateways** page says so: Midplane Cloud checks the public repository's
+latest release every hour, and counts only a final release. Every release is
+on [GitHub](https://github.com/midplaneai/midplane/releases), with what
+changed.

@@ -59,9 +59,9 @@ To mount files the connection strings name, such as a CA bundle for
 
 - **A connection string changes.** Change it in the Secret, then restart the
   pod: `kubectl rollout restart statefulset midplane-gw-…`.
-- **Upgrade.** `helm upgrade midplane-gw-…
-  oci://ghcr.io/midplaneai/charts/midplane-gateway --version <version>
-  --reuse-values`. The chart's version is the gateway's.
+- **Upgrade.** `helm upgrade` to the new version's chart
+  ([upgrading](/gateway/upgrading#kubernetes)). The chart's version is the
+  gateway's.
 - **Remove it.** Revoke the gateway on your project's **Gateways** page,
   then `helm uninstall midplane-gw-…`, and delete its disk, `kubectl delete
   pvc data-midplane-gw-…-0`, which holds the audit log.

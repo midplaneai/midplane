@@ -78,11 +78,9 @@ failed start after a fix needs nothing but a minute.
   the first start. Add the database to the config on the gateway's volume
   too ([setup from environment
   variables](/gateway/configuration#setup-from-environment-variables)).
-- **Upgrade.** Update the stack with the new version's template, replacing
-  the current one with
-  `https://midplane-gateway-templates.s3.eu-central-1.amazonaws.com/gateway/<version>/aws.yaml`.
-  The instance stops and starts, and runs the new image; its disk, and with
-  it the gateway, stays. Each version's template runs that version only.
+- **Upgrade.** Update the stack with the new version's template
+  ([upgrading](/gateway/upgrading#aws)). Each version's template runs that
+  version only.
 - **Remove it.** Revoke the gateway on your project's **Gateways** page,
   then delete the stack. That deletes the instance, its disk with the audit
   log, and the secret.

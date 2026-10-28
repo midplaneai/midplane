@@ -168,7 +168,9 @@ money.
   agents can't reach it until the relay is back. It reconnects on its own
   ([when the relay is down](/security#when-the-relay-is-down)).
 
-For production, replace `:latest` with a version you [verified](/releases).
+The command names the newest release's image by its version, such as
+`ghcr.io/midplaneai/midplane:0.24.0`, which you can [verify](/releases); the
+server keeps it until you [upgrade](/gateway/upgrading#docker) the gateway.
 Every variable is in
 [configuration](/gateway/configuration#setup-from-environment-variables).
 
@@ -243,8 +245,9 @@ the gateway.
   </Step>
 </Steps>
 
-For production, replace `:latest` in both commands with a version you
-[verified](/releases).
+Both commands name the newest release's image by its version, which you can
+[verify](/releases); the server keeps it until you
+[upgrade](/gateway/upgrading#at-your-own-url) the gateway.
 
 ## On a platform
 

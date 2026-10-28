@@ -1,6 +1,6 @@
 ---
 title: "Operations"
-description: "Health checks, logs worth alerting on, stopping, resources, upgrades and backups."
+description: "Health checks, logs worth alerting on, stopping, resources and backups."
 ---
 
 ## Health
@@ -65,16 +65,8 @@ and so on seconds, at most every 30 seconds, until it can be.
 
 ## Upgrades
 
-- **Deploy Midplane Cloud before gateways.** A gateway's sync reports what it
-  supports, and a newer gateway's calls need a cloud that knows them; an older
-  cloud refuses its status, and the sync fails until the cloud is upgraded.
-- **Gateways halt rather than half-enforce.** A bundle that needs a feature a
-  gateway lacks halts it, and the dashboard warns before publishing one to a
-  gateway that would.
-- **Restarts keep enforcing.** A linked gateway enforces its cached bundle
-  while it reconnects, and resumes pushing its audit log where it stopped.
-- The audit file, the bundle cache and the identity carry over between
-  versions; keep them on a volume.
+What carries over, and the commands for each way to run the gateway, are in
+[upgrading](/gateway/upgrading).
 
 ## Backups
 
