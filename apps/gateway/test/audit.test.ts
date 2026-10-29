@@ -681,7 +681,11 @@ describe("export and verify", () => {
     log.close();
   });
 
-  it("runs from the command line, reading only audit.file from the config", () => {
+  // Six CLI runs: each loads the gateway, and a shared x64 runner can take a
+  // second apiece (v0.26.0's first release run timed out at 5 s).
+  it("runs from the command line, reading only audit.file from the config", {
+    timeout: 30_000,
+  }, () => {
     const dir = tmp();
     const log = new LocalAuditLog(join(dir, "audit.db"));
     for (const e of lifecycle("q1")) log.append(e);
