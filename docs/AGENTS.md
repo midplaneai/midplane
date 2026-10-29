@@ -46,7 +46,7 @@ The architecture diagram lives once, in `snippets/architecture.mdx`; import it
 rather than drawing another. The home page opens with `images/overview.png`
 instead: what happens to an agent's statements, with no infrastructure. Each
 diagram is a PNG rendered from the SVG beside it; edit the SVG, re-render (the
-steps are in the monorepo's `DECISIONS.md`), and keep its `<desc>` and the
+steps are in the monorepo's `decisions/docs.md`), and keep its `<desc>` and the
 image's alt text the same. No dashboard screenshots while the setup flow is
 still changing. The AI-assistant prompt on `/gateway/deploy` is
 `snippets/server-setup-prompt.mdx`, which the `<Prompt>` card copies and an

@@ -9,7 +9,7 @@ import { join, relative, resolve, sep } from "node:path";
 
 /**
  * The only runtime dependencies each pure package may declare. Adding one is a
- * deliberate edit here plus an entry in DECISIONS.md.
+ * deliberate edit here plus an entry in decisions/repo.md.
  */
 export const PURE_PACKAGES: Readonly<Record<string, readonly string[]>> = {
   "@midplane/core": [

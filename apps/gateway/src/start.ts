@@ -18,7 +18,7 @@
 // log lines, as the gateway does, and an error is the last one.
 //
 // A start that fails exits at once, its error the last line: a restart
-// policy's own backoff paces the next try (DECISIONS.md, #68).
+// policy's own backoff paces the next try (decisions/setup.md, #68).
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
