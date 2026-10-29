@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  A Midplane gateway (0.26.0) behind Midplane's relay: one EC2 instance in
+  A Midplane gateway (0.26.1) behind Midplane's relay: one EC2 instance in
   your VPC with nothing inbound. Paste the midplane.env your project's setup
   page shows into the secret this stack creates (see Outputs).
 
@@ -256,7 +256,7 @@ Resources:
             systemctl enable midplane
             systemctl restart midplane
             --midplane--
-          - Image: ghcr.io/midplaneai/midplane:0.26.0
+          - Image: ghcr.io/midplaneai/midplane:0.26.1
 
 Outputs:
   EnvFile:
@@ -274,4 +274,4 @@ Outputs:
     Description: Allow this group into your database's security group, if the stack didn't.
     Value: !Ref GatewayGroup
   Version:
-    Value: "0.26.0"
+    Value: "0.26.1"
