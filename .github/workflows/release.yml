@@ -13,16 +13,19 @@ name: release
 #     for amd64 and arm64 built from it, with an SBOM and build provenance,
 #     and sign it keyless with cosign. This job installs and runs no
 #     dependencies;
-#   - templates (the `release` environment): once the image is published,
+#   - templates (the `release` environment): once GHCR serves the image,
 #     the CloudFormation template to S3, through an AWS role GitHub's OIDC
 #     token gets, and the Helm chart to GHCR (deploy/);
 #   - github-release (contents: write): once both are published, the tag's
-#     GitHub release, listing the feat, fix and perf commits since the last
-#     tag that change the shipped code, and both artifacts. Edit it on
-#     GitHub to add prose;
+#     GitHub release: the version's section of CHANGELOG.md (else the feat,
+#     fix and perf commits since the last tag that change the shipped code),
+#     and both artifacts;
 #   - registry (the `release` environment): the entry ai.midplane/midplane in
 #     the official MCP registry (apps/gateway/server.json), once npm serves
 #     the version.
+#
+# publish, templates and registry each wait only for build, so one approval
+# of the `release` environment starts all three.
 #
 # How to verify both: docs/releases.mdx. Actions are pinned by commit.
 on:
@@ -173,11 +176,13 @@ jobs:
   # to S3, where the dashboard's Deploy on AWS link reads it, at
   # gateway/X.Y.Z/ and gateway/latest/, through the role the bucket's stack
   # made for this environment (AWS_TEMPLATES_ROLE, a repository variable);
-  # and the Helm chart to ghcr.io/midplaneai/charts/midplane-gateway.
+  # and the Helm chart to ghcr.io/midplaneai/charts/midplane-gateway. Like
+  # registry, it starts alongside publish, so one approval releases all
+  # three, and waits for what it needs: here the image.
   templates:
-    needs: [build, publish]
+    needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 40
     environment: release
     permissions:
       contents: read
@@ -187,6 +192,7 @@ jobs:
       packages: write
     env:
       VERSION: ${{ needs.build.outputs.version }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/midplane
       BUCKET: midplane-gateway-templates
       HELM: https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz
       HELM_SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
@@ -195,6 +201,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # publish pushes both architectures under QEMU after npm, within its 30
+      # minutes; if it fails before the image, this times out.
+      - name: Wait until GHCR serves the version's image
+        run: |
+          for _ in $(seq 180); do
+            if docker manifest inspect "$IMAGE:$VERSION" > /dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "GHCR doesn't serve $IMAGE:$VERSION after 30 minutes" >&2
+          exit 1
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_TEMPLATES_ROLE }}
@@ -222,7 +240,8 @@ jobs:
   # The MCP registry entry for this version. The registry accepts it only if
   # npm serves that version with the entry's name as its mcpName, so the job
   # waits for that. It starts alongside publish, in the same environment, so
-  # one approval releases both; if publish fails before npm, it times out.
+  # one approval releases it with publish and templates; if publish fails
+  # before npm, it times out.
   #
   # The ai.midplane namespace is ours through DNS: the `release` environment
   # secret MCP_REGISTRY_DNS_PRIVATE_KEY is an Ed25519 key, in hex, whose
@@ -305,15 +324,24 @@ jobs:
             exit 0
           fi
           {
+            # The version's section of CHANGELOG.md, written in its bump pull
+            # request; up to the next version's heading, blank lines trimmed.
+            notes=$(awk -v v="$VERSION" '$1 == "##" { if (on) exit; on = ($2 == v); next } on' CHANGELOG.md \
+              | sed '/./,$!d' || true)
             # engine-v* tags are the older product's and don't match.
-            if prev=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2> /dev/null); then
-              # The commits that change what ships. Monorepo issue numbers
-              # mean nothing in this repository.
+            prev=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2> /dev/null || true)
+            if [ -n "$notes" ]; then
+              printf '%s\n\n' "$notes"
+            elif [ -n "$prev" ]; then
+              # Without a section, the commits that change what ships. Monorepo
+              # issue numbers mean nothing in this repository.
               changes=$(git log --reverse --format=%s "$prev..$TAG" -- apps/gateway packages/core packages/protocol \
                 | grep -E '^(feat|fix|perf)[(!:]' | sed -E 's/ \(#[0-9]+\)//g; s/^/- /' || true)
               if [ -n "$changes" ]; then
                 printf '## Changes\n\n%s\n\n' "$changes"
               fi
+            fi
+            if [ -n "$prev" ]; then
               printf '[All changes](%s/%s/compare/%s...%s)\n\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$prev" "$TAG"
             fi
             printf '## Artifacts\n\n'

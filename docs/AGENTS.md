@@ -99,7 +99,8 @@ Never use v1's terms: "the engine", "control plane", "self-host",
   with an editor or from a secret manager. The enrollment token is the one
   exception the dashboard makes: it works once, within a day.
 - Version-gate features a released gateway doesn't have yet, inline:
-  "(`0.22.0+`)".
+  "(`0.22.0+`)". Until the release, mark them "(`unreleased`)": the bump's
+  `scripts/set-version.ts` turns each into its version.
 - `/troubleshooting` has one heading per message the dashboard or the gateway
   shows, named by the sentence and its code: "Password authentication failed
   (28P01)".
