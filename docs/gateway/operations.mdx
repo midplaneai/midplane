@@ -37,6 +37,8 @@ carries MCP in stdio mode). The ones worth alerting on:
 | `certificate renewal failed` | (`0.23.0+`) Let's Encrypt didn't renew the gateway's automatic certificate; `error` says what to fix, `acme_type` and `acme_detail` what Let's Encrypt said ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)). The current certificate is served meanwhile, and the renewal is tried again in 12 hours |
 | `certificate not reloaded` | (`0.23.0+`) The certificate files changed, but the new pair can't be served: `error` names the file and the problem. The old certificate stays; said once per replacement |
 | `link cut` | The cloud refused the gateway's credentials: it was revoked |
+| `midplane upgrade needed` | (`0.25.0+`) A warning from a linked gateway: a release fixed a security problem, and this gateway runs a version below it. `needed` is the lowest version to run, `reason` says why, and `advisory` links the advisory when there is one. Said once per lowest version while it runs. It keeps enforcing your policy meanwhile ([upgrading](/gateway/upgrading#when-an-upgrade-is-needed)) |
+| `newer midplane available` | (`0.25.0+`) Midplane Cloud knows a newer release than this linked gateway's `version`: `latest` is the newest. Said once per release while it runs, at `info` ([upgrading](/gateway/upgrading)) |
 | `taint check failed; the grant counts as tainted` | The cloud couldn't be asked; the agent was contained |
 | `public URL not registered` | A URL in `public_urls` isn't one of the gateway's yet ([hosted agents](/gateway/hosted-agents)) |
 | `view definitions withheld from the cloud` | Some views' definitions couldn't be redacted, so they weren't sent; simulation denies statements through them |
@@ -88,7 +90,8 @@ audit.db "SELECT value FROM meta WHERE key = 'previous_instances'"`).
 
 *Tested by* `apps/gateway/test/link.e2e.test.ts` (readiness, 503 without a
 bundle, halting, SIGTERM, restarts with the cloud down, a database down and
-back), `apps/gateway/test/gateway.e2e.test.ts` (caps, timeouts, the catalog,
-local mode refusing to start without a database) and
+back, the release lines), `apps/gateway/test/gateway.e2e.test.ts` (caps,
+timeouts, the catalog, local mode refusing to start without a database),
 `apps/gateway/test/health.test.ts` (the retry schedule, what counts against a
-database's health).
+database's health) and `apps/gateway/test/release-notice.test.ts` (when each
+release line is said).

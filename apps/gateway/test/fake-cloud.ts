@@ -2,9 +2,9 @@
 // mode is tested within oss/ alone: where its relay is (if it has one),
 // enrollment with a pinned signing key,
 // client_credentials with private_key_jwt, the long poll, signed bundles,
-// commands, catalog uploads, held writes, taint and the audit push. It
-// never opens a connection to the gateway, and it keeps every body the
-// gateway sends, so tests can scan them.
+// commands, catalog uploads, held writes, taint, the audit push and the
+// releases a sync answer names. It never opens a connection to the gateway,
+// and it keeps every body the gateway sends, so tests can scan them.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
@@ -35,6 +35,7 @@ import {
   NonceSchema,
   type RelayInfo,
   relayControlName,
+  type SyncRelease,
   TAINT_JWS_TYPE,
   TaintReportSchema,
 } from "@midplane/protocol";
@@ -131,6 +132,8 @@ export interface FakeCloud {
   refuseCatalogs(status: 400 | 404 | 413 | null): void;
   /** Answer syncs with these catalog hashes instead of the stored ones. */
   echoCatalogs(hashes: Record<string, string> | null): void;
+  /** Name these releases in every sync answer from now on; null names none. */
+  announce(release: SyncRelease | null): void;
   /** Agent tokens, signed with the key the bundles carry. */
   agentToken(o: {
     audience: string;
@@ -252,6 +255,7 @@ export async function startFakeCloud(
   const uploads: { database: string; sha256: string; status: number }[] = [];
   let refusing: 400 | 404 | 413 | null = null;
   let echo: Record<string, string> | null = null;
+  let release: SyncRelease | null = null;
   let wake: (() => void) | null = null;
   let strip = false;
   let failing = 0;
@@ -439,7 +443,7 @@ export async function startFakeCloud(
     const held =
       echo ??
       Object.fromEntries([...catalogs].map(([id, cat]) => [id, cat.sha256]));
-    return c.json({ ...out, catalogs: held });
+    return c.json({ ...out, catalogs: held, ...(release ? { release } : {}) });
   });
 
   app.post(`${LINK_API_PREFIX}/catalogs/:database`, async (c) => {
@@ -834,6 +838,9 @@ export async function startFakeCloud(
     },
     echoCatalogs(hashes) {
       echo = hashes;
+    },
+    announce(r) {
+      release = r;
     },
     agentToken: (o) =>
       mintToken({

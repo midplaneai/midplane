@@ -25,6 +25,7 @@ import { unreachableMessage } from "../src/gateway.ts";
 import { MCP_PATH } from "../src/http.ts";
 import { EnrollmentError } from "../src/identity.ts";
 import { type RunningGateway, startLinked } from "../src/server.ts";
+import { SERVER_VERSION } from "../src/version.ts";
 import { type FakeCloud, startFakeCloud } from "./fake-cloud.ts";
 import {
   callTool,
@@ -522,6 +523,61 @@ describe.skipIf(!hasPostgres)("linked mode", { timeout: 20_000 }, () => {
     const id = cloud.command("test_connection");
     await waitFor("the result, third time", () => cloud.results.has(id));
     expect(cloud.results.get(id)).toMatchObject({ ok: true });
+  });
+
+  // protects=#85: a running gateway told on every sync that a newer release is out and an upgrade is needed logs each line once, with its own version, the reason and the advisory, and keeps enforcing;
+  // fails_when=the link client doesn't keep what it said (a line each sync), drops the release, or the release changes what it enforces;
+  // no_claim=the real cloud's answer (cloud/app/test/link.e2e.test.ts)
+  it("says once in its log that a newer release is out, and an upgrade needed", async () => {
+    const lines: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        lines.push(String(chunk));
+        return true;
+      });
+    const logged = (msg: string) =>
+      lines
+        .filter((l) => l.includes(`"msg":"${msg}"`))
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const next = `${Number(SERVER_VERSION.split(".")[0]) + 1}.0.0`;
+    const advisory =
+      "https://github.com/midplaneai/midplane/security/advisories/GHSA-test";
+    try {
+      const held = version();
+      const seen = cloud.statuses.length;
+      cloud.announce({
+        latest: next,
+        needed: { version: next, reason: "Fixes a test.", advisory },
+      });
+      // A status sent after three answers with the release came back.
+      await waitFor("three syncs", () => cloud.statuses.length >= seen + 4);
+      expect(logged("newer midplane available")).toEqual([
+        {
+          time: expect.any(String),
+          level: "info",
+          msg: "newer midplane available",
+          version: SERVER_VERSION,
+          latest: next,
+        },
+      ]);
+      expect(logged("midplane upgrade needed")).toEqual([
+        {
+          time: expect.any(String),
+          level: "warn",
+          msg: "midplane upgrade needed",
+          version: SERVER_VERSION,
+          needed: next,
+          reason: "Fixes a test.",
+          advisory,
+        },
+      ]);
+      expect(version()).toBe(held);
+      expect(gw.gateway.enforcement.state).toBe("enforcing");
+    } finally {
+      cloud.announce(null);
+      spy.mockRestore();
+    }
   });
 
   it("stays halted across a restart when its newest bundle can't be enforced", async () => {

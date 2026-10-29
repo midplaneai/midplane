@@ -25,6 +25,10 @@
 //
 // A gateway reached through the relay opens its work connections with this
 // link's access token, and the status says whether they are up.
+//
+// A sync answer may name the newest release and the lowest one a gateway
+// should run. The gateway says so once in its log, and does nothing else
+// with them (release-notice.ts).
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -110,6 +114,7 @@ import {
   verifyDecision,
   verifyTaint,
 } from "./proofs.ts";
+import { releaseNotices, type Said } from "./release-notice.ts";
 import type { PublicUrls } from "./urls.ts";
 import { SERVER_VERSION } from "./version.ts";
 
@@ -228,6 +233,8 @@ export class LinkClient implements TaintStore, Approvals {
   private readonly sent = new Map<string, string>();
   /** Per database, the withheld views last logged. */
   private readonly withheld = new Map<string, string>();
+  /** The highest release versions logged, so each is said once. */
+  private readonly said: Said = { latest: null, needed: null };
   private readonly stopper = new AbortController();
   private loop: Promise<void> | null = null;
   /** The long poll in flight, which news from this side cuts short. */
@@ -659,6 +666,12 @@ export class LinkClient implements TaintStore, Approvals {
     }
     const body = SyncResponseSchema.safeParse(answer);
     if (!body.success) throw new Error("the cloud's sync answer is malformed");
+    const { release } = body.data;
+    for (const line of releaseNotices(SERVER_VERSION, release, this.said)) {
+      this.o.log(line);
+      if (line.level === "info") this.said.latest = line.latest;
+      else this.said.needed = line.needed;
+    }
     let took = false;
     if (body.data.bundle) {
       const latest = await verifyFreshness(body.data.freshness, {

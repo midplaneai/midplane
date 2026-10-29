@@ -330,6 +330,25 @@ export const CommandSchema = z.object({
 });
 export type Command = z.infer<typeof CommandSchema>;
 
+/**
+ * What Midplane Cloud knows of gateway releases: the newest, and the lowest
+ * a gateway should run once a release fixes a security problem. For the
+ * gateway's log only: it never fetches, installs or changes anything for it.
+ */
+export const SyncReleaseSchema = z.object({
+  latest: z.string().min(1).max(64),
+  needed: z
+    .object({
+      version: z.string().min(1).max(64),
+      reason: z.string().min(1).max(200),
+      advisory: z.url().max(2048).optional(),
+    })
+    .optional(),
+});
+export type SyncRelease = z.infer<typeof SyncReleaseSchema>;
+
+// A plain object, so a gateway drops a field it doesn't know: gateways
+// before 0.25.0 take an answer with `release`.
 export const SyncResponseSchema = z.object({
   /** A compact JWS (`typ: mp-bundle`), when the gateway's is older. */
   bundle: z.string().min(1).optional(),
@@ -338,6 +357,8 @@ export const SyncResponseSchema = z.object({
   commands: z.array(CommandSchema).default([]),
   /** The hash of the catalog the cloud holds for each database it knows. */
   catalogs: CatalogHashesSchema.default({}),
+  /** Dropped if malformed: a log line never costs the gateway its sync. */
+  release: SyncReleaseSchema.optional().catch(undefined),
 });
 export type SyncResponse = z.infer<typeof SyncResponseSchema>;
 /** A sync answer as the cloud writes it, before defaults. */
