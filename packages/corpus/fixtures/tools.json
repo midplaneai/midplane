@@ -1,0 +1,149 @@
+{
+  "description": "The two statement tools: query runs reads and write runs writes. A statement of the other kind denies as tool, naming the one that runs it, once scope has passed: a read-only caller's write is a scope denial, not a pointer to a tool it doesn't have. A case without `accepts` runs either kind, as the rest of the corpus does.",
+  "catalog": "app",
+  "policies": {
+    "open": {
+      "table_access": {
+        "default": "read_write"
+      }
+    },
+    "hold_rows": {
+      "table_access": {
+        "default": "read_write"
+      },
+      "writes": {
+        "row_changes": "hold"
+      }
+    }
+  },
+  "defaults": {
+    "policy": "open"
+  },
+  "cases": [
+    {
+      "name": "a read through query runs read-only",
+      "sql": "SELECT id FROM users",
+      "accepts": "reads",
+      "expect": {
+        "verdict": "allow",
+        "read_only": true
+      }
+    },
+    {
+      "name": "a write through query is refused, naming the write tool",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "accepts": "reads",
+      "expect": {
+        "verdict": "deny",
+        "rule": "tool",
+        "reason_includes": "a write (UPDATE) and the query tool runs reads only"
+      }
+    },
+    {
+      "name": "SELECT INTO creates a table, so query refuses it",
+      "sql": "SELECT * INTO copy_of_users FROM users",
+      "accepts": "reads",
+      "expect": {
+        "verdict": "deny",
+        "rule": "tool",
+        "reason_includes": "SELECT INTO"
+      }
+    },
+    {
+      "name": "a schema change through query is refused the same way",
+      "sql": "DROP TABLE webhooks",
+      "accepts": "reads",
+      "expect": {
+        "verdict": "deny",
+        "rule": "tool",
+        "reason_includes": "DROP TABLE"
+      }
+    },
+    {
+      "name": "a write through write follows the policy",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "accepts": "writes",
+      "expect": {
+        "verdict": "allow",
+        "read_only": false
+      }
+    },
+    {
+      "name": "a held class still holds through write",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "policy": "hold_rows",
+      "accepts": "writes",
+      "expect": {
+        "verdict": "hold",
+        "class": "row_changes",
+        "cause": "class"
+      }
+    },
+    {
+      "name": "a read through write is refused, naming the query tool",
+      "sql": "SELECT id FROM users",
+      "accepts": "writes",
+      "expect": {
+        "verdict": "deny",
+        "rule": "tool",
+        "reason_includes": "a read and the write tool runs writes only"
+      }
+    },
+    {
+      "name": "scope is checked before the tool: a read-only caller's write through query is refused as read-only",
+      "sql": "INSERT INTO logs (msg) VALUES ('x')",
+      "scopes": ["db:main:read"],
+      "accepts": "reads",
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope",
+        "reason_includes": "read-only"
+      }
+    },
+    {
+      "name": "and through write, the same",
+      "sql": "INSERT INTO logs (msg) VALUES ('x')",
+      "scopes": ["db:main:read"],
+      "accepts": "writes",
+      "expect": {
+        "verdict": "deny",
+        "rule": "scope",
+        "reason_includes": "read-only"
+      }
+    },
+    {
+      "name": "a write hidden in a WITH query is classified as a read, so query reaches the hidden-write rule",
+      "sql": "WITH gone AS (DELETE FROM logs WHERE id = 1 RETURNING id) SELECT id FROM gone",
+      "accepts": "reads",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "name": "a write hidden in a WITH query, sent to write, is a hidden write, not 'a read'",
+      "sql": "WITH gone AS (DELETE FROM logs WHERE id = 1 RETURNING id) SELECT id FROM gone",
+      "accepts": "writes",
+      "expect": {
+        "verdict": "deny",
+        "rule": "hidden_write"
+      }
+    },
+    {
+      "name": "a read that wouldn't run anyway, sent to write, gets its real reason",
+      "sql": "SELECT id FROM nowhere",
+      "accepts": "writes",
+      "expect": {
+        "verdict": "deny",
+        "rule": "unresolved"
+      }
+    },
+    {
+      "name": "without accepts, either kind runs",
+      "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+      "expect": {
+        "verdict": "allow"
+      }
+    }
+  ]
+}

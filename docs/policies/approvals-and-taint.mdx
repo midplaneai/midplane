@@ -19,10 +19,10 @@ are held too. A held write doesn't run:
 2. The agent gets the request's id and a review link at once. A project
    manager approves or denies it on the Approvals page; Slack can announce
    new requests (one webhook per project).
-3. The agent re-runs the same statement with the same intent, or calls
-   `check_approval` with the id. An approval binds the database, the exact
-   statement, the intent and the agent's grant: change a byte and it's a new
-   request.
+3. The agent re-runs the same statement with the same intent through
+   `write`, or calls `check_approval` with the id. An approval binds the
+   database, the exact statement, the intent and the agent's grant: change a
+   byte and it's a new request.
 4. On the re-run, the gateway claims the approval (once, atomically), checks
    the decision's signature, and runs the write in a transaction that rolls
    back if it changes a different number of rows than the approver saw (more,

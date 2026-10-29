@@ -398,20 +398,37 @@ export interface RedactedCatalog {
 
 /**
  * The snapshot a gateway may send: every view definition redacted, or left
- * out when it can't be. The core denies a statement that reads a view
- * without a definition, so a withheld one fails closed in simulation.
+ * out when it can't be, and every comment left out. The core denies a
+ * statement that reads a view without a definition, so a withheld one fails
+ * closed in simulation. A COMMENT ON is free text that can hold a value, so
+ * it stays on the gateway, for describe_table; keys are names, and go up.
  */
 export function redactCatalog(catalog: CatalogSnapshot): RedactedCatalog {
   const withheld: WithheldDefinition[] = [];
   const relations = catalog.relations.map((r): Relation => {
-    if (r.definition === undefined) return r;
-    const out = redactDefinition(r.definition);
-    if (out.ok) return { ...r, definition: out.sql };
+    const { comment: _c, ...rel } = r;
+    const columns = rel.columns.map(({ comment: _cc, ...col }) => col);
+    if (rel.definition === undefined) return { ...rel, columns };
+    const out = redactDefinition(rel.definition);
+    if (out.ok) return { ...rel, columns, definition: out.sql };
     withheld.push({ schema: r.schema, name: r.name, reason: out.reason });
-    const { definition: _, ...rest } = r;
-    return rest;
+    const { definition: _, ...rest } = rel;
+    return { ...rest, columns };
   });
   return { catalog: { relations, routines: catalog.routines }, withheld };
+}
+
+/** Relations and columns that carry a comment: what the cloud refuses to store. */
+export function commentedRelations(catalog: CatalogSnapshot): string[] {
+  const out: string[] = [];
+  for (const r of catalog.relations) {
+    if (
+      r.comment !== undefined ||
+      r.columns.some((c) => c.comment !== undefined)
+    )
+      out.push(relationKey(r.schema, r.name));
+  }
+  return out;
 }
 
 /**

@@ -22,6 +22,45 @@ import { masksFor, ruleFor } from "./rewrite.ts";
 import type { Classification, StatementAnalysis } from "./statement.ts";
 import type { EvaluateInput, TaintSource } from "./types.ts";
 
+// ── tool ────────────────────────────────────────────────────────────────────
+
+/**
+ * Each statement tool runs one kind: `query` reads, `write` writes. Clients
+ * run a read-only tool without asking a person and gate a write tool, so
+ * the split is what lets them tell the two apart. A write sent to the read
+ * tool is refused here, right after scope: its kind is plain from the
+ * statement.
+ */
+export function checkReadTool(
+  input: EvaluateInput,
+  classification: Classification,
+): void {
+  const write = classification.write;
+  if (input.accepts === "reads" && write) {
+    throw new Deny(
+      "tool",
+      `Midplane denied this statement because it is a write (${write.operation}) and the query tool runs reads only. Send it to the write tool, with your intent: the policy decides whether it runs now, waits for a person's approval, or is refused.`,
+    );
+  }
+}
+
+/**
+ * A read sent to the write tool is refused only once every other rule has
+ * passed: a write hidden in a WITH query, or a name that doesn't resolve,
+ * gets its real reason rather than a pointer to the read tool.
+ */
+export function checkWriteTool(
+  input: EvaluateInput,
+  classification: Classification,
+): void {
+  if (input.accepts === "writes" && classification.write === null) {
+    throw new Deny(
+      "tool",
+      "Midplane denied this statement because it is a read and the write tool runs writes only. Send it to the query tool, which runs reads without a person's confirmation.",
+    );
+  }
+}
+
 // ── scope ───────────────────────────────────────────────────────────────────
 
 export function checkScope(input: EvaluateInput, writes: boolean): void {

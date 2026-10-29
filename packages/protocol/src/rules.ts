@@ -7,6 +7,7 @@ export const RuleIdSchema = z.enum([
   "parse_error",
   "multi_statement",
   "unsupported",
+  "tool",
   "unresolved",
   "scope",
   "table_access",

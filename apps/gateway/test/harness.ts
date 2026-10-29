@@ -269,3 +269,22 @@ export async function query(
     ...(database ? { database } : {}),
   });
 }
+
+export async function write(
+  url: string,
+  token: string,
+  sql: string,
+  database?: string,
+  intent?: string,
+): Promise<ToolResult> {
+  return callTool(url, token, "write", {
+    sql,
+    ...(database ? { database } : {}),
+    ...(intent !== undefined ? { intent } : {}),
+  });
+}
+
+/** The statement tool for a SQL text: `query` for a read, `write` for the rest. */
+export function toolFor(sql: string): "query" | "write" {
+  return /^\s*(select|values|with|table)\b/i.test(sql) ? "query" : "write";
+}

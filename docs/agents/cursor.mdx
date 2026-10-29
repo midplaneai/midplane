@@ -51,6 +51,15 @@ You need a running gateway ([get started](/get-started)).
 To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
 It has to sign in again within 15 minutes.
 
+## Permissions
+
+Cursor asks before an MCP tool call unless its auto-run setting covers
+the tool. Of the gateway's tools, `query`,
+`list_tables`, `describe_table` and `check_approval` only read; `write` is
+the one that changes data, and Midplane's policy still decides whether it
+runs, waits for a project manager, or is refused ([what clients ask you to
+confirm](/agents/tools#what-clients-ask-you-to-confirm)).
+
 ## If it doesn't work
 
 - **Sign-in never finishes**: Cursor takes the sign-in on port 8787, so

@@ -58,6 +58,8 @@ const CaseSchema = z.strictObject({
   scopes: z.array(z.string()).optional(),
   tainted: z.boolean().optional(),
   intent: z.string().optional(),
+  /** The tool the statement went to: `query` runs reads, `write` writes. */
+  accepts: z.enum(["reads", "writes"]).optional(),
   expect: ExpectationSchema,
   /** Where the case came from, e.g. the old engine test it was converted from. */
   origin: z.string().optional(),
@@ -97,6 +99,7 @@ export interface CorpusCase {
     caller: CallerClaims;
     tainted: boolean;
     intent: string;
+    accepts?: "reads" | "writes";
   };
   expect: Expectation;
 }
@@ -160,6 +163,7 @@ export function loadCorpus(): CorpusCase[] {
           caller,
           tainted: c.tainted ?? doc.defaults.tainted,
           intent: c.intent ?? "",
+          ...(c.accepts ? { accepts: c.accepts } : {}),
         },
         expect: c.expect,
       });

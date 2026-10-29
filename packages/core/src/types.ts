@@ -23,6 +23,13 @@ export interface EvaluateInput {
   tainted: boolean;
   /** The agent's stated reason; part of the approval binding. */
   intent: string;
+  /**
+   * What the calling tool runs: `query` runs reads, `write` runs writes. A
+   * statement of the other kind denies as `tool`, naming the right one: a
+   * write through `query` right after scope, a read through `write` once
+   * every other rule has passed. Absent, both kinds run.
+   */
+  accepts?: "reads" | "writes";
 }
 
 /** An output field and the base columns its value comes from. */

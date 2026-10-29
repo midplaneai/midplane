@@ -29,6 +29,7 @@ import {
   hasPostgres,
   type TestDatabase,
   type ToolResult,
+  toolFor,
 } from "./harness.ts";
 
 async function freePort(): Promise<number> {
@@ -125,7 +126,7 @@ describe.skipIf(!hasPostgres)(
       sql: string,
       o: { grant?: string; intent?: string } = {},
     ) =>
-      callTool(mcpUrl(), await token(o.grant), "query", {
+      callTool(mcpUrl(), await token(o.grant), toolFor(sql), {
         sql,
         ...(o.intent !== undefined ? { intent: o.intent } : {}),
       });

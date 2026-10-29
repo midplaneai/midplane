@@ -8,7 +8,9 @@
         {
           "name": "id",
           "type": "integer",
-          "category": "N"
+          "category": "N",
+          "not_null": true,
+          "primary_key": true
         },
         {
           "name": "name",
@@ -723,7 +725,7 @@
           "category": "S"
         }
       ],
-      "definition": "SELECT id,\n    'it''s s3cr3t'::text AS q,\n    'tab\ts3cr3t'::text AS e,\n    '😀 s3cr3t'::text AS u\n   FROM t"
+      "definition": "SELECT id,\n    'it''s s3cr3t'::text AS q,\n    'tab\ts3cr3t'::text AS e,\n    '\ud83d\ude00 s3cr3t'::text AS u\n   FROM t"
     },
     {
       "schema": "public",

@@ -212,14 +212,14 @@ export function heldMessage(o: {
     return [
       `This write is still waiting for a person's approval (request ${filed.id}, filed ${ago(filed.filed_at, o.now)} ago; it expires at ${instant(filed.expires_at)}).`,
       `Review: ${filed.review_url}.`,
-      `Once it is approved, re-run exactly this statement with the same intent, or ${recheck(filed.id)}.`,
+      `Once it is approved, re-run exactly this statement with the same intent through the write tool, or ${recheck(filed.id)}.`,
     ].join(" ");
   }
   return [
     `Midplane held this write, and nothing ran: ${why(o.cause, o.klass)}.`,
     `It ${countText(filed.preview)}.`,
     `Request ${filed.id} is waiting for a decision at ${filed.review_url}${filed.replaces ? ` (it replaces ${filed.replaces})` : ""}.`,
-    `Once it is approved, re-run exactly this statement with the same intent before ${instant(filed.expires_at)}, and it will run; or ${recheck(filed.id)}.`,
+    `Once it is approved, re-run exactly this statement with the same intent through the write tool before ${instant(filed.expires_at)}, and it will run; or ${recheck(filed.id)}.`,
   ].join(" ");
 }
 
@@ -254,11 +254,11 @@ export function stateMessage(
     case "approved":
       return statement
         ? [
-            `${head} was approved by ${decider(s.decided_by)}. Re-run exactly this statement with exactly this intent before ${instant(s.expires_at)} to run it:`,
+            `${head} was approved by ${decider(s.decided_by)}. Re-run exactly this statement with exactly this intent through the write tool before ${instant(s.expires_at)} to run it:`,
             `statement: ${statement.sql}`,
             `intent: ${JSON.stringify(statement.intent)}`,
           ].join("\n")
-        : `${head} was approved by ${decider(s.decided_by)}. Re-run exactly the statement you filed, with the same intent, before ${instant(s.expires_at)} to run it.`;
+        : `${head} was approved by ${decider(s.decided_by)}. Re-run exactly the statement you filed, with the same intent, through the write tool before ${instant(s.expires_at)} to run it.`;
     case "denied":
       return `${head} was denied by ${decider(s.decided_by)}${withNote(s.note)}. Re-running it won't change that.`;
     case "expired":

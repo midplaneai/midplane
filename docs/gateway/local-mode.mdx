@@ -65,9 +65,11 @@ over HTTP, with the gateway running as another user or on another host.
 
 ## What an agent can call
 
-Four tools: `query` (one statement, with an optional `intent`, the agent's
-reason), `list_tables`, `describe_table`, and `check_approval` (which, in
-local mode, says approvals need a linked gateway).
+Five tools ([tools](/agents/tools)): `query` (one read-only statement, with
+an optional `intent`, the agent's reason), `write` (one write, which the
+policy runs, holds or refuses), `list_tables`, `describe_table`, and
+`check_approval` (which, in local mode, says approvals need a linked
+gateway).
 
 *Tested by* `apps/gateway/test/cli.e2e.test.ts` (keygen, token, stdio) and
 `apps/gateway/test/gateway.e2e.test.ts` (local mode end to end).

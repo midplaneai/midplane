@@ -28,6 +28,7 @@ import {
   query,
   type TestDatabase,
   type ToolResult,
+  write,
 } from "./harness.ts";
 
 const QUICKSTART = fileURLToPath(
@@ -133,7 +134,7 @@ describe.skipIf(!hasPostgres)(
     });
 
     it("refuses a held write: local mode can't approve", async () => {
-      const r = await query(
+      const r = await write(
         url,
         token,
         "UPDATE support_tickets SET status = 'closed' WHERE id = 2",
@@ -147,7 +148,7 @@ describe.skipIf(!hasPostgres)(
     });
 
     it("denies a write without a WHERE", async () => {
-      const r = await query(url, token, "DELETE FROM support_tickets");
+      const r = await write(url, token, "DELETE FROM support_tickets");
       expect(r.isError).toBe(true);
       expect(textOf(r)).toMatch(/every row/);
     });

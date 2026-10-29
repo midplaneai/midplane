@@ -162,12 +162,13 @@ async function post(
   return (await httpsText(url, { method: "POST", headers, body }, tls)).body;
 }
 
-/** One MCP tools/call over HTTP, the 2025 handshake. */
+/** One MCP tools/call over HTTP, the 2025 handshake: `query` unless told `write`. */
 async function call(
   url: string,
   token: string,
   sql: string,
   tls?: Tls,
+  tool: "query" | "write" = "query",
 ): Promise<{ isError: boolean; text: string }> {
   const raw = await post(
     url,
@@ -181,7 +182,7 @@ async function call(
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "query", arguments: { sql } },
+      params: { name: tool, arguments: { sql } },
     }),
     tls,
   );
@@ -335,11 +336,13 @@ try {
     !emails.isError && !emails.text.includes("@example.com"),
     "emails come back masked",
   );
-  const held = await call(
-    url,
-    localToken,
-    "UPDATE support_tickets SET status = 'closed' WHERE id = 2",
+  const close = "UPDATE support_tickets SET status = 'closed' WHERE id = 2";
+  const misrouted = await call(url, localToken, close);
+  check(
+    misrouted.isError && /runs reads only/.test(misrouted.text),
+    "query refuses a write, naming the write tool",
   );
+  const held = await call(url, localToken, close, undefined, "write");
   check(
     held.isError && /approvals are unavailable/.test(held.text),
     "a held write says approvals are unavailable in local mode",

@@ -6,7 +6,9 @@ import { approvalKey } from "./approval.ts";
 import { CatalogIndex } from "./catalog.ts";
 import {
   checkAccess,
+  checkReadTool,
   checkScope,
+  checkWriteTool,
   decide,
   taintSources,
   untrustedTouched,
@@ -57,9 +59,13 @@ export function evaluate(input: EvaluateInput): Evaluation {
     fp = fingerprint(input.sql);
     const stmt = parseOne(input.sql);
 
-    // 2. Classify, then check the caller may read or write this database.
+    // 2. Classify; check the caller may read or write this database, then
+    //    that a write didn't come through the read tool: a read-only
+    //    caller's write is refused as read-only, not pointed at a write tool
+    //    it doesn't have.
     const classification = classify(stmt);
     checkScope(input, classification.write !== null);
+    checkReadTool(input, classification);
 
     // 3. Resolve every name; table access is checked as each relation binds.
     const catalog = new CatalogIndex(input.catalog);
@@ -85,8 +91,10 @@ export function evaluate(input: EvaluateInput): Evaluation {
     const gap = coverageGap(stmt, resolver.visited);
     if (gap) throw unsupported(`a ${gap} Midplane could not analyze`);
 
-    // 4. Decide.
+    // 4. Decide; a read that passed everything but came through the write
+    //    tool is refused last, so a hidden write or a bad name says why.
     const decision = decide(input, catalog, classification, analysis, resolver);
+    checkWriteTool(input, classification);
 
     // 5. Rewrite: masks at the source, then deparse if anything changed.
     const { changed } = rewrite(stmt, resolver, analysis, input.policy);

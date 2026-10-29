@@ -76,6 +76,7 @@
           {
             "group": "Agents",
             "pages": [
+              "agents/tools",
               "agents/claude-code",
               "agents/cursor",
               "agents/vs-code",

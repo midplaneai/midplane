@@ -1,12 +1,13 @@
 // What an agent may see of a database's shape: the relations it can read,
-// with each column's type and whether it comes back masked. Names and types
-// only; this is what list_tables and describe_table serve. Also what the
-// cloud shows about masks: the rule each base column gets, and which columns
-// no one has reviewed.
+// with each column's type, keys and comment, and whether it comes back
+// masked. Catalog metadata only, never a value; this is what list_tables and
+// describe_table serve. Also what the cloud shows about masks: the rule each
+// base column gets, and which columns no one has reviewed.
 
 import type {
   CatalogSnapshot,
   DatabasePolicy,
+  ForeignKey,
   MaskRule,
   Relation,
 } from "@midplane/protocol";
@@ -15,12 +16,24 @@ import { accessLevel } from "./decide.ts";
 import type { BaseColumn } from "./resolve.ts";
 import { masksFor, ruleFor } from "./rewrite.ts";
 
+export interface VisibleColumn {
+  name: string;
+  type: string;
+  masked: boolean;
+  notNull: boolean;
+  primaryKey: boolean;
+  comment: string | null;
+}
+
 export interface VisibleRelation {
   schema: string;
   name: string;
   kind: Relation["kind"];
   access: "read" | "read_write";
-  columns: { name: string; type: string; masked: boolean }[];
+  comment: string | null;
+  columns: VisibleColumn[];
+  /** Only those whose target the agent may read: a hidden table stays hidden. */
+  foreignKeys: ForeignKey[];
 }
 
 const SYSTEM = new Set(["pg_catalog", "information_schema"]);
@@ -29,22 +42,36 @@ export function visibleRelations(
   policy: DatabasePolicy,
   catalog: CatalogSnapshot,
 ): VisibleRelation[] {
-  const out: VisibleRelation[] = [];
+  // Readable relations first, so a foreign key to one the agent can't read
+  // is left out, as list_tables leaves that table out.
+  const readable = new Map<string, "read" | "read_write">();
   for (const r of catalog.relations) {
     if (SYSTEM.has(r.schema)) continue;
     const access = accessLevel(policy, r.schema, r.name, r.parent);
-    if (access === "deny") continue;
+    if (access !== "deny") readable.set(relationKey(r.schema, r.name), access);
+  }
+  const out: VisibleRelation[] = [];
+  for (const r of catalog.relations) {
+    const access = readable.get(relationKey(r.schema, r.name));
+    if (!access) continue;
     const entry = masksFor(policy, r);
     out.push({
       schema: r.schema,
       name: r.name,
       kind: r.kind,
       access,
+      comment: r.comment ?? null,
       columns: r.columns.map((c) => ({
         name: c.name,
         type: c.type,
         masked: entry !== null && ruleFor(entry, c.name) !== "none",
+        notNull: c.not_null === true,
+        primaryKey: c.primary_key === true,
+        comment: c.comment ?? null,
       })),
+      foreignKeys: (r.foreign_keys ?? []).filter((fk) =>
+        readable.has(relationKey(fk.references.schema, fk.references.name)),
+      ),
     });
   }
   return out;

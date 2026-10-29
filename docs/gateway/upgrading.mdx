@@ -33,6 +33,17 @@ never stops it.
 - The audit file, the bundle cache and the identity carry over between
   versions; keep them on a volume.
 
+## Changes that need attention
+
+- **`0.26.0`: writes moved to a `write` tool.** `query` runs reads only and
+  refuses a write with a message naming `write`; `write` runs writes and
+  refuses reads. Agents see the new tool when their client next lists the
+  gateway's tools, on reconnect or in a new session. A prompt or script that
+  sent writes through `query` must send them through `write`, and a held
+  write's approval is claimed by re-running it there. Clients run a
+  read-only tool without asking and gate the rest, which one tool that did
+  both couldn't express ([tools](/agents/tools)).
+
 ## Docker
 
 Use a fixed version, such as `ghcr.io/midplaneai/midplane:0.24.0`, not

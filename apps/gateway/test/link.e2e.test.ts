@@ -33,6 +33,7 @@ import {
   hasPostgres,
   query,
   type TestDatabase,
+  write,
 } from "./harness.ts";
 import { startProxy, type TcpProxy } from "./proxy.ts";
 import { localFetch } from "./tunnel.ts";
@@ -197,7 +198,7 @@ describe.skipIf(!hasPostgres)("linked mode", { timeout: 20_000 }, () => {
     expect((await fetch(`${gw.url}/readyz`)).status).toBe(200);
     const r = await query(mcpUrl(), await agent(), "SELECT email FROM users");
     expect(r.structuredContent?.rows).toEqual([["***"]]);
-    const w = await query(
+    const w = await write(
       mcpUrl(),
       await agent(),
       "INSERT INTO notes (body) VALUES ('hi')",
@@ -739,6 +740,7 @@ describe.skipIf(!hasPostgres)(
       const head = gw.audit.head().seq;
       const refused = [
         await query(mcpUrl(), token, COUNT, "far"),
+        // A read-only token has no write tool; through query it is refused too.
         await query(mcpUrl(), token, "DELETE FROM orders", "far"),
         await callTool(mcpUrl(), token, "list_tables", { database: "far" }),
         await callTool(mcpUrl(), token, "describe_table", {

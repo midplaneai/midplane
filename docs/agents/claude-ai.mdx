@@ -50,6 +50,18 @@ a URL of your own instead, see [hosted agents](/gateway/hosted-agents).
   can't read them ([what the relay sees](/security#the-relay)).
 </Check>
 
+## Permissions
+
+In the connector's settings, claude.ai groups the gateway's tools: `query`,
+`list_tables`, `describe_table` and `check_approval` are read-only, and
+`write` is the one write/delete tool. Set the read-only group to **Always
+allow** so reads run without a prompt, and keep `write` at **Needs
+approval**, or **Blocked** for an agent that should only read: reads keep
+working either way. An agent you gave **Read** on every database has no
+write/delete tool to configure. Midplane's policy decides on top: a write it
+holds still waits for a project manager ([what clients ask you to
+confirm](/agents/tools#what-clients-ask-you-to-confirm)).
+
 To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
 It has to sign in again within 15 minutes.
 

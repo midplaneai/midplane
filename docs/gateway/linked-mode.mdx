@@ -117,8 +117,9 @@ error, before it enrolls.
 
 Over the link, a gateway sends its status (bundle version, state, version,
 features, database ids, URLs, each database's health as an error code), each
-database's catalog (table and column names and types, view definitions with
-every literal replaced, never a value), held writes for approval, taint
+database's catalog (table and column names and types, primary and foreign
+keys, view definitions with every literal replaced; never a value, and never
+a `COMMENT ON`, which could hold one), held writes for approval, taint
 records, and its audit log ([audit](/audit)). It never sends a DSN, the
 salt, a Postgres error message, or a row.
 

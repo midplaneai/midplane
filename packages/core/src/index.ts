@@ -9,6 +9,7 @@ export {
   type ColumnMask,
   maskLookup,
   unreviewedColumns,
+  type VisibleColumn,
   type VisibleRelation,
   visibleRelations,
 } from "./describe.ts";
@@ -31,6 +32,7 @@ export {
 } from "./policy.ts";
 export {
   catalogNames,
+  commentedRelations,
   REDACTED_STRING,
   type RedactedCatalog,
   type RedactedDefinition,

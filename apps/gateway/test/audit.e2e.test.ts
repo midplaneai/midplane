@@ -33,6 +33,7 @@ import {
   hasPostgres,
   type TestDatabase,
   type ToolResult,
+  toolFor,
 } from "./harness.ts";
 
 async function freePort(): Promise<number> {
@@ -111,7 +112,7 @@ describe.skipIf(!hasPostgres)(
       callTool(
         mcpUrl(),
         await cloud.agentToken({ audience: mcpUrl(), grantId: "grant-1" }),
-        "query",
+        toolFor(sql),
         { sql, ...(intent !== undefined ? { intent } : {}) },
       );
     const publish = async (extra: Record<string, unknown> = {}) => {

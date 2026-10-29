@@ -56,6 +56,15 @@ It has to sign in again within 15 minutes.
   ```
 </Accordion>
 
+## Permissions
+
+Claude Code asks before an MCP tool call until you allow the tool, or the
+whole server, in its permission settings. Of the gateway's tools, `query`,
+`list_tables`, `describe_table` and `check_approval` only read; `write` is
+the one that changes data, and Midplane's policy still decides whether it
+runs, waits for a project manager, or is refused ([what clients ask you to
+confirm](/agents/tools#what-clients-ask-you-to-confirm)).
+
 ## If it doesn't work
 
 - **The consent page says it wants access, with no databases**: you aren't a

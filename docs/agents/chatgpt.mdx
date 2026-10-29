@@ -49,9 +49,15 @@ a URL of your own instead, see [hosted agents](/gateway/hosted-agents).
   read them ([what the relay sees](/security#the-relay)).
 </Check>
 
-ChatGPT asks you to confirm each `query` call, reads too, since the tool can
-write; it can remember your answer for the rest of the chat. `list_tables`
-and `describe_table` run without asking.
+## Permissions
+
+ChatGPT runs `query`, `list_tables`, `describe_table` and `check_approval`
+without asking: the gateway marks them read-only. It asks you to confirm each
+`write` call, and can remember your answer for the rest of the chat; an
+agent you gave **Read** on every database has no `write` tool at all.
+Midplane's policy decides on top: a write it holds still waits for a project
+manager ([what clients ask you to
+confirm](/agents/tools#what-clients-ask-you-to-confirm)).
 
 To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
 It has to sign in again within 15 minutes.

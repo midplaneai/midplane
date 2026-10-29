@@ -387,6 +387,7 @@ export class Gateway {
     sql: string,
     intent: string,
     tainted: boolean,
+    accepts?: "reads" | "writes",
   ): Evaluation {
     return evaluate({
       sql,
@@ -396,12 +397,19 @@ export class Gateway {
       caller: caller.caller,
       tainted,
       intent,
+      ...(accepts ? { accepts } : {}),
     });
   }
 
   async query(
     caller: VerifiedCaller,
-    input: { database?: string; sql: string; intent?: string },
+    input: {
+      database?: string;
+      sql: string;
+      intent?: string;
+      /** Which tool it came through: `query` runs reads, `write` writes. */
+      accepts?: "reads" | "writes";
+    },
   ): Promise<QueryOutcome> {
     const refusal = this.refusal();
     if (refusal) return { kind: "unavailable", message: refusal };
@@ -435,14 +443,31 @@ export class Gateway {
       return unavailable(err);
     }
 
-    let e = this.evaluate(db, policy, caller, input.sql, intent, false);
+    const accepts = input.accepts;
+    let e = this.evaluate(
+      db,
+      policy,
+      caller,
+      input.sql,
+      intent,
+      false,
+      accepts,
+    );
     // A name the catalog doesn't know may be new: re-read once and retry.
     if (e.verdict === "deny" && e.rule === "unresolved") {
       try {
         const before = db.refreshedAt;
         await this.refreshCatalog(db);
         if (db.refreshedAt !== before)
-          e = this.evaluate(db, policy, caller, input.sql, intent, false);
+          e = this.evaluate(
+            db,
+            policy,
+            caller,
+            input.sql,
+            intent,
+            false,
+            accepts,
+          );
       } catch {
         // Keep the denial.
       }
@@ -453,7 +478,7 @@ export class Gateway {
       ? await this.taintStore.checkTaint(grantId)
       : "clean";
     if (taint !== "clean") {
-      e = this.evaluate(db, policy, caller, input.sql, intent, true);
+      e = this.evaluate(db, policy, caller, input.sql, intent, true, accepts);
     }
     // Unknown taint closes what taint closes, but neither the agent nor the
     // audit log is told it read untrusted content.
