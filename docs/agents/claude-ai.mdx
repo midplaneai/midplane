@@ -1,38 +1,44 @@
 ---
 title: "Connect claude.ai to Postgres over MCP"
 sidebarTitle: "claude.ai"
-description: "Give the gateway a public URL, add it as a connector in claude.ai, sign in, and choose which Postgres databases Claude may read or write."
+description: "Add the gateway's URL to claude.ai as a custom connector, sign in, and choose which Postgres databases Claude may read or write."
 ---
 
 [Midplane](/) is a gateway between AI agents and your Postgres databases.
 Claude queries your data through it, never holds a connection string, and
 every statement it sends is checked against your policy before it runs.
 
-You need a running gateway ([get started](/get-started)). claude.ai runs on
-Anthropic's servers, so it reaches the gateway only at a public HTTPS URL.
+claude.ai connects from Anthropic's servers, so it reaches a gateway only at
+a public HTTPS URL. A gateway [on a server with Docker](/gateway/deploy#docker)
+or [on a platform](/gateway/deploy#on-a-platform) has one: its Midplane URL,
+through Midplane's relay, with no tunnel, DNS record or open port. A gateway
+on [this machine](/gateway/deploy#this-machine) has none; to use a tunnel or
+a URL of your own instead, see [hosted agents](/gateway/hosted-agents).
 
 <Steps>
-  <Step title="Give the gateway a public URL">
-    Use Anthropic's MCP tunnel (in research preview; for claude.ai it needs
-    the Enterprise plan) or your own ingress, such as a load balancer
-    allowlisted to Anthropic's IP ranges. [Hosted
-    agents](/gateway/hosted-agents) sets up either.
+  <Step title="Copy the gateway's URL">
+    On the project's **Agents** page, under **Connect an agent**, pick
+    **claude.ai** and copy the URL, such as
+    `https://gw-7hq2m4xd.eu.midplane.app/mcp`.
   </Step>
-  <Step title="Register the URL">
-    Add it to the gateway's `public_urls`. If the gateway enrolled before you
-    added it, press **Register** on the project's **Gateways** page.
-  </Step>
-  <Step title="Add the connector">
-    In claude.ai, add a connector with the gateway's public URL followed by
-    `/mcp`, such as `https://midplane.<tunnel domain>/mcp`. The **Agents**
-    page shows it under **Connect an agent**.
+  <Step title="Add a custom connector">
+    In claude.ai, go to **Customize > Connectors**, click **+ Add**, then
+    **Add custom connector**. Name it `Midplane`, paste the URL and click
+    **Continue**. Keep the sign-in settings it detects, and click **Add**.
+
+    On a Team or Enterprise plan, an owner adds it for the organization, in
+    **Organization settings > Connectors** (**Add**, then **Custom**, then
+    **Web**). Each member then finds it under **Customize > Connectors** and
+    clicks **Connect**.
   </Step>
   <Step title="Sign in and choose what it may reach">
-    Set each database to **None**, **Read** or **Read + write**, and **Allow**.
+    claude.ai opens Midplane. Sign in, set each database to **None**, **Read**
+    or **Read + write**, and **Allow**.
   </Step>
   <Step title="Try it">
-    Ask Claude which tables it can see. Its statement shows up in the
-    project's **Query log**.
+    In a chat, check that `Midplane` is on under **+ > Connectors**, and ask
+    Claude which tables it can see. Its statement shows up in the project's
+    **Query log**.
   </Step>
 </Steps>
 
@@ -40,7 +46,8 @@ Anthropic's servers, so it reaches the gateway only at a public HTTPS URL.
   You're set: Claude can answer questions from your data, and only what your
   policy allows runs. Masked columns stay masked, writes that need approval
   wait for a person, and every statement is in the audit log. Results go from
-  your gateway to Anthropic, never through Midplane Cloud.
+  your gateway to Anthropic, never through Midplane Cloud, and the relay
+  can't read them ([what the relay sees](/security#the-relay)).
 </Check>
 
 To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
@@ -48,12 +55,18 @@ It has to sign in again within 15 minutes.
 
 ## If it doesn't work
 
+- **claude.ai can't connect to the URL**: check that the gateway's setup step
+  or **Gateways** page says **Relay · connected**, or see [cannot reach the
+  relay](/troubleshooting#cannot-reach-the-relay).
 - **The consent page says it wants access, with no databases**: you aren't a
   member of the gateway's project, or the URL isn't registered. Ask an owner
   of the organization.
-- **The Gateways page shows the URL as not registered**: see
+- **The Gateways page shows a URL of your own as not registered**: see
   [troubleshooting](/troubleshooting#not-registered).
+- **claude.ai won't add another connector**: the Free plan allows one custom
+  connector.
 
-*Tested by* `apps/gateway/test/urls.e2e.test.ts` (several URLs, and a tunnel
-that rewrites Host) and `apps/gateway/test/auth.test.ts` for the gateway's
-side; the client's steps by hand.
+*Tested by* `apps/gateway/test/setup-relay.test.ts` (a gateway behind a
+stand-in relay), `apps/gateway/test/urls.e2e.test.ts` (several URLs, and a
+tunnel that rewrites Host) and `apps/gateway/test/auth.test.ts` for the
+gateway's side; the client's steps by hand, through the relay.

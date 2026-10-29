@@ -1,0 +1,72 @@
+---
+title: "Connect ChatGPT to Postgres over MCP"
+sidebarTitle: "ChatGPT"
+description: "Add the gateway's URL to ChatGPT as a custom MCP server, sign in, and choose which Postgres databases it may read or write."
+---
+
+[Midplane](/) is a gateway between AI agents and your Postgres databases.
+ChatGPT queries your data through it, never holds a connection string, and
+every statement it sends is checked against your policy before it runs.
+
+ChatGPT connects from OpenAI's servers, so it reaches a gateway only at a
+public HTTPS URL. A gateway [on a server with Docker](/gateway/deploy#docker)
+or [on a platform](/gateway/deploy#on-a-platform) has one: its Midplane URL,
+through Midplane's relay, with no tunnel, DNS record or open port. A gateway
+on [this machine](/gateway/deploy#this-machine) has none; to use a tunnel or
+a URL of your own instead, see [hosted agents](/gateway/hosted-agents).
+
+<Steps>
+  <Step title="Copy the gateway's URL">
+    On the project's **Agents** page, under **Connect an agent**, pick
+    **ChatGPT** and copy the URL, such as
+    `https://gw-7hq2m4xd.eu.midplane.app/mcp`.
+  </Step>
+  <Step title="Add a custom MCP server">
+    In ChatGPT on the web, open **Plugins**, select **+**, then **Add custom
+    MCP server**. Name it `Midplane`, paste the URL as the **Server URL**
+    under **Connection**, and choose **OAuth** for authentication. Read the
+    risk warning, select **I understand and want to continue**, then
+    **Create as a plugin**.
+
+    Your workspace's settings may not allow custom MCP servers: ask its
+    admin.
+  </Step>
+  <Step title="Sign in and choose what it may reach">
+    Install the plugin. ChatGPT opens Midplane: sign in, set each database to
+    **None**, **Read** or **Read + write**, and **Allow**.
+  </Step>
+  <Step title="Try it">
+    In a new chat, type `@`, pick `Midplane`, and ask which tables it can
+    see. Its statement shows up in the project's **Query log**.
+  </Step>
+</Steps>
+
+<Check>
+  You're set: ChatGPT can answer questions from your data, and only what your
+  policy allows runs. Masked columns stay masked, writes that need approval
+  wait for a person, and every statement is in the audit log. Results go from
+  your gateway to OpenAI, never through Midplane Cloud, and the relay can't
+  read them ([what the relay sees](/security#the-relay)).
+</Check>
+
+ChatGPT asks you to confirm each `query` call, reads too, since the tool can
+write; it can remember your answer for the rest of the chat. `list_tables`
+and `describe_table` run without asking.
+
+To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
+It has to sign in again within 15 minutes.
+
+## If it doesn't work
+
+- **ChatGPT can't connect to the URL**: check that the gateway's setup step
+  or **Gateways** page says **Relay · connected**, or see [cannot reach the
+  relay](/troubleshooting#cannot-reach-the-relay).
+- **The consent page says it wants access, with no databases**: you aren't a
+  member of the gateway's project, or the URL isn't registered. Ask an owner
+  of the organization.
+- **Through OpenAI's Secure MCP Tunnel** instead of the relay, signing in
+  isn't verified yet: see [hosted agents](/gateway/hosted-agents#chatgpt-and-codex-openai-secure-mcp-tunnel).
+
+*Tested by* `apps/gateway/test/setup-relay.test.ts` (a gateway behind a
+stand-in relay) and `apps/gateway/test/auth.test.ts` for the gateway's side;
+the client's steps by hand, through the relay.

@@ -79,7 +79,8 @@
               "agents/claude-code",
               "agents/cursor",
               "agents/vs-code",
-              "agents/claude-ai"
+              "agents/claude-ai",
+              "agents/chatgpt"
             ]
           },
           {

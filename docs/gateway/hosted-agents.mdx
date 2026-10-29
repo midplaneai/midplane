@@ -13,10 +13,12 @@ The simplest way is a Midplane URL: a gateway [behind the
 relay](/gateway/deploy#docker) is reachable at a public HTTPS URL while it
 only connects out, even in a private network. The relay passes agents'
 encrypted traffic to the gateway without reading it, and TLS ends at the
-gateway ([what the relay sees](/security#the-relay)). Otherwise, make the
-gateway reachable with what you already run, or with the tunnel your agent
-vendor offers, and register each URL the gateway answers on, as below.
-Either way, query results never reach Midplane Cloud.
+gateway ([what the relay sees](/security#the-relay)). Add that URL to
+[claude.ai](/agents/claude-ai) or [ChatGPT](/agents/chatgpt) as you would any
+other: nothing on this page is needed. Otherwise, make the gateway reachable
+with what you already run, or with the tunnel your agent vendor offers, and
+register each URL the gateway answers on, as below. Either way, query results
+never reach Midplane Cloud.
 
 ## One gateway, several URLs
 
@@ -69,6 +71,7 @@ metadata then names its first URL, so list the tunnel's URL first in
 | Where the agent runs | What you do | Who can read traffic |
 | --- | --- | --- |
 | Laptops or your own cluster (Claude Code, Cursor, VS Code) | Nothing extra: connect directly | Only you |
+| claude.ai, ChatGPT or another hosted agent, with a gateway behind the relay | Nothing extra: add its Midplane URL ([claude.ai](/agents/claude-ai), [ChatGPT](/agents/chatgpt)) | Only you: the relay passes ciphertext |
 | claude.ai or ChatGPT, with the vendor's tunnel | Run the vendor's tunnel next to the gateway, and register the tunnel URL | The agent vendor, which is the client anyway |
 | Hosted agents without a vendor tunnel | Give the gateway a public URL: your load balancer, allowlisted to the vendor's IP ranges, or a public deployment in your own cloud account | Only you |
 
