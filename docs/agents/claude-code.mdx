@@ -62,14 +62,18 @@ Claude Code asks before an MCP tool call until you allow the tool, or the
 whole server, in its permission settings. Of the gateway's tools, `query`,
 `list_tables`, `describe_table` and `check_approval` only read; `write` is
 the one that changes data, and Midplane's policy still decides whether it
-runs, waits for a project manager, or is refused ([what clients ask you to
+runs, waits for an owner or admin, or is refused ([what clients ask you to
 confirm](/agents/tools#what-clients-ask-you-to-confirm)).
 
 ## If it doesn't work
 
+- **Claude Code can't connect to the URL**: for a gateway at a Midplane
+  URL, check that the setup step says **Relay · connected**, or the
+  **Gateways** page **Relay: connected**, or see [cannot reach the
+  relay](/troubleshooting#cannot-reach-the-relay).
 - **The consent page says it wants access, with no databases**: you aren't a
   member of the gateway's project, or the gateway isn't registered. Ask an
-  owner of the organization.
+  owner or admin of its organization to invite you.
 - **The `localhost` URL does not resolve**: see
   [troubleshooting](/troubleshooting#the-localhost-url-does-not-resolve).
 

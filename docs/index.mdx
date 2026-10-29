@@ -7,8 +7,10 @@ description: "A gateway between AI agents and your Postgres databases. Every sta
 import Architecture from "/snippets/architecture.mdx";
 
 The gateway runs in your network, next to your databases. In Midplane Cloud
-you write the policy, approve held writes and read the query log. Midplane
-never sees your query results or connection strings.
+you write the policy, approve held writes and read the Query log. Agents reach
+the gateway through Midplane's relay, which passes their encrypted traffic
+without reading it, or at a URL of your own. Midplane never sees your query
+results or connection strings.
 
 <Architecture />
 
@@ -17,10 +19,10 @@ never sees your query results or connection strings.
     From a new project to your agent's first query.
   </Card>
   <Card title="How it works" icon="route" href="/how-it-works">
-    The parts, and what stays in your network.
+    The parts, how agents reach the gateway, and what stays in your network.
   </Card>
   <Card title="Deploy the gateway" icon="server" href="/gateway/deploy">
-    On your machine, a server, or a platform.
+    On your computer, a server, or a platform.
   </Card>
 </Columns>
 

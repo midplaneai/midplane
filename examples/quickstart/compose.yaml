@@ -1,4 +1,4 @@
-# A sample database for trying Midplane on your own machine. Docker is only
+# A sample database for trying Midplane on your computer. Docker is only
 # for this example: the gateway itself runs with `npx midplane`.
 services:
   postgres:

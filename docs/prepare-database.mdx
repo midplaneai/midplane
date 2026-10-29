@@ -64,9 +64,12 @@ table, so most setups leave them off.
 
 ## Write the connection string
 
-`midplane setup` asks for each database's connection string, tests it, and
-saves it in the gateway's folder: `secrets/shop.dsn` for the database id
-`shop`. It's one line:
+On your computer, or on a server at your own URL, `midplane setup` asks for
+each database's connection string, tests it, and saves it in the gateway's
+folder: `secrets/shop.dsn` for the database id `shop`. On a server behind the
+relay, or on a platform, it goes in the env file the dashboard shows instead,
+after its `MIDPLANE_DSN_<ID>=`. The gateway reads it from there each time it
+starts, and never saves it. Either way, it's one line:
 
 ```text
 postgres://midplane_gateway:<password>@<host>:5432/<database>?sslmode=verify-full
@@ -83,9 +86,10 @@ postgres://midplane_gateway:<password>@<host>:5432/<database>?sslmode=verify-ful
 certificate. If your provider signs certificates with its own CA, download it
 to where the gateway runs, and add its path. In Docker, put it in
 `/etc/midplane/tls` on the server: `&sslrootcert=/etc/midplane/tls/ca.pem`.
-The commands for **My own** certificate mount that folder at the same path;
-with an **Automatic** one, add `-v /etc/midplane/tls:/etc/midplane/tls:ro`
-after `docker run` in both. On your machine, use the file's full path.
+The commands for **My own** certificate mount that folder at the same path.
+With **Midplane URL**, or an **Automatic (Let's Encrypt)** certificate, add
+`-v /etc/midplane/tls:/etc/midplane/tls:ro` after each `docker run`. On your
+computer, use the file's full path.
 
 <Accordion title="How the gateway reads sslmode">
   The gateway reads `sslmode` differently from `psql`: `require`, `prefer` and
@@ -97,10 +101,10 @@ after `docker run` in both. On your machine, use the file's full path.
 
 ## Check that it connects
 
-Setup tests each connection string as you give it. It says `ok` with the
-database and its number of tables, or why not, such as `password
-authentication failed (28P01)`: look up the code in
+Setup tests each connection string as you give it. From an env file, the
+gateway tests each one as it first starts, in its log. Either says `ok` with
+the database and its number of tables, or why not, such as `password authentication failed (28P01)`: look up the code in
 [troubleshooting](/troubleshooting#connecting-to-a-database). Once the gateway
-runs, the database's line on the project overview shows **Catalog read**, and
-**Test connection** on the **Gateways** page shows its id with `ok`, such as
-`shop ok`.
+enforces a policy, the **Gateways** page lists each database as it reports it,
+such as `shop · reachable · catalog read: 12 tables`, and **Test connection**
+there shows each id with `ok`, such as `shop ok, 3 ms`.

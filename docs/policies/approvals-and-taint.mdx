@@ -16,8 +16,8 @@ are held too. A held write doesn't run:
 1. The gateway counts the rows it would change (a `SELECT count(*)` built from
    the write, run read-only, for at most 5 seconds) and files the write with
    Midplane Cloud: the statement, the intent, the count. Never the rows.
-2. The agent gets the request's id and a review link at once. A project
-   manager approves or denies it on the Approvals page; Slack can announce
+2. The agent gets the request's id and a review link at once. An owner or
+   admin approves or denies it on the Approvals page; Slack can announce
    new requests (one webhook per project).
 3. The agent re-runs the same statement with the same intent through
    `write`, or calls `check_approval` with the id. An approval binds the
@@ -50,7 +50,7 @@ may have read instructions meant for it.
   tables labeled secret (`labels.secret_tables`) are closed to them entirely.
 - **Every instance agrees.** Taint lives in Midplane Cloud, keyed by grant:
   tainted on one gateway, contained on all of them.
-- **Only people clear it.** A project manager clears an agent's taint on the
+- **Only people clear it.** An owner or admin clears an agent's taint on the
   Agents page, or it ends with the grant (revoking the agent or the token, or
   the person leaving the organization).
 

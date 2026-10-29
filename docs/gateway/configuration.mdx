@@ -1,6 +1,6 @@
 ---
 title: "Configuration"
-description: "Every key in midplane.yaml, in both modes, and the policy."
+description: "Every key in midplane.yaml, in both modes, the variables setup reads, every command and the policy."
 ---
 
 One YAML file, `midplane.yaml`, named with `--config`. Relative paths in it
@@ -22,19 +22,19 @@ gateway won't start on a config it can't fully read.
 | --- | --- | --- |
 | `listen.host` | `127.0.0.1` | Interface to listen on. Anything but loopback requires `tls`. `0.0.0.0` or `::` also requires `public_urls` |
 | `listen.port` | `7433` | |
-| `listen.allowed_hosts` | `[]` | More host names the `Host` header may carry, for a proxy that rewrites it. Not token audiences ([hosted agents](/gateway/hosted-agents)) |
-| `public_urls` | none | Up to eight base URLs agents reach the gateway at (`https://…`, no credentials, query or fragment). Each `<url>/mcp` is a token audience. Without them, the listener's own URL |
+| `listen.allowed_hosts` | `[]` | Up to eight more host names the `Host` header may carry, for a proxy that rewrites it: a name, or an IPv6 address in brackets. Not token audiences ([hosted agents](/gateway/hosted-agents)) |
+| `public_urls` | none | Up to eight base URLs agents reach the gateway at, with no credentials, query or fragment: `https://…`, or `http://` on your computer (`localhost`, a name under `.localhost`, `127.0.0.1` or `[::1]`). Midplane Cloud registers no other http URL, so a linked gateway that lists one can't join a project. Each `<url>/mcp` is a token audience. Without them, the listener's own URL |
 | `public_url` | none | Shorthand for one; not with `public_urls` |
 | `tls.cert_file`, `tls.key_file` | none | PEM files; HTTPS on the listener. (`0.23.0+`) Read again every 10 minutes: a replacement whose key matches, that is in date and covers the same public URL hosts is served to new connections without a restart |
 | `tls.acme` | none | (`0.23.0+`) A certificate the gateway gets and renews itself, from Let's Encrypt; not with `cert_file` and `key_file` ([automatic certificates](#automatic-certificates)) |
 | `tls.acme.http_port` | `7480` | Where the challenge listener binds, on every interface. The server's port 80 must reach it; not `listen.port` |
-| `tls.acme.directory_url` | Let's Encrypt | Another ACME directory, such as Let's Encrypt's staging (`https://acme-staging-v02.api.letsencrypt.org/directory`), whose certificates agents don't trust |
+| `tls.acme.directory_url` | Let's Encrypt | Another ACME directory, such as Let's Encrypt's staging (`https://acme-staging-v02.api.letsencrypt.org/directory`), whose certificates agents don't trust. https, or http on loopback |
 | `audit.file` | required | The audit log, a SQLite file ([audit](/audit)). Local processes may share one; give each linked gateway its own |
-| `audit.retention_days` | `30` | Days to keep each event after Midplane Cloud has it (in local mode, after it is recorded; an event a linked gateway left unsent, after the file is opened in local mode). An event the cloud hasn't acked is kept however old. `0` keeps everything |
+| `audit.retention_days` | `30` | Days to keep each event after Midplane Cloud has it (in local mode, after it is recorded; an event a linked gateway left unsent, after the file is opened in local mode), at most 3650. An event the cloud hasn't acked is kept however old. `0` keeps everything |
 | `mask_salt` | none | A secret source for the salt that keys `consistent-hash` masks: at least 32 characters, the same on every instance ([secrets](/gateway/secrets)). Required once a policy has masks |
 | `limits.max_rows` | `1000` | Rows returned per query, at most 1,000,000. A read stops at the cap and says it was truncated |
-| `limits.max_bytes` | `1048576` | Bytes returned per query, at least 1 KiB |
-| `databases.<id>.dsn` | required | A secret source for the connection string. The id is lowercase, up to 32 characters (`main`, `billing-eu`) |
+| `limits.max_bytes` | `1048576` | Bytes returned per query, from 1 KiB to 256 MiB |
+| `databases.<id>.dsn` | required | A secret source for the connection string, for at least one database. The id starts with a lowercase letter and has up to 32 lowercase letters, digits, `-` or `_` (`main`, `billing-eu`) |
 
 ## Automatic certificates
 
@@ -48,9 +48,11 @@ tls: { acme: {} }
 ```
 
 - **Before it listens**, it uses the certificate it kept, if that covers the
-  host and has more than 30 days left, or gets a new one: it can't serve
-  without one. If Let's Encrypt refuses, the gateway exits, its last log line
-  saying why with `acme_type` and `acme_detail` ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)).
+  host and has more than 30 days left, or gets a new one. If Let's Encrypt
+  refuses and the kept certificate still covers the host and is in date, the
+  gateway serves it, logs `certificate renewal failed`, and renews it at the
+  next check. With no certificate it can serve, the gateway exits, its last
+  log line saying why with `acme_type` and `acme_detail` ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)).
 - **Every 12 hours** it renews a certificate with 30 days or fewer left, and
   serves the new one to new connections without a restart. A renewal that
   fails logs `certificate renewal failed` and is tried at the next check; the
@@ -103,6 +105,17 @@ Each of these is checked at start, and a config that breaks one is refused
 by its key. A config with `relay` in local mode is refused too. What the
 relay sees, and what it can't, is in [security](/security#the-relay).
 
+Two more rules the config can't check:
+
+- **It needs a disk.** The gateway keeps its certificate in `acme/` beside
+  the config, on its volume, and never in a variable. Without a disk it
+  gets a new certificate at every start, and Let's Encrypt issues at most
+  five for one name a week.
+- **Run one copy of it.** The relay sends Let's Encrypt's check to any idle
+  connection of the gateway, so it may reach a copy that didn't order the
+  certificate. For replicas, use your own URL
+  ([replicas](/gateway/multiple-gateways#replicas)).
+
 ## Local mode only (`midplane local`)
 
 | Key | Default | What |
@@ -121,7 +134,7 @@ relay sees, and what it can't, is in [security](/security#the-relay).
 | `link.identity` | required | Where the gateway's identity lives: `{ file: identity.json }`, written at enrollment, or `{ env: VAR }` holding what `midplane enroll` printed ([linked mode](/gateway/linked-mode)) |
 | `link.enrollment_token` | none | A secret source for the one-time token from the project's Gateways page; read only until the identity exists |
 | `link.bundle_cache` | `bundle.jws` | The newest authentic bundle, enforced again after a restart with the cloud down |
-| `link.name` | none | How the dashboard names this gateway |
+| `link.name` | none | How the dashboard names this gateway, up to 80 characters |
 | `relay.control` | none | The relay's name, `relay.<domain>`, such as `relay.eu.midplane.app`: agents reach the gateway through it ([behind the relay](#behind-the-relay)) |
 
 Linked databases have no `policy`: policies come in signed bundles from
@@ -160,6 +173,48 @@ and never a connection string's value. A failure before the gateway joins
 the project removes what it wrote and leaves the token unused. A certificate
 it can't get is tried again at each start. A start that fails exits at once,
 its error the last log line, and a restart policy starts it again.
+
+Once the volume has a config, a new `MIDPLANE_DSN_*` alone is ignored: add
+the database to the config too ([adding
+databases](/gateway/multiple-gateways#adding-databases)).
+
+## Commands
+
+Every command needs Node 24.16 or newer. One with a flag it doesn't know
+prints the usage.
+
+| Command | What |
+| --- | --- |
+| `midplane setup` | Asks for each database's connection string, tests it, writes the gateway's folder and joins the project, then serves it as `midplane gateway` would. Stopped with `Ctrl-C` before it joins, it removes what it wrote and leaves the token unused. Its flags are [below](#setup-flags) |
+| `midplane start [--config <file>] [--dir <dir>]` | The image's default command. Serves `--config` (`/etc/midplane/midplane.yaml` by default), else `<dir>/midplane.yaml` (`/var/lib/midplane` by default), else sets up from the environment into `<dir>` and serves ([setup from environment variables](#setup-from-environment-variables)) |
+| `midplane gateway --config <file>` | Serves in [linked mode](/gateway/linked-mode) |
+| `midplane enroll --config <file> [--out <file>]` | Joins the project once and prints the identity as one line of JSON, or writes it to `--out` with mode 0600 |
+| `midplane local --config <file> [--stdio]` | Serves in [local mode](/gateway/local-mode). With `--stdio`, MCP goes over stdin and stdout, with the token in `MIDPLANE_TOKEN` |
+| `midplane keygen --out <dir>` | Writes `midplane-signing-key.json` (mode 0600) and `midplane-verify-key.json` in `<dir>` |
+| `midplane token --config <file> --key <file> --sub <who>` | Prints a local-mode token, signed with the key `--key` names. `--database <id>` limits it to one database (every one in the config by default), `--access` is `read` (the default) or `write`, and `--ttl` is in seconds (`3600` by default) |
+| `midplane audit export`, `midplane audit verify` | Export the audit file, and verify a file or an export ([audit](/audit#export-and-verify)) |
+| `midplane --version` | Prints `midplane` and its version |
+
+`enroll` and `keygen` never write over a file.
+
+### Setup flags
+
+| Flag | Default | What |
+| --- | --- | --- |
+| `--cloud <url>` | required | Midplane Cloud's URL: https, or http on loopback |
+| `--token <mpe1_…>` | required | The enrollment token |
+| `--database <id>` | none | A database of the project, asked for first. Repeat it for each; `Enter` skips one. Setup then offers to add others |
+| `--relay` | off | Sets the gateway up [behind the relay](#behind-the-relay). Not with `--url`, `--acme` or `--tls-dir`. A cloud without a relay refuses it |
+| `--url <https://…>` | none | The URL agents reach a server gateway at: https, a host and no path. The gateway listens on every interface, with TLS |
+| `--tls-dir <dir>` | `/etc/midplane/tls` | With `--url`: the folder holding the certificate, `tls.crt`, and its key, `tls.key`. Setup checks that the certificate covers the URL's host, is in date and matches its key |
+| `--acme` | off | With `--url`: an [automatic certificate](#automatic-certificates), which setup gets before it joins the project, answering Let's Encrypt's check on port 7480. Not with `--tls-dir`. The URL's host must be a name |
+| `--acme-directory <url>` | Let's Encrypt | With `--acme` or `--relay`: another ACME directory, https or http on loopback |
+| `--port <n>` | `7433` | The port to listen on, 1 to 65535. On loopback (on your computer, or behind the relay), the port asked for must be free, and without one setup takes the first free port from 7433 to 7442 |
+| `--dir <dir>` | `gw-` and 8 characters | The gateway's folder. It must not exist, or must be empty but for `lost+found` |
+| `--no-start` | off | Exit once set up, instead of serving |
+
+Without `--relay` or `--url`, setup makes a gateway for your computer: on
+loopback, at `http://gw-….localhost` and its port, with no TLS.
 
 ## The policy
 
@@ -213,5 +268,6 @@ denied; and reads run in read-only transactions.
 loopback, `tls.acme`, public URLs, the salt, retention, unknown keys, both
 modes), `apps/gateway/test/certificates.test.ts` and
 `apps/gateway/test/acme.e2e.test.ts` (getting, keeping, renewing and
-reloading certificates) and the core's corpus (`packages/corpus`) for what a
-policy means.
+reloading certificates), `apps/gateway/test/setup.test.ts` and
+`apps/gateway/test/cli.e2e.test.ts` (setup's flags and the commands), and the
+core's corpus (`packages/corpus`) for what a policy means.

@@ -166,7 +166,7 @@
     },
     {
       "source": "/self-host/configuration",
-      "destination": "/gateway/deploy"
+      "destination": "/gateway/configuration"
     },
     {
       "source": "/self-host/operations",
@@ -298,7 +298,7 @@
     },
     {
       "source": "/reference/audit-events",
-      "destination": "/"
+      "destination": "/audit"
     },
     {
       "source": "/reference/cli",
@@ -310,7 +310,7 @@
     },
     {
       "source": "/reference/environment-variables",
-      "destination": "/"
+      "destination": "/gateway/configuration#setup-from-environment-variables"
     },
     {
       "source": "/reference/mcp-tools",

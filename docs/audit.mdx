@@ -3,7 +3,7 @@ title: "Audit"
 description: "The gateway's audit log, what goes to Midplane Cloud, retention, export and verification."
 ---
 
-Every statement an agent sends is recorded on the gateway's own disk before it
+Every statement the gateway evaluates is recorded on its own disk before it
 runs. The file is the full record, it stays in your network, and you can
 export and verify it. A linked gateway also sends Midplane Cloud a projection
 of each event for the dashboard's query log: metadata and the statement with
@@ -26,6 +26,11 @@ an event is on disk before the gateway goes on.
   (a full or read-only disk), the statement doesn't run; the agent is told the
   audit log can't be written. The gateway also refuses to start on a file it
   can't write.
+- **Calls refused before evaluation leave no event.** The gateway refuses a
+  call before it reads the statement while it has no policy yet, is halted,
+  or its project is paused; when the call names a database it doesn't serve,
+  or names none and it serves several; and while the database can't be
+  reached. Nothing runs, and nothing is recorded.
 - **No results.** The record proves what ran, never what it returned. It does
   hold statements as written, which can contain values a person typed.
 - **A hash chain.** Each event carries the hash of the one before it, so an
@@ -86,8 +91,8 @@ them; each sync reports how many wait, and the Gateways page shows it.
   it on also sends as written the events from while it was off that haven't
   gone yet (a backlog from a cloud that was down, say). Turning it off stops
   full text from the next batch, and deletes the full text Midplane Cloud kept
-  for that database. Held writes always send their statement when filed,
-  switch or not: an approver has to read it.
+  for that database. Held writes always send their statement and intent when
+  filed, switch or not: an approver has to read them.
 - **Text is capped** at 16 KiB per statement in what's sent (the file keeps
   all of it).
 - **Only what was recorded while linked.** Events recorded in local mode stay
@@ -124,6 +129,12 @@ midplane audit verify --config midplane.yaml
   secrets, and they open the file read-only beside a running gateway. Each
   reads one snapshot of the file, so a prune meanwhile changes nothing in
   it. `--audit <file>` names the file directly.
+- `--out` never overwrites a file: an export to a name that exists fails. On
+  a schedule, give each export a new name:
+
+  ```sh
+  midplane audit export --config midplane.yaml --out "audit-$(date +%F).jsonl"
+  ```
 - An export is JSON lines: a header with the file's instance, the anchor and
   the checkpoint key, then each event with its sequence, the hash before it
   and its own hash. Keep it as private as the file: it holds the statements

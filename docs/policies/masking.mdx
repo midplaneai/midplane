@@ -42,9 +42,16 @@ To keep masks from being worked around, a database with any mask entry also:
   is code);
 - denies the catalog views that publish values or statement text
   (`pg_stats`, `pg_settings`, `pg_stat_activity`, `pg_stat_statements`);
-- denies writes that would copy a masked value into a clear column, renaming
-  or moving a masked table, and DDL that evaluates raw values (a `CHECK`, an
-  index predicate);
+- denies a write to a masked table that uses a masked column anywhere but a
+  plain `RETURNING`: in a filter (`DELETE FROM users WHERE email = …`), as an
+  `ON CONFLICT` target, or in a value it computes or copies (`SET salary =
+  salary * 2`, `SET name = email`). The count of rows a filtered write changes
+  would tell the agent the raw value. Writing a new value into a masked column
+  is allowed, and a plain `RETURNING` column comes back masked;
+- denies renaming or moving a table that has masks or labels, which are keyed
+  by name;
+- denies `ALTER TABLE` and `CREATE INDEX` on a masked table, since they can
+  evaluate raw values (a `USING` expression, a `CHECK`, an index predicate);
 - drops Postgres' error `DETAIL` and `HINT`, which can quote the failing row.
 
 ## Known limits

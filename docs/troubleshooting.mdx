@@ -27,7 +27,7 @@ new one and run the new command.
 ### A gateway at this URL is already enrolled
 
 Each URL belongs to one gateway. Revoke the old one on its project's
-**Gateways** page, or use another URL. On this machine, each setup makes a
+**Gateways** page, or use another URL. On your computer, each setup makes a
 new URL.
 
 ### The cloud may have enrolled this gateway
@@ -55,14 +55,22 @@ and run it again. Nothing was written, and the token is unused.
 ### Already set up
 
 The folder, or in Docker the volume, holds a gateway already. Start it
-instead: on this machine, `npx -y midplane@latest gateway --config
+instead: on your computer, `npx -y midplane@latest gateway --config
 <folder>/midplane.yaml`; in Docker, the step's `docker run -d` command. On
-this machine each run of setup makes a new folder; in Docker, a new token
+your computer each run of setup makes a new folder; in Docker, a new token
 gives the commands a new volume.
+
+### The folder is not empty
+
+`/var/lib/midplane isn't empty`, naming the folder setup writes to. Setup
+writes only to a folder that doesn't exist yet or is empty (a disk's own
+`lost+found` counts as empty), and this one holds files but no
+`midplane.yaml`. In Docker, use a new volume: a new token gives the commands
+one. On your computer, leave out `--dir`, and setup makes a new folder.
 
 ### The port is taken
 
-Another program, or another gateway, listens on it. On this machine, setup
+Another program, or another gateway, listens on it. On your computer, setup
 takes the first free port from 7433 to 7442 unless the command names one with
 `--port`: stop the other program, or change the port. In Docker, `docker run`
 says the port is already allocated: change **Port** on the page, which
@@ -75,18 +83,22 @@ key in `/etc/midplane/tls` on the server, as `tls.crt` and `tls.key`. With
 `EACCES`, the image's user (uid 1000) can't read them: `sudo chown 1000
 /etc/midplane/tls/tls.key`. A file that isn't PEM is refused too.
 
-### The gateway certificate is for another name
+### The certificate is for another name
 
-The certificate in `tls.crt` doesn't cover the URL's host. Use one issued for
-that name, or enter the URL it was issued for.
+`the certificate in /etc/midplane/tls/tls.crt is for gw.old.example.com, not
+gw.example.com`: it doesn't cover the URL's host. Use one issued for that
+name, or enter the URL it was issued for.
 
-### The gateway certificate expired or is not valid yet
+### The certificate expired or is not valid yet
 
-Renew it, and check the server's clock.
+`the certificate in /etc/midplane/tls/tls.crt expired on …`, or `isn't valid
+until …`. Renew it, and check the server's clock.
 
-### The key does not match the certificate
+### The key is not the key of the certificate
 
-Put the certificate's own key in `tls.key`, as PEM and without a passphrase.
+`/etc/midplane/tls/tls.key isn't the key of the certificate in
+/etc/midplane/tls/tls.crt`. Put the certificate's own key in `tls.key`, as
+PEM and without a passphrase.
 
 ### The DNS for the URL does not point at this server
 
@@ -162,7 +174,7 @@ there: `-p 172.17.0.1:5432:5432`. On Docker Desktop, use
 
 ### A gateway URL starts with https
 
-`http://` URLs only work for this machine (`localhost`, `127.0.0.1`,
+`http://` URLs only work on your computer (`localhost`, `127.0.0.1`,
 `*.localhost`). Use `https://` for anything else.
 
 ### Cannot reach Midplane Cloud
@@ -186,15 +198,39 @@ gateway reach the cloud without TLS inspection.
 unreadable. In Docker with a config you wrote, let the image's user read the
 secrets: `sudo chown -R 1000:1000 secrets`.
 
+### An environment variable the config names is not set
+
+`databases.shop.dsn: environment variable SHOP_DSN is not set`, or the same
+for `mask_salt` or `link.enrollment_token`: the config takes the value from
+the environment (`dsn: { env: SHOP_DSN }`), and the gateway's process doesn't
+have it. Give the process that variable (a container's environment, a
+Kubernetes Secret), or have the config name a file instead (`dsn: { file:
+secrets/shop.dsn }`). For `link.identity`, the message says to put the output
+of `midplane enroll` in the variable.
+
+### Cannot read config
+
+`cannot read config /etc/midplane/midplane.yaml`: the file `--config` names
+is missing or unreadable. In Docker, mount the folder that holds it, and let
+the image's user (uid 1000) read it.
+
 ### The listen host is not loopback, so TLS is required
 
 Add a certificate (`tls`), or keep the gateway on `127.0.0.1` [behind your TLS
 proxy](/gateway/deploy#other-setups).
 
-### Node is too old
+### Midplane needs Node 24.16 or newer
 
-The gateway needs Node 24.16 or newer (`node --version`): upgrade Node. The
-image is for servers: on a laptop it needs a TLS certificate.
+`midplane needs Node 24.16 or newer; this is Node 22.12.0.` Upgrade Node
+(`node --version` prints it). The image is for servers: on your computer it
+needs a TLS certificate.
+
+### Local mode over stdio needs a token in MIDPLANE_TOKEN
+
+`--stdio needs a token in MIDPLANE_TOKEN`: the MCP client started `midplane
+local --stdio` without one. Add the token `midplane token` printed to the
+client's entry for the gateway, as the variable `MIDPLANE_TOKEN` ([local
+mode](/gateway/local-mode)).
 
 ### The localhost URL does not resolve
 
@@ -205,13 +241,14 @@ to `/etc/hosts`: `127.0.0.1 gw-k3m9x2qa.localhost`.
 
 A gateway [behind the relay](/gateway/deploy#docker) connects out
 to the relay of its region, such as `relay.eu.midplane.app`, on port 443. The
-setup step and the **Gateways** page say how that goes: **Relay · connected**,
-**connecting**, or the relay's refusal, below. Until it first connects, the
-gateway can't get its certificate, so agents can't reach it; it keeps
-trying, waiting up to a minute between tries, and logs `relay connection
-failed` each time with the `status` or `code`. A gateway that connected
-before keeps enforcing your policies meanwhile
-([when the relay is down](/security#when-the-relay-is-down)).
+setup step's checklist shows how that goes as **Relay · connected**, and the
+**Gateways** page as **Relay: connected**. Before the first connection they
+say **connecting**, and otherwise the relay's refusal, below. Until it first
+connects, the gateway can't get its certificate, so agents can't reach it;
+it keeps trying, waiting up to a minute between tries, and logs `relay
+connection failed` each time with the `status` or `code`. A gateway that
+connected before keeps enforcing your policies meanwhile ([when the relay is
+down](/security#when-the-relay-is-down)).
 
 ### Midplane Cloud has no relay
 
@@ -248,7 +285,7 @@ be reached at its Midplane URL again, so set up a new one with a new token.
 
 **Relay: refused: Midplane holds no relay URL for this gateway** (403). The
 gateway's config has `relay`, but it didn't get a Midplane URL when it
-joined the project, or a project manager removed it on the **Gateways**
+joined the project, or an owner or admin removed it on the **Gateways**
 page. Only joining gives a gateway one: set up a new gateway behind the relay
 with a new token.
 
@@ -256,8 +293,11 @@ with a new token.
 
 **Relay: refused: too many idle connections, from replicas of this gateway**
 (429). The relay holds at most 8 idle connections per gateway, and each
-copy of a gateway keeps 4. Run at most two copies of one gateway behind the
-relay.
+copy of a gateway keeps 4, so a third copy is refused. Run one copy: the
+relay passes Let's Encrypt's check of the gateway's name to any idle
+connection of that gateway, so with two copies the check can reach the one
+that didn't order the certificate, and fail. For replicas, give the gateway
+[your own URL](/gateway/deploy#your-own-url).
 
 ### No link token for the relay
 
@@ -274,6 +314,25 @@ Let's Encrypt said. Its check of the gateway's name didn't reach the
 gateway, as when the gateway lost its connections to the relay meanwhile.
 The gateway tries again at its next start, which Docker makes on its own
 under `--restart unless-stopped`, with no new token.
+
+### An agent cannot connect at the Midplane URL
+
+The agent's client reports that the connection closed during the TLS
+handshake, after about 5 seconds or at once. The relay had no connection
+from the gateway to pass the agent's connection to:
+
+- For a gateway it knows, the relay waits up to 5 seconds for an idle
+  connection from the gateway, then closes the agent's connection without an
+  answer. The gateway is down, or isn't connected to the relay.
+- For a name no gateway holds, such as a revoked gateway's, it closes the
+  connection at once.
+
+Nothing reaches the gateway, so the Query log shows nothing. On the
+**Gateways** page, the gateway should be enforcing, with **Relay:
+connected**. **Not responding** means it stopped or can't reach Midplane
+Cloud: check that it runs, and its log. A relay refusal has its heading
+above. Check too that the agent has the URL exactly as the **Gateways** page
+shows it.
 
 ## Connecting to a database
 
@@ -294,16 +353,17 @@ container itself.
 The host name doesn't resolve where the gateway runs, often a private name of
 another network. Run the gateway inside that network.
 
-### Name lookup failed for now (EAI_AGAIN)
+### Host not found (EAI_AGAIN)
 
-The DNS server didn't answer. It retries; check the host's DNS if it lasts.
+The DNS server didn't answer for now. The gateway retries; check the host's
+DNS if it lasts.
 
 ### Connection timed out (ETIMEDOUT)
 
 A firewall or security group drops the connection, or the database is on
 another network.
 
-### No answer in time (TIMEOUT)
+### Connection timed out (TIMEOUT)
 
 Nothing answered within 10 seconds. Same causes as above, or a Neon compute
 waking up.
@@ -358,6 +418,12 @@ No gateway's config lists this database id. Add it under `databases:` in the
 config of a gateway that can reach the database, and restart that gateway
 ([adding databases](/gateway/multiple-gateways#adding-databases)).
 
+### No live gateway serves it
+
+Every gateway whose config lists this database id is **Not responding**:
+none has synced for three minutes. The line names each one. Check that they
+run, and their logs.
+
 ### In its config, not in this project
 
 The gateway's config lists a database id the project doesn't have: a database
@@ -378,6 +444,12 @@ This gateway read other tables for the id than the policy editor shows, which
 are the last ones any gateway sent. After a schema change it passes once every
 gateway has read the database again, within a few minutes. If it stays, the
 gateways' connection strings for this id point at different databases.
+
+### Not connected yet
+
+The gateway joined the project but hasn't synced with Midplane Cloud yet: it
+stopped after joining, or it can't reach the cloud. Start it, and read its
+log ([cannot reach Midplane Cloud](#cannot-reach-midplane-cloud)).
 
 ### Waiting for a policy
 
@@ -419,5 +491,16 @@ The gateway's file lost events before they were sent. Check the file with
 
 ### Its audit log went backwards, or held two versions of one event
 
-The audit file was restored, copied or rewritten. Nothing is lost:
+The audit file was restored, copied or rewritten, or two processes share it.
+Give each linked gateway a file of its own ([one linked gateway per
+file](/audit#the-file)). Nothing is lost:
 [backups](/gateway/operations#backups).
+
+## What an agent is told
+
+### The audit log cannot be written, so nothing was run
+
+`The audit log can't be written, so nothing was run. Every statement is
+recorded before it runs.` The gateway couldn't record the statement before
+running it: the disk that holds `audit.file` is full or read-only. Free space
+on it, or make it writable ([the file](/audit#the-file)).

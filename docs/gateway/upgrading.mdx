@@ -1,6 +1,6 @@
 ---
 title: "Upgrading"
-description: "Move a gateway to a new release: what carries over, and the commands for Docker, this machine and each deploy template."
+description: "Move a gateway to a new release: what carries over, and the commands for Docker, your computer and each deploy template."
 ---
 
 Midplane never upgrades a gateway: you do, when you choose. When a newer
@@ -46,7 +46,7 @@ never stops it.
 
 ## Docker
 
-Use a fixed version, such as `ghcr.io/midplaneai/midplane:0.24.0`, not
+Use a fixed version, such as `ghcr.io/midplaneai/midplane:0.26.0`, not
 `:latest`: Docker doesn't download `:latest` again once the image is on the
 server. Pull the new image first, so the gateway is down only between removing
 its container and starting the new one. Its volume, with its identity, cached
@@ -93,7 +93,7 @@ Then start it again with the `docker run -d` command you started it with,
 with the new version in place of its tag: Midplane Cloud doesn't know the
 port or the certificate you chose.
 
-## This machine
+## Your computer
 
 Stop the gateway (`Ctrl-C`), then start it again in the folder you ran setup
 in, such as:

@@ -9,8 +9,10 @@ offline, to try Midplane ([quickstart](https://github.com/midplaneai/midplane/tr
 when you don't want a hosted control plane.
 
 What it doesn't have: approvals (a held write is refused, with a pointer to
-linking the gateway), a dashboard, and taint shared between instances (each
-gateway keeps taint in its audit file).
+linking the gateway), a dashboard, taint shared between instances (each
+gateway keeps taint in its audit file), and the relay: agents reach a local
+gateway on your computer or at a URL of your own, and a config with `relay`
+is refused.
 
 ## Keys and tokens
 

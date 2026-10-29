@@ -1,13 +1,14 @@
 ---
 title: "How it works"
-description: "The gateway, your databases, projects and agents, and what stays in your network."
+description: "The gateway, the relay, your databases, projects and agents: how agents reach the gateway, the path of a statement, and what stays in your network."
 ---
 
 import Architecture from "/snippets/architecture.mdx";
 
 <Architecture />
 
-The gateway opens its connections to Midplane Cloud and to the relay. Neither
+The gateway opens its own connections: to your databases, to Midplane Cloud
+and, behind the relay, to the relay. Neither Midplane Cloud nor the relay
 connects to the gateway or to your databases.
 
 ## The parts
@@ -15,21 +16,72 @@ connects to the gateway or to your databases.
 <Columns cols={2}>
   <Card title="Gateway" icon="server">
     One process in your network, next to your databases. It holds their
-    connection strings, and agents talk only to it.
+    connection strings, checks every statement, and keeps the audit log.
+    Agents talk only to it.
   </Card>
   <Card title="Databases" icon="database">
     Each has an id, such as `shop`, and its own policy: which tables agents may
     use, and what comes back masked.
   </Card>
+  <Card title="Agents" icon="robot">
+    MCP clients such as Claude Code or claude.ai. Each signs in through the
+    gateway, and you choose which databases it may use.
+  </Card>
+  <Card title="Relay" icon="arrow-right-arrow-left">
+    Midplane's, in its region. It gives a gateway in a private network a
+    public HTTPS URL, its Midplane URL, and passes agents' encrypted traffic
+    to it without reading it.
+  </Card>
+  <Card title="Midplane Cloud" icon="cloud">
+    Where you write the policy, approve held writes and read the Query log. It
+    signs every policy it sends, and gets no rows and no connection strings.
+  </Card>
   <Card title="Project" icon="folder">
     In Midplane Cloud: databases, their policies, their gateways and the agents
     allowed in. Published policies reach every gateway in seconds.
   </Card>
-  <Card title="Agents" icon="robot">
-    MCP clients such as Claude Code. Each signs in through the gateway, and you
-    choose which databases it may use.
-  </Card>
 </Columns>
+
+## How agents reach the gateway
+
+| Where the gateway runs | Agents reach it at | Which agents | What you set up |
+| --- | --- | --- | --- |
+| [Your computer](/gateway/deploy#your-computer) | The `http://gw-….localhost` URL setup prints, with its port | Those on the same computer | Node |
+| [A server or a platform, behind the relay](/gateway/deploy#docker) | Its Midplane URL, such as `https://gw-7hq2m4xd.eu.midplane.app/mcp` | Any, claude.ai and ChatGPT included | Nothing inbound: the server connects out on port 443 |
+| [A server at your own URL](/gateway/deploy#your-own-url) | Your URL, such as `https://midplane.example.com/mcp` | Any that can reach the URL | A DNS record, and ports 80 and 443 open or a certificate of your own |
+
+Hosted agents, such as claude.ai and ChatGPT, run on their vendor's servers,
+so they need a public HTTPS URL. Behind the relay the gateway has one, even in
+a private network with nothing open.
+
+### Through the relay
+
+<Steps>
+  <Step title="The gateway connects out">
+    It keeps 4 connections open to the relay of its region, such as
+    `relay.eu.midplane.app`, and authenticates them with the token it uses
+    with Midplane Cloud.
+  </Step>
+  <Step title="An agent connects to the Midplane URL">
+    The URL's name, such as `gw-7hq2m4xd.eu.midplane.app`, points at the
+    relay. Each gateway gets its own when it joins a project.
+  </Step>
+  <Step title="The relay passes the bytes on">
+    It reads only the name the agent asks for in its TLS handshake, then
+    passes the still-encrypted bytes over one of that gateway's connections.
+  </Step>
+  <Step title="TLS ends at the gateway">
+    With a certificate the gateway got from Let's Encrypt, for a key that
+    never leaves its disk. The agent's statement then takes the path below.
+  </Step>
+</Steps>
+
+The relay can't read a query, a result or a token, but it is in the path:
+while it's down, agents can't reach the gateway, and Midplane controls the
+DNS of the names it serves. [Security](/security#the-relay) has what the relay
+sees, what it can't, and how to watch for a certificate your gateway didn't
+get. To keep Midplane out of the path, give the gateway [your own
+URL](/gateway/deploy#your-own-url).
 
 ## The path of a statement
 
@@ -50,7 +102,7 @@ connects to the gateway or to your databases.
 
 ## What stays and what goes up
 
-<Columns cols={2}>
+<Columns cols={3}>
   <Card title="Stays in your network" icon="lock">
     Connection strings, database error messages, the mask salt, and the full
     audit log. Results go only to your agents.
@@ -60,7 +112,12 @@ connects to the gateway or to your databases.
     database status, and writes held for approval, as written. Full statements
     only if you turn them on.
   </Card>
+  <Card title="Passes through the relay" icon="arrow-right-arrow-left">
+    Agents' traffic, still encrypted. The relay sees the gateway's name, the
+    addresses, and when and how many bytes cross, never what they say.
+  </Card>
 </Columns>
 
-Every detail is in the reference: [linked mode](/gateway/linked-mode#what-goes-up)
-and [audit](/audit#what-goes-to-midplane-cloud-linked-mode).
+Every detail is in the reference: [linked mode](/gateway/linked-mode#what-goes-up),
+[audit](/audit#what-goes-to-midplane-cloud-linked-mode) and
+[security](/security#the-relay).

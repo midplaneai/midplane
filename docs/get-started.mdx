@@ -10,9 +10,9 @@ sample one), Node 24.16 or newer, and an MCP client such as Claude Code.
   <Step title="Create a project">
     Midplane Cloud is invite-only for now: [get access](https://midplane.ai/#get-access),
     and we'll email you an invitation. Follow its link to create your account
-    at [eu.app.midplane.ai](https://eu.app.midplane.ai), verify your address,
-    name your organization and create a project. Its overview opens on **Connect your
-    first database**.
+    in its region, such as [eu.app.midplane.ai](https://eu.app.midplane.ai),
+    verify your address, name your organization and create a project. Its
+    overview opens on **Connect your first database**.
   </Step>
   <Step title="Run the gateway">
     Have a connection string at hand for a role the gateway logs in as.
@@ -20,14 +20,18 @@ sample one), Node 24.16 or newer, and an MCP client such as Claude Code.
     ([prepare your database](/prepare-database)). No database at hand? Try
     [the sample](#with-the-sample-database) instead.
 
-    **Create enrollment token**, pick **This machine** or **A server
-    (Docker)**, and run the command the step shows. `midplane setup` asks for
-    each database's connection string, tests it, and names it in Midplane,
-    such as `shop`: your name for the database, not its Postgres name. Then it
-    joins your project and starts the gateway. The step lists each database
-    as the gateway reports it (`shop · reachable · catalog read: 12 tables`),
-    and it's done when the gateway enforces the project's policy ([deploy the
-    gateway](/gateway/deploy)).
+    **Create enrollment token** and pick where the gateway runs: **Your
+    computer** to try Midplane with agents on it, or **A server (Docker)** for
+    agents anywhere, claude.ai and ChatGPT included. On your computer, the
+    step's command runs `midplane setup`, which asks for each database's
+    connection string, tests it, and names it in Midplane, such as `shop`:
+    your name for the database, not its Postgres name. On a server, you put
+    each connection string in the env file the step shows, and the gateway
+    tests it as it starts. Either way it then joins your project and starts.
+    The step shows the gateway's checks as it reports them, and it's done when
+    the gateway enforces the project's policy. The **Gateways** page then lists
+    each database, such as `shop · reachable · catalog read: 12 tables`
+    ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Choose what agents may read">
     A new policy denies everything. **Open `shop`'s policy** from the step and
@@ -61,7 +65,7 @@ secret, and row changes held for approval. The project you started from stays
 as it is, for your own database.
 
 In the sample project, **Run the gateway** starts the sample's Postgres with
-Docker, then setup on this machine, which runs the gateway on port 7434 so it
+Docker, then setup on your computer, which runs the gateway on port 7434 so it
 can run beside one of your own. When setup asks for `shop`'s connection
 string, paste the one the step shows (the password is a public example).
 **Choose what agents may read** is already done. When Claude Code signs in,

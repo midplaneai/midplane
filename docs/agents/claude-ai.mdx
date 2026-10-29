@@ -12,8 +12,9 @@ claude.ai connects from Anthropic's servers, so it reaches a gateway only at
 a public HTTPS URL. A gateway [on a server with Docker](/gateway/deploy#docker)
 or [on a platform](/gateway/deploy#on-a-platform) has one: its Midplane URL,
 through Midplane's relay, with no tunnel, DNS record or open port. A gateway
-on [this machine](/gateway/deploy#this-machine) has none; to use a tunnel or
-a URL of your own instead, see [hosted agents](/gateway/hosted-agents).
+on [your computer](/gateway/deploy#your-computer) has none, as it answers
+only on that computer; to use a tunnel or a URL of your own instead, see
+[hosted agents](/gateway/hosted-agents).
 
 <Steps>
   <Step title="Copy the gateway's URL">
@@ -59,7 +60,7 @@ allow** so reads run without a prompt, and keep `write` at **Needs
 approval**, or **Blocked** for an agent that should only read: reads keep
 working either way. An agent you gave **Read** on every database has no
 write/delete tool to configure. Midplane's policy decides on top: a write it
-holds still waits for a project manager ([what clients ask you to
+holds still waits for an owner or admin ([what clients ask you to
 confirm](/agents/tools#what-clients-ask-you-to-confirm)).
 
 To cut it off, **Revoke** it under **Connected agents** on the **Agents** page.
@@ -67,12 +68,12 @@ It has to sign in again within 15 minutes.
 
 ## If it doesn't work
 
-- **claude.ai can't connect to the URL**: check that the gateway's setup step
-  or **Gateways** page says **Relay · connected**, or see [cannot reach the
-  relay](/troubleshooting#cannot-reach-the-relay).
+- **claude.ai can't connect to the URL**: check that the setup step says
+  **Relay · connected**, or the **Gateways** page **Relay: connected**, or
+  see [cannot reach the relay](/troubleshooting#cannot-reach-the-relay).
 - **The consent page says it wants access, with no databases**: you aren't a
   member of the gateway's project, or the URL isn't registered. Ask an owner
-  of the organization.
+  or admin of its organization to invite you.
 - **The Gateways page shows a URL of your own as not registered**: see
   [troubleshooting](/troubleshooting#not-registered).
 - **claude.ai won't add another connector**: the Free plan allows one custom

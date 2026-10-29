@@ -70,6 +70,7 @@ import {
   StoppedError,
 } from "./executor.ts";
 import { HealthBook, retryDelay } from "./health.ts";
+import { log } from "./log.ts";
 
 export interface DatabaseRuntime {
   id: string;
@@ -662,9 +663,12 @@ export class Gateway {
         code,
       })
       .catch((err) =>
-        process.stderr.write(
-          `${JSON.stringify({ level: "warn", msg: "approval outcome not reported", approval: approvalId, error: String(err) })}\n`,
-        ),
+        log({
+          level: "warn",
+          msg: "approval outcome not reported",
+          approval: approvalId,
+          error: String(err),
+        }),
       );
   }
 
@@ -1039,9 +1043,11 @@ export class Gateway {
     try {
       this.o.audit.append(event());
     } catch (err) {
-      process.stderr.write(
-        `${JSON.stringify({ level: "error", msg: "audit write after execution failed", error: String(err) })}\n`,
-      );
+      log({
+        level: "error",
+        msg: "audit write after execution failed",
+        error: String(err),
+      });
     }
   }
 

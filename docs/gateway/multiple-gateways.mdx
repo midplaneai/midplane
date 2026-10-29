@@ -23,11 +23,13 @@ in that network.
 
 ## Replicas
 
-For availability, run several processes of one gateway behind one URL. They
-share one identity (enroll once with `midplane enroll`, as on [platforms
-without a disk](/gateway/deploy#other-setups)), and each keeps its
+For availability, run several processes of one gateway behind one URL of
+your own. They share one identity (enroll once with `midplane enroll`, as on
+[platforms without a disk](/gateway/deploy#other-setups)), and each keeps its
 own audit file. A new enrollment token always makes a new gateway, so don't use
-one for a replica. More in [linked mode](/gateway/linked-mode#replicas).
+one for a replica. Behind the relay, run one process of each gateway: the
+relay can send Let's Encrypt's check meant for one process to another. More
+in [linked mode](/gateway/linked-mode#replicas).
 
 ## Adding databases
 
@@ -36,14 +38,19 @@ one for a replica. More in [linked mode](/gateway/linked-mode#replicas).
     **+ Add database** under **Databases**, with its id.
   </Step>
   <Step title="Add it to the gateway's config">
-    Copy a line under `databases:` and change the id in both places, then
-    write the connection string to the file the new line names:
+    Add a line under `databases:` that names a file for the connection
+    string, then write the string to that file:
 
     ```yaml
     databases:
       shop: { dsn: { file: secrets/shop.dsn } }
       billing: { dsn: { file: secrets/billing.dsn } }
     ```
+
+    A gateway set up from environment variables (in Docker behind the relay,
+    or on a platform) has lines such as `shop: { dsn: { env:
+    MIDPLANE_DSN_SHOP } }`. Copied with the id changed, such a line names a
+    variable the container doesn't have, so name a file instead, as above.
 
     In Docker, the config and the secrets are in the gateway's volume. Write
     from standard input, so the connection string stays off the command line:
@@ -54,11 +61,25 @@ one for a replica. More in [linked mode](/gateway/linked-mode#replicas).
     `databases:` list, so the line joins it.
   </Step>
   <Step title="Restart the gateway">
-    On your machine, stop it with `Ctrl-C` and start it again; in Docker, run
+    On your computer, stop it with `Ctrl-C` and start it again; in Docker, run
     `docker restart midplane-gw-…`. It reads the new database's tables, and
     the policy editor shows them.
   </Step>
 </Steps>
+
+To keep the new connection string in a variable instead, as the others are,
+add `MIDPLANE_DSN_BILLING` where the gateway's variables live, add a line
+under `databases:` that names it, and restart the gateway so it reads both:
+
+```yaml
+  billing: { dsn: { env: MIDPLANE_DSN_BILLING } }
+```
+
+A new `MIDPLANE_DSN_` variable alone does nothing once the
+gateway has set itself up. In Docker, `docker restart` doesn't read the env
+file again: remove the container and run its command again, as in
+[upgrading](/gateway/upgrading#behind-the-relay). Each platform's page says
+where its variables live.
 
 If you change the config first, the gateway still starts: on **Gateways** its
 line reads `billing · in its config, not in this project`. **Add** beside it

@@ -5,9 +5,11 @@ description: "claude.ai, ChatGPT and other hosted agents reach the gateway at a 
 ---
 
 Agents on laptops or in your own cluster (Claude Code, Cursor, VS Code, your own
-agents) connect to the gateway directly. Hosted agents run on their vendor's
-servers: claude.ai connectors, ChatGPT and background agents. They can reach an
-MCP server only at a public HTTPS URL, and your gateway sits in your network.
+agents) reach the gateway wherever it answers: at its Midplane URL behind the
+relay, at your own URL, or on your computer. Hosted agents run on their
+vendor's servers: claude.ai connectors, ChatGPT and background agents. They
+can reach an MCP server only at a public HTTPS URL, and your gateway sits in
+your network.
 
 The simplest way is a Midplane URL: a gateway [behind the
 relay](/gateway/deploy#docker) is reachable at a public HTTPS URL while it
@@ -23,7 +25,9 @@ never reach Midplane Cloud.
 ## One gateway, several URLs
 
 A gateway can answer on several URLs at once: its direct URL, plus any tunnel
-or ingress URL in front of it. List them all in its config:
+or ingress URL in front of it. A gateway behind the relay can't: it answers
+only on its Midplane URL ([configuration](/gateway/configuration#behind-the-relay)).
+List them all in its config:
 
 ```yaml
 # midplane.yaml
@@ -44,20 +48,24 @@ public_urls:
   403. A gateway listening on loopback also answers to `localhost`,
   `127.0.0.1` and `[::1]`. If a proxy in front of it rewrites the Host header
   to another name, add that name to `listen.allowed_hosts`.
-- **Registration.** Only registered URLs are audiences, and only a project
-  manager registers one. The URLs in the config when a gateway enrolls are
+- **Registration.** Only registered URLs are audiences, and only an owner or
+  admin registers one. The URLs in the config when a gateway enrolls are
   registered then, under the enrollment token. A linked gateway reports its
   `public_urls` on every sync; one you add to the config later waits on the
-  project's Gateways page until a project manager registers it there, since
+  project's Gateways page until an owner or admin registers it there, since
   whoever can edit the config or holds the gateway's identity shouldn't be
-  able to add audiences on their own. You can also register a URL that isn't
+  able to add audiences on their own. A Midplane URL is registered only as its
+  gateway joins: **Add URL** refuses one. You can also register a URL that isn't
   in the config. A URL you remove from the config is dropped within ten
   minutes, or at once on the Gateways page. A URL another live gateway holds
   can't be registered: the Gateways page and the gateway's log say so (`public
   URL not registered`).
-- **Revoking.** Revoking a gateway frees its URLs for another gateway. Stop
-  the revoked gateway's process too: it keeps its last bundle, and so keeps
-  accepting tokens that name those URLs.
+- **Revoking.** Revoking a gateway frees its URLs for another gateway, except
+  a Midplane URL: no other gateway ever gets one, so agents given it never
+  reach another gateway by it. Stop the revoked gateway's process too: it
+  keeps its last bundle, and so keeps accepting tokens that name its URLs.
+  Behind the relay, the relay closes its connections within 10 seconds, so
+  agents can't reach it there anyway.
 - **TLS.** The gateway requires TLS whenever it listens off loopback. Run a
   tunnel next to it over loopback (in one Kubernetes pod, or one network
   namespace in Compose), or give the gateway a certificate (`tls`).
@@ -70,7 +78,7 @@ metadata then names its first URL, so list the tunnel's URL first in
 
 | Where the agent runs | What you do | Who can read traffic |
 | --- | --- | --- |
-| Laptops or your own cluster (Claude Code, Cursor, VS Code) | Nothing extra: connect directly | Only you |
+| Laptops or your own cluster (Claude Code, Cursor, VS Code) | Nothing extra: add the gateway's URL | Only you; behind the relay, it passes ciphertext |
 | claude.ai, ChatGPT or another hosted agent, with a gateway behind the relay | Nothing extra: add its Midplane URL ([claude.ai](/agents/claude-ai), [ChatGPT](/agents/chatgpt)) | Only you: the relay passes ciphertext |
 | claude.ai or ChatGPT, with the vendor's tunnel | Run the vendor's tunnel next to the gateway, and register the tunnel URL | The agent vendor, which is the client anyway |
 | Hosted agents without a vendor tunnel | Give the gateway a public URL: your load balancer, allowlisted to the vendor's IP ranges, or a public deployment in your own cloud account | Only you |
@@ -133,9 +141,8 @@ services:
   midplane-gateway:
     image: ${MIDPLANE_IMAGE}   # the gateway image
     command: gateway --config /etc/midplane/midplane.yaml
-    environment: [MIDPLANE_ENROLLMENT_TOKEN, MAIN_DSN, MIDPLANE_MASK_SALT]
     volumes:
-      - ./midplane:/etc/midplane
+      - ./midplane:/etc/midplane   # the config, its secrets/ and what it writes
     network_mode: "service:mcp-proxy"
 ```
 
@@ -158,14 +165,19 @@ listen: { host: 127.0.0.1, port: 7433 }
 public_urls:
   - https://midplane.abc123.tunnel.anthropic.com
 audit: { file: /etc/midplane/audit.db }
-mask_salt: { env: MIDPLANE_MASK_SALT }
+mask_salt: { file: /etc/midplane/secrets/mask-salt }
 link:
   cloud_url: https://cloud.midplane.example
   identity: { file: /etc/midplane/identity.json }
-  enrollment_token: { env: MIDPLANE_ENROLLMENT_TOKEN }
+  enrollment_token: { file: /etc/midplane/secrets/enrollment-token }
 databases:
-  main: { dsn: { env: MAIN_DSN } }
+  main: { dsn: { file: /etc/midplane/secrets/main.dsn } }
 ```
+
+Write the secrets with an editor, as in [write the config
+yourself](/gateway/deploy#write-the-config-yourself). The gateway runs as uid
+1000 and writes its identity, audit log and bundle cache in the folder too,
+so give it the folder: `sudo chown -R 1000:1000 midplane`.
 
 ### Kubernetes
 
@@ -241,9 +253,8 @@ services:
   midplane-gateway:
     image: ${MIDPLANE_IMAGE}   # the gateway image
     command: gateway --config /etc/midplane/midplane.yaml
-    environment: [MIDPLANE_ENROLLMENT_TOKEN, MAIN_DSN, MIDPLANE_MASK_SALT]
     volumes:
-      - ./midplane:/etc/midplane
+      - ./midplane:/etc/midplane   # as in the Claude example, secrets in files
   tunnel-client:
     image: ghcr.io/openai/tunnel-client:<version>
     environment:
@@ -257,8 +268,8 @@ services:
 ### Kubernetes
 
 The gateway and `tunnel-client` run in one pod and talk over loopback, the
-pattern OpenAI documents. Midplane has no Helm chart yet; this is the pod to
-deploy.
+pattern OpenAI documents. Midplane's [Helm chart](/gateway/kubernetes) runs
+the gateway alone and takes no extra container, so deploy this pod instead.
 
 ```yaml
 apiVersion: apps/v1

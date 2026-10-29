@@ -1,6 +1,6 @@
 ---
 title: "Deploy the gateway"
-description: "What the gateway is, where to run it, and the steps to get it running on your machine, on a server with Docker, or on a platform."
+description: "What the gateway is, where to run it, and the steps to get it running on your computer, on a server with Docker, or on a platform."
 ---
 
 import ServerSetupPrompt from "/snippets/server-setup-prompt.mdx";
@@ -8,36 +8,38 @@ import ServerSetupPrompt from "/snippets/server-setup-prompt.mdx";
 The gateway is the part of Midplane that runs in your network. It's a small
 program next to your databases: agents connect to it, it checks each statement
 against your policy and records it, and only then runs it. It holds your
-connection strings, and it connects out to Midplane Cloud to get your policy.
-Nothing connects in to it but agents.
+connection strings and opens its own connections: to your databases, and to
+Midplane Cloud for your policy. Behind Midplane's relay, agents' traffic comes
+in over connections the gateway opens too, so nothing connects in to it at
+all.
 
 ## Where to run it
 
 <Columns cols={3}>
-  <Card title="This machine" icon="laptop" href="#this-machine">
-    To try Midplane. Only agents on this machine can use it.
+  <Card title="Your computer" icon="laptop" href="#your-computer">
+    To try Midplane. Only agents on your computer can use it.
   </Card>
   <Card title="A server, with Docker" icon="server" href="#docker">
-    For a team or production: agents anywhere reach it at an HTTPS URL, even
-    in a private network.
+    For a team or production: agents anywhere reach it at an HTTPS URL,
+    claude.ai and ChatGPT included, even in a private network.
   </Card>
   <Card title="A cloud platform" icon="cloud" href="#on-a-platform">
     The same, from a template: AWS, Fly.io, Render or Kubernetes.
   </Card>
 </Columns>
 
-Run it where it can reach your databases: on your laptop for a local or cloud
-database, inside the VPC for a private one.
+Run it where it can reach your databases: on your computer for a local or
+cloud database, inside the VPC for a private one.
 
-## This machine
+## Your computer
 
 You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
 
 <Warning>
   The gateway runs as you, so an agent that runs commands as you, such as
   Claude Code with its shell, can read `secrets/*.dsn` and connect to the
-  database without Midplane. Use this machine to try Midplane; to hold such an
-  agent to your policy, run the gateway as another user or on another host.
+  database without Midplane. Use your computer to try Midplane; to hold such
+  an agent to your policy, run the gateway as another user or on another host.
 </Warning>
 
 <Steps>
@@ -48,7 +50,7 @@ You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
     holds the token.
   </Step>
   <Step title="Run setup">
-    Choose **This machine** and run the command in a terminal. It runs
+    Choose **Your computer** and run the command in a terminal. It runs
     `midplane setup`, which asks for each database's connection string
     ([prepare your database](/prepare-database)). What you paste isn't shown,
     and stays in the gateway's folder: it never reaches Midplane Cloud.
@@ -69,10 +71,12 @@ You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
   </Step>
 </Steps>
 
-Agents on this machine reach it at the `http://gw-….localhost` URL setup
-prints. Setup takes the first port from 7433 to 7442 that is free when it
-runs, so a gateway that was stopped then may have its port taken: give the
-new one another with `--port`.
+Agents on your computer reach it at the `http://gw-….localhost` URL setup
+prints. Hosted agents such as claude.ai and ChatGPT can't, unless a tunnel or
+a URL of your own is in front of it ([hosted agents](/gateway/hosted-agents)):
+a gateway [on a server](#docker) has a public URL. Setup takes the first port from 7433 to 7442 that is
+free when it runs, so a gateway that was stopped then may have its port taken:
+give the new one another with `--port`.
 
 ## Docker
 
@@ -82,9 +86,16 @@ Midplane URL, such as `https://gw-7hq2m4xd.eu.midplane.app/mcp`, through
 Midplane's relay: no host name, DNS record or open port, and it runs in a
 private network. The relay passes agents' encrypted traffic to the gateway
 without reading it, and TLS ends at the gateway, with a certificate it gets
-from Let's Encrypt and a key that never leaves its volume ([what the relay
-sees](/security#the-relay)). To keep Midplane out of that path, use [your own
-URL](#your-own-url).
+from Let's Encrypt and a key that never leaves its volume ([how it
+works](/how-it-works#through-the-relay), [what the relay
+sees](/security#the-relay)).
+
+|  | Midplane URL | [Your own URL](#your-own-url) |
+| --- | --- | --- |
+| You need | A server that connects out on port 443 | A DNS name for the server, and ports 80 and 443 open or a certificate of your own |
+| Between agents and the gateway | Midplane's relay, which passes encrypted bytes it can't read | Nothing of Midplane's |
+| Copies of one gateway | One | As many as you run behind the URL ([replicas](/gateway/multiple-gateways#replicas)) |
+| While the relay is down | Agents can't reach the gateway | No effect |
 
 Let an AI assistant (Claude, ChatGPT, Cursor) set the server up with you: copy
 this prompt into it. It asks how you want to work first, never asks for your
@@ -164,12 +175,17 @@ money.
   keeps restarting and trying, about once a minute: Docker reads the env file
   only when it creates the container. Remove it (`docker rm -f
   midplane-gw-…`), fix the file, and run the command again.
+- **Keep the volume, and run one copy.** The gateway's certificate is on
+  the volume: a gateway that loses it orders a new one as it starts, and
+  Let's Encrypt issues at most 5 for one name a week. A second copy of the
+  same gateway behind the relay can get Let's Encrypt's checks meant for the
+  first, so for replicas use [your own URL](#your-own-url).
 - **If the relay is down,** the gateway keeps enforcing your policies, but
   agents can't reach it until the relay is back. It reconnects on its own
   ([when the relay is down](/security#when-the-relay-is-down)).
 
 The command names the newest release's image by its version, such as
-`ghcr.io/midplaneai/midplane:0.24.0`, which you can [verify](/releases); the
+`ghcr.io/midplaneai/midplane:0.26.0`, which you can [verify](/releases); the
 server keeps it until you [upgrade](/gateway/upgrading#docker) the gateway.
 Every variable is in
 [configuration](/gateway/configuration#setup-from-environment-variables).
@@ -298,8 +314,11 @@ under **Runs on**.
     ```sh
     docker run -d --name midplane --restart unless-stopped \
       --env-file midplane.env -v midplane:/var/lib/midplane \
-      -p 443:7433 -p 80:7480 ghcr.io/midplaneai/midplane:latest
+      -p 443:7433 -p 80:7480 ghcr.io/midplaneai/midplane:<version>
     ```
+
+    With `<version>` the newest release's, such as `0.26.0`
+    ([upgrading](/gateway/upgrading#docker)).
 
     The variables per database, the connection tests, what stays in the
     file and what happens when setup fails are as [above](#docker), with
@@ -322,7 +341,7 @@ under **Runs on**.
     URL, keep the gateway on loopback and have the proxy forward the URL to
     it, keeping the `Host` header.
 
-    - **With `npx`:** follow [this machine](#this-machine). Then add the URL
+    - **With `npx`:** follow [your computer](#your-computer). Then add the URL
       to `public_urls` in the gateway's `midplane.yaml`, such as
       `public_urls: [http://gw-k3m9x2qa.localhost:7433,
       https://midplane.example.com]`, and restart it. A URL added after the
@@ -336,6 +355,9 @@ under **Runs on**.
       first starts.
   </Accordion>
   <Accordion title="A platform without a disk">
+    At your own URL only: behind the relay, the gateway keeps its certificate
+    on its disk, and without one it would order a new one at every start.
+
     Some platforms keep no files across restarts, so the gateway can't keep the
     identity it gets when it joins. Enroll it once and store the identity as a
     secret instead:
@@ -388,7 +410,9 @@ under **Runs on**.
     reads `midplane.yaml`, and let uid 1000 read the secrets (`sudo chown -R
     1000:1000 secrets`). Put what the gateway writes (`audit.file`,
     `link.identity` and `link.bundle_cache`) under `/var/lib/midplane/`, on a
-    volume. Every key is in [configuration](/gateway/configuration).
+    volume. With `tls.acme`, the gateway keeps its certificate in `acme/`
+    beside the config, so mount the folder writable instead. Every key is in
+    [configuration](/gateway/configuration).
   </Accordion>
   <Accordion title="What the gateway's folder holds">
     ```text

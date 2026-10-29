@@ -38,8 +38,9 @@ started](/get-started)).
     Configuration** download the certificate. Save it as `supabase-ca.crt`
     where the gateway runs: in Docker, in `/etc/midplane/tls` on the server.
     The commands for **My own** certificate mount that folder at the same
-    path; with an **Automatic** one, add `-v
-    /etc/midplane/tls:/etc/midplane/tls:ro` after `docker run` in both.
+    path. With **Midplane URL**, or an **Automatic (Let's Encrypt)**
+    certificate, add `-v /etc/midplane/tls:/etc/midplane/tls:ro` after each
+    `docker run`.
   </Step>
   <Step title="Give setup the connection string">
     Change the copied string in three places: the user becomes
@@ -52,15 +53,15 @@ started](/get-started)).
 
     `sslrootcert` is the certificate's path where the gateway runs:
     `/etc/midplane/tls/supabase-ca.crt` in Docker, or the file's full path on
-    your machine. Put the line after its `MIDPLANE_DSN_…=` in the env file,
+    your computer. Put the line after its `MIDPLANE_DSN_…=` in the env file,
     or paste it when `midplane setup` asks for the connection string
     ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
     Setup says `ok` with the database and its number of tables. Once the
     gateway runs, **Test connection** on the **Gateways** page shows your
-    database's id with `ok`, such as `shop ok`, and the policy editor lists
-    your tables.
+    database's id with `ok`, such as `shop ok, 3 ms`, and the policy
+    editor lists your tables.
   </Step>
 </Steps>
 

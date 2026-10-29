@@ -40,6 +40,11 @@ Blueprint picks Starter, in Frankfurt.
 ## Run it
 
 - **A connection string changes.** Change it in **Environment** and deploy.
+- **A database is added later.** First append the database's line to
+  `/var/lib/midplane/midplane.yaml`, in the worker's **Shell**. Then add its
+  `MIDPLANE_DSN_<ID>` in **Environment** and deploy, so the gateway starts
+  with both: the variable alone is ignored once the gateway has set itself
+  up ([adding databases](/gateway/multiple-gateways#adding-databases)).
 - **Upgrade.** In the worker's **Settings**, change the image's tag to the
   new version, and deploy ([upgrading](/gateway/upgrading#render)). The
   disk, and with it the gateway, stays.

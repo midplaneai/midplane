@@ -54,15 +54,15 @@ started](/get-started)).
 
     `sslrootcert` is the bundle's path where the gateway runs:
     `/etc/midplane/tls/rds-global-bundle.pem` in Docker and with the AWS
-    template, or the file's full path on your machine. Put the line after
+    template, or the file's full path on your computer. Put the line after
     its `MIDPLANE_DSN_…=` in the env file, or paste it when `midplane setup`
     asks for the connection string ([deploy the gateway](/gateway/deploy)).
   </Step>
   <Step title="Check that it connects">
     Setup says `ok` with the database and its number of tables. Once the
     gateway runs, **Test connection** on the **Gateways** page shows your
-    database's id with `ok`, such as `shop ok`, and the policy editor lists
-    your tables.
+    database's id with `ok`, such as `shop ok, 3 ms`, and the policy
+    editor lists your tables.
   </Step>
 </Steps>
 

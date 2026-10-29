@@ -1,8 +1,8 @@
 # Midplane quickstart
 
-Try Midplane on your own machine in a few minutes: a sample Postgres database
+Try Midplane on your computer in a few minutes: a sample Postgres database
 in Docker, the gateway in local mode with `npx`, and Claude Code as the agent.
-Nothing leaves your machine. There is no Midplane Cloud in this setup, so
+Nothing leaves your computer. There is no Midplane Cloud in this setup, so
 writes that need a person's approval are refused rather than held.
 
 You need Node 24.16 or newer, Docker, and Claude Code (any MCP client works).
@@ -62,8 +62,9 @@ claude mcp add --transport http midplane http://127.0.0.1:7433/mcp \
 
 Start `claude` and check `/mcp` lists `midplane` as connected.
 
-Or let Claude Code start the gateway itself, over stdio, instead of step 3's
-terminal (not both):
+Or let Claude Code start the gateway itself, over stdio, instead of step 3
+(not both). Run this in step 2's terminal, where `SHOP_DSN` and
+`MIDPLANE_MASK_SALT` are set:
 
 ```sh
 claude mcp add midplane \

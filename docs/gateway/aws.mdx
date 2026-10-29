@@ -74,10 +74,12 @@ failed start after a fix needs nothing but a minute.
 - **A connection string changes.** Change it in the secret, then restart
   the gateway: reboot the instance, or run `sudo systemctl restart midplane`
   in a shell from the **Shell** output.
-- **A database is added later.** A new `MIDPLANE_DSN_…` line is read only at
-  the first start. Add the database to the config on the gateway's volume
-  too ([setup from environment
-  variables](/gateway/configuration#setup-from-environment-variables)).
+- **A database is added later.** Add its `MIDPLANE_DSN_<ID>` line to the
+  secret: alone, it is ignored once the gateway has set itself up. Then, in
+  a shell from the **Shell** output, append the database's line to the
+  config on the gateway's volume with `sudo docker exec -i midplane sh -c
+  'cat >> midplane.yaml'`, and restart the gateway as above ([adding
+  databases](/gateway/multiple-gateways#adding-databases)).
 - **Upgrade.** Update the stack with the new version's template
   ([upgrading](/gateway/upgrading#aws)). Each version's template runs that
   version only.

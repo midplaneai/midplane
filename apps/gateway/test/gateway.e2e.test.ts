@@ -12,7 +12,7 @@ import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AuditUnavailableError, LocalAuditLog } from "../src/audit.ts";
 import { generateSigningKey, TokenVerifier } from "../src/auth.ts";
 import { introspect } from "../src/catalog.ts";
@@ -989,6 +989,64 @@ describe.skipIf(!hasPostgres)("gateway end to end", () => {
       } finally {
         await executor.close();
       }
+    });
+
+    it("logs an audit write that fails after execution, with its time", async () => {
+      const executor = new DatabaseExecutor(db.agentDsn);
+      const catalog = await executor.withReadOnly(introspect);
+      const policy = validatePolicy(MASKED);
+      if (!policy.ok) throw new Error(policy.errors.join("; "));
+      const caller = await verifierFor(gw).verify(await gw.token());
+      const lines: string[] = [];
+      const stderr = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation((chunk) => {
+          lines.push(String(chunk));
+          return true;
+        });
+      try {
+        const g = new Gateway({
+          databases: new Map([
+            [
+              "main",
+              {
+                id: "main",
+                policy: policy.policy,
+                executor,
+                catalog,
+                refreshedAt: Date.now(),
+              },
+            ],
+          ]),
+          audit: {
+            append(e) {
+              if (e.event === "EXECUTED")
+                throw new AuditUnavailableError(new Error("disk full"));
+            },
+            heldStatement: () => null,
+            claimedHere: () => false,
+          },
+          taint: {
+            checkTaint: async () => "clean" as const,
+            taint: async () => {},
+          },
+          salt: gw.salt,
+          limits: { maxRows: 10, maxBytes: 100_000 },
+          mode: "local",
+        });
+        const sql = "INSERT INTO logs (msg) VALUES ('after execution')";
+        expect((await g.query(caller, { sql, database: "main" })).kind).toBe(
+          "ok",
+        );
+      } finally {
+        stderr.mockRestore();
+        await executor.close();
+      }
+      const line = lines
+        .filter((l) => l.startsWith("{"))
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((l) => l.msg === "audit write after execution failed");
+      expect(line).toMatchObject({ level: "error", time: expect.any(String) });
     });
   });
 

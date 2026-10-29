@@ -7,6 +7,8 @@ description: "Enrollment, bundles, databases a gateway can't reach, what goes up
 policies authored in the dashboard, agents' identities, approvals, taint shared
 by every instance, and a query log. The gateway opens every connection; the
 cloud never connects to it, and it serves nothing for the cloud to call.
+Behind the relay, the gateway's connections to the relay are its own too,
+opened with the same link token ([behind the relay](/gateway/configuration#behind-the-relay)).
 
 ```yaml
 # midplane.yaml
@@ -28,7 +30,7 @@ dashboard.
 
 ## Enrollment
 
-A project manager makes an enrollment token on the project's Gateways page.
+An owner or admin makes an enrollment token on the project's Gateways page.
 It works once, within 24 hours, and pins Midplane Cloud's signing key: the
 gateway refuses an answer signed with any other key, so a TLS-inspecting proxy
 can't stand in for the cloud.
@@ -45,6 +47,8 @@ can't stand in for the cloud.
 The identity holds the gateway's private key: treat it like a password
 ([secrets](/gateway/secrets)). Enrolling registers every URL in `public_urls` (or
 the listener's) as one of the gateway's URLs ([hosted agents](/gateway/hosted-agents)).
+Behind the relay, that is its Midplane URL, which only enrolling gives a
+gateway.
 
 ## Bundles
 
@@ -116,12 +120,13 @@ error, before it enrolls.
 ## What goes up
 
 Over the link, a gateway sends its status (bundle version, state, version,
-features, database ids, URLs, each database's health as an error code), each
-database's catalog (table and column names and types, primary and foreign
-keys, view definitions with every literal replaced; never a value, and never
-a `COMMENT ON`, which could hold one), held writes for approval, taint
-records, and its audit log ([audit](/audit)). It never sends a DSN, the
-salt, a Postgres error message, or a row.
+features, database ids, URLs, each database's health as an error code, and
+behind the relay how many connections it holds there and the relay's last
+refusal), each database's catalog (table and column names and types, primary
+and foreign keys, view definitions with every literal replaced; never a
+value, and never a `COMMENT ON`, which could hold one), held writes for
+approval, taint records, and its audit log ([audit](/audit)). It never sends
+a DSN, the salt, a Postgres error message, or a row.
 
 The cloud's ack of each audit batch is signed like its other answers, for a
 nonce the gateway sends, and names the hash of the event it stored at the
@@ -146,12 +151,19 @@ for two minutes. Give each replica a file of its own: a copied file goes on
 as a new instance once the cloud names the other's event at one of its
 sequences. Local processes may share a file; linked ones may not.
 
+Behind the relay, run one process: the relay sends Let's Encrypt's checks of
+the gateway's name to any of its connections, so a second process could get
+the check for the first one's certificate. For replicas, give the gateway
+[your own URL](/gateway/deploy#your-own-url).
+
 ## Revoking
 
 Revoking a gateway on the Gateways page cuts its link: it can't get new
 bundles or file held writes. It keeps enforcing its last bundle, and
 personal access tokens it already accepts keep working there until they
-expire, so stop the process as well.
+expire, so stop the process as well. Behind the relay, the relay closes the
+gateway's connections within 10 seconds, so agents can't reach it at its
+Midplane URL from then on, and no other gateway ever gets that URL.
 
 *Tested by* `apps/gateway/test/link.e2e.test.ts` (enrollment and the pin,
 bundles, halting, pausing, restarts with the cloud down, revocation, no

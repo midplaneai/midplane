@@ -18,7 +18,21 @@ publishes that same tarball:
   workflow's identity. `:latest` moves to each release; deploy a version tag
   or, better, the digest.
 
-Then the tag gets a GitHub release listing the changes and both artifacts.
+Once the image is published, the same release also publishes the deploy
+templates, each set to that version's image:
+
+- the Helm chart `midplane-gateway`, to `oci://ghcr.io/midplaneai/charts`
+  ([Kubernetes](/gateway/kubernetes));
+- the CloudFormation template, to
+  `https://midplane-gateway-templates.s3.eu-central-1.amazonaws.com/gateway/X.Y.Z/aws.yaml`,
+  and to `gateway/latest/aws.yaml` beside it, the one **Launch the stack on
+  AWS** opens ([AWS](/gateway/aws)).
+
+Neither template is signed or attested. The image each one runs is: verify
+it as below.
+
+Then the tag gets a GitHub release listing the changes, the npm package and
+the image.
 From `0.23.0`, the entry `ai.midplane/midplane` in the
 [official MCP registry](https://registry.modelcontextprotocol.io) moves to that
 npm version too, for MCP clients that install from it (local mode over stdio;

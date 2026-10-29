@@ -13,6 +13,12 @@ description: "Health checks, logs worth alerting on, stopping, resources and bac
 Both are unauthenticated and say nothing else. A linked gateway with no bundle
 yet answers `/mcp` with a plain `503`, so clients don't loop through sign-in.
 
+Behind the relay, the listener is on loopback, so a health check runs on the
+same host or in the same pod: `curl -k https://127.0.0.1:7433/readyz`, with
+the port in `listen.port`. It serves HTTPS with the certificate for the
+gateway's Midplane URL, which doesn't name `127.0.0.1` (so `-k`), and it
+listens only once it has that certificate.
+
 ## Logs
 
 JSON lines on stderr, one object each, with `time`, `level` and `msg` (stdout
@@ -22,6 +28,10 @@ carries MCP in stdio mode). The ones worth alerting on:
 | --- | --- |
 | `gateway halted` | An authentic bundle can't be enforced here; `reason` says why. Everything is refused until it's fixed |
 | `bundle rejected` | A bundle failed its signature, issuer, project or version check; nothing changed |
+| `bundle refused` | An authentic bundle that isn't the project's latest, or that came without a valid proof that it is, such as an old one a proxy sent again: `reason` says which. Nothing changed, and the next sync asks again |
+| `bundle cache write failed` | The newest bundle is enforced but couldn't be written to `link.bundle_cache`: check the disk. The gateway removes the old cache, so a restart with the cloud down waits for a bundle (`503`) instead of enforcing an older one |
+| `stale bundle cache could not be removed` | As above, and the old cache couldn't be removed either: a restart with the cloud down enforces that older bundle until the cloud answers. Fix the disk |
+| `sync failed` | The long poll to Midplane Cloud failed: the cloud can't be reached, a proxy is in the way, or the cloud refused the gateway's status (an older cloud, [upgrading](/gateway/upgrading#what-carries-over)). `error` says why; it tries again after `retry_ms`, backing off to about 30 seconds, and keeps enforcing its bundle meanwhile |
 | `audit write after execution failed` | A statement ran but its outcome couldn't be recorded: check the disk |
 | `audit push failed` | Midplane Cloud couldn't be reached, or answered with an error (a 5xx); the events wait in the file and are retried, backing off to every five minutes. A 429, another replica's batch in progress, is retried within seconds and not logged, for up to two minutes in a row |
 | `audit push waiting: Midplane Cloud keeps answering 429` | The cloud, or a proxy before it, has answered 429 for two minutes, longer than any replica's turn: said once until a batch is acked again, and each further 429 is an `audit push failed`. `from` and `to` name the batch |
@@ -34,18 +44,26 @@ carries MCP in stdio mode). The ones worth alerting on:
 | `audit pruning failed` | Retention couldn't delete old events, so the file keeps growing; `error` says why |
 | `audit events recorded while linked never reached Midplane Cloud; local mode doesn't send them` | The file last ran linked, and `events` of its events were still waiting when it was opened in local mode. They stay in the file for the retention window from now (export them to keep them longer) and are never sent, even if it is linked again |
 | `database unreachable` | (`0.22.0+`) A database didn't answer: at start, on a retry, or when a statement lost its connection. `database` and `code` say which and why, `error` has the full message. Said again only if it fails differently, and `database reachable` follows once it answers ([linked mode](/gateway/linked-mode#databases-it-cannot-reach)) |
-| `certificate renewal failed` | (`0.23.0+`) Let's Encrypt didn't renew the gateway's automatic certificate; `error` says what to fix, `acme_type` and `acme_detail` what Let's Encrypt said ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)). The current certificate is served meanwhile, and the renewal is tried again in 12 hours |
+| `certificate renewal failed` | (`0.23.0+`) Let's Encrypt didn't renew the gateway's automatic certificate; `error` says what to fix, `acme_type` and `acme_detail` what Let's Encrypt said ([troubleshooting](/troubleshooting#the-gateway-does-not-connect)). The current certificate is served meanwhile, and the renewal is tried again in 12 hours. Said at start too, with the kept certificate's `valid_until`, when it is still in date |
 | `certificate not reloaded` | (`0.23.0+`) The certificate files changed, but the new pair can't be served: `error` names the file and the problem. The old certificate stays; said once per replacement |
 | `link cut` | The cloud refused the gateway's credentials: it was revoked |
+| `relay connection failed` | Behind the relay: a work connection to the relay failed. `status` is the relay's answer (`401` for the link token, after a fresh one; `429` for too many idle connections), or `code` and `error` say why there was none. It tries again after `retry_ms`, backing off to about a minute ([cannot reach the relay](/troubleshooting#cannot-reach-the-relay)) |
+| `The relay at <control> refused this gateway: Midplane Cloud holds no relay URL for it, so agents can't reach it there. Only enrolling gives a gateway one. It tries again every minute.` | Behind the relay: the relay answered `403`, as Midplane Cloud holds no relay URL for this gateway ([no relay URL](/troubleshooting#midplane-holds-no-relay-url-for-this-gateway)). Said once until a connection is accepted again |
 | `midplane upgrade needed` | (`0.25.0+`) A warning from a linked gateway: a release fixed a security problem, and this gateway runs a version below it. `needed` is the lowest version to run, `reason` says why, and `advisory` links the advisory when there is one. Said once per lowest version while it runs. It keeps enforcing your policy meanwhile ([upgrading](/gateway/upgrading#when-an-upgrade-is-needed)) |
 | `newer midplane available` | (`0.25.0+`) Midplane Cloud knows a newer release than this linked gateway's `version`: `latest` is the newest. Said once per release while it runs, at `info` ([upgrading](/gateway/upgrading)) |
 | `taint check failed; the grant counts as tainted` | The cloud couldn't be asked; the agent was contained |
+| `taint answer didn't verify; the grant counts as tainted` | An answer to a taint check that isn't the cloud's signed answer for that grant and check, such as a proxy's; the agent was contained |
+| `approval didn't verify; nothing ran` | Midplane Cloud's approval of a held write didn't verify for it (`approval` names it), so the write was refused. Report it |
+| `catalog upload refused` | The cloud refused a database's catalog: `code` is `too_large`, or the HTTP status. The gateway doesn't send that catalog again on its own until it changes, so the policy editor may not show the database's newest tables |
 | `public URL not registered` | A URL in `public_urls` isn't one of the gateway's yet ([hosted agents](/gateway/hosted-agents)) |
 | `view definitions withheld from the cloud` | Some views' definitions couldn't be redacted, so they weren't sent; simulation denies statements through them |
 
 `mcp client` notes each new agent (client, person and MCP protocol version)
 once. `certificate obtained`, `certificate renewed` and `certificate reloaded`
-note a new certificate and its `valid_until`.
+note a new certificate and its `valid_until`. Behind the relay, `relay work
+connection silent; replaced`, at `info`, notes an idle connection that heard
+nothing from the relay for 75 seconds: the gateway opens another, so it needs
+no alert.
 
 ## Stopping
 
@@ -91,7 +109,8 @@ audit.db "SELECT value FROM meta WHERE key = 'previous_instances'"`).
 *Tested by* `apps/gateway/test/link.e2e.test.ts` (readiness, 503 without a
 bundle, halting, SIGTERM, restarts with the cloud down, a database down and
 back, the release lines), `apps/gateway/test/gateway.e2e.test.ts` (caps,
-timeouts, the catalog, local mode refusing to start without a database),
-`apps/gateway/test/health.test.ts` (the retry schedule, what counts against a
-database's health) and `apps/gateway/test/release-notice.test.ts` (when each
-release line is said).
+timeouts, the catalog, local mode refusing to start without a database, an
+audit write that fails after execution), `apps/gateway/test/health.test.ts`
+(the retry schedule, what counts against a database's health),
+`apps/gateway/test/relay.test.ts` (the relay's lines and backoff) and
+`apps/gateway/test/release-notice.test.ts` (when each release line is said).

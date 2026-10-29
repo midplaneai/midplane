@@ -51,6 +51,15 @@ which it gets from Let's Encrypt as a gateway does. It serves it only to
 gateways opening their connections; an agent's connection to a gateway's name
 never ends there.
 
+### Revoking a gateway behind the relay
+
+Revoking a gateway closes its connections to the relay within 10 seconds, so
+agents can't reach it at its Midplane URL from then on, even while its
+process runs. No other gateway ever gets that URL, even after the gateway is
+revoked or its organization deleted: agents that have it are never sent to
+another gateway, and no other gateway can get a certificate for the name
+through the relay.
+
 ### Who could get a certificate for your gateway
 
 Midplane controls the DNS of `midplane.app`, where Midplane URLs are. So

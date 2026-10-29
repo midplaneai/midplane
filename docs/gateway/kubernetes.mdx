@@ -7,9 +7,8 @@ description: "Install the gateway with Midplane's Helm chart, behind Midplane's 
 The chart runs the gateway as one pod with its own disk, behind Midplane's
 relay: agents reach it at a Midplane URL, and the chart makes no Service or
 Ingress, so nothing connects in. Run it in a cluster that reaches your
-databases. You need `kubectl` and `helm` for the cluster, a default
-storage class, or one you name, and the chart `0.24.1+`: an earlier gateway
-refuses a disk that holds the filesystem's `lost+found`, as most do.
+databases. You need `kubectl` and `helm` for the cluster, and a default
+storage class, or one you name.
 
 ## Set it up
 
@@ -21,7 +20,7 @@ refuses a disk that holds the filesystem's `lost+found`, as most do.
     token**, above the tabs, and keep the page open.
   </Step>
   <Step title="Save the env file">
-    On your machine, save the file the page shows as `midplane.env` with an
+    On your computer, save the file the page shows as `midplane.env` with an
     editor, with each database's connection string after its `=` ([prepare
     your database](/prepare-database)). Name each database's host as the
     cluster's pods reach it.
@@ -59,6 +58,11 @@ To mount files the connection strings name, such as a CA bundle for
 
 - **A connection string changes.** Change it in the Secret, then restart the
   pod: `kubectl rollout restart statefulset midplane-gw-…`.
+- **A database is added later.** Add its `MIDPLANE_DSN_<ID>` to the Secret:
+  alone, it is ignored once the gateway has set itself up. Then append the
+  database's line to `/var/lib/midplane/midplane.yaml`, in a shell from
+  `kubectl exec -it midplane-gw-…-0 -- sh`, and restart the pod as above
+  ([adding databases](/gateway/multiple-gateways#adding-databases)).
 - **Upgrade.** `helm upgrade` to the new version's chart
   ([upgrading](/gateway/upgrading#kubernetes)). The chart's version is the
   gateway's.

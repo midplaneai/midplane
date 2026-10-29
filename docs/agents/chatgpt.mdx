@@ -12,8 +12,9 @@ ChatGPT connects from OpenAI's servers, so it reaches a gateway only at a
 public HTTPS URL. A gateway [on a server with Docker](/gateway/deploy#docker)
 or [on a platform](/gateway/deploy#on-a-platform) has one: its Midplane URL,
 through Midplane's relay, with no tunnel, DNS record or open port. A gateway
-on [this machine](/gateway/deploy#this-machine) has none; to use a tunnel or
-a URL of your own instead, see [hosted agents](/gateway/hosted-agents).
+on [your computer](/gateway/deploy#your-computer) has none, as it answers
+only on that computer; to use a tunnel or a URL of your own instead, see
+[hosted agents](/gateway/hosted-agents).
 
 <Steps>
   <Step title="Copy the gateway's URL">
@@ -64,12 +65,12 @@ It has to sign in again within 15 minutes.
 
 ## If it doesn't work
 
-- **ChatGPT can't connect to the URL**: check that the gateway's setup step
-  or **Gateways** page says **Relay · connected**, or see [cannot reach the
-  relay](/troubleshooting#cannot-reach-the-relay).
+- **ChatGPT can't connect to the URL**: check that the setup step says
+  **Relay · connected**, or the **Gateways** page **Relay: connected**, or
+  see [cannot reach the relay](/troubleshooting#cannot-reach-the-relay).
 - **The consent page says it wants access, with no databases**: you aren't a
   member of the gateway's project, or the URL isn't registered. Ask an owner
-  of the organization.
+  or admin of its organization to invite you.
 - **Through OpenAI's Secure MCP Tunnel** instead of the relay, signing in
   isn't verified yet: see [hosted agents](/gateway/hosted-agents#chatgpt-and-codex-openai-secure-mcp-tunnel).
 

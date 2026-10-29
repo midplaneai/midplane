@@ -9,9 +9,7 @@ agents reach it at a Midplane URL, and the app has no IP address or service,
 so nothing connects in. It suits a database Fly can reach over the
 internet, such as [Supabase](/prepare-database/supabase) or
 [Neon](/prepare-database/neon). You need
-[flyctl](https://fly.io/docs/flyctl/install/), signed in, and the gateway
-`0.24.1+`, which sets itself up on a volume that holds the filesystem's
-`lost+found`.
+[flyctl](https://fly.io/docs/flyctl/install/), signed in.
 
 ## Set it up
 
@@ -23,7 +21,7 @@ internet, such as [Supabase](/prepare-database/supabase) or
     above the tabs, and keep the page open.
   </Step>
   <Step title="Save the env file">
-    On your machine, save the file the page shows as `midplane.env` with an
+    On your computer, save the file the page shows as `midplane.env` with an
     editor, with each database's connection string after its `=` ([prepare
     your database](/prepare-database)).
   </Step>
@@ -52,6 +50,12 @@ internet, such as [Supabase](/prepare-database/supabase) or
 - **A connection string changes.** Import it from a file, as setup did,
   such as `fly secrets import -a midplane-gw-… < shop.env` with one line:
   Fly restarts the machine with it.
+- **A database is added later.** Import its `MIDPLANE_DSN_<ID>` line the
+  same way: alone, it is ignored once the gateway has set itself up. Then
+  append the database's line to `/var/lib/midplane/midplane.yaml`, in a
+  shell from `fly ssh console -a midplane-gw-…`, and restart the machine:
+  `fly machine restart <machine id> -a midplane-gw-…` ([adding
+  databases](/gateway/multiple-gateways#adding-databases)).
 - **Upgrade.** `fly machine update` with the new version's image
   ([upgrading](/gateway/upgrading#fly-io)). The volume, and with it the
   gateway, stays.

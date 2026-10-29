@@ -54,7 +54,11 @@ it.
 
 ![An AI agent connects over MCP to Midplane's relay; its queries and results are encrypted end to end, and the relay forwards them without being able to read them. In your network, the Midplane gateway checks, records and runs each statement, writes it to the audit log before it runs, and queries Postgres as its own role. Both of its other connections are outbound: to the relay, which agents' traffic comes in over, and to Midplane Cloud, which gets the query log with values removed and sends signed policies and approvals. Midplane Cloud gets no query results and no credentials.](docs/images/architecture.png)
 
-On your own machine or at [your own
+Behind the relay, agents reach the gateway at a public HTTPS URL while it only
+connects out, even in a private network: the relay passes their encrypted
+traffic without reading it ([how it
+works](https://midplane.ai/docs/how-it-works#through-the-relay)). On your
+computer or at [your own
 URL](https://midplane.ai/docs/gateway/deploy#your-own-url), agents connect to
 the gateway directly, with no relay.
 
@@ -82,7 +86,7 @@ docker compose up -d --wait
 ```
 
 Then follow [its steps](examples/quickstart): a sample shop database and the
-gateway in local mode, with nothing leaving your machine. Ask your agent:
+gateway in local mode, with nothing leaving your computer. Ask your agent:
 
 | Ask | What happens |
 | --- | --- |
