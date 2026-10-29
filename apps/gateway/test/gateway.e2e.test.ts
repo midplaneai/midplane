@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { validatePolicy } from "@midplane/core";
+import { MAX_SQL_BYTES, validatePolicy } from "@midplane/core";
 import {
   Client,
   StreamableHTTPClientTransport,
@@ -18,6 +18,7 @@ import { generateSigningKey, TokenVerifier } from "../src/auth.ts";
 import { introspect } from "../src/catalog.ts";
 import { DatabaseExecutor, type ExecutionError } from "../src/executor.ts";
 import { Gateway } from "../src/gateway.ts";
+import { MAX_TOOL_INPUT_ELEMENTS } from "../src/tools.ts";
 import {
   callTool,
   checksPasswords,
@@ -879,6 +880,40 @@ describe.skipIf(!hasPostgres)("gateway end to end", () => {
       );
       expect(hidden.content[0]?.text).toContain("nested");
       expect(hidden.content[0]?.text).not.toContain("query tool");
+    });
+
+    it("bounds the elements in a call's arguments, and nothing over it runs", async () => {
+      const t = await gw.token();
+      const extra = (n: number) =>
+        Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, i]));
+      const before = gw.audit.events().length;
+      const many = await callTool(gw.mcpUrl, t, "query", {
+        sql: "SELECT 1",
+        database: "main",
+        ...extra(MAX_TOOL_INPUT_ELEMENTS),
+      });
+      expect(many.isError).toBe(true);
+      expect(many.content[0]?.text).toContain(
+        `maximum of ${MAX_TOOL_INPUT_ELEMENTS} elements`,
+      );
+      expect(gw.audit.events().length).toBe(before);
+      // A client that adds a few keys of its own still gets through.
+      const few = await callTool(gw.mcpUrl, t, "query", {
+        sql: "SELECT 1",
+        database: "main",
+        ...extra(3),
+      });
+      expect(few.isError).toBeFalsy();
+      // So does a statement at the core's own cap: the body limit stays the
+      // SDK's 4 MiB.
+      const select = "SELECT 1 -- ";
+      const atCap = await query(
+        gw.mcpUrl,
+        t,
+        select + "x".repeat(MAX_SQL_BYTES - select.length),
+        "main",
+      );
+      expect(atCap.isError).toBeFalsy();
     });
   });
 

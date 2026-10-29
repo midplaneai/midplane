@@ -123,6 +123,7 @@ An allowed statement returns JSON text, and the same object as the result's
 | Held | `isError`, the request id, the review link, how many rows it would change and when the request expires; `structuredContent.approval` holds `id`, `status`, `preview`, `expires_at` and `review_url` |
 | Failed in Postgres | `isError`, `Postgres returned an error (SQLSTATE): message`. On a database with masks the message's detail and hint are dropped, and on a statement that reads a table with untrusted columns only the SQLSTATE comes back: either could quote a row |
 | Unavailable | `isError`, and why nothing runs now: the project is paused, the gateway has no policy or halted, the database can't be reached, or the audit log can't be written (every statement is recorded before it runs) |
+| Too many arguments | `isError`, before anything is recorded: a call's arguments hold at most 64 array elements and object members, and no tool takes more than three |
 
 `EXPLAIN` is refused as unsupported, like everything else the gateway can't
 analyze: `SET`, `SHOW`, `COPY`, transaction control and `MERGE`. Each

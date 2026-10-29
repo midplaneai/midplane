@@ -67,6 +67,13 @@ const WRITES: ToolAnnotations = {
   openWorldHint: false,
 };
 
+/**
+ * The most array elements and object members one call's arguments may hold.
+ * Every tool takes at most three scalars; without a bound, one request could
+ * exhaust memory while the SDK validates it (GHSA-46jr-4wx8-v453).
+ */
+export const MAX_TOOL_INPUT_ELEMENTS = 64;
+
 function text(t: string, isError = false): CallToolResult {
   return {
     content: [{ type: "text", text: t }],
@@ -248,7 +255,10 @@ export function createServerFactory(
       known === null || configured.length === 0 || mayWrite(known, configured);
     const server = new McpServer(
       { name: SERVER_NAME, version: SERVER_VERSION },
-      { instructions: instructions(canWrite) },
+      {
+        instructions: instructions(canWrite),
+        maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
+      },
     );
 
     server.registerTool(
