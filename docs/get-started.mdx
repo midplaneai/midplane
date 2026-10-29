@@ -21,11 +21,13 @@ sample one), Node 24.16 or newer, and an MCP client such as Claude Code.
     [the sample](#with-the-sample-database) instead.
 
     **Create enrollment token** and pick where the gateway runs: **Your
-    computer** to try Midplane with agents on it, or **A server (Docker)** for
-    agents anywhere, claude.ai and ChatGPT included. On your computer, the
-    step's command runs `midplane setup`, which asks for each database's
-    connection string, tests it, and names it in Midplane, such as `shop`:
-    your name for the database, not its Postgres name. On a server, you put
+    computer** to try Midplane, or **A server (Docker)** for a team. Agents
+    anywhere, claude.ai and ChatGPT included, reach a gateway on a server, and
+    one on your computer at a **Midplane URL**; at **This computer only**,
+    only agents on your computer do. On your computer, the step's command
+    runs `midplane setup`, which asks for each database's connection string,
+    tests it, and names it in Midplane, such as `shop`: your name for the
+    database, not its Postgres name. On a server, you put
     each connection string in the env file the step shows, and the gateway
     tests it as it starts. Either way it then joins your project and starts.
     The step shows the gateway's checks as it reports them, and it's done when
@@ -66,7 +68,8 @@ as it is, for your own database.
 
 In the sample project, **Run the gateway** starts the sample's Postgres with
 Docker, then setup on your computer, which runs the gateway on port 7434 so it
-can run beside one of your own. When setup asks for `shop`'s connection
+can run beside one of your own. Choose **Midplane URL** to try it from
+claude.ai or ChatGPT too. When setup asks for `shop`'s connection
 string, paste the one the step shows (the password is a public example).
 **Choose what agents may read** is already done. When Claude Code signs in,
 give it read and write on `shop`, then ask, in order:

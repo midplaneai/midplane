@@ -17,7 +17,8 @@ all.
 
 <Columns cols={3}>
   <Card title="Your computer" icon="laptop" href="#your-computer">
-    To try Midplane. Only agents on your computer can use it.
+    To try Midplane: with agents on your computer, or with claude.ai and
+    ChatGPT too, at a Midplane URL.
   </Card>
   <Card title="A server, with Docker" icon="server" href="#docker">
     For a team or production: agents anywhere reach it at an HTTPS URL,
@@ -33,7 +34,14 @@ cloud database, inside the VPC for a private one.
 
 ## Your computer
 
-You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
+You need Node 24.16 or newer, and macOS, Linux or WSL on Windows. Under
+**Agents reach it at**, the page offers two URLs where Midplane has a relay:
+
+|  | This computer only | Midplane URL |
+| --- | --- | --- |
+| Agents reach it at | `http://gw-….localhost` and its port | `https://gw-….eu.midplane.app/mcp`, through Midplane's relay |
+| Which agents | Those on your computer | Any, claude.ai and ChatGPT included, and those on your computer |
+| Your computer needs | Nothing more | To connect out on port 443 |
 
 <Warning>
   The gateway runs as you, so an agent that runs commands as you, such as
@@ -50,10 +58,12 @@ You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
     holds the token.
   </Step>
   <Step title="Run setup">
-    Choose **Your computer** and run the command in a terminal. It runs
-    `midplane setup`, which asks for each database's connection string
-    ([prepare your database](/prepare-database)). What you paste isn't shown,
-    and stays in the gateway's folder: it never reaches Midplane Cloud.
+    Choose **Your computer**, keep **This computer only** or choose
+    **Midplane URL**, and paste the command into a terminal. It runs
+    `midplane setup`, with `--relay` for a Midplane URL, which asks for each
+    database's connection string ([prepare your database](/prepare-database)):
+    paste it and press Enter. What you paste isn't shown, and stays in the
+    gateway's folder: it never reaches Midplane Cloud.
   </Step>
   <Step title="Check each database">
     Setup connects as the gateway will and says what it found, such as `ok:
@@ -65,18 +75,36 @@ You need Node 24.16 or newer, and macOS, Linux or WSL on Windows.
   <Step title="Start it">
     Setup joins your project, writes the gateway's folder where you ran it,
     such as `gw-k3m9x2qa`, and starts the gateway. The page shows it
-    connected. It keeps running in that terminal; `Ctrl-C` stops it, and
-    `npx -y midplane@latest gateway --config gw-k3m9x2qa/midplane.yaml` starts
-    it again.
+    connected; with a Midplane URL, it shows the URL for agents once the
+    gateway's connections to the relay are up. It keeps running in that
+    terminal; `Ctrl-C` stops it, and `npx -y midplane@latest gateway --config
+    gw-k3m9x2qa/midplane.yaml` starts it again.
   </Step>
 </Steps>
 
-Agents on your computer reach it at the `http://gw-….localhost` URL setup
-prints. Hosted agents such as claude.ai and ChatGPT can't, unless a tunnel or
-a URL of your own is in front of it ([hosted agents](/gateway/hosted-agents)):
-a gateway [on a server](#docker) has a public URL. Setup takes the first port from 7433 to 7442 that is
-free when it runs, so a gateway that was stopped then may have its port taken:
-give the new one another with `--port`.
+With **This computer only**, agents on your computer reach the gateway at the
+`http://gw-….localhost` URL setup prints. Hosted agents such as claude.ai and
+ChatGPT can't, unless a tunnel or a URL of your own is in front of it
+([hosted agents](/gateway/hosted-agents)). Setup takes the first port from
+7433 to 7442 that is free when it runs, so a gateway that was stopped then may
+have its port taken: give the new one another with `--port`.
+
+With a **Midplane URL**, agents anywhere reach it at the URL the page shows,
+such as `https://gw-k3m9x2qa.eu.midplane.app/mcp`, which setup's last line
+names too. Agents on your computer use it as well: the gateway answers on no
+other URL. It listens only on loopback and connects out to the relay, which
+passes agents' encrypted traffic to it without reading it, as [for a
+server](#docker).
+
+- **The URL is on the internet.** Anyone can reach it, and an agent reaches
+  your data only once a member of your project signs it in, as at any
+  gateway's URL. Its certificate, and so its name, is published in
+  Certificate Transparency logs ([watch them](/security#watch-certificate-transparency-logs)).
+- **Its certificate comes through the relay** as the gateway first starts,
+  and stays in its folder, where the gateway renews it.
+- **While your computer sleeps** or is offline, agents can't reach the
+  gateway. It reconnects to the relay on its own once your computer wakes, as
+  it does [when the relay is down](/security#when-the-relay-is-down).
 
 ## Docker
 
@@ -265,6 +293,12 @@ the gateway.
 Both commands name the newest release's image by its version, which you can
 [verify](/releases); the server keeps it until you
 [upgrade](/gateway/upgrading#at-your-own-url) the gateway.
+
+The volume holds the gateway's config, connection strings, identity,
+certificate and audit log. To replace the gateway with a new one, revoke it
+on the **Gateways** page (its URL is taken until then), run `docker rm -f
+midplane-gw-… && docker volume rm midplane-gw-…`, which deletes its audit
+log, and set the new one up with a new token.
 
 ## On a platform
 

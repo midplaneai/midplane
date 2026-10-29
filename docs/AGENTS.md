@@ -73,10 +73,11 @@ Use these, exactly:
 - **The audit log** (the file on the gateway's disk) and **the Query log**
   (what the dashboard shows).
 - Where a gateway runs and how agents reach it: **your computer** (setup
-  with `npx`, agents on the same computer only; never "this machine" or
-  "your machine"), a gateway **behind the relay** at its **Midplane URL**
-  (`https://gw-….eu.midplane.app/mcp`, through **the relay**, Midplane's),
-  or at **your own URL**.
+  with `npx`; never "this machine" or "your machine"), where **This computer
+  only** serves agents on the same computer, a gateway **behind the relay**
+  at its **Midplane URL** (`https://gw-….eu.midplane.app/mcp`, through **the
+  relay**, Midplane's: on a server, a platform or your computer), or at
+  **your own URL**.
 
 Never use v1's terms: "the engine", "control plane", "self-host",
 `MIDPLANE_POLICY_FILE`, "write classes", machine tokens (`mp_live_…`), or

@@ -22,7 +22,7 @@ the gateway's Midplane URL, such as `gw-7hq2m4xd.eu.midplane.app`, which points
 at the relay. The relay reads only the name the agent asks for in its TLS
 handshake, then passes the still-encrypted bytes, unread, over one of that
 gateway's connections. TLS ends at the gateway, with a certificate it got from
-Let's Encrypt for a key that never leaves its volume. Each connection serves
+Let's Encrypt for a key that never leaves its disk. Each connection serves
 only its own gateway's name.
 
 ### What the relay sees

@@ -46,8 +46,8 @@ connects to the gateway or to your databases.
 
 | Where the gateway runs | Agents reach it at | Which agents | What you set up |
 | --- | --- | --- | --- |
-| [Your computer](/gateway/deploy#your-computer) | The `http://gw-….localhost` URL setup prints, with its port | Those on the same computer | Node |
-| [A server or a platform, behind the relay](/gateway/deploy#docker) | Its Midplane URL, such as `https://gw-7hq2m4xd.eu.midplane.app/mcp` | Any, claude.ai and ChatGPT included | Nothing inbound: the server connects out on port 443 |
+| [Your computer, this computer only](/gateway/deploy#your-computer) | The `http://gw-….localhost` URL setup prints, with its port | Those on the same computer | Node |
+| [A server, a platform or your computer, behind the relay](/gateway/deploy#docker) | Its Midplane URL, such as `https://gw-7hq2m4xd.eu.midplane.app/mcp` | Any, claude.ai and ChatGPT included | Nothing inbound: the gateway connects out on port 443 |
 | [A server at your own URL](/gateway/deploy#your-own-url) | Your URL, such as `https://midplane.example.com/mcp` | Any that can reach the URL | A DNS record, and ports 80 and 443 open or a certificate of your own |
 
 Hosted agents, such as claude.ai and ChatGPT, run on their vendor's servers,

@@ -12,8 +12,9 @@ can reach an MCP server only at a public HTTPS URL, and your gateway sits in
 your network.
 
 The simplest way is a Midplane URL: a gateway [behind the
-relay](/gateway/deploy#docker) is reachable at a public HTTPS URL while it
-only connects out, even in a private network. The relay passes agents'
+relay](/gateway/deploy#docker), on a server or a platform or [on your
+computer](/gateway/deploy#your-computer), is reachable at a public HTTPS URL
+while it only connects out, even in a private network. The relay passes agents'
 encrypted traffic to the gateway without reading it, and TLS ends at the
 gateway ([what the relay sees](/security#the-relay)). Add that URL to
 [claude.ai](/agents/claude-ai) or [ChatGPT](/agents/chatgpt) as you would any
