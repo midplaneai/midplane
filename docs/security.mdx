@@ -15,7 +15,9 @@ through the relay, below.
 A gateway [behind the relay](/gateway/deploy#docker) connects out
 to the relay of its region, `relay.eu.midplane.app` in the EU, and keeps a
 few connections open there, which it authenticates with the token it uses
-with Midplane Cloud. An agent connects to
+with Midplane Cloud. Setup learns the relay's name from Midplane Cloud in an
+answer signed with the key the enrollment token pins, so a proxy that
+intercepts TLS can't point the gateway at another relay. An agent connects to
 the gateway's Midplane URL, such as `gw-7hq2m4xd.eu.midplane.app`, which points
 at the relay. The relay reads only the name the agent asks for in its TLS
 handshake, then passes the still-encrypted bytes, unread, over one of that

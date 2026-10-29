@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { CORE_FEATURES } from "@midplane/core";
 import {
+  type Ed25519PublicJwk,
   Ed25519PublicJwkSchema,
   ENROLLMENT_TOKEN_PREFIX,
   EnrollmentTokenSchema,
@@ -114,6 +115,19 @@ export function enrollmentPin(token: string): string {
     .toString("base64url");
 }
 
+/**
+ * The cloud's signing key as an answer names it, if the token pins it; else
+ * null. Nothing an answer says is believed before this.
+ */
+export async function pinnedKey(
+  token: string,
+  named: { x: string },
+): Promise<Ed25519PublicJwk | null> {
+  const key = { kty: "OKP", crv: "Ed25519", x: named.x } as const;
+  const thumbprint = await calculateJwkThumbprint(key, "sha256");
+  return thumbprint === enrollmentPin(token) ? key : null;
+}
+
 export interface EnrollOptions {
   cloudUrl: string;
   token: string;
@@ -138,7 +152,8 @@ export interface Enrollment {
 
 /** Enroll with the cloud and return the identity to keep. */
 export async function enroll(o: EnrollOptions): Promise<Enrollment> {
-  const pin = enrollmentPin(o.token);
+  // A token that isn't one is refused before anything is sent.
+  enrollmentPin(o.token);
   const { privateKey, publicKey } = await generateKeyPair("Ed25519", {
     extractable: true,
   });
@@ -194,12 +209,8 @@ export async function enroll(o: EnrollOptions): Promise<Enrollment> {
   }
 
   // The pin, before anything the answer says is believed.
-  const signingKey = {
-    kty: "OKP",
-    crv: "Ed25519",
-    x: answer.data.signing_key.x,
-  } as const;
-  if ((await calculateJwkThumbprint(signingKey, "sha256")) !== pin) {
+  const signingKey = await pinnedKey(o.token, answer.data.signing_key);
+  if (!signingKey) {
     throw new EnrollmentError(
       "the answer is signed with a key the enrollment token doesn't pin; something between this gateway and Midplane Cloud may be intercepting TLS",
       believed,

@@ -13,10 +13,11 @@
 // With `--relay`, agents reach the gateway through Midplane's relay instead,
 // at `https://<slug>.<relay domain>`, and it needs no host name, DNS record
 // or open port. Setup asks the cloud for its relay before the first
-// question; a cloud without one is refused. The gateway listens on loopback,
-// for health checks, and gets its certificate as it first starts, through
-// the relay, whose challenges reach it over the work connections its link
-// token opens: so only once it has enrolled.
+// question, and believes only an answer signed for its nonce with the key
+// the token pins; a cloud without one is refused. The gateway listens on
+// loopback, for health checks, and gets its certificate as it first starts,
+// through the relay, whose challenges reach it over the work connections its
+// link token opens: so only once it has enrolled.
 //
 // The enrollment token is spent last: the flags, the folder, the port and
 // the certificate (or the challenge's port) are checked before the first
@@ -49,11 +50,12 @@ import {
   EnrollmentTokenSchema,
   GATEWAY_SLUG_ALPHABET,
   LINK_API_PREFIX,
+  RelayAnswerSchema,
   type RelayInfo,
-  RelayInfoSchema,
   relayControlName,
   relaySlugOf,
 } from "@midplane/protocol";
+import { importJWK } from "jose";
 import {
   ACME_FILES,
   ACME_HTTP_PORT,
@@ -75,8 +77,10 @@ import {
   EnrollmentError,
   enroll,
   identityText,
+  pinnedKey,
 } from "./identity.ts";
 import { PromptClosed, type Prompter } from "./prompt.ts";
+import { verifyRelay } from "./proofs.ts";
 import { resourceOf } from "./urls.ts";
 
 /** A problem setup stops at; the message is for the person running it. */
@@ -478,21 +482,25 @@ function readTlsFile(file: string): string {
 const UNSPENT = "Nothing was written, and the token is unused.";
 
 /**
- * Where the cloud's relay is, as its region's cloud says: refused for a
- * cloud without one (404), naming the flag or variable that sets up at a
- * URL of the operator's own instead.
+ * Where the cloud's relay is, as its region's cloud says, signed for a
+ * nonce of setup's own with the key the token pins: refused for a cloud
+ * without one (404), naming the flag or variable that sets up at a URL of
+ * the operator's own instead, and for an answer that isn't signed so.
  */
 export async function askRelay(
   cloudUrl: string,
+  token: string,
   names: InputNames,
   o: { fetch?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<RelayInfo> {
+  const nonce = randomBytes(16).toString("base64url");
   const timeout = AbortSignal.timeout(30_000);
   let res: Response;
   try {
-    res = await (o.fetch ?? fetch)(`${cloudUrl}${LINK_API_PREFIX}/relay`, {
-      signal: o.signal ? AbortSignal.any([o.signal, timeout]) : timeout,
-    });
+    res = await (o.fetch ?? fetch)(
+      `${cloudUrl}${LINK_API_PREFIX}/relay?nonce=${nonce}`,
+      { signal: o.signal ? AbortSignal.any([o.signal, timeout]) : timeout },
+    );
   } catch (err) {
     if (o.signal?.aborted) throw new PromptClosed(true);
     throw new SetupError(
@@ -512,17 +520,39 @@ export async function askRelay(
       `Midplane Cloud at ${cloudUrl} has no relay: set the gateway up at a URL of your own, with ${names.url}. ${UNSPENT}`,
     );
   }
-  const info = RelayInfoSchema.safeParse(body);
-  if (
-    !res.ok ||
-    !info.success ||
-    info.data.control !== relayControlName(info.data.domain)
-  ) {
+  const answer = RelayAnswerSchema.safeParse(body);
+  if (!res.ok || !answer.success) {
     throw new SetupError(
       `Midplane Cloud at ${cloudUrl} didn't say where its relay is (${res.status}): try again later. ${UNSPENT}`,
     );
   }
-  return info.data;
+  // The pin, then the signature: only the signed answer is believed.
+  const { signing_key, proof } = answer.data;
+  const key = signing_key ? await pinnedKey(token, signing_key) : null;
+  if (signing_key && !key) {
+    throw new SetupError(
+      `Midplane Cloud at ${cloudUrl} signed where its relay is with a key the enrollment token doesn't pin: the token is for another Midplane Cloud, or something between this gateway and Midplane Cloud is intercepting TLS. ${UNSPENT}`,
+    );
+  }
+  const signed =
+    key && proof
+      ? await verifyRelay(proof, {
+          key: await importJWK(key, "EdDSA"),
+          issuer: cloudUrl,
+          nonce,
+        })
+      : null;
+  if (!signed) {
+    throw new SetupError(
+      `Midplane Cloud at ${cloudUrl} didn't sign where its relay is for this setup: something between this gateway and Midplane Cloud may be intercepting TLS. ${UNSPENT}`,
+    );
+  }
+  if (signed.control !== relayControlName(signed.domain)) {
+    throw new SetupError(
+      `Midplane Cloud at ${cloudUrl} didn't say where its relay is (${res.status}): try again later. ${UNSPENT}`,
+    );
+  }
+  return { domain: signed.domain, control: signed.control };
 }
 
 /** Everything checked before the first question. */
@@ -542,7 +572,7 @@ export async function prepareSetup(
   if (plan.relay) {
     // On loopback, as on this machine: agents come through the relay.
     const port = await choosePort(plan.port);
-    const relay = await askRelay(plan.cloudUrl, plan.names, o);
+    const relay = await askRelay(plan.cloudUrl, plan.token, plan.names, o);
     const url = `https://${plan.slug}.${relay.domain}`;
     let host: string | null = null;
     try {

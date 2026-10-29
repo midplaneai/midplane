@@ -1,9 +1,11 @@
 // The link answers a gateway acts on, verified against the bundle key it
 // pinned at enrollment: a person's decision on a held write, the claim of
 // that decision for one nonce, a grant's taint for one nonce, and the ack of
-// an audit batch for one nonce and body. Anything that doesn't verify is
-// null, and the caller fails closed: nothing runs, the grant counts as
-// tainted, or the events stay owed.
+// an audit batch for one nonce and body. Before enrolling, setup verifies
+// where the relay is, for its nonce, against the key its token pins.
+// Anything that doesn't verify is null, and the caller fails closed: nothing
+// runs, the grant counts as tainted, the events stay owed, or nothing is
+// set up.
 
 import {
   APPROVAL_JWS_TYPE,
@@ -16,6 +18,9 @@ import {
   ClaimPayloadSchema,
   type DecisionPayload,
   DecisionPayloadSchema,
+  RELAY_JWS_TYPE,
+  type RelayPayload,
+  RelayPayloadSchema,
   TAINT_JWS_TYPE,
   type TaintPayload,
   TaintPayloadSchema,
@@ -35,31 +40,38 @@ export interface ProofContext {
 /** Tolerated clock difference between gateway and cloud. */
 const SKEW_MS = 5_000;
 
-async function verified<T extends { iss: string; project_id: string }>(
+/** The payload of a JWS of this type, signed with `key`. */
+async function signedPayload<T>(
   jws: string,
   typ: string,
   schema: z.ZodType<T>,
-  ctx: ProofContext,
+  key: VerifyKey,
 ): Promise<T | null> {
   try {
-    const { payload, protectedHeader } = await compactVerify(jws, ctx.key, {
+    const { payload, protectedHeader } = await compactVerify(jws, key, {
       algorithms: ["EdDSA"],
     });
     if (protectedHeader.typ !== typ) return null;
     const parsed = schema.safeParse(
       JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload)),
     );
-    if (
-      !parsed.success ||
-      parsed.data.iss !== ctx.issuer ||
-      parsed.data.project_id !== ctx.projectId
-    ) {
-      return null;
-    }
-    return parsed.data;
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
+}
+
+async function verified<T extends { iss: string; project_id: string }>(
+  jws: string,
+  typ: string,
+  schema: z.ZodType<T>,
+  ctx: ProofContext,
+): Promise<T | null> {
+  const p = await signedPayload(jws, typ, schema, ctx.key);
+  if (!p || p.iss !== ctx.issuer || p.project_id !== ctx.projectId) {
+    return null;
+  }
+  return p;
 }
 
 /** The longest a decision may be claimable after a person makes it. */
@@ -141,4 +153,22 @@ export async function verifyAuditAck(
     return null;
   }
   return a;
+}
+
+/**
+ * Where the cloud's relay is, for setup's nonce: no project yet, so it binds
+ * the issuer only. `key` is the one the enrollment token pins.
+ */
+export async function verifyRelay(
+  jws: string,
+  ctx: { key: VerifyKey; issuer: string; nonce: string },
+): Promise<RelayPayload | null> {
+  const r = await signedPayload(
+    jws,
+    RELAY_JWS_TYPE,
+    RelayPayloadSchema,
+    ctx.key,
+  );
+  if (!r || r.iss !== ctx.issuer || r.nonce !== ctx.nonce) return null;
+  return r;
 }

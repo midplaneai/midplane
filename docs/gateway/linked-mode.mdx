@@ -33,7 +33,10 @@ dashboard.
 An owner or admin makes an enrollment token on the project's Gateways page.
 It works once, within 24 hours, and pins Midplane Cloud's signing key: the
 gateway refuses an answer signed with any other key, so a TLS-inspecting proxy
-can't stand in for the cloud.
+can't stand in for the cloud. Behind the relay, setup first asks Midplane
+Cloud where the relay is, and believes only an answer signed with that key
+for that setup, so such a proxy can't send the gateway's connections to
+another relay either.
 
 - **On a disk:** with `link.identity: { file: identity.json }`, the first
   start enrolls with the token and writes the identity (mode 0600). Later
@@ -165,7 +168,9 @@ expire, so stop the process as well. Behind the relay, the relay closes the
 gateway's connections within 10 seconds, so agents can't reach it at its
 Midplane URL from then on, and no other gateway ever gets that URL.
 
-*Tested by* `apps/gateway/test/link.e2e.test.ts` (enrollment and the pin,
+*Tested by* `apps/gateway/test/setup-relay.test.ts` (a forged answer naming
+another relay, refused before anything is written),
+`apps/gateway/test/link.e2e.test.ts` (enrollment and the pin,
 bundles, halting, pausing, restarts with the cloud down, revocation, no
 inbound connection, a database unreachable at start, then served, then
 dropped), against a stand-in for the cloud, `apps/gateway/test/catalog.e2e.test.ts`

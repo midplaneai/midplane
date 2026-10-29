@@ -17,6 +17,7 @@
 //    A work connection carries one stream.
 
 import { z } from "zod";
+import { Ed25519PublicJwkSchema } from "./link.ts";
 
 /** The work connection's upgrade, on the control name. */
 export const RELAY_CONNECT_PATH = "/v1/connect";
@@ -58,6 +59,38 @@ export const RelayInfoSchema = z.object({
   control: z.string().min(1),
 });
 export type RelayInfo = z.infer<typeof RelayInfoSchema>;
+
+export const RELAY_JWS_TYPE = "mp-relay";
+
+/**
+ * Where the relay is, signed with the bundle key for the nonce setup sent
+ * (`GET <link prefix>/relay?nonce=…`). Setup checks the key against its
+ * enrollment token's pin before writing anything, so nothing between it
+ * and the cloud can send the gateway's work connections, and its link
+ * token, to another relay.
+ */
+export const RelayPayloadSchema = z.object({
+  v: z.literal(1),
+  /** The cloud's origin, as setup was given it. */
+  iss: z.string().min(1),
+  domain: z.string().min(1),
+  control: z.string().min(1),
+  nonce: z.string().min(1),
+  iat: z.number().int(),
+});
+export type RelayPayload = z.infer<typeof RelayPayloadSchema>;
+
+/**
+ * The answer: where the relay is and, for a nonce, the same signed. Without
+ * one, as older gateways ask, it is unsigned.
+ */
+export const RelayAnswerSchema = RelayInfoSchema.extend({
+  /** The cloud's bundle-signing key; its thumbprint must equal the token's pin. */
+  signing_key: Ed25519PublicJwkSchema.loose().optional(),
+  /** A compact JWS (`typ: mp-relay`) over RelayPayload, signed with that key. */
+  proof: z.string().min(1).optional(),
+});
+export type RelayAnswer = z.infer<typeof RelayAnswerSchema>;
 
 export function relayControlName(domain: string): string {
   return `${RELAY_CONTROL_LABEL}.${domain}`;

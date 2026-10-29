@@ -33,6 +33,7 @@ import {
   IDENTITY_JWS_TYPE,
   LINK_API_PREFIX,
   NonceSchema,
+  RELAY_JWS_TYPE,
   type RelayInfo,
   relayControlName,
   type SyncRelease,
@@ -211,6 +212,41 @@ export interface FakeCloud {
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
+/** A fresh enrollment token pinning `publicJwk`, as the cloud makes them. */
+export async function pinningToken(publicJwk: JWK): Promise<string> {
+  const pin = await calculateJwkThumbprint(
+    { kty: "OKP", crv: "Ed25519", x: publicJwk.x as string },
+    "sha256",
+  );
+  return `mpe1_${Buffer.concat([Buffer.from(pin, "base64url"), randomBytes(32)]).toString("base64url")}`;
+}
+
+/**
+ * Where the relay is, signed for a nonce as the cloud signs it; `payload`
+ * may change any field, and `typ` the type.
+ */
+export async function relayProof(
+  privateJwk: JWK,
+  payload: { iss: string; domain: string; nonce: string } & Record<
+    string,
+    unknown
+  >,
+  typ = RELAY_JWS_TYPE,
+): Promise<string> {
+  return new CompactSign(
+    new TextEncoder().encode(
+      JSON.stringify({
+        v: 1,
+        control: relayControlName(payload.domain),
+        iat: Math.floor(Date.now() / 1000),
+        ...payload,
+      }),
+    ),
+  )
+    .setProtectedHeader({ alg: "EdDSA", typ })
+    .sign(await importJWK(privateJwk, "EdDSA"));
+}
+
 /** A nonce that differs from `n`, as a replayed answer's would. */
 const otherNonce = (n: string) =>
   `${n.startsWith("x") ? "y" : "x"}${n.slice(1)}`;
@@ -219,7 +255,10 @@ export async function startFakeCloud(
   options: {
     waitMs?: number;
     databases?: string[];
-    /** The region's relay domain, as `GET /link/v1/relay` says it; none answers 404. */
+    /**
+     * The region's relay domain, as `GET /link/v1/relay` says it, signed for
+     * a nonce as the cloud signs it; none answers 404.
+     */
     relayDomain?: string;
   } = {},
 ): Promise<FakeCloud> {
@@ -302,7 +341,7 @@ export async function startFakeCloud(
     c.json({ issuer: url, token_endpoint: `${url}/oauth2/token` }),
   );
 
-  app.get(`${LINK_API_PREFIX}/relay`, (c) => {
+  app.get(`${LINK_API_PREFIX}/relay`, async (c) => {
     const domain = options.relayDomain;
     if (!domain) {
       return c.json(
@@ -311,7 +350,16 @@ export async function startFakeCloud(
       );
     }
     const info: RelayInfo = { domain, control: relayControlName(domain) };
-    return c.json(info);
+    const nonce = c.req.query("nonce");
+    if (nonce === undefined) return c.json(info);
+    if (!NonceSchema.safeParse(nonce).success) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    return c.json({
+      ...info,
+      signing_key: signing.publicJwk,
+      proof: await relayProof(signing.privateJwk, { iss: url, domain, nonce }),
+    });
   });
 
   app.post(`${LINK_API_PREFIX}/enroll`, async (c) => {

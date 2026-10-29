@@ -14,9 +14,11 @@ import {
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { JWK } from "jose";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { LETS_ENCRYPT } from "../src/acme.ts";
+import { generateSigningKey } from "../src/auth.ts";
 import { certificateProblem } from "../src/certificates.ts";
 import { parseLinkedConfig } from "../src/config.ts";
 import { PromptClosed } from "../src/prompt.ts";
@@ -38,6 +40,7 @@ import {
   suggestDatabaseId,
   writeAndEnroll,
 } from "../src/setup.ts";
+import { pinningToken, relayProof } from "./fake-cloud.ts";
 
 const TOKEN = `mpe1_${"A".repeat(86)}`;
 const flags = (more: SetupFlags = {}): SetupFlags => ({
@@ -161,23 +164,60 @@ describe("the flags", () => {
 
 describe("--relay", () => {
   const DOMAIN = "eu.relay.test";
-  /** A cloud's answer to where its relay is, and the URLs setup asked. */
-  const cloudSays = (status: number, body: unknown = null) => {
+  const CLOUD = "https://eu.app.midplane.ai";
+  const RELAY = { domain: DOMAIN, control: `relay.${DOMAIN}` };
+  /** The cloud's signing key, which `token` pins, and a key it doesn't. */
+  let cloudKey: { privateJwk: JWK; publicJwk: JWK };
+  let otherKey: { privateJwk: JWK; publicJwk: JWK };
+  let token: string;
+  let base: string;
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "midplane-setup-relay-"));
+    cloudKey = await generateSigningKey();
+    otherKey = await generateSigningKey();
+    token = await pinningToken(cloudKey.publicJwk);
+  });
+
+  /**
+   * Where the relay is, signed for `nonce` as the cloud signs it, or with
+   * another key, type or payload.
+   */
+  const proof = (
+    nonce: string,
+    o: { key?: JWK; typ?: string; payload?: Record<string, unknown> } = {},
+  ) =>
+    relayProof(
+      o.key ?? cloudKey.privateJwk,
+      { iss: CLOUD, domain: DOMAIN, nonce, ...o.payload },
+      o.typ,
+    );
+  /** The cloud's answer for setup's nonce: signed, naming its key. */
+  const signed =
+    (o: Parameters<typeof proof>[1] = {}) =>
+    async (nonce: string) => ({
+      ...RELAY,
+      signing_key: cloudKey.publicJwk,
+      proof: await proof(nonce, o),
+    });
+  /**
+   * A cloud's answer to where its relay is, and the URLs setup asked: `body`
+   * as it is, or as made for the nonce setup sent.
+   */
+  const cloudSays = (
+    status: number,
+    body: unknown | ((nonce: string) => Promise<unknown>) = null,
+  ) => {
     const asked: string[] = [];
     const answer = (async (input: string | URL | Request) => {
       asked.push(String(input));
-      return new Response(JSON.stringify(body), {
-        status,
-        headers: { "content-type": "application/json" },
-      });
+      const nonce = new URL(String(input)).searchParams.get("nonce") ?? "";
+      return Response.json(
+        typeof body === "function" ? await body(nonce) : body,
+        { status },
+      );
     }) as typeof fetch;
     return { fetch: answer, asked };
   };
-  const RELAY = { domain: DOMAIN, control: `relay.${DOMAIN}` };
-  let base: string;
-  beforeAll(() => {
-    base = mkdtempSync(join(tmpdir(), "midplane-setup-relay-"));
-  });
 
   // protects=--relay plans a gateway at the URL the cloud's relay domain gives its slug, on loopback, with a certificate through the relay and the cloud's relay as its control name, and the config setup writes for it is one the gateway loads as relayed;
   // fails_when=the URL isn't https://<slug>.<relay domain>, the listener leaves loopback, a challenge port is bound or checked, the certificate comes from files, --acme-directory is dropped, or the written config doesn't load as the relay's;
@@ -190,15 +230,19 @@ describe("--relay", () => {
     const plan = planSetup(
       flags({
         relay: true,
+        token,
         "acme-directory": "https://localhost:14000/dir",
         dir: join(base, "gw"),
         database: ["shop"],
       }),
       "gw-k3m9x2qa",
     );
-    const cloud = cloudSays(200, RELAY);
+    const cloud = cloudSays(200, signed());
     const p = await prepareSetup(plan, { place: "installed", ...cloud });
-    expect(cloud.asked).toEqual(["https://eu.app.midplane.ai/link/v1/relay"]);
+    expect(cloud.asked).toHaveLength(1);
+    expect(cloud.asked[0]).toMatch(
+      /^https:\/\/eu\.app\.midplane\.ai\/link\/v1\/relay\?nonce=[A-Za-z0-9_-]{22}$/,
+    );
     expect(p).toMatchObject({
       relayed: {
         control: "relay.eu.relay.test",
@@ -273,10 +317,10 @@ describe("--relay", () => {
 
     const dir = join(base, "refused");
     const prepare = (fetchImpl: typeof fetch) =>
-      prepareSetup(planSetup(flags({ relay: true, dir }), "gw-k3m9x2qa"), {
-        place: "installed",
-        fetch: fetchImpl,
-      });
+      prepareSetup(
+        planSetup(flags({ relay: true, token, dir }), "gw-k3m9x2qa"),
+        { place: "installed", fetch: fetchImpl },
+      );
     await expect(
       prepare(cloudSays(404, { error: "not_found" }).fetch),
     ).rejects.toThrow(
@@ -286,8 +330,13 @@ describe("--relay", () => {
     );
     for (const [status, body] of [
       [503, null],
-      [200, { domain: DOMAIN, control: "relay.elsewhere.test" }],
       [200, { domain: "" }],
+      [
+        200,
+        signed({
+          payload: { domain: DOMAIN, control: "relay.elsewhere.test" },
+        }),
+      ],
     ] as const) {
       await expect(prepare(cloudSays(status, body).fetch)).rejects.toThrow(
         `Midplane Cloud at https://eu.app.midplane.ai didn't say where its relay is (${status}): try again later.`,
@@ -295,8 +344,12 @@ describe("--relay", () => {
     }
     await expect(
       prepare(
-        cloudSays(200, { domain: "Bad Domain", control: "relay.Bad Domain" })
-          .fetch,
+        cloudSays(
+          200,
+          signed({
+            payload: { domain: "Bad Domain", control: "relay.Bad Domain" },
+          }),
+        ).fetch,
       ),
     ).rejects.toThrow(/named a relay domain no gateway URL can be on/);
     await expect(
@@ -326,6 +379,94 @@ describe("--relay", () => {
     setTimeout(() => stop.abort(), 20);
     await expect(stopped).rejects.toThrow(PromptClosed);
     expect(readdirSync(base)).not.toContain("refused");
+  });
+
+  // protects=criterion 1 of #105: setup believes where the relay is only from an answer signed for its own nonce, by the cloud it was given, with the key its token pins, and refuses any other before anything is written; an unsigned field naming another relay is ignored;
+  // fails_when=an unsigned answer, one without its proof, one signed with another key (named or not), for another nonce, issuer or type, or a token pinning another key gets through, the refusal blames the cloud's uptime instead, the folder is written, or the unsigned domain is used;
+  // no_claim=that a gateway set up from a forged answer never dials it (setup-relay.test.ts, through a proxy, with a stand-in relay at the forged domain)
+  it("refuse an answer the token's pin doesn't verify, before anything is written", async () => {
+    const dir = join(base, "forged");
+    const prepare = (fetchImpl: typeof fetch, t = token) =>
+      prepareSetup(
+        planSetup(flags({ relay: true, token: t, dir }), "gw-k3m9x2qa"),
+        { place: "installed", fetch: fetchImpl },
+      );
+    const ELSEWHERE = { domain: "evil.test", control: "relay.evil.test" };
+    const unpinned =
+      "Midplane Cloud at https://eu.app.midplane.ai signed where its relay is with a key the enrollment token doesn't pin: the token is for another Midplane Cloud, or something between this gateway and Midplane Cloud is intercepting TLS. Nothing was written, and the token is unused.";
+    const unsigned =
+      "Midplane Cloud at https://eu.app.midplane.ai didn't sign where its relay is for this setup: something between this gateway and Midplane Cloud may be intercepting TLS. Nothing was written, and the token is unused.";
+
+    for (const [body, refused] of [
+      // As older clouds answer, or a proxy that drops the signature.
+      [ELSEWHERE, unsigned],
+      [{ ...ELSEWHERE, signing_key: cloudKey.publicJwk }, unsigned],
+      // A proxy's own key, and its own signature.
+      [
+        async (n: string) => ({
+          ...ELSEWHERE,
+          signing_key: otherKey.publicJwk,
+          proof: await proof(n, {
+            key: otherKey.privateJwk,
+            payload: ELSEWHERE,
+          }),
+        }),
+        unpinned,
+      ],
+      // Its signature under the cloud's key.
+      [signed({ key: otherKey.privateJwk, payload: ELSEWHERE }), unsigned],
+      // The cloud's, for another nonce, issuer or type.
+      [signed({ payload: { ...ELSEWHERE, nonce: "x".repeat(22) } }), unsigned],
+      [
+        signed({
+          payload: { ...ELSEWHERE, iss: "https://us.app.midplane.ai" },
+        }),
+        unsigned,
+      ],
+      [signed({ typ: "mp-freshness", payload: ELSEWHERE }), unsigned],
+      // The cloud's signature over another payload.
+      [
+        async (n: string) => {
+          const [head, , sig] = (await proof(n)).split(".");
+          const swapped = Buffer.from(
+            JSON.stringify({
+              v: 1,
+              iss: CLOUD,
+              ...ELSEWHERE,
+              nonce: n,
+              iat: 0,
+            }),
+          ).toString("base64url");
+          return {
+            ...ELSEWHERE,
+            signing_key: cloudKey.publicJwk,
+            proof: `${head}.${swapped}.${sig}`,
+          };
+        },
+        unsigned,
+      ],
+    ] as const) {
+      await expect(prepare(cloudSays(200, body).fetch)).rejects.toThrow(
+        new SetupError(refused),
+      );
+    }
+    // A token that pins another key: the cloud's own answer isn't believed.
+    await expect(
+      prepare(cloudSays(200, signed()).fetch, TOKEN),
+    ).rejects.toThrow(new SetupError(unpinned));
+    expect(readdirSync(base)).not.toContain("forged");
+
+    // Only what is signed is believed: an unsigned field is ignored.
+    const p = await prepare(
+      cloudSays(200, async (n: string) => ({
+        ...(await signed()(n)),
+        ...ELSEWHERE,
+      })).fetch,
+    );
+    expect(p.relayed).toEqual({
+      control: "relay.eu.relay.test",
+      url: "https://gw-k3m9x2qa.eu.relay.test",
+    });
   });
 });
 

@@ -10,9 +10,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { generateSigningKey } from "../src/auth.ts";
 import { parseLinkedConfig } from "../src/config.ts";
 import { SetupError, setupYaml } from "../src/setup.ts";
 import { chooseStart, readSetupEnv, setupFromEnv } from "../src/start.ts";
+import { pinningToken, relayProof } from "./fake-cloud.ts";
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const TOKEN = `mpe1_${"A".repeat(86)}`;
@@ -204,22 +206,34 @@ describe("the environment without MIDPLANE_URL", () => {
       });
     }
 
-    const { MIDPLANE_URL: _, ...env } = complete();
+    // A token pinning the key the cloud signs where its relay is with.
+    const key = await generateSigningKey();
+    const { MIDPLANE_URL: _, ...env } = complete({
+      MIDPLANE_ENROLLMENT_TOKEN: await pinningToken(key.publicJwk),
+    });
     const dir = join(mkdtempSync(join(tmpdir(), "midplane-start-relay-")), "v");
     const asked: { path: string; body?: string }[] = [];
     const cloud =
       (relay: boolean): typeof fetch =>
       async (input, init) => {
-        const path = new URL(String(input)).pathname;
+        const url = new URL(String(input));
+        const path = url.pathname;
         asked.push({
           path,
           ...(init?.body ? { body: String(init.body) } : {}),
         });
         if (path === "/link/v1/relay") {
+          const domain = "eu.relay.test";
           return relay
             ? Response.json({
-                domain: "eu.relay.test",
-                control: "relay.eu.relay.test",
+                domain,
+                control: `relay.${domain}`,
+                signing_key: key.publicJwk,
+                proof: await relayProof(key.privateJwk, {
+                  iss: url.origin,
+                  domain,
+                  nonce: url.searchParams.get("nonce") ?? "",
+                }),
               })
             : Response.json({ error: "not_found" }, { status: 404 });
         }

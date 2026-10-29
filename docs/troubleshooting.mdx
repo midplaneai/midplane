@@ -187,6 +187,12 @@ firewalls and proxies from its host.
 Something between the gateway and Midplane Cloud intercepts TLS. Let the
 gateway reach the cloud without TLS inspection.
 
+Behind the relay, setup checks where the relay is first, and stops before it
+writes anything, with the token still unused: `signed where its relay is with
+a key the enrollment token doesn't pin`, or `didn't sign where its relay is
+for this setup`. Check, too, that the token comes from the Midplane Cloud the
+URL names (`MIDPLANE_CLOUD_URL`, or `--cloud`).
+
 ### This gateway enrolled with another cloud
 
 `link.cloud_url` changed after enrollment. Put it back, or remove

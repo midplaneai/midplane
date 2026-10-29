@@ -4,24 +4,26 @@
 // config #67's gateway loads; then that gateway opens its work connections,
 // gets its certificate through the relay and answers there, as the agents'
 // URL setup's last line names. No certificate is ordered before enrolling.
+// A proxy that forges where the relay is gets nothing set up (#105).
 // The one connection string fails its test and is kept, so no Postgres is
 // needed; a query through the relay is the cloud's test with the real relay
 // (relay-gateway.e2e.test.ts).
 
 import { X509Certificate } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadParser } from "@midplane/core";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { generateSigningKey } from "../src/auth.ts";
 import { loadLinkedConfig } from "../src/config.ts";
 import type { Prompter } from "../src/prompt.ts";
 import { type RunningGateway, startLinked } from "../src/server.ts";
 import { runSetup } from "../src/setup.ts";
 import { startConfig } from "../src/start.ts";
 import { type FakeAcme, startFakeAcme } from "./fake-acme.ts";
-import { type FakeCloud, startFakeCloud } from "./fake-cloud.ts";
+import { type FakeCloud, relayProof, startFakeCloud } from "./fake-cloud.ts";
 import {
   type StandInRelay,
   startStandInRelay,
@@ -224,6 +226,118 @@ describe("set up behind the relay", { timeout: 30_000 }, () => {
     while (!cloud.statuses.some((s) => (s.relay?.idle ?? 0) > 0)) {
       if (Date.now() > until) throw new Error("no status with the relay");
       await new Promise((r) => setTimeout(r, 20));
+    }
+  });
+
+  // protects=criterion 2 of #105: a proxy that intercepts TLS between setup and the cloud and names another relay, signing for setup's nonce with a key of its own or not signing at all, gets nothing set up, interactively or from the environment: nothing is written, nothing enrolls, and the relay at the domain it named never hears from a gateway; the token stays unused, and with the cloud's own answer it sets up a gateway that dials the cloud's relay only;
+  // fails_when=setup believes an answer the token's pin doesn't verify, writes or enrolls before checking it, spends the token, or a gateway ever opens a work connection at the forged domain;
+  // no_claim=a proxy that holds the cloud's signing key (nothing setup can tell from the cloud), or the link after enrollment (link.e2e.test.ts pins the bundle key there)
+  it("refuses a forged answer naming another relay, which no gateway ever dials", async () => {
+    const { cloud, relay, acme } = await world();
+    const forged = await startStandInRelay({
+      control: "relay.evil.test",
+      source: { address: "203.0.113.7", port: 51234 },
+    });
+    try {
+      const own = await generateSigningKey();
+      const elsewhere = { domain: "evil.test", control: "relay.evil.test" };
+      /** The proxy's answer to where the relay is: its own signature, or none. */
+      const forgeries = {
+        signed: async (nonce: string) => ({
+          ...elsewhere,
+          signing_key: own.publicJwk,
+          proof: await relayProof(own.privateJwk, {
+            iss: cloud.url,
+            domain: elsewhere.domain,
+            nonce,
+          }),
+        }),
+        stripped: async () => elsewhere,
+      };
+      const through =
+        (forge: (nonce: string) => Promise<unknown>): typeof fetch =>
+        async (input, init) => {
+          const url = new URL(String(input));
+          if (url.pathname !== "/link/v1/relay") return fetch(input, init);
+          return Response.json(
+            await forge(url.searchParams.get("nonce") ?? ""),
+          );
+        };
+      const token = cloud.enrollmentToken();
+      const env: NodeJS.ProcessEnv = {
+        MIDPLANE_CLOUD_URL: cloud.url,
+        MIDPLANE_ENROLLMENT_TOKEN: token,
+        MIDPLANE_ACME_DIRECTORY: acme.url,
+        MIDPLANE_DSN_SHOP: DSN,
+      };
+      const refused = {
+        signed: `Midplane Cloud at ${cloud.url} signed where its relay is with a key the enrollment token doesn't pin`,
+        stripped: `Midplane Cloud at ${cloud.url} didn't sign where its relay is for this setup`,
+      };
+      for (const how of ["signed", "stripped"] as const) {
+        const dir = join(base, `forged-${how}`);
+        const prompter: Prompter = {
+          ask: async () => {
+            throw new Error("asked a question");
+          },
+          close: () => {},
+        };
+        await expect(
+          runSetup(
+            {
+              cloud: cloud.url,
+              token,
+              relay: true,
+              "acme-directory": acme.url,
+              dir,
+              "no-start": true,
+            },
+            {
+              prompter,
+              out: () => {},
+              inContainer: false,
+              npx: false,
+              fetch: through(forgeries[how]),
+            },
+          ),
+        ).rejects.toThrow(refused[how]);
+        const volume = join(base, `forged-${how}-volume`);
+        const set = startConfig({
+          config: join(base, "nothing-mounted", "midplane.yaml"),
+          dir: volume,
+          env,
+          log: () => {},
+          inContainer: false,
+          fetch: through(forgeries[how]),
+        });
+        await expect(set).rejects.toThrow(refused[how]);
+        await expect(set).rejects.toThrow(
+          "Nothing was written, and the token is unused.",
+        );
+        expect(existsSync(dir)).toBe(false);
+        expect(existsSync(volume)).toBe(false);
+      }
+      expect(cloud.gatewayId).toBeNull();
+      expect(cloud.bodies.map((b) => b.path)).not.toContain("/link/v1/enroll");
+
+      // The same token, with the cloud's own answer: the cloud's relay only.
+      const configPath = await startConfig({
+        config: join(base, "nothing-mounted", "midplane.yaml"),
+        dir: join(base, "honest-volume"),
+        env,
+        log: () => {},
+        inContainer: false,
+      });
+      expect(cloud.registered[0]).toMatch(
+        /^https:\/\/gw-[0-9a-z]{8}\.eu\.relay\.test\/mcp$/,
+      );
+      const served = await serveThroughRelay(configPath, env);
+      expect(served.health).toEqual({ status: 200, body: "ok" });
+      expect(relay.tokens.length).toBeGreaterThan(0);
+      expect(forged.tokens).toEqual([]);
+      expect(forged.idle()).toBe(0);
+    } finally {
+      await forged.close();
     }
   });
 });
