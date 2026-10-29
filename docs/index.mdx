@@ -4,15 +4,13 @@ sidebarTitle: "What is Midplane"
 description: "A gateway between AI agents and your Postgres databases. Every statement is checked against your policy and recorded before it runs."
 ---
 
-import Architecture from "/snippets/architecture.mdx";
+![An AI agent sends five statements, and Midplane, drawn as a plane between the agent and Postgres, checks each one against your policy and records it before it runs. Two reads pass through to Postgres: one is answered, the other answered with its emails hashed. Three stop at Midplane: a read of the api_keys table is blocked because the table is not open to agents, a delete waits for your approval, and dropping the orders table is blocked because schema changes are denied.](/images/overview.png)
 
 The gateway runs in your network, next to your databases. In Midplane Cloud
 you write the policy, approve held writes and read the Query log. Agents reach
 the gateway through Midplane's relay, which passes their encrypted traffic
 without reading it, or at a URL of your own. Midplane never sees your query
 results or connection strings.
-
-<Architecture />
 
 <Columns cols={3}>
   <Card title="Get started" icon="rocket" href="/get-started">

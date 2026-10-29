@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">What Midplane does</title>
+  <desc id="desc">An AI agent sends five statements, and Midplane, drawn as a plane between the agent and Postgres, checks each one against your policy and records it before it runs. Two reads pass through to Postgres: one is answered, the other answered with its emails hashed. Three stop at Midplane: a read of the api_keys table is blocked because the table is not open to agents, a delete waits for your approval, and dropping the orders table is blocked because schema changes are denied.</desc>
+  <defs>
+    <style>
+      text { font-family: "Schibsted Grotesk", sans-serif; fill: #0F1F29; }
+      .title { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+      .caption { font-size: 19px; font-weight: 400; fill: #4A5A63; }
+      .note { font-size: 18px; font-weight: 400; fill: #4A5A63; }
+      .sql { font-family: "Martian Mono", monospace; font-size: 17px; }
+      .chip { font-size: 17px; font-weight: 700; text-anchor: middle; }
+      .center { text-anchor: middle; }
+      .end { text-anchor: end; }
+      .pill { fill: #F8FAF8; stroke: #D6DDD8; stroke-width: 1.5; }
+      .line { fill: none; stroke: #0F1F29; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+      .through { fill: none; stroke: #F3F6F4; stroke-width: 2.5; stroke-linecap: round; opacity: 0.55; }
+      .icon { fill: none; stroke: #0F1F29; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+    <marker id="head" viewBox="0 0 12 10" markerWidth="12" markerHeight="10" refX="12" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L12,5 L0,10 Z" fill="#0F1F29"/>
+    </marker>
+    <linearGradient id="face" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1E3441"/>
+      <stop offset="1" stop-color="#0F1F29"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#0F1F29" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="#EEF2EF"/>
+
+  <!-- Headings: the agent, and Midplane above its plane. -->
+  <g class="icon">
+    <path d="M46 48 h42 a6 6 0 0 1 6 6 v28 a6 6 0 0 1 -6 6 h-28 l-10 9 v-9 h-4 a6 6 0 0 1 -6 -6 v-28 a6 6 0 0 1 6 -6 z"/>
+    <path d="M53 60 l7 7 -7 7 M66 74 h12"/>
+  </g>
+  <text class="title" x="112" y="78">AI agent</text>
+  <text class="caption" x="112" y="106">Claude Code, Cursor, any MCP client</text>
+
+  <g transform="translate(629.4 44) scale(0.42)">
+    <path fill="#0F1F29" d="M2 65.6V23.42H15.3V30.03Q17.3 26.19 20.49 24.28Q23.69 22.36 27.92 22.36Q32.41 22.36 35.42 24.49Q38.43 26.62 39.9 30.77Q42.41 26.19 46.02 24.28Q49.63 22.36 53.5 22.36Q60.02 22.36 63.39 26.92Q66.75 31.48 66.75 40.21V65.6H53.07V39.83Q53.07 37.92 52.69 36.26Q52.32 34.6 51.29 33.54Q50.27 32.49 48.26 32.49Q45.8 32.49 44.24 34.22Q42.67 35.94 41.95 38.85Q41.22 41.76 41.22 45.34V65.6H27.53V39.83Q27.53 37.92 27.16 36.24Q26.79 34.57 25.75 33.53Q24.72 32.49 22.75 32.49Q20.28 32.49 18.71 34.2Q17.15 35.9 16.42 38.82Q15.69 41.75 15.69 45.38V65.6ZM74.78 65.6V23.42H88.46V65.6ZM81.62 19.2Q77.63 19.2 75.33 16.89Q73.02 14.59 73.02 10.6Q73.02 6.61 75.33 4.3Q77.63 2 81.62 2Q85.61 2 87.91 4.3Q90.22 6.61 90.22 10.6Q90.22 14.59 87.91 16.89Q85.61 19.2 81.62 19.2ZM111.56 66.66Q106.19 66.66 102.3 64.03Q98.4 61.4 96.32 56.42Q94.24 51.44 94.24 44.41Q94.24 37.38 96.34 32.45Q98.44 27.52 102.36 24.94Q106.29 22.36 111.8 22.36Q116.68 22.36 120.17 24.55Q123.67 26.74 126.02 31.63L124.66 31.61V7.01H138.34V65.6H125.36V57.24L125.46 57.84Q123.19 62.39 119.68 64.53Q116.17 66.66 111.56 66.66ZM116.81 56.5Q119.3 56.5 121.23 55.16Q123.17 53.83 124.27 51.16Q125.38 48.49 125.38 44.57Q125.38 38.63 122.95 35.56Q120.53 32.49 116.92 32.49Q113.09 32.49 110.87 35.75Q108.65 39.01 108.65 44.69Q108.65 50.23 110.8 53.36Q112.95 56.5 116.81 56.5ZM170.6 80.84V23.42H183.59V31.74L183.48 31.15Q185.85 26.51 189.36 24.43Q192.87 22.36 197.42 22.36Q202.82 22.36 206.7 24.97Q210.57 27.59 212.65 32.57Q214.73 37.55 214.73 44.61Q214.73 51.61 212.63 56.55Q210.53 61.5 206.6 64.08Q202.66 66.66 197.14 66.66Q192.27 66.66 188.79 64.46Q185.31 62.25 182.96 57.39L184.25 57.38V80.84ZM192.06 56.5Q195.91 56.5 198.12 53.24Q200.33 49.98 200.33 44.33Q200.33 38.73 198.18 35.61Q196.02 32.49 192.14 32.49Q189.69 32.49 187.75 33.83Q185.81 35.16 184.7 37.83Q183.6 40.49 183.6 44.45Q183.6 50.38 186.02 53.44Q188.45 56.5 192.06 56.5ZM231.46 65.6Q225.86 65.6 223.1 63.07Q220.33 60.53 220.33 55.54V7.01H234.02V53.66Q234.02 54.96 234.39 55.4Q234.76 55.84 235.97 55.84H238.87V65.6ZM256.93 66.63Q252.95 66.63 249.43 65.3Q245.91 63.97 243.71 61.15Q241.51 58.32 241.51 53.84Q241.51 49.01 244.3 45.85Q247.1 42.7 252.21 41.15Q257.33 39.6 264.32 39.6H269.82L269.12 40.82V38.33Q269.12 34.51 267.81 32.75Q266.5 30.99 263.48 30.99Q260.55 30.99 259.04 32.54Q257.52 34.1 257.03 37.12L243.38 34.91Q244.13 31.36 246.55 28.51Q248.96 25.65 253.32 23.97Q257.67 22.29 264.23 22.29Q269.99 22.29 274.12 24.01Q278.24 25.73 280.46 29.87Q282.67 34.01 282.67 41.31V53.66Q282.67 54.98 283.04 55.41Q283.42 55.84 284.63 55.84H286.33V65.6H280.22Q274.92 65.6 272.31 63.05Q269.7 60.5 269.7 55.54V53.95L272.18 55.03Q271.71 56.73 270.8 58.72Q269.89 60.71 268.2 62.51Q266.51 64.31 263.77 65.47Q261.03 66.63 256.93 66.63ZM261.02 57.69Q263.56 57.69 265.39 56.57Q267.23 55.44 268.24 53.3Q269.25 51.16 269.25 48.11V46.96H265.01Q261.26 46.96 259.19 47.95Q257.12 48.93 256.32 50.33Q255.51 51.72 255.51 53.04Q255.51 53.9 255.94 54.99Q256.36 56.09 257.54 56.89Q258.72 57.69 261.02 57.69ZM292.05 65.6V23.42H305.35V33.22L305.04 31.47Q307.06 27.07 310.52 24.71Q313.99 22.36 318.91 22.36Q323.98 22.36 327.08 24.69Q330.19 27.02 331.61 31.06Q333.03 35.1 333.03 40.24V65.6H319.34V41.08Q319.34 36.87 318.12 34.68Q316.9 32.49 313.73 32.49Q309.78 32.49 307.76 36.1Q305.74 39.7 305.74 47.37V65.6ZM361.05 66.66Q354.79 66.66 349.63 63.95Q344.47 61.24 341.38 56.25Q338.29 51.27 338.29 44.43Q338.29 37.67 341.3 32.72Q344.31 27.78 349.46 25.07Q354.61 22.36 361.06 22.36Q364.6 22.36 368.26 23.41Q371.91 24.47 375 27.17Q378.08 29.87 379.96 34.72Q381.85 39.57 381.85 47.15H347.08V39.99H369.6L368.62 41.9Q368.27 38.23 367.18 35.96Q366.08 33.69 364.41 32.64Q362.74 31.6 360.66 31.6Q357.81 31.6 356.01 33.29Q354.2 34.98 353.34 37.89Q352.48 40.8 352.48 44.5Q352.48 50.08 354.49 53.44Q356.5 56.8 360.93 56.8Q363.68 56.8 365.72 55.38Q367.75 53.95 368.91 50.87L381.09 53.76Q379.6 58.39 376.42 61.23Q373.23 64.07 369.18 65.37Q365.14 66.66 361.05 66.66Z"/>
+    <path fill="#B4460C" d="M154.47 66.66Q150.44 66.66 148.01 64.24Q145.59 61.81 145.59 57.78Q145.59 53.74 148.01 51.32Q150.44 48.89 154.47 48.89Q158.51 48.89 160.94 51.32Q163.36 53.74 163.36 57.78Q163.36 61.81 160.94 64.24Q158.51 66.66 154.47 66.66ZM154.47 40.13Q150.44 40.13 148.01 37.7Q145.59 35.28 145.59 31.24Q145.59 27.21 148.01 24.78Q150.44 22.36 154.47 22.36Q158.51 22.36 160.94 24.78Q163.36 27.21 163.36 31.24Q163.36 35.28 160.94 37.7Q158.51 40.13 154.47 40.13Z"/>
+  </g>
+  <text class="caption center" x="710" y="110">Checks every statement against your policy</text>
+  <text class="caption center" x="710" y="134">and records it before it runs</text>
+
+  <!-- Statement lines. Allowed ones cross the plane and run on to Postgres;
+       the others end at their verdict, against the plane. -->
+  <path class="line" d="M444 220 H992 C1020 220 1012 270 1036 270 H1052" marker-end="url(#head)"/>
+  <path class="line" d="M444 380 H992 C1020 380 1012 330 1036 330 H1052" marker-end="url(#head)"/>
+  <path class="line" d="M444 300 H558" marker-end="url(#head)"/>
+  <path class="line" d="M444 460 H482" marker-end="url(#head)"/>
+  <path class="line" d="M444 540 H558" marker-end="url(#head)"/>
+
+  <!-- The plane -->
+  <path d="M670 156 L750 184 V576 L670 604 Z" fill="url(#face)"/>
+  <path d="M670 156 V604" stroke="#3A5361" stroke-width="2" fill="none"/>
+  <path class="through" d="M670 220 H750 M670 380 H750"/>
+
+  <!-- Statements -->
+  <g filter="url(#shadow)">
+    <rect class="pill" x="40" y="198" width="404" height="44" rx="9"/>
+    <rect class="pill" x="40" y="278" width="404" height="44" rx="9"/>
+    <rect class="pill" x="40" y="358" width="404" height="44" rx="9"/>
+    <rect class="pill" x="40" y="438" width="404" height="44" rx="9"/>
+    <rect class="pill" x="40" y="518" width="404" height="44" rx="9"/>
+  </g>
+  <text class="sql" x="57" y="226">SELECT plan FROM customers</text>
+  <text class="sql" x="57" y="306">SELECT * FROM api_keys</text>
+  <text class="sql" x="57" y="386">SELECT email FROM customers</text>
+  <text class="sql" x="57" y="466">DELETE FROM orders WHERE id = 7</text>
+  <text class="sql" x="57" y="546">DROP TABLE orders</text>
+
+  <!-- Verdicts that pass, past the plane -->
+  <rect x="764" y="203" width="114" height="34" rx="17" fill="#DCEBE2"/>
+  <text class="chip" x="821" y="226" style="fill:#1F5039">Answered</text>
+  <rect x="764" y="363" width="229" height="34" rx="17" fill="#DCE6EF"/>
+  <text class="chip" x="878.5" y="386" style="fill:#274866">Answered, fields hidden</text>
+  <text class="note" x="764" y="424">Emails hashed</text>
+
+  <!-- Verdicts that stop, against the plane -->
+  <rect x="560" y="283" width="96" height="34" rx="17" fill="#B4460C"/>
+  <text class="chip" x="608" y="306" style="fill:#FFFFFF">Blocked</text>
+  <text class="note end" x="656" y="344">Table not open to agents</text>
+  <rect x="484" y="443" width="172" height="34" rx="17" fill="#FBE9DF"/>
+  <text class="chip" x="570" y="466" style="fill:#8A3409">Held for approval</text>
+  <text class="note end" x="656" y="504">Waits for your OK</text>
+  <rect x="560" y="523" width="96" height="34" rx="17" fill="#B4460C"/>
+  <text class="chip" x="608" y="546" style="fill:#FFFFFF">Blocked</text>
+  <text class="note end" x="656" y="584">Schema changes denied</text>
+
+  <!-- Postgres -->
+  <g class="icon">
+    <path d="M1054 254 v92 c0 10 25 18 56 18 s56 -8 56 -18 v-92" fill="#F8FAF8"/>
+    <ellipse cx="1110" cy="254" rx="56" ry="17" fill="#F8FAF8"/>
+    <path d="M1054 285 c0 10 25 18 56 18 s56 -8 56 -18 M1054 316 c0 10 25 18 56 18 s56 -8 56 -18"/>
+  </g>
+  <text class="title center" x="1110" y="406">Postgres</text>
+</svg>

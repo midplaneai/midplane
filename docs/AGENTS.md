@@ -43,7 +43,11 @@ and add a client only once it has been tested end to end against a gateway.
 
 Prefer `<Steps>`, `<Columns>` of `<Card>`s, tables and diagrams to paragraphs.
 The architecture diagram lives once, in `snippets/architecture.mdx`; import it
-rather than drawing another. No dashboard screenshots while the setup flow is
+rather than drawing another. The home page opens with `images/overview.png`
+instead: what happens to an agent's statements, with no infrastructure. Each
+diagram is a PNG rendered from the SVG beside it; edit the SVG, re-render (the
+steps are in the monorepo's `DECISIONS.md`), and keep its `<desc>` and the
+image's alt text the same. No dashboard screenshots while the setup flow is
 still changing. The AI-assistant prompt on `/gateway/deploy` is
 `snippets/server-setup-prompt.mdx`, which the `<Prompt>` card copies and an
 accordion shows: when the Docker steps or the dashboard's labels change, change
