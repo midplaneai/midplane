@@ -81,10 +81,26 @@ function nodeTooOld(version = process.versions.node): boolean {
   return major < MIN_NODE[0] || (major === MIN_NODE[0] && minor < MIN_NODE[1]);
 }
 
+/**
+ * Exit once the event loop is empty. process.exit() can hang: it stops V8's
+ * worker threads before the heap, and a background compile waiting on a
+ * garbage collection then waits forever (Node 24, `midplane audit verify` in
+ * CI). An empty loop tears the heap down first. Whatever still holds the
+ * loop open gets process.exit() after a second. What fails meanwhile, a
+ * reader gone from the pipe (EPIPE) or a rejection nothing awaits, would
+ * replace the code; process.exit() never let it run, so neither does this.
+ */
+function exit(code: number): void {
+  process.exitCode = code;
+  process.on("uncaughtException", () => {});
+  process.on("unhandledRejection", () => {});
+  setTimeout(() => process.exit(code), 1000).unref();
+}
+
 function serveUntilSignal(running: RunningGateway): void {
   const stop = async () => {
     await running.close();
-    process.exit(0);
+    exit(0);
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
@@ -384,7 +400,7 @@ async function main(argv: string[]): Promise<number> {
 
 main(process.argv.slice(2)).then(
   (code) => {
-    if (code >= 0) process.exit(code);
+    if (code >= 0) exit(code);
   },
   (err) => {
     log({
@@ -398,6 +414,6 @@ main(process.argv.slice(2)).then(
         ? { acme_type: err.problem.type, acme_detail: err.problem.detail }
         : {}),
     });
-    process.exit(1);
+    exit(1);
   },
 );

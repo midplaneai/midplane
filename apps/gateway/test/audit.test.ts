@@ -756,6 +756,53 @@ describe("export and verify", () => {
     expect(live.status).toBe(0);
   });
 
+  it("exits on an empty event loop, and a reader that left changes nothing", () => {
+    // Value: protects=the CLI exits without process.exit(), which can deadlock with V8's background compiles (v0.25.0's first release run hung in audit verify), and a closed stdout keeps its code; fails_when=main's code goes to process.exit() again, a handle holds the loop past the result, or a late EPIPE throws; why_new=nothing checked how the CLI exits; seam=none
+    const dir = tmp();
+    const log = new LocalAuditLog(join(dir, "audit.db"));
+    for (const e of lifecycle("q1")) log.append(e);
+    log.close();
+    const exported = join(dir, "out.jsonl");
+    execFileSync(process.execPath, [
+      CLI,
+      "audit",
+      "export",
+      "--audit",
+      join(dir, "audit.db"),
+      "--out",
+      exported,
+    ]);
+    // Only the fallback for a loop held open calls process.exit().
+    const probe = join(dir, "exit-probe.cjs");
+    writeFileSync(
+      probe,
+      'const exit = process.exit;\nprocess.exit = (c) => { process.stderr.write("process.exit called\\n"); exit(c); };\n',
+    );
+    const verified = spawnSync(process.execPath, [
+      "--require",
+      probe,
+      CLI,
+      "audit",
+      "verify",
+      "--file",
+      exported,
+    ]);
+    expect(verified.status).toBe(0);
+    expect(String(verified.stderr)).not.toMatch(/process\.exit called/);
+    // `true` has closed the pipe before the result is written.
+    const status = join(dir, "status");
+    const piped = spawnSync("sh", [
+      "-c",
+      '{ "$0" "$1" audit verify --file "$2"; echo $? > "$3"; } | true',
+      process.execPath,
+      CLI,
+      exported,
+      status,
+    ]);
+    expect(String(piped.stderr)).toBe("");
+    expect(readFileSync(status, "utf8").trim()).toBe("0");
+  });
+
   it("reads a file read-only", () => {
     const path = join(tmp(), "a.db");
     const log = new LocalAuditLog(path);

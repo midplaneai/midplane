@@ -7,8 +7,8 @@ import Architecture from "/snippets/architecture.mdx";
 
 <Architecture />
 
-The gateway opens every connection. Midplane Cloud never connects to the
-gateway or to your databases.
+The gateway opens its connections to Midplane Cloud and to the relay. Neither
+connects to the gateway or to your databases.
 
 ## The parts
 
@@ -52,12 +52,13 @@ gateway or to your databases.
 
 <Columns cols={2}>
   <Card title="Stays in your network" icon="lock">
-    Rows and results, connection strings, database error messages, the mask
-    salt, and the full audit log.
+    Connection strings, database error messages, the mask salt, and the full
+    audit log. Results go only to your agents.
   </Card>
   <Card title="Goes to Midplane Cloud" icon="cloud-arrow-up">
     Table and column names, statements with their values replaced, gateway and
-    database status, and writes held for approval.
+    database status, and writes held for approval, as written. Full statements
+    only if you turn them on.
   </Card>
 </Columns>
 
