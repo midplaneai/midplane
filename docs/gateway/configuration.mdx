@@ -111,10 +111,11 @@ Two more rules the config can't check:
   the config, on its volume, and never in a variable. Without a disk it
   gets a new certificate at every start, and Let's Encrypt issues at most
   five for one name a week.
-- **Run one copy of it.** The relay sends Let's Encrypt's check to any idle
-  connection of the gateway, so it may reach a copy that didn't order the
-  certificate. For replicas, use your own URL
-  ([replicas](/gateway/multiple-gateways#replicas)).
+- **Run at most two copies of it.** The relay holds 8 idle connections per
+  gateway, and each copy keeps 4. Each copy orders its own certificate, out
+  of the same five a week, and the relay passes Let's Encrypt's check to one of the gateway's connections
+  after another until the copy that ordered it answers. For more copies, use
+  your own URL ([replicas](/gateway/multiple-gateways#replicas)).
 
 ## Local mode only (`midplane local`)
 

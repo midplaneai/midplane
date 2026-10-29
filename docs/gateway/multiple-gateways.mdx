@@ -24,12 +24,12 @@ in that network.
 ## Replicas
 
 For availability, run several processes of one gateway behind one URL of
-your own. They share one identity (enroll once with `midplane enroll`, as on
-[platforms without a disk](/gateway/deploy#other-setups)), and each keeps its
-own audit file. A new enrollment token always makes a new gateway, so don't use
-one for a replica. Behind the relay, run one process of each gateway: the
-relay can send Let's Encrypt's check meant for one process to another. More
-in [linked mode](/gateway/linked-mode#replicas).
+your own, or two behind the relay. They share one identity (enroll once with
+`midplane enroll`, as on [platforms without a disk](/gateway/deploy#other-setups)),
+and each keeps its own audit file. A new enrollment token always makes a new
+gateway, so don't use one for a replica. Behind the relay, each process also
+keeps its own certificate, so give each a disk of its own. More in [linked
+mode](/gateway/linked-mode#replicas).
 
 ## Adding databases
 

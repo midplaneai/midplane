@@ -154,10 +154,12 @@ for two minutes. Give each replica a file of its own: a copied file goes on
 as a new instance once the cloud names the other's event at one of its
 sequences. Local processes may share a file; linked ones may not.
 
-Behind the relay, run one process: the relay sends Let's Encrypt's checks of
-the gateway's name to any of its connections, so a second process could get
-the check for the first one's certificate. For replicas, give the gateway
-[your own URL](/gateway/deploy#your-own-url).
+Behind the relay, run at most two processes, each with a disk of its own:
+the relay holds 8 idle connections per gateway, and each process keeps 4.
+Each orders its own certificate, and the relay passes Let's Encrypt's checks
+of the gateway's name to one of its connections after another until the
+process that ordered it answers. For more, give the gateway [your own
+URL](/gateway/deploy#your-own-url).
 
 ## Revoking
 

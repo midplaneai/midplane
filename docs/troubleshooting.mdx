@@ -299,11 +299,9 @@ with a new token.
 
 **Relay: refused: too many idle connections, from replicas of this gateway**
 (429). The relay holds at most 8 idle connections per gateway, and each
-copy of a gateway keeps 4, so a third copy is refused. Run one copy: the
-relay passes Let's Encrypt's check of the gateway's name to any idle
-connection of that gateway, so with two copies the check can reach the one
-that didn't order the certificate, and fail. For replicas, give the gateway
-[your own URL](/gateway/deploy#your-own-url).
+copy of a gateway keeps 4, so a third copy is refused. Run at most two
+copies of one gateway behind the relay; for more, give the gateway [your own
+URL](/gateway/deploy#your-own-url).
 
 ### No link token for the relay
 

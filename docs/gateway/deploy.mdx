@@ -94,7 +94,7 @@ sees](/security#the-relay)).
 | --- | --- | --- |
 | You need | A server that connects out on port 443 | A DNS name for the server, and ports 80 and 443 open or a certificate of your own |
 | Between agents and the gateway | Midplane's relay, which passes encrypted bytes it can't read | Nothing of Midplane's |
-| Copies of one gateway | One | As many as you run behind the URL ([replicas](/gateway/multiple-gateways#replicas)) |
+| Copies of one gateway | Up to two | As many as you run behind the URL ([replicas](/gateway/multiple-gateways#replicas)) |
 | While the relay is down | Agents can't reach the gateway | No effect |
 
 Let an AI assistant (Claude, ChatGPT, Cursor) set the server up with you: copy
@@ -175,11 +175,12 @@ money.
   keeps restarting and trying, about once a minute: Docker reads the env file
   only when it creates the container. Remove it (`docker rm -f
   midplane-gw-…`), fix the file, and run the command again.
-- **Keep the volume, and run one copy.** The gateway's certificate is on
-  the volume: a gateway that loses it orders a new one as it starts, and
-  Let's Encrypt issues at most 5 for one name a week. A second copy of the
-  same gateway behind the relay can get Let's Encrypt's checks meant for the
-  first, so for replicas use [your own URL](#your-own-url).
+- **Keep the volume.** The gateway's certificate is on the volume: a
+  gateway that loses it orders a new one as it starts, and Let's Encrypt
+  issues at most 5 for one name a week, to all its copies together. Behind
+  the relay, run at most two copies of one gateway, each with a volume of
+  its own ([replicas](/gateway/multiple-gateways#replicas)); for more, use
+  [your own URL](#your-own-url).
 - **If the relay is down,** the gateway keeps enforcing your policies, but
   agents can't reach it until the relay is back. It reconnects on its own
   ([when the relay is down](/security#when-the-relay-is-down)).
