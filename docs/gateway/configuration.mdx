@@ -181,8 +181,9 @@ databases](/gateway/multiple-gateways#adding-databases)).
 
 ## Commands
 
-Every command needs Node 24.16 or newer. One with a flag it doesn't know
-prints the usage.
+Every command needs Node 24.16 or newer. (`unreleased`) `--help` after any
+command prints the usage, and so does a flag the command doesn't know, which
+exits 2.
 
 | Command | What |
 | --- | --- |
@@ -192,7 +193,7 @@ prints the usage.
 | `midplane enroll --config <file> [--out <file>]` | Joins the project once and prints the identity as one line of JSON, or writes it to `--out` with mode 0600 |
 | `midplane local --config <file> [--stdio]` | Serves in [local mode](/gateway/local-mode). With `--stdio`, MCP goes over stdin and stdout, with the token in `MIDPLANE_TOKEN` |
 | `midplane keygen --out <dir>` | Writes `midplane-signing-key.json` (mode 0600) and `midplane-verify-key.json` in `<dir>` |
-| `midplane token --config <file> --key <file> --sub <who>` | Prints a local-mode token, signed with the key `--key` names. `--database <id>` limits it to one database (every one in the config by default), `--access` is `read` (the default) or `write`, and `--ttl` is in seconds (`3600` by default) |
+| `midplane token --config <file> --key <file> --sub <who>` | Prints a local-mode token, signed with the key `--key` names. `--database <id>` limits it to one database (every one in the config by default), `--access` is `read` (the default) or `write`, and `--ttl` is a whole number of seconds (`3600` by default, `86400` for a day). (`unreleased`) A `--ttl` such as `24h` is refused, and stderr says when the token expires |
 | `midplane audit export`, `midplane audit verify` | Export the audit file, and verify a file or an export ([audit](/audit#export-and-verify)) |
 | `midplane --version` | Prints `midplane` and its version |
 

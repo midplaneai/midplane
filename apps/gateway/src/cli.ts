@@ -23,6 +23,7 @@
 //   midplane audit verify (--config midplane.yaml | --audit <file> | --file <export>)
 //                  [--checkpoints <cloud export>]
 //   midplane --version
+//   midplane [<command>] --help                        the usage
 
 import { randomUUID } from "node:crypto";
 import { createWriteStream, readFileSync, writeFileSync } from "node:fs";
@@ -71,7 +72,8 @@ const USAGE = `usage:
   midplane token --config <file> --key <signing-key.json> --sub <who> [--database <id>] [--access read|write] [--ttl <seconds>]
   midplane audit export (--config <file> | --audit <file>) [--out <file>] [--since <seq>]
   midplane audit verify (--config <file> | --audit <file> | --file <export>) [--checkpoints <cloud export>]
-  midplane --version`;
+  midplane --version
+  midplane [<command>] --help`;
 
 /** node:sqlite's text-truncation bug is fixed from 24.16. */
 const MIN_NODE = [24, 16] as const;
@@ -95,6 +97,44 @@ function exit(code: number): void {
   process.on("uncaughtException", () => {});
   process.on("unhandledRejection", () => {});
   setTimeout(() => process.exit(code), 1000).unref();
+}
+
+/** A flag parseArgs refused, then the usage: exit 2. */
+function usageError(err: unknown): number {
+  process.stderr.write(`${(err as Error).message}\n${USAGE}\n`);
+  return 2;
+}
+
+/**
+ * A flag's whole number, or null. Digits only: parseInt would read `24h` as
+ * 24, `1e3` as 1 and `-5` as -5.
+ */
+function wholeNumber(text: string): number | null {
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** The flags of every command but setup and start. */
+function commandFlags(args: string[]) {
+  return parseArgs({
+    args,
+    options: {
+      config: { type: "string" },
+      stdio: { type: "boolean", default: false },
+      out: { type: "string" },
+      key: { type: "string" },
+      sub: { type: "string" },
+      database: { type: "string" },
+      access: { type: "string", default: "read" },
+      ttl: { type: "string", default: "3600" },
+      audit: { type: "string" },
+      file: { type: "string" },
+      since: { type: "string" },
+      checkpoints: { type: "string" },
+    },
+    strict: true,
+  }).values;
 }
 
 function serveUntilSignal(running: RunningGateway): void {
@@ -133,8 +173,7 @@ async function setup(args: string[]): Promise<number> {
       allowPositionals: false,
     }).values;
   } catch (err) {
-    process.stderr.write(`${(err as Error).message}\n${USAGE}\n`);
-    return 2;
+    return usageError(err);
   }
   const abort = new AbortController();
   const stop = () => abort.abort();
@@ -188,8 +227,7 @@ async function start(args: string[]): Promise<number> {
       allowPositionals: false,
     }).values;
   } catch (err) {
-    process.stderr.write(`${(err as Error).message}\n${USAGE}\n`);
-    return 2;
+    return usageError(err);
   }
   const abort = new AbortController();
   const stop = () => abort.abort();
@@ -240,29 +278,22 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(`midplane ${SERVER_VERSION}\n`);
     return 0;
   }
+  // Agents try `<command> --help` before they guess a flag's format.
+  if (command === "help" || argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
   if (command === "setup") return setup(args);
   if (command === "start") return start(args);
   // `midplane audit <export|verify>` takes its subcommand first.
   const sub = command === "audit" ? args[0] : undefined;
   const rest = command === "audit" ? args.slice(1) : args;
-  const { values } = parseArgs({
-    args: rest,
-    options: {
-      config: { type: "string" },
-      stdio: { type: "boolean", default: false },
-      out: { type: "string" },
-      key: { type: "string" },
-      sub: { type: "string" },
-      database: { type: "string" },
-      access: { type: "string", default: "read" },
-      ttl: { type: "string", default: "3600" },
-      audit: { type: "string" },
-      file: { type: "string" },
-      since: { type: "string" },
-      checkpoints: { type: "string" },
-    },
-    strict: true,
-  });
+  let values: ReturnType<typeof commandFlags>;
+  try {
+    values = commandFlags(rest);
+  } catch (err) {
+    return usageError(err);
+  }
 
   const auditFile = () =>
     values.audit ?? (values.config ? auditFileOf(values.config) : null);
@@ -272,8 +303,9 @@ async function main(argv: string[]): Promise<number> {
       if (sub === "export") {
         const file = auditFile();
         if (!file) break;
-        const since = values.since ? Number.parseInt(values.since, 10) : 0;
-        if (!Number.isSafeInteger(since) || since < 0) break;
+        const since =
+          values.since === undefined ? 0 : wholeNumber(values.since);
+        if (since === null) break;
         const out = values.out
           ? createWriteStream(values.out, { flags: "wx", mode: 0o600 })
           : process.stdout;
@@ -367,6 +399,16 @@ async function main(argv: string[]): Promise<number> {
     }
     case "token": {
       if (!values.config || !values.key || !values.sub) break;
+      const now = Math.floor(Date.now() / 1000);
+      const ttl = wholeNumber(values.ttl) ?? 0;
+      // A date ends in the year 275760: past it, no expiry to print.
+      const until = new Date((now + ttl) * 1000);
+      if (ttl < 1 || Number.isNaN(until.getTime())) {
+        process.stderr.write(
+          `--ttl is a whole number of seconds, at least 1 (3600 is an hour, 86400 a day), not ${JSON.stringify(values.ttl)}\n`,
+        );
+        return 2;
+      }
       const config = loadConfig(values.config);
       if (values.access !== "read" && values.access !== "write") break;
       const databases = values.database
@@ -387,10 +429,16 @@ async function main(argv: string[]): Promise<number> {
         databases: Object.fromEntries(
           databases.map((d) => [d, values.access as "read" | "write"]),
         ),
-        ttlSeconds: Number.parseInt(values.ttl, 10),
+        ttlSeconds: ttl,
         jti: randomUUID(),
+        now,
       });
       process.stdout.write(`${token}\n`);
+      // On stderr, so `> token.txt` keeps the token alone and a wrong
+      // lifetime shows without decoding it.
+      process.stderr.write(
+        `token for ${values.sub}: ${values.access} on ${databases.join(", ")}, until ${until.toISOString()} (${ttl} seconds)\n`,
+      );
       return 0;
     }
   }

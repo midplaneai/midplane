@@ -153,9 +153,9 @@ midplane audit verify --config midplane.yaml
   the events pushed under the old one are checked by the chain alone.
 - `verify` exits `0` when the record verifies. It exits `1` when it doesn't (a
   broken chain, a checkpoint that doesn't match), and also when it can't check
-  at all: an input or config it can't read, a config with no `audit.file`, an
-  unknown option. It exits `2`, printing its usage, when given nothing to read.
-  Treat only `0` as verified.
+  at all: an input or config it can't read, a config with no `audit.file`. It
+  exits `2`, printing its usage, when given nothing to read, and (`unreleased`)
+  given an option it doesn't know. Treat only `0` as verified.
 - **What it proves:** the record is internally consistent from its anchor,
   and nothing Midplane Cloud saw was changed afterwards. **What it can't:**
   the chain is a plain SHA-256 chain, so events the cloud never received can

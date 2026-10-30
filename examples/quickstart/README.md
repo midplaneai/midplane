@@ -38,8 +38,9 @@ npx midplane token --config midplane.yaml --key midplane-signing-key.json \
 
 `keygen` writes a signing key (keep it secret) and the verify key that
 `midplane.yaml` names. The token is a signed JWT that lets an agent read and
-write the `shop` database for an hour (`--ttl` changes that). The salt keys the
-masks; keep the same one across restarts, or masked values change.
+write the `shop` database for an hour (`--ttl` changes that, in seconds:
+`--ttl 86400` is a day). The salt keys the masks; keep the same one across
+restarts, or masked values change.
 
 ## 3. Start the gateway
 
