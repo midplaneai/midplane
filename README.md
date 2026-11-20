@@ -68,7 +68,8 @@ the gateway directly, with no relay.
 - **Your own database, with Midplane Cloud**, for policy in a dashboard,
   approvals and a query log; the cloud never holds a database credential or
   sees a row. Follow [get started](https://midplane.ai/docs/get-started).
-  Midplane Cloud is invite-only for now: [get access](https://midplane.ai/#get-access).
+  Midplane Cloud is invite-only for now: start the [Team plan](https://midplane.ai/#pricing)
+  and we'll email you an invitation.
 - **Your own database, no account**: [local mode](https://midplane.ai/docs/gateway/local-mode).
 
 The gateway is the `midplane` npm package, run with `npx`, or the image
